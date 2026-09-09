@@ -79,6 +79,44 @@ class WhatsAppController extends Controller
     }
 
     /**
+     * GET /api/admin/whatsapp/self-device — the Super Admin's OWN WhatsApp
+     * test connection (Account::platformDevice(), lazily created on first
+     * call). MessageTemplateController::test() fires every test-send
+     * through this exact same session. Deliberately NOT one of the
+     * generic per-tenant routes below with a ?account_id= override — this
+     * account is invisible to ordinary Account queries (see
+     * Account::booted()'s exclude_platform_device global scope), so
+     * TenantIsolationMiddleware's `Account::whereKey($id)->exists()` check
+     * would 404 it; these three self-device endpoints instead resolve
+     * Account::platformDevice() directly and sit in the same
+     * permission:manage-accounts admin group as /admin/whatsapp/devices,
+     * entirely outside tenant.isolation.
+     */
+    public function selfDeviceStatus(): JsonResponse
+    {
+        $account = Account::platformDevice();
+        $session = WhatsAppSession::firstWhere('account_id', $account->id);
+
+        return response()->json([
+            'account_id' => $account->id,
+            'status' => $session->status ?? 'disconnected',
+            'last_connected_at' => $session?->last_connected_at,
+        ]);
+    }
+
+    /** POST /api/admin/whatsapp/self-device/start-session — see selfDeviceStatus()'s docblock. */
+    public function selfDeviceStartSession(): JsonResponse
+    {
+        return $this->forwardToQrEngine('start-session', Account::platformDevice()->id);
+    }
+
+    /** POST /api/admin/whatsapp/self-device/logout — see selfDeviceStatus()'s docblock. */
+    public function selfDeviceLogout(): JsonResponse
+    {
+        return $this->forwardToQrEngine('logout', Account::platformDevice()->id);
+    }
+
+    /**
      * POST /api/whatsapp/start-session — asks qr-engine-service to open (or
      * resume) this account's Baileys session. The QR code itself streams to
      * the browser over Socket.IO, not in this response.

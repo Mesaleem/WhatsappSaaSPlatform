@@ -35,6 +35,15 @@ interface NavItem {
   /** Only shown to Super Admin, regardless of permission. */
   superAdminOnly?: boolean;
   /**
+   * Hidden from Super Admin even though they hold the permission (Super
+   * Admin bypasses ordinary permission checks — see isNavItemVisible
+   * below). Send Alert is the only item using this: Super Admin now
+   * tests templates from Template Manager's "Send Template" action
+   * (through their own scanned device), not the per-client Send Alert
+   * flow.
+   */
+  hiddenForSuperAdmin?: boolean;
+  /**
    * Absolute Super Admin Control — hidden for a non-Super-Admin whose
    * account has this module disabled (Account.allowed_modules). Super
    * Admin is never affected by this, even while a client is selected.
@@ -65,7 +74,7 @@ interface NavItem {
 const NAV_ITEMS: NavItem[] = [
   { label: 'Dashboard', to: '/', icon: LayoutDashboard, tint: NAV_TINTS.dashboard },
   { label: 'WhatsApp Setup', to: '/settings/whatsapp', icon: QrCode, tint: NAV_TINTS.whatsapp, requiresAccount: true, requiresModule: 'whatsapp_setup' },
-  { label: 'Send Alert', to: '/alerts/send', icon: Send, tint: NAV_TINTS.send, permission: 'send-messages', requiresModule: 'send_alert' },
+  { label: 'Send Alert', to: '/alerts/send', icon: Send, tint: NAV_TINTS.send, permission: 'send-messages', requiresModule: 'send_alert', hiddenForSuperAdmin: true },
   { label: 'Analytics', to: '/analytics', icon: BarChart3, tint: NAV_TINTS.analytics, permission: 'view-analytics', requiresModule: 'analytics' },
   { label: 'Chatbot Rules', to: '/chatbot', icon: Bot, tint: NAV_TINTS.chatbot, permission: 'manage-chatbot', requiresModule: 'chatbot' },
   { label: 'Billing & Plans', to: '/billing', icon: CreditCard, tint: NAV_TINTS.billing, permission: 'manage-subscriptions', requiresModule: 'billing' },
@@ -82,7 +91,7 @@ const NAV_ITEMS: NavItem[] = [
   { label: 'Audit Logs', to: '/audit-logs', icon: History, tint: NAV_TINTS.gateway, permission: 'view-audit-logs' },
   // Advanced Broadcast Engine + Mail Template Manager — super_admin
   // (via PERMISSIONS) and admin only.
-  { label: 'Notifications', to: '/notifications', icon: Megaphone, tint: NAV_TINTS.chatbot, permission: 'manage-notifications' },
+  { label: 'Notifications', to: '/notifications', icon: Megaphone, tint: NAV_TINTS.chatbot, permission: 'manage-notifications', requiresModule: 'notifications' },
 ];
 
 function isNavItemVisible(
@@ -95,6 +104,7 @@ function isNavItemVisible(
   },
 ): boolean {
   if (item.superAdminOnly) return opts.isSuperAdmin;
+  if (item.hiddenForSuperAdmin && opts.isSuperAdmin) return false;
   if (item.requiresAccount && !opts.hasAccount) return false;
   if (item.permission && !opts.isSuperAdmin && !opts.hasPermission(item.permission)) return false;
   if (item.requiresModule && !opts.isSuperAdmin && !opts.hasModule(item.requiresModule)) return false;

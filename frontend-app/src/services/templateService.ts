@@ -7,6 +7,8 @@ import type {
   SaveMessageTemplatePayload,
   SendTemplateMessagePayload,
   SendTemplateMessageResponse,
+  TestTemplateMessagePayload,
+  TestTemplateMessageResponse,
 } from '../types/templates';
 
 const templateService = {
@@ -43,6 +45,16 @@ const templateService = {
 
   remove(id: number) {
     return axiosInstance.delete<{ message: string }>(`/message-templates/${id}`).then((res) => res.data);
+  },
+
+  /**
+   * POST /api/admin/templates/{id}/test — Strict 1-Template-Per-Client &
+   * Testing Gate. Always sends through the Super Admin's own scanned
+   * WhatsApp device (backend: Account::platformDevice()), never a
+   * client's — see MessageTemplateController::test()'s docblock.
+   */
+  test(id: number, payload: TestTemplateMessagePayload) {
+    return axiosInstance.post<TestTemplateMessageResponse>(`/admin/templates/${id}/test`, payload).then((res) => res.data);
   },
 
   // --- Client Admin Dynamic Form Engine ---

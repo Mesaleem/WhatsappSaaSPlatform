@@ -38,3 +38,14 @@ export function extractFieldErrors(err: unknown): Record<string, string> {
 
   return Object.fromEntries(Object.entries(errors).map(([field, messages]) => [field, messages[0]]));
 }
+
+/**
+ * `error_code` from the same envelope (e.g. 'WHATSAPP_DISCONNECTED') —
+ * lets a caller branch on a specific failure reason instead of pattern-
+ * matching `.message` text. Undefined for a plain validation 422 or any
+ * error response that doesn't set one.
+ */
+export function extractErrorCode(err: unknown): string | undefined {
+  const axiosErr = err as AxiosError<ApiErrorResponse>;
+  return axiosErr.response?.data?.error_code;
+}

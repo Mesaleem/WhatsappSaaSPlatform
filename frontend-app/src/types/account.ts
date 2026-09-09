@@ -21,6 +21,7 @@ export const ACCOUNT_MODULES = [
   'billing',
   'developer_api',
   'team_management',
+  'notifications',
 ] as const;
 
 export type AccountModule = (typeof ACCOUNT_MODULES)[number];
@@ -47,6 +48,7 @@ export const ACCOUNT_MODULE_LABELS: Record<AccountModule, string> = {
   billing: 'Billing & Plans',
   developer_api: 'Developer API',
   team_management: 'Team User Creation',
+  notifications: 'Notifications',
 };
 
 export interface AccountOwner {

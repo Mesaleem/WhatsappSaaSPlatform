@@ -1,6 +1,7 @@
 import axiosInstance from '../core/api/axiosInstance';
 import type {
   AdminWhatsAppDevice,
+  WhatsAppStatus,
   WhatsAppStatusResponse,
   MetaConfigResponse,
   SaveMetaConfigPayload,
@@ -52,6 +53,29 @@ const whatsappService = {
   /** GET /api/admin/whatsapp/devices — Super Admin Device Settings overview table. */
   adminListDevices() {
     return axiosInstance.get<{ data: AdminWhatsAppDevice[] }>('/admin/whatsapp/devices').then((res) => res.data.data);
+  },
+
+  // Super Admin WhatsApp Device Integration — the Super Admin's OWN
+  // scannable WhatsApp test device (backend: Account::platformDevice()).
+  // Distinct from status()/startSession()/logout() above: those act on a
+  // client account_id, this always acts on the one reserved platform
+  // device, so no accountId parameter is needed or accepted.
+  selfDeviceStatus() {
+    return axiosInstance
+      .get<{ account_id: number; status: WhatsAppStatus; last_connected_at: string | null }>(
+        '/admin/whatsapp/self-device',
+      )
+      .then((res) => res.data);
+  },
+
+  selfDeviceStartSession() {
+    return axiosInstance
+      .post<{ message: string }>('/admin/whatsapp/self-device/start-session')
+      .then((res) => res.data);
+  },
+
+  selfDeviceLogout() {
+    return axiosInstance.post<{ message: string }>('/admin/whatsapp/self-device/logout').then((res) => res.data);
   },
 
   // Module 5: Meta Cloud API credential configuration. Admin-only on the

@@ -322,6 +322,18 @@ Route::middleware('auth:sanctum')->group(function () {
     // docblock for the disclosed "every tenant's device" interpretation.
     Route::middleware('permission:manage-accounts')->get('/admin/whatsapp/devices', [WhatsAppController::class, 'adminIndex']);
 
+    // Super Admin WhatsApp Device Integration — the Super Admin's OWN
+    // scannable WhatsApp test device (Account::platformDevice()), used by
+    // MessageTemplateController::test() to fire test-sends for ANY
+    // template. Same permission tier as the listing route above; see
+    // WhatsAppController::selfDeviceStatus()'s docblock for why these
+    // don't reuse the generic per-tenant /whatsapp/* routes below.
+    Route::middleware('permission:manage-accounts')->prefix('admin/whatsapp/self-device')->group(function () {
+        Route::get('/', [WhatsAppController::class, 'selfDeviceStatus']);
+        Route::post('/start-session', [WhatsAppController::class, 'selfDeviceStartSession']);
+        Route::post('/logout', [WhatsAppController::class, 'selfDeviceLogout']);
+    });
+
     // Module 8: platform's own Razorpay/Stripe merchant credential vault
     // (used to COLLECT payments FROM tenants) — a distinct, dedicated
     // permission (manage-billing-settings) from manage-accounts, so this

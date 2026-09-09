@@ -129,12 +129,14 @@ class MessageTemplateController extends Controller
      *   - prefixes the outgoing text with "[TEST] " so the recipient (and
      *     any WhatsApp chat history) can never mistake it for a real
      *     alert,
-     *   - resolves the tenant to send THROUGH from the request body
-     *     (account_id), not ResolvesTenantAccount — this route sits
-     *     outside tenant.isolation (see this class's top docblock), so no
-     *     ?account_id= query attribute is ever set for it; the template's
-     *     own account_id is the fallback when the caller omits one and
-     *     the template is already scoped to a specific client.
+     *   - ALWAYS sends through Account::platformDevice() — the Super
+     *     Admin's OWN scanned WhatsApp connection (see
+     *     WhatsAppController::selfDeviceStatus()'s docblock) — never a
+     *     client's. Testing message rendering/delivery mechanics doesn't
+     *     need (and previously couldn't reliably assume) any particular
+     *     client's device; this also lets a global template
+     *     (account_id null) be tested, which the prior client-account
+     *     resolution design could not do.
      *
      * Variable validation reuses MessageTemplate::variableValidationRules()
      * — the exact same per-field type/required rules
@@ -145,23 +147,9 @@ class MessageTemplateController extends Controller
     public function test(Request $request, int $id): JsonResponse
     {
         $template = MessageTemplate::findOrFail($id);
-
-        $accountId = $request->integer('account_id') ?: $template->account_id;
-
-        if (! $accountId) {
-            return response()->json([
-                'message' => 'This template is not assigned to a client account yet. Pass account_id to test-send through a specific client\'s WhatsApp connection.',
-            ], 422);
-        }
-
-        $account = Account::with(['currentSubscription', 'whatsAppSession'])->find($accountId);
-
-        if (! $account) {
-            return response()->json(['message' => 'Account not found.'], 404);
-        }
+        $account = Account::platformDevice();
 
         $data = $request->validate([
-            'account_id' => ['sometimes', 'integer', 'exists:accounts,id'],
             'recipient_phone' => ['required', 'string', 'max:20'],
             'variables' => ['sometimes', 'array'],
             ...MessageTemplate::variableValidationRules($template->effectiveVariablesSchema()),
@@ -169,7 +157,7 @@ class MessageTemplateController extends Controller
 
         if (PaymentAlertDispatcher::isWhatsAppDisconnected($account)) {
             return response()->json([
-                'message' => 'WhatsApp is disconnected for this account. Connect its device before test-firing.',
+                'message' => 'Your WhatsApp test device is disconnected. Please scan WhatsApp and send again.',
                 'error_code' => 'WHATSAPP_DISCONNECTED',
             ], 422);
         }

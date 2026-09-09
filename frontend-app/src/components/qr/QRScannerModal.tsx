@@ -15,9 +15,22 @@ interface QRScannerModalProps {
   onClose: () => void;
   /** Called once the phone has scanned and the connection is confirmed open. */
   onConnected: () => void;
+  /**
+   * Super Admin WhatsApp Device Integration — override for how to
+   * (re)start the session. Defaults to whatsappService.startSession(accountId)
+   * (every per-tenant caller, unchanged). The Super Admin's own test
+   * device is a reserved Account row invisible to ordinary tenant
+   * resolution (see WhatsAppController::selfDeviceStatus()'s docblock),
+   * so it can't use that generic per-tenant endpoint — its caller passes
+   * whatsappService.selfDeviceStartSession() here instead. The Socket.IO
+   * connection below still uses accountId either way; qr-engine-service
+   * has no notion of this backend-only distinction.
+   */
+  startSession?: () => Promise<unknown>;
 }
 
-export default function QRScannerModal({ accountId, onClose, onConnected }: QRScannerModalProps) {
+export default function QRScannerModal({ accountId, onClose, onConnected, startSession }: QRScannerModalProps) {
+  const startSessionRequest = startSession ?? (() => whatsappService.startSession(accountId));
   const [status, setStatus] = useState<WhatsAppStatus>('connecting');
   const [qr, setQr] = useState<string | null>(null);
   const [secondsLeft, setSecondsLeft] = useState(QR_TTL_SECONDS);
@@ -64,13 +77,7 @@ export default function QRScannerModal({ accountId, onClose, onConnected }: QRSc
   // Open the socket and kick off (or resume) the Baileys session.
   useEffect(() => {
     connectSocket();
-    // Super Admin WhatsApp Device Integration fix: pass this modal's own
-    // accountId through explicitly rather than relying on the axios
-    // interceptor's header-tenant-selector default — the Device Settings
-    // overview table can open this modal for any row's account regardless
-    // of (or with no) header selection, exactly like the Socket.IO `auth`
-    // connection right above is already scoped.
-    whatsappService.startSession(accountId).catch(() => {
+    startSessionRequest().catch(() => {
       setSocketError('Failed to start the WhatsApp session. Please try again.');
     });
 
@@ -102,7 +109,7 @@ export default function QRScannerModal({ accountId, onClose, onConnected }: QRSc
     setSocketError(null);
     setQr(null);
     setSecondsLeft(QR_TTL_SECONDS);
-    whatsappService.startSession(accountId).catch(() => {
+    startSessionRequest().catch(() => {
       setSocketError('Failed to refresh the QR code. Please try again.');
     });
   };

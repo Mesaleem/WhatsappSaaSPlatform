@@ -160,7 +160,7 @@ export default function App() {
             <Route
               path="/notifications"
               element={
-                <ProtectedRoute permission="manage-notifications">
+                <ProtectedRoute permission="manage-notifications" module="notifications">
                   <NotificationsPage />
                 </ProtectedRoute>
               }

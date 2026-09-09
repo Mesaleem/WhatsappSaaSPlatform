@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Radio, RefreshCw } from 'lucide-react';
+import { QrCode, Radio, RefreshCw } from 'lucide-react';
 import whatsappService from '../../services/whatsappService';
 import QRScannerModal from '../../components/qr/QRScannerModal';
-import { TableCard } from '../../components/common/Card';
+import { Card, TableCard } from '../../components/common/Card';
 import { TableSkeletonRows } from '../../components/common/Skeleton';
 import { extractErrorMessage } from '../../utils/apiError';
 import type { AdminWhatsAppDevice, WhatsAppStatus } from '../../types/whatsapp';
@@ -37,6 +37,131 @@ function formatLastConnected(value: string | null): string {
  * for the disclosed "every tenant's device" interpretation of this
  * feature's spec.
  */
+/**
+ * Super Admin WhatsApp Device Integration — the Super Admin's OWN
+ * scannable WhatsApp connection, separate from every tenant row in the
+ * table below. MessageTemplateController::test() (Template Manager's
+ * "Send Template" test action) always fires through THIS device, never a
+ * client's — mirrors WhatsAppSetupPage's connect/status/disconnect
+ * pattern almost exactly, just targeting
+ * whatsappService.selfDeviceStatus()/selfDeviceStartSession()/
+ * selfDeviceLogout() instead of a client account_id.
+ */
+function SuperAdminTestDeviceCard() {
+  const [accountId, setAccountId] = useState<number | null>(null);
+  const [status, setStatus] = useState<WhatsAppStatus>('disconnected');
+  const [isLoading, setIsLoading] = useState(true);
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
+  const [toast, setToast] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setIsLoading(true);
+    try {
+      const res = await whatsappService.selfDeviceStatus();
+      setAccountId(res.account_id);
+      setStatus(res.status);
+    } catch {
+      // Leave as-is — the card still renders, just possibly stale.
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const showToast = (message: string) => {
+    setToast(message);
+    setTimeout(() => setToast(null), 4000);
+  };
+
+  const handleConnected = () => {
+    setStatus('connected');
+    setIsModalOpen(false);
+    showToast('Your WhatsApp test device is connected.');
+  };
+
+  const handleLogout = async () => {
+    setIsLoggingOut(true);
+    try {
+      await whatsappService.selfDeviceLogout();
+      setStatus('disconnected');
+      showToast('Your WhatsApp test device is disconnected.');
+    } catch {
+      showToast('Failed to disconnect. Please try again.');
+    } finally {
+      setIsLoggingOut(false);
+    }
+  };
+
+  const STATUS_META: Record<WhatsAppStatus, { label: string; dot: string }> = {
+    connected: { label: 'Connected', dot: 'bg-emerald-500' },
+    disconnected: { label: 'Not connected — scan to test templates', dot: 'bg-red-500' },
+    connecting: { label: 'Action needed — scan to connect', dot: 'bg-amber-400' },
+  };
+  const meta = STATUS_META[status];
+
+  return (
+    <Card className="mb-6">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-indigo-50 text-indigo-600">
+            <QrCode className="h-5 w-5" />
+          </div>
+          <div>
+            <p className="text-sm font-semibold text-slate-900">Your WhatsApp Test Device</p>
+            <p className="mt-0.5 flex items-center gap-2 text-sm text-slate-500">
+              <span className={`h-2 w-2 rounded-full ${meta.dot}`} />
+              {isLoading ? 'Checking status…' : meta.label}
+            </p>
+          </div>
+        </div>
+
+        {status === 'connected' ? (
+          <button
+            type="button"
+            onClick={() => void handleLogout()}
+            disabled={isLoggingOut}
+            className="rounded-lg border border-red-200 px-3 py-1.5 text-sm font-medium text-red-600 hover:bg-red-50 disabled:opacity-60"
+          >
+            {isLoggingOut ? 'Disconnecting…' : 'Disconnect'}
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setIsModalOpen(true)}
+            disabled={isLoading || accountId === null}
+            className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:opacity-60"
+          >
+            <Radio className="h-4 w-4" />
+            {status === 'connecting' ? 'Reconnect' : 'Scan to Connect'}
+          </button>
+        )}
+      </div>
+      <p className="mt-3 text-xs text-slate-400">
+        Template Manager's "Send Template" test action always sends through this device — not a client's.
+      </p>
+
+      {isModalOpen && accountId !== null && (
+        <QRScannerModal
+          accountId={accountId}
+          onClose={() => setIsModalOpen(false)}
+          onConnected={handleConnected}
+          startSession={() => whatsappService.selfDeviceStartSession()}
+        />
+      )}
+
+      {toast && (
+        <div className="fixed bottom-6 right-6 z-50 rounded-lg bg-slate-900 px-4 py-3 text-sm font-medium text-white shadow-lg">
+          {toast}
+        </div>
+      )}
+    </Card>
+  );
+}
+
 export default function AdminDeviceSettingsPage() {
   const [devices, setDevices] = useState<AdminWhatsAppDevice[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -115,6 +240,8 @@ export default function AdminDeviceSettingsPage() {
         )}
 
         <div className="mt-6">
+          <SuperAdminTestDeviceCard />
+
           <TableCard>
             <table className="min-w-full divide-y divide-slate-200 text-sm">
               <thead className="bg-slate-50">

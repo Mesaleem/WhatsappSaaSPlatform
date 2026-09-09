@@ -32,6 +32,9 @@ export interface MessageTemplate {
   /** Raw, as configured — null/[] until a Super Admin has used the Variable Configurator Panel on this template. */
   variables_schema: TemplateVariableSchemaField[] | null;
   status: MessageTemplateStatus;
+  /** Strict 1-Template-Per-Client & Testing Gate — approve() refuses to run until this is true. Set by POST /admin/templates/{id}/test on a confirmed successful send. */
+  is_super_admin_tested: boolean;
+  tested_at: string | null;
   creator: { id: number; name: string } | null;
   created_at: string;
   updated_at: string;
@@ -66,6 +69,18 @@ export interface SendTemplateMessagePayload {
 export interface SendTemplateMessageResponse {
   message: string;
   rendered_message: string;
+}
+
+/** POST /api/admin/templates/{id}/test — Super Admin test-fire, always through Account::platformDevice(). */
+export interface TestTemplateMessagePayload {
+  recipient_phone: string;
+  variables: Record<string, string>;
+}
+
+export interface TestTemplateMessageResponse {
+  message: string;
+  rendered_message: string;
+  data: MessageTemplate;
 }
 
 /** GET /api/account/api-key */

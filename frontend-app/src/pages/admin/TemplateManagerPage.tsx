@@ -1,5 +1,18 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
-import { CheckCircle2, ListChecks, Pencil, Plus, Sparkles, Trash2, XCircle } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import {
+  AlertTriangle,
+  CheckCircle2,
+  ListChecks,
+  Loader2,
+  Pencil,
+  Plus,
+  Send,
+  ShieldCheck,
+  Sparkles,
+  Trash2,
+  XCircle,
+} from 'lucide-react';
 import accountService from '../../services/accountService';
 import templateService from '../../services/templateService';
 import type { Account } from '../../types/account';
@@ -14,7 +27,7 @@ import { inputClass, TableCard } from '../../components/common/Card';
 import { PageHeader, PageShell } from '../../components/common/PageShell';
 import { Pagination, SearchInput, StatusFilterSelect } from '../../components/common/DataTableControls';
 import { TableSkeletonRows } from '../../components/common/Skeleton';
-import { extractErrorMessage as extractMessage } from '../../utils/apiError';
+import { extractErrorCode, extractErrorMessage as extractMessage } from '../../utils/apiError';
 
 
 /** Same {{token}} extraction as the backend's MessageTemplate::variableNames() — kept in sync deliberately. */
@@ -35,6 +48,19 @@ function defaultLabel(key: string): string {
 
 function defaultVariableField(key: string): TemplateVariableSchemaField {
   return { key, label: defaultLabel(key), type: 'string', required: true };
+}
+
+/**
+ * Client-side mirror of the backend's MessageTemplate::effectiveVariablesSchema()
+ * — the configured variables_schema if the Super Admin has used the
+ * Variable Configurator Panel, else one auto-derived string/required
+ * field per {{token}} in template_body. Reused by both the Variables
+ * table column (display only) and TestTemplateModal (drives its dynamic
+ * form fields), so the two can never disagree about a template's schema.
+ */
+function effectiveSchema(t: MessageTemplate): TemplateVariableSchemaField[] {
+  if (t.variables_schema && t.variables_schema.length > 0) return t.variables_schema;
+  return extractVariables(t.template_body).map(defaultVariableField);
 }
 
 const VARIABLE_TYPE_OPTIONS: { value: TemplateVariableType; label: string }[] = [
@@ -306,6 +332,178 @@ function TemplateModal({
   );
 }
 
+/**
+ * Strict 1-Template-Per-Client & Testing Gate — "Send Template" test
+ * action. Always fires through the Super Admin's OWN scanned WhatsApp
+ * device (Account::platformDevice() server-side, never a client's — see
+ * MessageTemplateController::test()'s docblock), works on a 'pending'
+ * template (testing is what's REQUIRED before it can be approved at
+ * all), and on a confirmed successful send flips is_super_admin_tested —
+ * onTested() refreshes the table row so its badge and the Approve
+ * button's gate update immediately.
+ */
+function TestTemplateModal({
+  template,
+  onClose,
+  onTested,
+}: {
+  template: MessageTemplate;
+  onClose: () => void;
+  onTested: () => void;
+}) {
+  const schema = useMemo(() => effectiveSchema(template), [template]);
+
+  const [recipientPhone, setRecipientPhone] = useState('');
+  const [variables, setVariables] = useState<Record<string, string>>(
+    Object.fromEntries(schema.map((f) => [f.key, ''])),
+  );
+  const [isSending, setIsSending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [errorCode, setErrorCode] = useState<string | undefined>(undefined);
+  const [success, setSuccess] = useState<string | null>(null);
+
+  const handleSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    setErrorCode(undefined);
+    setSuccess(null);
+
+    if (!recipientPhone.trim()) {
+      setError('Recipient phone is required.');
+      return;
+    }
+    const missingRequired = schema.filter((f) => f.required && !variables[f.key]?.trim());
+    if (missingRequired.length > 0) {
+      setError(`Fill in: ${missingRequired.map((f) => f.label || f.key).join(', ')}`);
+      return;
+    }
+
+    setIsSending(true);
+    try {
+      const res = await templateService.test(template.id, {
+        recipient_phone: recipientPhone.trim(),
+        variables,
+      });
+      setSuccess(res.message);
+      onTested();
+    } catch (err) {
+      setErrorCode(extractErrorCode(err));
+      setError(extractMessage(err, 'Could not send the test message.'));
+    } finally {
+      setIsSending(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4">
+      <div className="max-h-[92vh] w-full max-w-lg overflow-y-auto rounded-xl bg-white p-6 shadow-xl">
+        <div className="flex items-center justify-between">
+          <h3 className="text-base font-semibold text-slate-900">Send Template — Test "{template.title}"</h3>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-600">
+            <XCircle className="h-5 w-5" />
+          </button>
+        </div>
+        <p className="mt-1 text-sm text-slate-500">
+          Sends a real "[TEST]"-prefixed WhatsApp message through your own test device — not billed to any client.
+        </p>
+
+        <form onSubmit={(e) => void handleSubmit(e)} className="mt-4 space-y-4">
+          <div>
+            <label className="text-sm font-medium text-slate-700">Recipient Phone</label>
+            <input
+              value={recipientPhone}
+              onChange={(e) => setRecipientPhone(e.target.value)}
+              placeholder="919876543210"
+              className={inputClass}
+              autoFocus
+            />
+          </div>
+
+          {schema.length > 0 && (
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              {schema.map((field) => (
+                <div key={field.key}>
+                  <label className="text-sm font-medium text-slate-700">
+                    {field.label || field.key}
+                    {field.required && (
+                      <span className="ml-0.5 text-red-500" aria-hidden="true">
+                        *
+                      </span>
+                    )}
+                  </label>
+                  {field.type === 'select' ? (
+                    <select
+                      value={variables[field.key] ?? ''}
+                      onChange={(e) => setVariables((prev) => ({ ...prev, [field.key]: e.target.value }))}
+                      className={inputClass}
+                    >
+                      <option value="">Select…</option>
+                      {(field.options ?? []).map((opt) => (
+                        <option key={opt} value={opt}>
+                          {opt}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      type={field.type === 'number' ? 'number' : field.type === 'date' ? 'date' : 'text'}
+                      value={variables[field.key] ?? ''}
+                      onChange={(e) => setVariables((prev) => ({ ...prev, [field.key]: e.target.value }))}
+                      placeholder={`{{${field.key}}}`}
+                      className={inputClass}
+                    />
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {error && (
+            <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+              <div className="flex items-center gap-2">
+                <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+                {error}
+              </div>
+              {errorCode === 'WHATSAPP_DISCONNECTED' && (
+                <Link
+                  to="/admin/device-settings"
+                  className="mt-2 inline-block text-xs font-semibold text-red-800 underline underline-offset-2"
+                >
+                  Go scan your WhatsApp test device →
+                </Link>
+              )}
+            </div>
+          )}
+          {success && (
+            <div className="flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+              <CheckCircle2 className="h-4 w-4 flex-shrink-0" />
+              {success}
+            </div>
+          )}
+
+          <div className="flex justify-end gap-3 border-t border-slate-100 pt-4">
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+            >
+              Close
+            </button>
+            <button
+              type="submit"
+              disabled={isSending}
+              className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:opacity-60"
+            >
+              {isSending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+              {isSending ? 'Sending…' : 'Send Test'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 export default function TemplateManagerPage() {
   const [templates, setTemplates] = useState<MessageTemplate[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
@@ -320,6 +518,8 @@ export default function TemplateManagerPage() {
     template: null,
   });
   const [busyId, setBusyId] = useState<number | null>(null);
+  // Strict 1-Template-Per-Client & Testing Gate — "Send Template" test action.
+  const [testModalTemplate, setTestModalTemplate] = useState<MessageTemplate | null>(null);
 
   const load = useCallback(async () => {
     setIsLoading(true);
@@ -476,14 +676,34 @@ export default function TemplateManagerPage() {
                     >
                       {t.status}
                     </span>
+                    <div
+                      className={`mt-1 flex items-center gap-1 text-[11px] ${
+                        t.is_super_admin_tested ? 'text-emerald-600' : 'text-slate-400'
+                      }`}
+                    >
+                      <ShieldCheck className="h-3 w-3" />
+                      {t.is_super_admin_tested ? 'Tested' : 'Not tested'}
+                    </div>
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex items-center justify-end gap-3">
+                      <button
+                        onClick={() => setTestModalTemplate(t)}
+                        className="flex items-center gap-1 text-xs font-medium text-indigo-600 hover:text-indigo-700"
+                      >
+                        <Send className="h-3.5 w-3.5" />
+                        Send Template
+                      </button>
                       {t.status !== 'approved' && (
                         <button
                           onClick={() => void handleApprove(t)}
-                          disabled={busyId === t.id}
-                          className="flex items-center gap-1 text-xs font-medium text-emerald-600 hover:text-emerald-700 disabled:opacity-60"
+                          disabled={busyId === t.id || !t.is_super_admin_tested}
+                          title={
+                            t.is_super_admin_tested
+                              ? undefined
+                              : 'Send a test message first — approving is blocked until this template has been successfully test-fired.'
+                          }
+                          className="flex items-center gap-1 text-xs font-medium text-emerald-600 hover:text-emerald-700 disabled:cursor-not-allowed disabled:opacity-40"
                         >
                           <CheckCircle2 className="h-3.5 w-3.5" />
                           Approve
@@ -547,6 +767,14 @@ export default function TemplateManagerPage() {
             setModalState({ open: false, template: null });
             void load();
           }}
+        />
+      )}
+
+      {testModalTemplate && (
+        <TestTemplateModal
+          template={testModalTemplate}
+          onClose={() => setTestModalTemplate(null)}
+          onTested={() => void load()}
         />
       )}
     </PageShell>

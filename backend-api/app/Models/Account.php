@@ -54,14 +54,42 @@ class Account extends Model
      * provisioning step, same "get or create a singleton row" pattern as
      * MailSetting::currentCached() elsewhere in this codebase — rather
      * than requiring you to run a seeder for a single reserved row.
+     *
+     * Also lazily provisions a never-expiring 'qr'-engine, 'unlimited'
+     * subscription the first time this account is created — both
+     * WhatsAppEngineFactory::make() and PaymentAlertDispatcher::
+     * isWhatsAppDisconnected() key off currentSubscription->engine_type,
+     * and this row has no real plan/billing behind it (price_paid stays
+     * 0, it is never shown on any billing screen, and test() never
+     * deducts from used_messages — a test-fire must never consume a real
+     * quota). 'qr' specifically, not 'meta' — the "WhatsApp scan option"
+     * this exists for is a Baileys QR pairing, the same flow
+     * QRScannerModal already drives for every tenant.
      */
     public static function platformDevice(): self
     {
-        return static::withoutGlobalScope('exclude_platform_device')
+        $account = static::withoutGlobalScope('exclude_platform_device')
             ->firstOrCreate(
                 ['is_platform_device' => true],
                 ['company_name' => 'Super Admin — WhatsApp Test Device', 'status' => 'active'],
             );
+
+        if ($account->subscriptions()->doesntExist()) {
+            $account->subscriptions()->create([
+                'engine_type' => 'qr',
+                'billing_model' => 'unlimited',
+                'rate_per_message' => null,
+                'total_allocated_messages' => null,
+                'used_messages' => 0,
+                'price_paid' => 0,
+                'payment_mode' => 'cash',
+                'starts_at' => now(),
+                'expires_at' => null,
+                'status' => 'active',
+            ]);
+        }
+
+        return $account;
     }
 
     public static function cacheKey(int $id): string
@@ -96,6 +124,7 @@ class Account extends Model
         'billing',
         'developer_api',
         'team_management',
+        'notifications',
     ];
 
     protected $fillable = [
