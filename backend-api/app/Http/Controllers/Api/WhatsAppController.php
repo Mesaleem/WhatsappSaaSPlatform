@@ -1,0 +1,126 @@
+<?php
+
+namespace App\Http\Controllers\Api;
+
+use App\Http\Controllers\Concerns\ResolvesTenantAccount;
+use App\Http\Controllers\Controller;
+use App\Models\Account;
+use App\Models\WhatsAppSession;
+use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Http;
+use Throwable;
+
+class WhatsAppController extends Controller
+{
+    use ResolvesTenantAccount;
+
+    /**
+     * GET /api/whatsapp/status — the account's last known connection status.
+     * This is the source of truth for a page load / refresh; live updates
+     * while the QR modal is open come from qr-engine-service's Socket.IO
+     * stream instead, not this endpoint.
+     */
+    public function status(Request $request): JsonResponse
+    {
+        $account = $this->requireAccount($request, 'A WhatsApp session requires a selected tenant account (pass ?account_id=).');
+
+        $session = WhatsAppSession::firstWhere('account_id', $account->id);
+
+        return response()->json([
+            'status' => $session->status ?? 'disconnected',
+            'last_connected_at' => $session?->last_connected_at,
+        ]);
+    }
+
+    /**
+     * GET /api/admin/whatsapp/devices — Super Admin WhatsApp Device
+     * Integration: one table of every tenant account's device status,
+     * so a Super Admin doesn't have to select each account one at a time
+     * just to see who's connected. Link/Disconnect/Reconnect from this
+     * page are the SAME per-tenant endpoints below (status/start-session/
+     * logout) — each already honors Super Admin's ?account_id= override
+     * via ResolvesTenantAccount (see that trait's docblock), so this page
+     * needed only a listing endpoint, not a parallel device-management
+     * system.
+     *
+     * DISCLOSED INTERPRETATION: the spec's "link, view status, disconnect,
+     * or reconnect system WhatsApp devices" is read as "every tenant's
+     * device, managed from the Super Admin Portal" (plural "devices"),
+     * not a single separate platform-owned device with no tenant. A
+     * platform-owned device would need whatsapp_sessions.account_id to
+     * become nullable (breaking its current UNIQUE tenant-per-row FK
+     * invariant) and a sentinel value threaded through qr-engine-service's
+     * Number()-coerced, `exists:accounts,id`-validated status callback —
+     * real schema and cross-service risk for a capability the spec did
+     * not unambiguously ask for. This reading reuses 100% of the existing,
+     * already-battle-tested per-tenant flow instead.
+     */
+    public function adminIndex(): JsonResponse
+    {
+        $sessions = WhatsAppSession::query()->get()->keyBy('account_id');
+
+        $devices = Account::query()
+            ->orderBy('company_name')
+            ->get(['id', 'company_name'])
+            ->map(function (Account $account) use ($sessions) {
+                $session = $sessions->get($account->id);
+
+                return [
+                    'account_id' => $account->id,
+                    'company_name' => $account->company_name,
+                    'status' => $session->status ?? 'disconnected',
+                    'last_connected_at' => $session?->last_connected_at,
+                ];
+            })
+            ->values();
+
+        return response()->json(['data' => $devices]);
+    }
+
+    /**
+     * POST /api/whatsapp/start-session — asks qr-engine-service to open (or
+     * resume) this account's Baileys session. The QR code itself streams to
+     * the browser over Socket.IO, not in this response.
+     */
+    public function startSession(Request $request): JsonResponse
+    {
+        $account = $this->requireAccount($request, 'A WhatsApp session requires a selected tenant account (pass ?account_id=).');
+
+        return $this->forwardToQrEngine('start-session', $account->id);
+    }
+
+    /**
+     * POST /api/whatsapp/logout — ends the session and clears its auth files.
+     */
+    public function logout(Request $request): JsonResponse
+    {
+        $account = $this->requireAccount($request, 'A WhatsApp session requires a selected tenant account (pass ?account_id=).');
+
+        return $this->forwardToQrEngine('logout', $account->id);
+    }
+
+    private function forwardToQrEngine(string $path, int $accountId): JsonResponse
+    {
+        $baseUrl = rtrim((string) config('services.qr_engine.url'), '/');
+        $secret = config('services.qr_engine.internal_secret');
+
+        try {
+            $response = Http::withHeaders(['X-Internal-Secret' => $secret])
+                ->timeout(10)
+                ->post("{$baseUrl}/api/qr/{$path}", ['account_id' => $accountId]);
+        } catch (Throwable $e) {
+            return response()->json([
+                'message' => 'The WhatsApp engine service is unreachable. Please try again shortly.',
+            ], 502);
+        }
+
+        if ($response->failed()) {
+            return response()->json([
+                'message' => $response->json('message') ?? 'The WhatsApp engine service rejected the request.',
+            ], $response->status());
+        }
+
+        return response()->json($response->json());
+    }
+}
