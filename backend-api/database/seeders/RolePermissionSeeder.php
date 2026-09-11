@@ -59,6 +59,51 @@ class RolePermissionSeeder extends Seeder
         // an Admin may broadcast to their own account's users; a plain
         // 'user' role never composes or sends notifications.
         'manage-notifications',
+        // Social Media Marketing & Meta Ads Automation Expansion (Phase 1).
+        // manage-social-settings is Super-Admin-only, separate from the four
+        // social_marketer permissions below, on purpose: it gates the
+        // PLATFORM's Meta/LinkedIn/Google OAuth App credential vault
+        // (SocialGatewayController — same tier as manage-billing-settings),
+        // never a tenant's own connected social accounts.
+        'manage-social-settings',
+        'manage-social-accounts',
+        'launch-meta-ads',
+        'manage-social-leads',
+        'view-social-analytics',
+        // Social Media Marketing & Meta Ads Automation Expansion (Phase 4).
+        // Separate from manage-social-leads on purpose, mirroring the
+        // launch-meta-ads / manage-social-accounts split from Phase 3:
+        // configuring WHICH keywords auto-reply (CommentRulesPage) is a
+        // distinct, higher-stakes action (it posts publicly on the
+        // tenant's Page/Instagram automatically) from day-to-day lead/
+        // inbox management, so a Super Admin can grant them separately.
+        'manage-comment-automation',
+        // Client Admin Granular Permission Matrix — see
+        // TeamController::MANAGED_PERMISSIONS' docblock for the full
+        // design rationale (why these are granted as DIRECT per-user
+        // Spatie permissions via /team/users/{id}/permissions rather than
+        // edited onto a Role — Role rows are global across every tenant
+        // since config/permission.php has 'teams' => false). Not added to
+        // any DEFAULT_ROLES below: 'admin' and 'social_marketer' already
+        // reach the same underlying actions through their existing
+        // coarser manage-chatbot/launch-meta-ads permissions (both OR'd
+        // with these in routes/api.php), so no default role needs these
+        // granted a second time. They exist here purely so
+        // Rule::exists('permissions','name') accepts them from
+        // TeamController::updatePermissions() and RoleController::store().
+        'whatsapp.view',
+        'whatsapp.create',
+        'whatsapp.edit',
+        'whatsapp.delete',
+        'social_ads.view',
+        'social_ads.launch',
+        'social_ads.edit_budget',
+        // No corresponding backend action exists for this one (disclosed
+        // in TeamController::MANAGED_PERMISSIONS' docblock and this
+        // refactor's audit report) — kept in the catalog so the matrix
+        // checkbox is still storable, matching the spec's literal
+        // checklist.
+        'social_ads.delete_rules',
     ];
 
     /**
@@ -72,6 +117,13 @@ class RolePermissionSeeder extends Seeder
         // Global system access across every tenant account.
         'super_admin' => self::PERMISSIONS,
         // Account owner: manages their own account's subscription, team and roles.
+        // Client Management, Team Users, Dynamic RBAC Sidebar & Global
+        // Table Filters refactor — Admin (spec's "Client Admin") must see
+        // the full Social Media Marketing operational suite in the
+        // sidebar (AppLayout.tsx's nav items are permission-gated, so the
+        // nav can't show them without the permission existing here too).
+        // Admin did not hold any of these five before this change —
+        // verified by reading this exact array prior to this edit.
         'admin' => [
             'manage-subscriptions',
             'send-messages',
@@ -83,12 +135,45 @@ class RolePermissionSeeder extends Seeder
             'manage-roles',
             'view-audit-logs',
             'manage-notifications',
+            'manage-social-accounts',
+            'launch-meta-ads',
+            'manage-social-leads',
+            'view-social-analytics',
+            'manage-comment-automation',
         ],
         // Standard staff member.
         'user' => [
             'send-messages',
             'view-analytics',
             'view-audit-logs',
+        ],
+        // Social Media Marketing & Meta Ads Automation Expansion (Phase 1).
+        // Deliberately restricted to ONLY these four permissions — this
+        // role has no access to WhatsApp, Billing, or Developer settings
+        // (see AppLayout.tsx's nav gating and routes/api.php's route
+        // groups, neither of which grants a social_marketer route on any
+        // of those permissions). NOT granted view-audit-logs, unlike the
+        // three default roles above — a disclosed deviation from this
+        // seeder's own "every role can see login history" precedent,
+        // since the spec explicitly calls this role "restricted access".
+        // Revisit if Super Admin wants social_marketer to see their own
+        // login history too.
+        'social_marketer' => [
+            'manage-social-accounts',
+            'launch-meta-ads',
+            'manage-social-leads',
+            'view-social-analytics',
+            // Phase 4 — see PERMISSIONS' comment for why this is separate
+            // from manage-social-leads.
+            'manage-comment-automation',
+            // Client Management, Team Users, Dynamic RBAC Sidebar & Global
+            // Table Filters refactor — the spec explicitly lists "Team
+            // Users" as a page this role must see. Deliberately still NOT
+            // given manage-roles/manage-subscriptions/etc. — only enough
+            // to see and manage the Team Users page itself, consistent
+            // with this role's existing "restricted access" scope (see
+            // this array's own comment above re: view-audit-logs).
+            'manage-team',
         ],
     ];
 

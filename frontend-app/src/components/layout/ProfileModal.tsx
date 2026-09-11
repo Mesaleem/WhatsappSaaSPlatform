@@ -153,13 +153,19 @@ export default function ProfileModal({ onClose }: { onClose: () => void }) {
               <p className="text-sm font-semibold" style={{ color: indigo.ink }}>
                 {user?.name}
               </p>
-              <span
-                className={`mt-0.5 inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold ${
-                  ROLE_BADGE_CLASS[user?.role.name ?? ''] ?? 'bg-slate-100 text-slate-600 border-slate-200'
-                }`}
-              >
-                {user?.role.name ? roleLabel(user.role.name) : ''}
-              </span>
+              {/* Dynamic Multi-Role Sidebar Aggregation refactor — one badge per assigned role, not just the first. */}
+              <div className="mt-0.5 flex flex-wrap items-center gap-1">
+                {(user?.roles ?? []).map((r) => (
+                  <span
+                    key={r.id}
+                    className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold ${
+                      ROLE_BADGE_CLASS[r.name] ?? 'bg-slate-100 text-slate-600 border-slate-200'
+                    }`}
+                  >
+                    {roleLabel(r.name)}
+                  </span>
+                ))}
+              </div>
             </div>
           </div>
           <button
@@ -174,7 +180,7 @@ export default function ProfileModal({ onClose }: { onClose: () => void }) {
         <form onSubmit={(e) => void handleSave(e)} className="mt-5 space-y-4">
           <div>
             <label className="text-sm font-medium" style={{ color: indigo.ink }}>
-              Full Name
+              Full Name <span className="text-red-500">*</span>
             </label>
             <input
               value={name}
@@ -185,7 +191,7 @@ export default function ProfileModal({ onClose }: { onClose: () => void }) {
           </div>
           <div>
             <label className="text-sm font-medium" style={{ color: indigo.ink }}>
-              Email Address
+              Email Address <span className="text-red-500">*</span>
             </label>
             <input
               type="email"

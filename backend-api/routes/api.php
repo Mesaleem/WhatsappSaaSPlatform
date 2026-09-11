@@ -27,11 +27,21 @@ use App\Http\Controllers\Api\Internal\WhatsAppInboundController;
 use App\Http\Controllers\Api\ChatbotRuleController;
 use App\Http\Controllers\Api\ChatbotLogController;
 use App\Http\Controllers\Api\TeamController;
+use App\Http\Controllers\Api\QuotaRequestController;
 use App\Http\Controllers\Api\AuditLogController;
 use App\Http\Controllers\Api\InAppNotificationController;
 use App\Http\Controllers\Api\NotificationTemplateController;
 use App\Http\Controllers\Api\MailLogController;
 use App\Http\Controllers\Api\NotificationBroadcastController;
+use App\Http\Controllers\Api\SocialAuthController;
+use App\Http\Controllers\Api\AdCampaignController;
+use App\Http\Controllers\Api\CommentAutomationRuleController;
+use App\Http\Controllers\Api\SocialInboxController;
+use App\Http\Controllers\Api\SocialWebhookController;
+use App\Http\Controllers\Api\Admin\SocialGatewayController;
+use App\Http\Controllers\Api\LeadController;
+use App\Http\Controllers\Api\AICopywriterController;
+use App\Http\Controllers\Api\SocialReportController;
 use Illuminate\Support\Facades\Route;
 
 Route::post('/auth/login', [AuthController::class, 'login']);
@@ -51,8 +61,29 @@ Route::middleware('internal.secret')->post('/internal/whatsapp-inbound', [WhatsA
 // shared secret. GET is protected by the per-tenant hub_verify_token
 // handshake; POST processing gaps (signature verification, persistence)
 // are disclosed in MetaWebhookController and the Module 5 report.
-Route::get('/webhooks/meta', [MetaWebhookController::class, 'verify']);
-Route::post('/webhooks/meta', [MetaWebhookController::class, 'handle']);
+// Production Polish — see AppServiceProvider's 'meta-webhook' limiter
+// docblock for the verified root cause (this app's 'api' middleware
+// group has NO throttle at all without this).
+Route::middleware('throttle:meta-webhook')->group(function () {
+    Route::get('/webhooks/meta', [MetaWebhookController::class, 'verify']);
+    Route::post('/webhooks/meta', [MetaWebhookController::class, 'handle']);
+});
+
+// Social Media Marketing & Meta Ads Automation Expansion (Phase 1).
+// /social/callback/{provider} is the OAuth redirect_uri the PROVIDER
+// (e.g. Meta) sends the popup window back to — public, no Laravel
+// session, tenant identity travels in the encrypted `state` query param
+// instead (see SocialAuthController::callback()'s docblock). Distinct
+// from /social/webhook/{provider} below (Lead Ads / Page event
+// subscriptions) even though the literal spec named only one path for
+// both concerns — see SocialWebhookController's docblock.
+// Production Polish — same 'meta-webhook' throttle as /webhooks/meta
+// above; these three are equally public/unauthenticated.
+Route::middleware('throttle:meta-webhook')->group(function () {
+    Route::get('/social/callback/{provider}', [SocialAuthController::class, 'callback']);
+    Route::get('/social/webhook/{provider}', [SocialWebhookController::class, 'verify']);
+    Route::post('/social/webhook/{provider}', [SocialWebhookController::class, 'handle']);
+});
 
 // Module 8: Razorpay/Stripe webhook receivers. Public — the gateways call
 // these directly with no Laravel session and no bearer token; authenticity
@@ -112,6 +143,16 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/client-summary', [BillingController::class, 'clientSummary']);
     });
 
+    // Quota Exhaustion Request Workflow — Client Admin submits a top-up
+    // request. Deliberately placed in the SAME group as /billing/* above
+    // (tenant.isolation ONLY, NOT subscription.guard) for the identical
+    // reason: this is most needed exactly when the subscription has just
+    // flipped to 'exhausted', and subscription.guard would 403 the very
+    // request meant to fix that. See QuotaRequestController::store()'s
+    // docblock.
+    Route::middleware(['tenant.isolation', 'permission:manage-subscriptions'])
+        ->post('/quota-requests/store', [QuotaRequestController::class, 'store']);
+
     // Dynamic Templates & Variables System — Profile/Account Settings'
     // "Client API Key" section. Gated by manage-developer-settings, the
     // same permission tier as the Developer Portal (ApiKeyController) —
@@ -165,14 +206,133 @@ Route::middleware('auth:sanctum')->group(function () {
         // Module 10: Chatbot Rule Builder + execution logs. A dedicated
         // permission (manage-chatbot) rather than reusing
         // manage-developer-settings — see RolePermissionSeeder's docblock.
-        Route::middleware('permission:manage-chatbot')->prefix('chatbot')->group(function () {
-            Route::get('/rules', [ChatbotRuleController::class, 'index']);
-            Route::post('/rules', [ChatbotRuleController::class, 'store']);
-            Route::put('/rules/{id}', [ChatbotRuleController::class, 'update']);
-            Route::delete('/rules/{id}', [ChatbotRuleController::class, 'destroy']);
-            Route::post('/rules/{id}/toggle', [ChatbotRuleController::class, 'toggle']);
+        // Client Admin Granular Permission Matrix — WhatsApp Module
+        // (View/Create/Edit/Delete map 1:1 onto this controller's CRUD;
+        // 'Send Messages' is gated separately below under /alerts, reusing
+        // the existing send-messages permission — see
+        // TeamController::MANAGED_PERMISSIONS' docblock). Each route below
+        // accepts EITHER the pre-existing coarse 'manage-chatbot'
+        // permission (so 'admin' — and any other role/user who already
+        // held it — is completely unaffected by this change) OR the new
+        // matching granular permission (so a user granted ONLY
+        // 'whatsapp.view' via the new per-user matrix can view rules
+        // without also being able to create/edit/delete them).
+        Route::prefix('chatbot')->group(function () {
+            Route::middleware('permission:manage-chatbot|whatsapp.view')->group(function () {
+                Route::get('/rules', [ChatbotRuleController::class, 'index']);
+                Route::get('/logs', [ChatbotLogController::class, 'index']);
+            });
+            Route::middleware('permission:manage-chatbot|whatsapp.create')->post('/rules', [ChatbotRuleController::class, 'store']);
+            Route::middleware('permission:manage-chatbot|whatsapp.edit')->group(function () {
+                Route::put('/rules/{id}', [ChatbotRuleController::class, 'update']);
+                Route::post('/rules/{id}/toggle', [ChatbotRuleController::class, 'toggle']);
+            });
+            Route::middleware('permission:manage-chatbot|whatsapp.delete')->delete('/rules/{id}', [ChatbotRuleController::class, 'destroy']);
+        });
 
-            Route::get('/logs', [ChatbotLogController::class, 'index']);
+        // Social Media Marketing & Meta Ads Automation Expansion (Phase 1).
+        // Gated the same tier as chatbot/team above: an active-subscription
+        // admin-console feature. redirect()/index()/bind()/destroy() all
+        // resolve the tenant via ResolvesTenantAccount, same as every other
+        // route in this group.
+        Route::middleware('permission:manage-social-accounts')->prefix('social')->group(function () {
+            Route::get('/accounts', [SocialAuthController::class, 'index']);
+            Route::delete('/accounts/{id}', [SocialAuthController::class, 'destroy']);
+            Route::post('/accounts/bind', [SocialAuthController::class, 'bind']);
+            Route::get('/oauth/{provider}/redirect', [SocialAuthController::class, 'redirect']);
+        });
+
+        // Social Media Marketing & Meta Ads Automation Expansion (Phase 3).
+        // Meta Ads Launcher & Auto-Budget Guard — separate permission tier
+        // (launch-meta-ads) from manage-social-accounts above: connecting a
+        // Page/Ad Account is asset administration, launching a real,
+        // budget-spending campaign is a distinct, higher-stakes action a
+        // Super Admin may want to grant separately. Seeded onto
+        // social_marketer already in Phase 1's RolePermissionSeeder.
+        // Client Management, User Creation, Multi-Role Permissions &
+        // Feature Module Checklists refactor — explicit requirement:
+        // block every /api/social/ads/* route for a client with the
+        // 'meta_ads' module disabled. 'module.guard:meta_ads' runs
+        // after permission:launch-meta-ads, inside the same
+        // tenant.isolation/subscription.guard group both already sit
+        // in. Disclosed, deliberately NOT extended to /social/ai/* (the
+        // AI Copywriter embedded in this page's Launch Wizard) — the
+        // spec named only /api/social/ads/*; see the audit report.
+        // Client Admin Granular Permission Matrix — Social Ads Module
+        // (View/Launch Ads/Edit Budget map 1:1 onto index/launch/
+        // updateCplThreshold below; 'social_ads.delete_rules' has no
+        // corresponding action here — AdCampaignController has no
+        // delete-campaign endpoint — disclosed in
+        // TeamController::MANAGED_PERMISSIONS' docblock and this
+        // refactor's audit report; NOT invented here). pause/resume are
+        // deliberately NOT covered by the new granular permissions (not
+        // named in the spec's 4-item checklist) — they stay gated on
+        // 'launch-meta-ads' alone, unchanged. module.guard:meta_ads stays
+        // a group-level gate, applying to every action exactly as before.
+        Route::middleware('module.guard:meta_ads')->prefix('social/ads')->group(function () {
+            Route::middleware('permission:launch-meta-ads|social_ads.view')->get('/', [AdCampaignController::class, 'index']);
+            Route::middleware('permission:launch-meta-ads|social_ads.launch')->post('/launch', [AdCampaignController::class, 'launch']);
+            Route::middleware('permission:launch-meta-ads')->post('/{id}/pause', [AdCampaignController::class, 'pause']);
+            Route::middleware('permission:launch-meta-ads')->post('/{id}/resume', [AdCampaignController::class, 'resume']);
+            Route::middleware('permission:launch-meta-ads|social_ads.edit_budget')->patch('/{id}/cpl-threshold', [AdCampaignController::class, 'updateCplThreshold']);
+        });
+
+        // Social Media Marketing & Meta Ads Automation Expansion (Phase 4).
+        // Ad Comment Auto-Responder — rule CRUD (CommentRulesPage).
+        Route::middleware('permission:manage-comment-automation')->prefix('social/comment-rules')->group(function () {
+            Route::get('/', [CommentAutomationRuleController::class, 'index']);
+            Route::post('/', [CommentAutomationRuleController::class, 'store']);
+            Route::put('/{id}', [CommentAutomationRuleController::class, 'update']);
+            Route::delete('/{id}', [CommentAutomationRuleController::class, 'destroy']);
+        });
+
+        // Social Media Marketing & Meta Ads Automation Expansion (Phase 4).
+        // Unified Social Inbox — gated on manage-social-leads (same tier
+        // as the Instant Lead Bridge it surfaces alongside FB/IG DMs;
+        // see SocialInboxController's docblock).
+        Route::middleware('permission:manage-social-leads')->prefix('social/inbox')->group(function () {
+            Route::get('/threads', [SocialInboxController::class, 'threads']);
+            Route::get('/threads/{id}/messages', [SocialInboxController::class, 'messages']);
+            Route::post('/send', [SocialInboxController::class, 'send']);
+        });
+
+        // Social Media Marketing & Meta Ads Automation Expansion —
+        // Final Phase. Instant Lead CRM — read-only list/detail over the
+        // SAME Lead rows the Unified Social Inbox already surfaces as
+        // synthetic 'lead:' threads (Phase 2's leads table). NOT part of
+        // the literal Phase 1-4 spec text, but explicitly required by
+        // this final phase's route/nav audit item 3 ("Instant Lead CRM
+        // (/social/leads)") — no backend or frontend for it existed
+        // before this. Same permission tier as the Inbox above
+        // (manage-social-leads), since both surface the same underlying
+        // data.
+        Route::middleware('permission:manage-social-leads')->prefix('social/leads')->group(function () {
+            Route::get('/', [LeadController::class, 'index']);
+            Route::get('/{id}', [LeadController::class, 'show']);
+        });
+
+        // Social Media Marketing & Meta Ads Automation Expansion — Final
+        // Phase. AI Ad Copywriter — gated the SAME tier as
+        // launch-meta-ads (it is embedded in, and only useful from, the
+        // Ad Creation Wizard on MetaAdsPage.tsx).
+        Route::middleware('permission:launch-meta-ads')->prefix('social/ai')->group(function () {
+            Route::post('/generate', [AICopywriterController::class, 'generate']);
+        });
+
+        // Social Media Marketing & Meta Ads Automation Expansion — Final
+        // Phase. White-Label Automated PDF Reporting — read-only
+        // reporting surface, gated on view-social-analytics (the existing
+        // read-only social reporting permission tier; NOT a new
+        // permission, since a monthly report is analytics, not a new
+        // write-capability like manage-comment-automation was).
+        // /summary (JSON, for SocialReportsPage's recharts) is a
+        // disclosed addition beyond the literal spec's single /generate
+        // endpoint — the spec explicitly asks the SAME page to also show
+        // "monthly metric graphs", which needs data in a chartable shape,
+        // not PDF bytes.
+        Route::middleware('permission:view-social-analytics')->prefix('social/reports')->group(function () {
+            Route::get('/summary', [SocialReportController::class, 'summary']);
+            Route::get('/generate', [SocialReportController::class, 'generate']);
         });
 
         // UI overhaul: Team Users page — tenant Admin managing sub-users
@@ -181,9 +341,16 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::middleware('permission:manage-team')->prefix('team')->group(function () {
             Route::get('/users', [TeamController::class, 'index']);
             Route::post('/users', [TeamController::class, 'store']);
+            Route::patch('/users/{id}', [TeamController::class, 'update']);
             Route::patch('/users/{id}/toggle', [TeamController::class, 'toggle']);
             Route::delete('/users/{id}', [TeamController::class, 'destroy']);
             Route::get('/roles', [TeamController::class, 'roles']);
+            // Client Admin Granular Permission Matrix (/team/permissions
+            // on the frontend) — same manage-team gate as the rest of
+            // this group, since granting a teammate finer WhatsApp/Social
+            // Ads access is itself a team-management action.
+            Route::get('/users/{id}/permissions', [TeamController::class, 'permissions']);
+            Route::patch('/users/{id}/permissions', [TeamController::class, 'updatePermissions']);
         });
 
         // Module 6: Payment alert dispatch. send-messages is held by
@@ -350,5 +517,24 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/mail-settings', [MailSettingsController::class, 'show']);
         Route::put('/mail-settings', [MailSettingsController::class, 'update']);
         Route::post('/mail-settings/test', [MailSettingsController::class, 'sendTest']);
+    });
+
+    // Quota Exhaustion Request Workflow — Super Admin review/approval.
+    // Same manage-billing-settings tier as /admin/billing above (this IS
+    // billing administration: approval mutates a tenant's subscription
+    // quota and generates an invoice).
+    Route::middleware('permission:manage-billing-settings')->prefix('admin/quota-requests')->group(function () {
+        Route::get('/', [QuotaRequestController::class, 'index']);
+        Route::post('/{id}/approve', [QuotaRequestController::class, 'approve']);
+    });
+
+    // Social Media Marketing & Meta Ads Automation Expansion (Phase 1).
+    // Platform-level Meta/LinkedIn/Google OAuth App credential vault —
+    // same tier and shape as /admin/billing/gateway-settings above, its
+    // own dedicated permission (manage-social-settings) rather than
+    // manage-billing-settings so it can be delegated separately.
+    Route::middleware('permission:manage-social-settings')->prefix('admin/social')->group(function () {
+        Route::get('/provider-configs', [SocialGatewayController::class, 'index']);
+        Route::post('/provider-configs/{provider}', [SocialGatewayController::class, 'update']);
     });
 });

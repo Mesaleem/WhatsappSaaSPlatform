@@ -9,14 +9,21 @@ import {
   Code2,
   CreditCard,
   History,
+  Inbox,
   LayoutDashboard,
   Megaphone,
+  MessageSquare,
   QrCode,
+  FileBarChart,
+  Rocket,
   Send,
   Settings,
+  Share2,
   Smartphone,
   Sparkles,
+  UserSearch,
   Users,
+  Zap,
 } from 'lucide-react';
 import { useAuth } from '../../core/context/AuthContext';
 import type { AccountModule } from '../../types/account';
@@ -49,6 +56,18 @@ interface NavItem {
    * Admin is never affected by this, even while a client is selected.
    */
   requiresModule?: AccountModule;
+  /**
+   * Social Media Marketing & Meta Ads Automation Expansion (Phase 1).
+   * Hides this item for the listed exact role slugs, regardless of
+   * `permission`. Needed ONLY for items with no `permission` gate of
+   * their own (e.g. "WhatsApp Setup" is requiresAccount-only, so a
+   * social_marketer would otherwise see it) — every other item in this
+   * spec (Billing, Developer API) is already hidden for social_marketer
+   * automatically, because that role simply isn't granted those
+   * permissions (RolePermissionSeeder). Never checked for Super Admin
+   * (superAdminOnly items aside, Super Admin bypasses ordinary gates).
+   */
+  hiddenForRoles?: string[];
 }
 
 /**
@@ -73,17 +92,36 @@ interface NavItem {
  */
 const NAV_ITEMS: NavItem[] = [
   { label: 'Dashboard', to: '/', icon: LayoutDashboard, tint: NAV_TINTS.dashboard },
-  { label: 'WhatsApp Setup', to: '/settings/whatsapp', icon: QrCode, tint: NAV_TINTS.whatsapp, requiresAccount: true, requiresModule: 'whatsapp_setup' },
+  { label: 'WhatsApp Setup', to: '/settings/whatsapp', icon: QrCode, tint: NAV_TINTS.whatsapp, requiresAccount: true, requiresModule: 'whatsapp_setup', hiddenForRoles: ['social_marketer'] },
   { label: 'Send Alert', to: '/alerts/send', icon: Send, tint: NAV_TINTS.send, permission: 'send-messages', requiresModule: 'send_alert', hiddenForSuperAdmin: true },
   { label: 'Analytics', to: '/analytics', icon: BarChart3, tint: NAV_TINTS.analytics, permission: 'view-analytics', requiresModule: 'analytics' },
   { label: 'Chatbot Rules', to: '/chatbot', icon: Bot, tint: NAV_TINTS.chatbot, permission: 'manage-chatbot', requiresModule: 'chatbot' },
   { label: 'Billing & Plans', to: '/billing', icon: CreditCard, tint: NAV_TINTS.billing, permission: 'manage-subscriptions', requiresModule: 'billing' },
   { label: 'Developer API', to: '/developer', icon: Code2, tint: NAV_TINTS.developer, permission: 'manage-developer-settings', requiresModule: 'developer_api' },
   { label: 'Team Users', to: '/users', icon: Users, tint: NAV_TINTS.team, permission: 'manage-team', requiresModule: 'team_management' },
-  { label: 'Manage Accounts', to: '/admin/accounts', icon: Building2, tint: NAV_TINTS.accounts, superAdminOnly: true },
+  // Social Media Marketing & Meta Ads Automation Expansion (Phase 1).
+  // "Module & Feature Access" modal reorganization: 'social_accounts' is
+  // now a real ACCOUNT_MODULES slug (Social Media Suite), closing the
+  // gap disclosed in an earlier task — this nav item is gated the same
+  // way every other module-backed item above it is.
+  { label: 'Social Accounts', to: '/social/accounts', icon: Share2, tint: NAV_TINTS.social, permission: 'manage-social-accounts', requiresModule: 'social_accounts' },
+  // Social Media Marketing & Meta Ads Automation Expansion (Phase 3).
+  { label: 'Meta Ads Launcher', to: '/social/ads', icon: Rocket, tint: NAV_TINTS.social, permission: 'launch-meta-ads' },
+  // Social Media Marketing & Meta Ads Automation Expansion (Phase 4).
+  { label: 'Social Inbox', to: '/social/inbox', icon: Inbox, tint: NAV_TINTS.social, permission: 'manage-social-leads' },
+  { label: 'Comment Rules', to: '/social/comment-rules', icon: MessageSquare, tint: NAV_TINTS.social, permission: 'manage-comment-automation' },
+  // Social Media Marketing & Meta Ads Automation Expansion — Final Phase.
+  { label: 'Instant Lead CRM', to: '/social/leads', icon: UserSearch, tint: NAV_TINTS.social, permission: 'manage-social-leads' },
+  { label: 'Social Reports', to: '/social/reports', icon: FileBarChart, tint: NAV_TINTS.social, permission: 'view-social-analytics' },
+  { label: 'Manage Clients', to: '/admin/accounts', icon: Building2, tint: NAV_TINTS.accounts, superAdminOnly: true },
   // Dynamic Templates & Variables System — Super Admin Template Designer & Approval Panel.
   { label: 'Template Manager', to: '/admin/templates', icon: Sparkles, tint: NAV_TINTS.accounts, superAdminOnly: true },
   { label: 'Admin Gateway Settings', to: '/admin/billing/gateway-settings', icon: Settings, tint: NAV_TINTS.gateway, superAdminOnly: true },
+  // Quota Exhaustion Request Workflow & Custom Invoice Generation —
+  // Super Admin review/approval queue for Client Admin top-up requests.
+  { label: 'Quota Top-Up Requests', to: '/admin/quota-requests', icon: Zap, tint: NAV_TINTS.billing, superAdminOnly: true },
+  // Social Media Marketing & Meta Ads Automation Expansion (Phase 2).
+  { label: 'Social Gateway Settings', to: '/admin/social-settings', icon: Settings, tint: NAV_TINTS.social, superAdminOnly: true },
   // Super Admin WhatsApp Device Integration — link/view/disconnect/reconnect any client's device from one screen.
   { label: 'Device Settings', to: '/admin/device-settings', icon: Smartphone, tint: NAV_TINTS.whatsapp, superAdminOnly: true },
   // Role-Based Login Audit Logging Architecture — held by all three
@@ -101,10 +139,12 @@ function isNavItemVisible(
     hasAccount: boolean;
     hasPermission: (p: string) => boolean;
     hasModule: (m: AccountModule) => boolean;
+    hasRole: (roleName: string) => boolean;
   },
 ): boolean {
   if (item.superAdminOnly) return opts.isSuperAdmin;
   if (item.hiddenForSuperAdmin && opts.isSuperAdmin) return false;
+  if (!opts.isSuperAdmin && item.hiddenForRoles?.some((role) => opts.hasRole(role))) return false;
   if (item.requiresAccount && !opts.hasAccount) return false;
   if (item.permission && !opts.isSuperAdmin && !opts.hasPermission(item.permission)) return false;
   if (item.requiresModule && !opts.isSuperAdmin && !opts.hasModule(item.requiresModule)) return false;
@@ -124,7 +164,7 @@ function resolvePageTitle(pathname: string): string {
 }
 
 export default function AppLayout() {
-  const { user, hasPermission, isSuperAdmin, hasModule } = useAuth();
+  const { user, hasPermission, isSuperAdmin, hasModule, hasRole } = useAuth();
   const location = useLocation();
   const [isCollapsed, setIsCollapsed] = useState(false);
 
@@ -134,9 +174,9 @@ export default function AppLayout() {
   const visibleItems = useMemo(
     () =>
       NAV_ITEMS.filter((item) =>
-        isNavItemVisible(item, { isSuperAdmin: superAdmin, hasAccount, hasPermission, hasModule }),
+        isNavItemVisible(item, { isSuperAdmin: superAdmin, hasAccount, hasPermission, hasModule, hasRole }),
       ),
-    [superAdmin, hasAccount, hasPermission, hasModule],
+    [superAdmin, hasAccount, hasPermission, hasModule, hasRole],
   );
 
   const pageTitle = resolvePageTitle(location.pathname);

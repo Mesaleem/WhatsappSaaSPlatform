@@ -19,25 +19,33 @@ import {
   CheckCircle2,
   Clock,
   CreditCard,
+  Eye,
   IndianRupee,
   Loader2,
+  Megaphone,
   MessageSquare,
   Percent,
   Send,
   Settings,
   Smartphone,
+  Target,
   TrendingUp,
   Users,
   Wifi,
   XCircle,
+  Zap,
 } from 'lucide-react';
 import { useAuth } from '../core/context/AuthContext';
 import { useTenant } from '../core/context/TenantContext';
 import analyticsService from '../services/analyticsService';
+import reportsService from '../services/reportsService';
+import QuotaTopUpModal from '../components/billing/QuotaTopUpModal';
 import { indigo, NAV_TINTS, cardShadow, type Tint } from '../theme/signalIndigo';
 import type { ApiErrorResponse } from '../types/auth';
+import type { ModuleAssignment } from '../types/account';
 import type { AnalyticsChartsResponse, AnalyticsSummary, GlobalAnalyticsSummary } from '../types/analytics';
 import type { PaymentAlert, PaymentAlertStatus } from '../types/alert';
+import type { SocialReportSummary } from '../types/reports';
 import type { EngineType, Subscription } from '../types/subscription';
 import ExpiringSoonModal from '../components/admin/ExpiringSoonModal';
 
@@ -311,6 +319,15 @@ function SubscriptionHealthCard({
   quotaPercentUsed: number | null;
   quotaLabel: string;
 }) {
+  // Quota Exhaustion Request Workflow — "Request Extra Quota" button.
+  // Self-contained modal/toast state (this card is a plain function
+  // component with no parent-owned state today, matching the pattern
+  // SocialAdsSummaryCards below already uses for its own self-contained
+  // fetch state). Hooks must run before the `if (!subscription) return
+  // null;` guard below (Rules of Hooks), so they're declared first.
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [toast, setToast] = useState<string | null>(null);
+
   if (!subscription) return null;
 
   const planLabel = `${subscription.billing_model.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())} (${subscription.engine_type.toUpperCase()})`;
@@ -318,54 +335,170 @@ function SubscriptionHealthCard({
   const percent = quotaPercentUsed ?? 0;
   const barColor = percent >= 90 ? '#DC2626' : percent >= 70 ? '#D97706' : '#0E9F6E';
 
-  return (
-    <Link
-      to="/billing"
-      className="block rounded-2xl border bg-white p-5 transition hover:-translate-y-0.5"
-      style={{ borderColor: indigo.border, boxShadow: cardShadow }}
-    >
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <div>
-          <p className="text-[11px] font-semibold uppercase tracking-wide" style={{ color: indigo.muted }}>
-            Current Subscription Plan
-          </p>
-          <p className="mt-1 font-display text-base font-bold" style={{ color: indigo.ink }}>
-            {planLabel}
-          </p>
-        </div>
-        <div className="text-right">
-          <p className="text-[11px] font-semibold uppercase tracking-wide" style={{ color: indigo.muted }}>
-            Renews / Expires
-          </p>
-          <p className="mt-1 text-sm font-semibold" style={{ color: indigo.ink }}>
-            {renewalDate}
-          </p>
-        </div>
-        <div className="text-right">
-          <p className="text-[11px] font-semibold uppercase tracking-wide" style={{ color: indigo.muted }}>
-            Subscription Amount
-          </p>
-          <p className="mt-1 font-mono text-sm font-semibold" style={{ color: indigo.ink }}>
-            {formatINR(subscription.price_paid)}
-          </p>
-        </div>
-      </div>
+  // Conditional Quota Top-Up Button — server-mirrored gate (see
+  // QuotaRequestController::store()): only a flat_quota plan has a
+  // finite total_allocated_messages to run out of and top up.
+  // 'unlimited' has no cap; 'per_message' has no cap to hit either.
+  // Shown at 90%+ usage (spec: "reaches 90% or 100%").
+  const canRequestTopUp = subscription.billing_model === 'flat_quota' && quotaPercentUsed !== null && quotaPercentUsed >= 90;
 
-      {quotaPercentUsed !== null && (
-        <div className="mt-4" title={quotaLabel}>
-          <div className="flex items-center justify-between text-xs" style={{ color: indigo.muted }}>
-            <span>Message Quota</span>
-            <span>{quotaLabel}</span>
+  const handleSubmitted = (message: string) => {
+    setIsModalOpen(false);
+    setToast(message);
+    setTimeout(() => setToast(null), 4000);
+  };
+
+  return (
+    <>
+      <Link
+        to="/billing"
+        className="block rounded-2xl border bg-white p-5 transition hover:-translate-y-0.5"
+        style={{ borderColor: indigo.border, boxShadow: cardShadow }}
+      >
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div>
+            <p className="text-[11px] font-semibold uppercase tracking-wide" style={{ color: indigo.muted }}>
+              Current Subscription Plan
+            </p>
+            <p className="mt-1 font-display text-base font-bold" style={{ color: indigo.ink }}>
+              {planLabel}
+            </p>
           </div>
-          <div className="mt-1.5 h-2.5 w-full overflow-hidden rounded-full bg-slate-100">
-            <div
-              className="h-full rounded-full transition-all"
-              style={{ width: `${Math.min(100, Math.max(0, percent))}%`, background: barColor }}
-            />
+          <div className="text-right">
+            <p className="text-[11px] font-semibold uppercase tracking-wide" style={{ color: indigo.muted }}>
+              Renews / Expires
+            </p>
+            <p className="mt-1 text-sm font-semibold" style={{ color: indigo.ink }}>
+              {renewalDate}
+            </p>
           </div>
+          <div className="text-right">
+            <p className="text-[11px] font-semibold uppercase tracking-wide" style={{ color: indigo.muted }}>
+              Subscription Amount
+            </p>
+            <p className="mt-1 font-mono text-sm font-semibold" style={{ color: indigo.ink }}>
+              {formatINR(subscription.price_paid)}
+            </p>
+          </div>
+        </div>
+
+        {quotaPercentUsed !== null && (
+          <div className="mt-4" title={quotaLabel}>
+            <div className="flex items-center justify-between text-xs" style={{ color: indigo.muted }}>
+              <span>Message Quota</span>
+              <span>{quotaLabel}</span>
+            </div>
+            <div className="mt-1.5 h-2.5 w-full overflow-hidden rounded-full bg-slate-100">
+              <div
+                className="h-full rounded-full transition-all"
+                style={{ width: `${Math.min(100, Math.max(0, percent))}%`, background: barColor }}
+              />
+            </div>
+          </div>
+        )}
+
+        {canRequestTopUp && (
+          <button
+            onClick={(e) => {
+              // The card itself is a <Link to="/billing"> — without
+              // these, clicking this button would also navigate away
+              // before the modal ever opens.
+              e.preventDefault();
+              e.stopPropagation();
+              setIsModalOpen(true);
+            }}
+            className="mt-4 flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold text-white shadow-sm transition hover:opacity-90"
+            style={{ background: barColor }}
+          >
+            <Zap className="h-3.5 w-3.5" />
+            Request Extra Quota
+          </button>
+        )}
+      </Link>
+
+      {isModalOpen && (
+        <QuotaTopUpModal onClose={() => setIsModalOpen(false)} onSubmitted={handleSubmitted} />
+      )}
+
+      {toast && (
+        <div className="fixed bottom-6 right-6 z-50 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 shadow-lg">
+          {toast}
         </div>
       )}
-    </Link>
+    </>
+  );
+}
+
+/**
+ * Dynamic Permission & Module-Based Dashboard — Social Media widget set.
+ * Self-contained fetch, same pattern as DailyPulseChart/RevenuePulseChart
+ * above: reuses GET /api/social/reports/summary (SocialReportsPage's own
+ * data source — see reportsService.ts), so no new backend endpoint was
+ * needed for this. Rendered only when the account's module_assignment is
+ * 'social_media' or 'both' AND the caller holds view-social-analytics
+ * (the same permission SocialReportsPage itself requires) — a user
+ * without that permission never triggers this request.
+ */
+function SocialAdsSummaryCards() {
+  const [summary, setSummary] = useState<SocialReportSummary | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
+
+  const load = useCallback(async () => {
+    setIsLoading(true);
+    setLoadError(false);
+    try {
+      const data = await reportsService.getSummary();
+      setSummary(data);
+    } catch {
+      setLoadError(true);
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  if (loadError) return null;
+
+  return (
+    <div>
+      <h3 className="mb-3 font-display text-sm font-bold" style={{ color: indigo.ink }}>
+        Social Media &amp; Meta Ads — This Month
+      </h3>
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <StatCard
+          label="Total Ad Spend"
+          value={isLoading ? '…' : formatINR(summary?.total_ad_spend ?? 0)}
+          sub={summary?.period.label}
+          icon={Megaphone}
+          tint={NAV_TINTS.chatbot}
+        />
+        <StatCard
+          label="Leads Generated"
+          value={isLoading ? '…' : String(summary?.total_leads_generated ?? 0)}
+          sub="Instant Lead Bridge, this month"
+          icon={Target}
+          tint={NAV_TINTS.team}
+        />
+        <StatCard
+          label="Average CPL"
+          value={isLoading ? '…' : summary?.average_cpl != null ? formatINR(summary.average_cpl) : 'N/A'}
+          sub="Cost per Meta-attributed lead"
+          icon={TrendingUp}
+          tint={NAV_TINTS.analytics}
+        />
+        <StatCard
+          label="Combined Impressions"
+          value={isLoading ? '…' : String(summary?.combined_impressions ?? 0)}
+          sub="Ad views across active campaigns"
+          icon={Eye}
+          tint={NAV_TINTS.send}
+        />
+      </div>
+    </div>
   );
 }
 
@@ -378,6 +511,18 @@ function TenantDashboard({ impersonatedAccountName }: { impersonatedAccountName?
   const canManageChatbot = hasPermission('manage-chatbot');
   const canManageBilling = hasPermission('manage-subscriptions');
   const canManageTeam = hasPermission('manage-team');
+  const canViewSocialAnalytics = hasPermission('view-social-analytics');
+
+  // Dynamic Permission & Module-Based Dashboard — module_assignment is
+  // DISTINCT from the granular allowed_modules sidebar checklist (see
+  // Account::MODULE_ASSIGNMENTS' docblock on the backend and this
+  // refactor's audit report): it drives ONLY which widget SET renders
+  // here. Defaults to 'both' for every account created before this
+  // column existed (zero-regression — 'both' shows everything this page
+  // already showed).
+  const moduleAssignment: ModuleAssignment = user?.account?.module_assignment ?? 'both';
+  const showWhatsApp = moduleAssignment !== 'social_media';
+  const showSocial = moduleAssignment !== 'whatsapp_messaging' && canViewSocialAnalytics;
 
   const subscription = user?.account?.current_subscription ?? null;
 
@@ -466,55 +611,63 @@ function TenantDashboard({ impersonatedAccountName }: { impersonatedAccountName?
           </div>
         )}
 
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <StatCard
-            label="Total Messages"
-            value={!canViewAnalytics ? '—' : isLoadingSummary ? '…' : String(summary?.total_alerts_attempted ?? 0)}
-            sub={!canViewAnalytics ? 'Requires view-analytics' : isLoadingSummary ? undefined : 'Last 30 days'}
-            icon={MessageSquare}
-            tint={NAV_TINTS.send}
-          />
-          <StatCard
-            label="Success Rate"
-            value={!canViewAnalytics ? '—' : isLoadingSummary ? '…' : `${summary?.delivered_rate ?? 0}%`}
-            sub={!canViewAnalytics ? 'Requires view-analytics' : isLoadingSummary ? undefined : `${summary?.total_failed ?? 0} failed`}
-            icon={TrendingUp}
-            tint={NAV_TINTS.analytics}
-          />
-          <StatCard label="Quota Health" value={quotaLabel} sub={quotaSub} icon={CreditCard} tint={NAV_TINTS.billing} />
-          <StatCard
-            label="Active Engine"
-            value={engineType ? ENGINE_LABEL[engineType] : '—'}
-            sub={engineType === 'qr' ? 'Self-hosted via QR pairing' : engineType === 'meta' ? 'Official WhatsApp Cloud API' : undefined}
-            icon={engineType === 'qr' ? Smartphone : Wifi}
-            tint={NAV_TINTS.whatsapp}
-          />
-          <StatCard
-            label="Today's Messages"
-            value={!canViewAnalytics ? '—' : isLoadingSummary ? '…' : `${summary?.total_sent_today ?? 0} sent`}
-            sub={!canViewAnalytics ? 'Requires view-analytics' : isLoadingSummary ? undefined : `${summary?.total_failed_today ?? 0} failed today`}
-            icon={MessageSquare}
-            tint={NAV_TINTS.dashboard}
-            onClick={canViewLogs ? () => navigate('/analytics') : undefined}
-          />
-        </div>
+        {/* Dynamic Permission & Module-Based Dashboard — WhatsApp Only / Both. Every card here is WhatsApp message/engine/quota data, hidden entirely for a 'social_media' client. */}
+        {showWhatsApp && (
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <StatCard
+              label="Total Messages"
+              value={!canViewAnalytics ? '—' : isLoadingSummary ? '…' : String(summary?.total_alerts_attempted ?? 0)}
+              sub={!canViewAnalytics ? 'Requires view-analytics' : isLoadingSummary ? undefined : 'Last 30 days'}
+              icon={MessageSquare}
+              tint={NAV_TINTS.send}
+            />
+            <StatCard
+              label="Success Rate"
+              value={!canViewAnalytics ? '—' : isLoadingSummary ? '…' : `${summary?.delivered_rate ?? 0}%`}
+              sub={!canViewAnalytics ? 'Requires view-analytics' : isLoadingSummary ? undefined : `${summary?.total_failed ?? 0} failed`}
+              icon={TrendingUp}
+              tint={NAV_TINTS.analytics}
+            />
+            <StatCard label="Quota Health" value={quotaLabel} sub={quotaSub} icon={CreditCard} tint={NAV_TINTS.billing} />
+            <StatCard
+              label="Active Engine"
+              value={engineType ? ENGINE_LABEL[engineType] : '—'}
+              sub={engineType === 'qr' ? 'Self-hosted via QR pairing' : engineType === 'meta' ? 'Official WhatsApp Cloud API' : undefined}
+              icon={engineType === 'qr' ? Smartphone : Wifi}
+              tint={NAV_TINTS.whatsapp}
+            />
+            <StatCard
+              label="Today's Messages"
+              value={!canViewAnalytics ? '—' : isLoadingSummary ? '…' : `${summary?.total_sent_today ?? 0} sent`}
+              sub={!canViewAnalytics ? 'Requires view-analytics' : isLoadingSummary ? undefined : `${summary?.total_failed_today ?? 0} failed today`}
+              icon={MessageSquare}
+              tint={NAV_TINTS.dashboard}
+              onClick={canViewLogs ? () => navigate('/analytics') : undefined}
+            />
+          </div>
+        )}
+
+        {/* Dynamic Permission & Module-Based Dashboard — Social Media Only / Both. */}
+        {showSocial && <SocialAdsSummaryCards />}
 
         <SubscriptionHealthCard subscription={subscription} quotaPercentUsed={quota?.quota_percent_used ?? null} quotaLabel={quotaSub ?? quotaLabel} />
 
-        {canViewAnalytics && <DailyPulseChart />}
+        {showWhatsApp && canViewAnalytics && <DailyPulseChart />}
 
         <div>
           <h3 className="mb-3 font-display text-sm font-bold" style={{ color: indigo.ink }}>
             Quick Actions
           </h3>
           <div className="grid gap-3 sm:grid-cols-3">
-            {canSendAlerts && <QuickAction to="/alerts/send" label="Send Payment Alert" icon={Send} tint={NAV_TINTS.send} />}
+            {showWhatsApp && canSendAlerts && <QuickAction to="/alerts/send" label="Send Payment Alert" icon={Send} tint={NAV_TINTS.send} />}
             {canManageTeam && <QuickAction to="/users" label="Manage Team" icon={Users} tint={NAV_TINTS.team} />}
             {canManageBilling && <QuickAction to="/billing" label="Upgrade / Renew Plan" icon={CreditCard} tint={NAV_TINTS.billing} />}
-            {canManageChatbot && <QuickAction to="/chatbot" label="Manage Chatbot" icon={Bot} tint={NAV_TINTS.chatbot} />}
+            {showWhatsApp && canManageChatbot && <QuickAction to="/chatbot" label="Manage Chatbot" icon={Bot} tint={NAV_TINTS.chatbot} />}
+            {showSocial && <QuickAction to="/social/reports" label="View Social Reports" icon={Megaphone} tint={NAV_TINTS.chatbot} />}
           </div>
         </div>
 
+        {showWhatsApp && (
         <div className="overflow-hidden rounded-2xl border bg-white" style={{ borderColor: indigo.border, boxShadow: cardShadow }}>
           <div className="flex items-center justify-between px-5 py-3.5" style={{ borderBottom: `1px solid ${indigo.border}` }}>
             <h3 className="font-display text-sm font-bold" style={{ color: indigo.ink }}>
@@ -590,6 +743,7 @@ function TenantDashboard({ impersonatedAccountName }: { impersonatedAccountName?
             </div>
           )}
         </div>
+        )}
       </div>
     </div>
   );
@@ -766,7 +920,7 @@ function SuperAdminDashboard() {
             Quick Actions
           </h3>
           <div className="grid gap-3 sm:grid-cols-2">
-            <QuickAction to="/admin/accounts" label="Manage Accounts" icon={Building2} tint={NAV_TINTS.accounts} />
+            <QuickAction to="/admin/accounts" label="Manage Clients" icon={Building2} tint={NAV_TINTS.accounts} />
             <QuickAction to="/admin/billing/gateway-settings" label="Gateway Settings" icon={Settings} tint={NAV_TINTS.gateway} />
           </div>
         </div>

@@ -115,6 +115,22 @@ class Account extends Model
      *
      * @var list<string>
      */
+    /**
+     * Super Admin Client Provisioning refactor — the client's coarse
+     * business-category, distinct from the granular per-feature
+     * `allowed_modules` checklist above: this drives which WIDGET SET
+     * DashboardPage.tsx renders (WhatsApp-only / Social-only / hybrid
+     * "both"), while `allowed_modules` continues to drive the sidebar's
+     * per-feature checklist. Deliberately two separate fields rather
+     * than deriving one from the other — conflating "which dashboard
+     * layout" with "which of 15 individual features" would make either
+     * concept impossible to reason about on its own. See this
+     * refactor's audit report.
+     *
+     * @var list<string>
+     */
+    public const MODULE_ASSIGNMENTS = ['whatsapp_messaging', 'social_media', 'both'];
+
     public const MODULES = [
         'dashboard',
         'whatsapp_setup',
@@ -125,6 +141,36 @@ class Account extends Model
         'developer_api',
         'team_management',
         'notifications',
+        // Client Management, User Creation, Multi-Role Permissions &
+        // Feature Module Checklists refactor — six new checklist rows.
+        // The spec's 8-item checklist also lists "WhatsApp Chatbot &
+        // Rules" and "Team Users": deliberately NOT new slugs here —
+        // "Team Users" already exists above as 'team_management'
+        // (enforced both client- and server-side already), and
+        // "WhatsApp Chatbot & Rules" is rendered in the checklist UI as
+        // one combined checkbox over the two EXISTING 'whatsapp_setup'
+        // + 'chatbot' slugs rather than a new, parallel, unenforced
+        // slug that would duplicate what already works. See
+        // CreateAccountModal.tsx's module-checklist section and this
+        // refactor's audit report for the full slug-to-checklist-row
+        // mapping and the reasoning above.
+        'meta_ads',
+        'social_inbox',
+        'lead_crm',
+        'comment_automation',
+        'reports',
+        'templates',
+        // "Module & Feature Access" modal reorganization (3 categories +
+        // Master Category checkboxes + Quick Plan presets) — two new
+        // slugs. 'device_settings' maps to a superAdminOnly nav item
+        // with no requiresModule (same disclosed no-op precedent as
+        // 'templates'); 'social_accounts' closes a previously-disclosed
+        // gap by gaining a real `requiresModule` gate on its nav item.
+        // See frontend-app's types/account.ts CORE_COMMON_MODULES /
+        // WHATSAPP_SUITE_MODULES / SOCIAL_SUITE_MODULES and this
+        // refactor's audit report.
+        'device_settings',
+        'social_accounts',
     ];
 
     protected $fillable = [
@@ -135,15 +181,41 @@ class Account extends Model
         'api_rate_limit_per_minute',
         // Absolute Super Admin Control — per-client module toggles.
         'allowed_modules',
+        // Super Admin Client Provisioning, Client Admin Mapping, User
+        // Limits, Granular Permission Matrix & Adaptive Dashboards
+        // refactor — see the creating migration's docblock and
+        // MODULE_ASSIGNMENTS above.
+        'max_users_limit',
+        'module_assignment',
         // Super Admin WhatsApp Device Integration — see platformDevice().
         'is_platform_device',
+        // Social Media Marketing & Meta Ads Automation Expansion (Phase 1).
+        // Per-platform toggles; see the creating migration's docblock for
+        // why these default false rather than following allowed_modules'
+        // "null = everything enabled" precedent.
+        'allow_facebook',
+        'allow_instagram',
+        'allow_linkedin',
+        'allow_youtube',
+        // Social Media Marketing & Meta Ads Automation Expansion (Final
+        // Phase) — White-Label Automated PDF Reporting. See the creating
+        // migration's docblock: Super-Admin-set only, same tier as
+        // company_name/primary_phone above (no tenant self-service
+        // profile endpoint exists for any of these).
+        'logo_url',
+        'brand_accent_color',
     ];
 
     protected function casts(): array
     {
         return [
             'allowed_modules' => 'array',
+            'max_users_limit' => 'integer',
             'is_platform_device' => 'boolean',
+            'allow_facebook' => 'boolean',
+            'allow_instagram' => 'boolean',
+            'allow_linkedin' => 'boolean',
+            'allow_youtube' => 'boolean',
         ];
     }
 
@@ -230,5 +302,45 @@ class Account extends Model
         }
 
         return in_array($module, $this->allowed_modules, true);
+    }
+
+    /**
+     * Super Admin Client Provisioning refactor — User Limits.
+     * max_users_limit === null means unlimited (the default for every
+     * account until a Super Admin sets a cap — same zero-regression
+     * convention as hasModuleEnabled() above). Counts EVERY user on the
+     * account, including the primary Admin/owner, since the limit is a
+     * total-headcount cap on the account, not a "team members besides
+     * the owner" cap.
+     */
+    public function hasReachedUserLimit(): bool
+    {
+        if ($this->max_users_limit === null) {
+            return false;
+        }
+
+        return $this->users()->count() >= $this->max_users_limit;
+    }
+
+    /**
+     * Social Media Marketing & Meta Ads Automation Expansion (Phase 1).
+     * Maps a SocialAccount::ASSET_TYPES value to the allow_* column that
+     * gates it. 'meta_ad_account' is deliberately bundled under
+     * allow_facebook (the spec names four PLATFORM toggles — facebook,
+     * instagram, linkedin, youtube — not a separate "ads" toggle; a Meta
+     * Ad Account is part of the same Meta/Facebook Business grant as
+     * Pages) — a disclosed interpretation, easy to split into its own
+     * column later if Super Admin wants Ads gated independently of Pages.
+     * Unknown asset types fail closed (false), not open.
+     */
+    public function hasSocialPlatformEnabled(string $assetType): bool
+    {
+        return match ($assetType) {
+            'facebook_page', 'meta_ad_account' => (bool) $this->allow_facebook,
+            'instagram' => (bool) $this->allow_instagram,
+            'linkedin_page' => (bool) $this->allow_linkedin,
+            'youtube_channel' => (bool) $this->allow_youtube,
+            default => false,
+        };
     }
 }

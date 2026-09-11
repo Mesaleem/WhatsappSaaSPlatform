@@ -222,7 +222,7 @@ export default function MetaConfigCard() {
       <form onSubmit={(e) => void handleSave(e)} className="mt-5 space-y-4">
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
           <div>
-            <label className="text-sm font-medium text-slate-700">Phone Number ID</label>
+            <label className="text-sm font-medium text-slate-700">Phone Number ID <span className="text-red-500">*</span></label>
             <input
               type="text"
               value={phoneNumberId}
@@ -233,7 +233,7 @@ export default function MetaConfigCard() {
           </div>
 
           <div>
-            <label className="text-sm font-medium text-slate-700">WhatsApp Business Account ID (WABA ID)</label>
+            <label className="text-sm font-medium text-slate-700">WhatsApp Business Account ID (WABA ID) <span className="text-red-500">*</span></label>
             <input
               type="text"
               value={wabaId}
@@ -245,7 +245,7 @@ export default function MetaConfigCard() {
         </div>
 
         <div>
-          <label className="text-sm font-medium text-slate-700">Permanent Access Token</label>
+          <label className="text-sm font-medium text-slate-700">Permanent Access Token <span className="text-red-500">*</span></label>
           <div className="relative">
             <input
               type={showToken ? 'text' : 'password'}

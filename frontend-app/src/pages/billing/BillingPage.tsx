@@ -16,6 +16,7 @@ import {
 import { useAuth } from '../../core/context/AuthContext';
 import billingService from '../../services/billingService';
 import StripeCardModal from '../../components/billing/StripeCardModal';
+import QuotaTopUpModal from '../../components/billing/QuotaTopUpModal';
 import ClientBillingSummaryTable from '../../components/billing/ClientBillingSummaryTable';
 import { PageHeader, PageShell } from '../../components/common/PageShell';
 import { TableSkeletonRows } from '../../components/common/Skeleton';
@@ -105,6 +106,7 @@ export default function BillingPage() {
   const [checkoutError, setCheckoutError] = useState<string | null>(null);
   const [checkoutSuccess, setCheckoutSuccess] = useState<string | null>(null);
   const [stripeModal, setStripeModal] = useState<StripeModalState | null>(null);
+  const [isQuotaModalOpen, setIsQuotaModalOpen] = useState(false);
 
   const loadPlans = useCallback(async () => {
     setIsLoadingPlans(true);
@@ -256,7 +258,7 @@ export default function BillingPage() {
   // null for that role), so this branch replaces the self-service
   // checkout/invoice UI below with the platform-wide Client Billing
   // Summary table instead — Super Admin manages a specific client's
-  // subscription via Manage Accounts, not via this self-service page.
+  // subscription via Manage Clients, not via this self-service page.
   if (isSuperAdmin()) {
     return (
       <PageShell maxWidthClassName="max-w-full">
@@ -353,6 +355,20 @@ export default function BillingPage() {
                       style={{ width: `${quotaPercent}%` }}
                     />
                   </div>
+                </div>
+              )}
+              {/* Conditional Quota Top-Up Button — server-mirrored gate,
+                  same as SubscriptionHealthCard on the dashboard: only a
+                  flat_quota plan at 90%+ usage can request a top-up. */}
+              {subscription.billing_model === 'flat_quota' && quotaPercent !== null && quotaPercent >= 90 && (
+                <div className="col-span-2 sm:col-span-4">
+                  <button
+                    onClick={() => setIsQuotaModalOpen(true)}
+                    className="flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-indigo-700"
+                  >
+                    <Zap className="h-3.5 w-3.5" />
+                    Request Extra Quota
+                  </button>
                 </div>
               )}
             </div>
@@ -483,6 +499,7 @@ export default function BillingPage() {
                         <button
                           onClick={() => void handleDownload(invoice)}
                           disabled={downloadingId === invoice.id}
+                          title="Downloads the invoice PDF. Client Billing & Invoice Notification: no separate gateway checkout exists yet for a Super-Admin-generated top-up invoice — see the Quota Top-Up audit report."
                           className="inline-flex items-center gap-1 text-xs font-medium text-indigo-600 hover:text-indigo-700 disabled:opacity-60"
                         >
                           {downloadingId === invoice.id ? (
@@ -490,7 +507,7 @@ export default function BillingPage() {
                           ) : (
                             <Download className="h-3 w-3" />
                           )}
-                          PDF
+                          {invoice.status === 'paid' ? 'View Bill' : 'Pay Invoice'}
                         </button>
                       </td>
                     </tr>
@@ -544,6 +561,16 @@ export default function BillingPage() {
           amountDisplay={stripeModal.amountDisplay}
           onSuccess={(paymentIntentId) => void handleStripeSuccess(paymentIntentId)}
           onClose={() => setStripeModal(null)}
+        />
+      )}
+
+      {isQuotaModalOpen && (
+        <QuotaTopUpModal
+          onClose={() => setIsQuotaModalOpen(false)}
+          onSubmitted={(message) => {
+            setIsQuotaModalOpen(false);
+            setCheckoutSuccess(message);
+          }}
         />
       )}
     </div>

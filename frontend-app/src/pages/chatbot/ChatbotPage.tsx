@@ -13,7 +13,7 @@ import {
   XCircle,
 } from 'lucide-react';
 import chatbotService from '../../services/chatbotService';
-import { SearchInput } from '../../components/common/DataTableControls';
+import { ClearFiltersButton, SearchInput } from '../../components/common/DataTableControls';
 import { useAuth } from '../../core/context/AuthContext';
 import { useTenant } from '../../core/context/TenantContext';
 import { extractErrorMessage as extractMessage } from '../../utils/apiError';
@@ -279,7 +279,7 @@ function RuleFormModal({
 
         <form onSubmit={(e) => void handleSubmit(e)} className="mt-4 space-y-4">
           <div>
-            <label className="text-sm font-medium text-slate-700">Name</label>
+            <label className="text-sm font-medium text-slate-700">Name <span className="text-red-500">*</span></label>
             <input value={form.name} onChange={(e) => update('name', e.target.value)} placeholder="e.g. Business hours" className={inputClass} autoFocus />
           </div>
 
@@ -311,7 +311,7 @@ function RuleFormModal({
           {form.match_type !== 'fallback' && (
             <div>
               <label className="text-sm font-medium text-slate-700">
-                Keywords <span className="text-xs font-normal text-slate-400">(one per line)</span>
+                Keywords <span className="text-red-500">*</span> <span className="text-xs font-normal text-slate-400">(one per line)</span>
               </label>
               <textarea
                 value={form.keywordsText}
@@ -342,7 +342,7 @@ function RuleFormModal({
 
           {form.response_type === 'text' && (
             <div>
-              <label className="text-sm font-medium text-slate-700">Reply text</label>
+              <label className="text-sm font-medium text-slate-700">Reply text <span className="text-red-500">*</span></label>
               <textarea value={form.text} onChange={(e) => update('text', e.target.value)} rows={3} className={inputClass} />
             </div>
           )}
@@ -360,7 +360,7 @@ function RuleFormModal({
                 </select>
               </div>
               <div>
-                <label className="text-sm font-medium text-slate-700">Media URL</label>
+                <label className="text-sm font-medium text-slate-700">Media URL <span className="text-red-500">*</span></label>
                 <input value={form.url} onChange={(e) => update('url', e.target.value)} placeholder="https://..." className={inputClass} />
               </div>
               <div>
@@ -379,7 +379,7 @@ function RuleFormModal({
           {form.response_type === 'interactive' && (
             <div className="space-y-3 rounded-lg border border-slate-200 p-3">
               <div>
-                <label className="text-sm font-medium text-slate-700">Body text</label>
+                <label className="text-sm font-medium text-slate-700">Body text <span className="text-red-500">*</span></label>
                 <textarea value={form.body} onChange={(e) => update('body', e.target.value)} rows={2} className={inputClass} />
               </div>
               <div>
@@ -396,7 +396,7 @@ function RuleFormModal({
 
               {form.interactive_type === 'button' ? (
                 <div className="space-y-2">
-                  <label className="text-sm font-medium text-slate-700">Buttons</label>
+                  <label className="text-sm font-medium text-slate-700">Buttons <span className="text-red-500">*</span></label>
                   {form.buttons.map((btn, i) => (
                     <div key={i} className="flex items-center gap-2">
                       <input
@@ -601,6 +601,9 @@ function RulesTab() {
       )
     : rules;
 
+  const hasActiveRuleFilters = search !== '';
+  const clearRuleFilters = () => setSearch('');
+
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -609,6 +612,7 @@ function RulesTab() {
         </p>
         <div className="flex items-center gap-3">
           <SearchInput value={search} onChange={setSearch} placeholder="Search name or keyword…" />
+          <ClearFiltersButton active={hasActiveRuleFilters} onClear={clearRuleFilters} />
           <button
             onClick={() => setShowCreate(true)}
             disabled={isReadOnly()}
@@ -756,6 +760,12 @@ function LogsTab() {
     return () => clearTimeout(handle);
   }, [searchInput]);
 
+  const hasActiveLogFilters = searchInput !== '' || status !== '';
+  const clearLogFilters = () => {
+    setSearchInput('');
+    setStatus('');
+  };
+
   const load = useCallback(
     async (pageToLoad: number) => {
       setIsLoading(true);
@@ -804,6 +814,7 @@ function LogsTab() {
             </option>
           ))}
         </select>
+        <ClearFiltersButton active={hasActiveLogFilters} onClear={clearLogFilters} />
       </div>
 
       <div className="overflow-x-auto">

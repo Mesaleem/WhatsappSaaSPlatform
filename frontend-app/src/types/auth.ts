@@ -23,12 +23,21 @@ export interface User {
   id: number;
   name: string;
   email: string;
+  phone_number: string | null;
   is_active: boolean;
   account_id: number | null;
   /** null only for Super Admin — global access, not tied to a tenant account. */
   account: Account | null;
-  role: Role;
-  /** Flattened permission names for fast client-side checks. */
+  /**
+   * Dynamic Multi-Role Sidebar Aggregation refactor — a user can hold
+   * more than one role (was a single `role: Role` object; AuthController::
+   * formatUser() previously collapsed to roles.first(), an arbitrary
+   * pick once a user has more than one assigned role). Check membership
+   * with AuthContext's hasRole()/isSuperAdmin() rather than reading this
+   * array directly.
+   */
+  roles: Role[];
+  /** Flattened, already-deduplicated-and-unioned-across-all-roles permission names (see backend's User::getAllPermissions()). */
   permissions: string[];
   created_at: string;
 }
@@ -62,5 +71,5 @@ export interface AuthState {
 export interface ApiErrorResponse {
   message: string;
   errors?: Record<string, string[]>;
-  error_code?: 'SUBSCRIPTION_EXPIRED' | 'ACCOUNT_SUSPENDED' | 'UNAUTHENTICATED' | string;
+  error_code?: 'SUBSCRIPTION_EXPIRED' | 'ACCOUNT_SUSPENDED' | 'CLIENT_ACCOUNT_SUSPENDED' | 'UNAUTHENTICATED' | string;
 }

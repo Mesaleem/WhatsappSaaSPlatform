@@ -25,7 +25,7 @@ import type {
 } from '../../types/templates';
 import { inputClass, TableCard } from '../../components/common/Card';
 import { PageHeader, PageShell } from '../../components/common/PageShell';
-import { Pagination, SearchInput, StatusFilterSelect } from '../../components/common/DataTableControls';
+import { ClearFiltersButton, Pagination, SearchInput, StatusFilterSelect } from '../../components/common/DataTableControls';
 import { TableSkeletonRows } from '../../components/common/Skeleton';
 import { extractErrorCode, extractErrorMessage as extractMessage } from '../../utils/apiError';
 
@@ -175,7 +175,7 @@ function TemplateModal({
         <form onSubmit={(e) => void handleSubmit(e)} className="mt-4 space-y-4">
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
             <div>
-              <label className="text-sm font-medium text-slate-700">Title</label>
+              <label className="text-sm font-medium text-slate-700">Title <span className="text-red-500">*</span></label>
               <input
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
@@ -213,7 +213,7 @@ function TemplateModal({
 
           <div>
             <label className="text-sm font-medium text-slate-700">
-              Template body — use {'{{variable_name}}'} for dynamic tags
+              Template body — use {'{{variable_name}}'} for dynamic tags <span className="text-red-500">*</span>
             </label>
             <textarea
               value={templateBody}
@@ -409,7 +409,7 @@ function TestTemplateModal({
 
         <form onSubmit={(e) => void handleSubmit(e)} className="mt-4 space-y-4">
           <div>
-            <label className="text-sm font-medium text-slate-700">Recipient Phone</label>
+            <label className="text-sm font-medium text-slate-700">Recipient Phone <span className="text-red-500">*</span></label>
             <input
               value={recipientPhone}
               onChange={(e) => setRecipientPhone(e.target.value)}
@@ -590,6 +590,12 @@ export default function TemplateManagerPage() {
     });
   }, [templates, search, statusFilter]);
 
+  const hasActiveFilters = search !== '' || statusFilter !== '';
+  const clearFilters = () => {
+    setSearch('');
+    setStatusFilter('');
+  };
+
   useEffect(() => {
     setPage(1);
   }, [search, statusFilter]);
@@ -619,6 +625,7 @@ export default function TemplateManagerPage() {
       <div className="flex flex-wrap items-center gap-3">
         <SearchInput value={search} onChange={setSearch} placeholder="Search by title or industry…" />
         <StatusFilterSelect value={statusFilter} onChange={setStatusFilter} options={STATUS_OPTIONS} allLabel="All statuses" />
+        <ClearFiltersButton active={hasActiveFilters} onClear={clearFilters} />
       </div>
 
       {error && (

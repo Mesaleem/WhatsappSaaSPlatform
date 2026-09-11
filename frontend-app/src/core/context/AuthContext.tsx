@@ -36,7 +36,7 @@ interface AuthContextValue {
    * so the two can never disagree. Always true for Super Admin (no
    * tenant account to be restricted by). `allowed_modules === null`
    * means "every module enabled" — the default until a Super Admin
-   * explicitly narrows it via Manage Accounts (mirrors
+   * explicitly narrows it via Manage Clients (mirrors
    * Account::hasModuleEnabled() on the backend).
    */
   hasModule: (module: AccountModule) => boolean;
@@ -122,12 +122,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [user],
   );
 
+  // Dynamic Multi-Role Sidebar Aggregation refactor — ROOT-CAUSE FIX:
+  // both of these previously read a single `user.role` object
+  // (`user?.role.name === ...`), so a user holding more than one role
+  // could be misclassified depending on which role the backend's
+  // (now-fixed) roles.first() happened to return. Both now check
+  // membership across the FULL `user.roles` array the backend sends.
   const hasRole = useCallback(
-    (roleName: string) => user?.role.name === roleName,
+    (roleName: string) => user?.roles.some((r) => r.name === roleName) ?? false,
     [user],
   );
 
-  const isSuperAdmin = useCallback(() => user?.role.name === 'super_admin', [user]);
+  const isSuperAdmin = useCallback(
+    () => user?.roles.some((r) => r.name === 'super_admin') ?? false,
+    [user],
+  );
 
   const hasModule = useCallback(
     (module: AccountModule) => {

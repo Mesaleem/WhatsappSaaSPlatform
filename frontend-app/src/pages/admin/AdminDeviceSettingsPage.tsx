@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { QrCode, Radio, RefreshCw } from 'lucide-react';
+import { AlertCircle, QrCode, Radio, RefreshCw } from 'lucide-react';
 import whatsappService from '../../services/whatsappService';
 import QRScannerModal from '../../components/qr/QRScannerModal';
 import { Card, TableCard } from '../../components/common/Card';
@@ -54,15 +54,29 @@ function SuperAdminTestDeviceCard() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+  // Previously an empty `catch {}` silently swallowed this — the button
+  // stayed permanently disabled (accountId never set) with no visible
+  // explanation. Now surfaced as an inline retryable banner AND a toast,
+  // matching the error-handling pattern the rest of this page already
+  // uses for the device table below (see `error`/`actionError`).
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  const showToast = (message: string) => {
+    setToast(message);
+    setTimeout(() => setToast(null), 4000);
+  };
 
   const load = useCallback(async () => {
     setIsLoading(true);
+    setLoadError(null);
     try {
       const res = await whatsappService.selfDeviceStatus();
       setAccountId(res.account_id);
       setStatus(res.status);
-    } catch {
-      // Leave as-is — the card still renders, just possibly stale.
+    } catch (err) {
+      const message = extractErrorMessage(err, 'Failed to load your WhatsApp test device status.');
+      setLoadError(message);
+      showToast(message);
     } finally {
       setIsLoading(false);
     }
@@ -71,11 +85,6 @@ function SuperAdminTestDeviceCard() {
   useEffect(() => {
     void load();
   }, [load]);
-
-  const showToast = (message: string) => {
-    setToast(message);
-    setTimeout(() => setToast(null), 4000);
-  };
 
   const handleConnected = () => {
     setStatus('connected');
@@ -143,6 +152,18 @@ function SuperAdminTestDeviceCard() {
       <p className="mt-3 text-xs text-slate-400">
         Template Manager's "Send Template" test action always sends through this device — not a client's.
       </p>
+
+      {loadError && !isLoading && (
+        <div className="mt-3 flex items-start justify-between gap-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+          <span className="flex items-start gap-1.5">
+            <AlertCircle className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
+            {loadError}
+          </span>
+          <button type="button" onClick={() => void load()} className="flex-shrink-0 font-semibold underline hover:no-underline">
+            Retry
+          </button>
+        </div>
+      )}
 
       {isModalOpen && accountId !== null && (
         <QRScannerModal

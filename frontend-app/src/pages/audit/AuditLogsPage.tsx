@@ -7,7 +7,7 @@ import type { AuditLogFilters, LoginAuditLog, LoginAuditStatus } from '../../typ
 import type { ApiErrorResponse } from '../../types/auth';
 import { PageHeader, PageShell } from '../../components/common/PageShell';
 import { TableCard } from '../../components/common/Card';
-import { Pagination, SearchInput, StatusFilterSelect } from '../../components/common/DataTableControls';
+import { ClearFiltersButton, Pagination, SearchInput, StatusFilterSelect } from '../../components/common/DataTableControls';
 import { TableSkeletonRows } from '../../components/common/Skeleton';
 
 /**
@@ -81,6 +81,15 @@ export default function AuditLogsPage() {
     () => ({ search, status, role, from, to }),
     [search, status, role, from, to],
   );
+
+  const hasActiveFilters = search !== '' || status !== '' || role !== '' || from !== '' || to !== '';
+  const clearFilters = () => {
+    setSearch('');
+    setStatus('');
+    setRole('');
+    setFrom('');
+    setTo('');
+  };
 
   const load = useCallback(
     async (pageToLoad: number) => {
@@ -196,6 +205,7 @@ export default function AuditLogsPage() {
             aria-label="To date"
           />
         </div>
+        <ClearFiltersButton active={hasActiveFilters} onClear={clearFilters} />
       </div>
 
       {error && (

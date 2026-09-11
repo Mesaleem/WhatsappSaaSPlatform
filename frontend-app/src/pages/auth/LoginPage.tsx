@@ -100,7 +100,7 @@ export default function LoginPage() {
           <form className="mt-8 space-y-5" onSubmit={handleSubmit} noValidate>
             <div>
               <label htmlFor="email" className="block text-sm font-medium text-slate-700">
-                Email address
+                Email address <span className="text-red-500">*</span>
               </label>
               <div className="relative mt-1.5">
                 <Mail className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
@@ -126,7 +126,7 @@ export default function LoginPage() {
             <div>
               <div className="flex items-center justify-between">
                 <label htmlFor="password" className="block text-sm font-medium text-slate-700">
-                  Password
+                  Password <span className="text-red-500">*</span>
                 </label>
               </div>
               <div className="relative mt-1.5">

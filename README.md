@@ -460,11 +460,13 @@ Serve `dist/` as static files (Nginx `root`, or any CDN/static host). Set `VITE_
 
 ### 7.4 Cron
 
-`routes/console.php` currently defines no scheduled commands beyond Laravel's default `inspire` example — there is nothing that requires cron *today*. Still, add the standard Laravel scheduler entry now so any scheduled command introduced later (subscription-expiry sweeps, webhook-delivery retries, etc.) works without a further deploy step:
+**Required as of Phase 3 (Meta Ads Automation Expansion).** `routes/console.php` registers `ads:check-performance-rules` (the Auto-Budget Guard — polls every active Meta ad campaign's spend/leads/CPL and auto-pauses + WhatsApp-alerts on a rule breach) on a 15-minute schedule. Laravel's scheduler only actually fires registered commands when the OS crontab below is installed and running — without it, `ads:check-performance-rules` silently never executes and campaigns are never auto-paused, however correct the application code is. Add the standard Laravel scheduler entry:
 
 ```cron
 * * * * * cd /var/www/wa-saas-platform/backend-api && php artisan schedule:run >> /dev/null 2>&1
 ```
+
+This single crontab line is also what any future scheduled command (subscription-expiry sweeps, webhook-delivery retries, etc.) will reuse without a further deploy step.
 
 ### 7.5 SSL
 

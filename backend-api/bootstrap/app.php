@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Middleware\AuthenticateApiKey;
+use App\Http\Middleware\EnsureModuleEnabledMiddleware;
 use App\Http\Middleware\SubscriptionGuardMiddleware;
 use App\Http\Middleware\TenantIsolationMiddleware;
 use App\Http\Middleware\VerifyInternalSecret;
@@ -24,6 +25,10 @@ return Application::configure(basePath: dirname(__DIR__))
             'tenant.isolation' => TenantIsolationMiddleware::class,
             'subscription.guard' => SubscriptionGuardMiddleware::class,
             'internal.secret' => VerifyInternalSecret::class,
+            // Client Management, User Creation, Multi-Role Permissions &
+            // Feature Module Checklists refactor — server-side
+            // Account::MODULES enforcement (see that middleware's docblock).
+            'module.guard' => EnsureModuleEnabledMiddleware::class,
             // Module 9 — external Developer API (Api\V1\*) Bearer API-key auth.
             'auth.apikey' => AuthenticateApiKey::class,
             'role' => RoleMiddleware::class,

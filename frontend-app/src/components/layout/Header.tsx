@@ -6,6 +6,7 @@ import { indigo, activeGradient } from '../../theme/signalIndigo';
 import ProfileModal from './ProfileModal';
 import NotificationBell from './NotificationBell';
 import ExpiryWarningBanner from './ExpiryWarningBanner';
+import SocialConnectionWarningBanner from './SocialConnectionWarningBanner';
 
 function QuotaBadge() {
   const { user } = useAuth();
@@ -119,6 +120,7 @@ export default function Header({ pageTitle }: { pageTitle: string }) {
         {isProfileOpen && <ProfileModal onClose={() => setIsProfileOpen(false)} />}
       </header>
       <ExpiryWarningBanner />
+      <SocialConnectionWarningBanner />
     </>
   );
 }

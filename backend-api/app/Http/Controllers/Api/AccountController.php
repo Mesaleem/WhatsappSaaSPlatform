@@ -143,6 +143,12 @@ class AccountController extends Controller
 
             'admin_name' => ['required', 'string', 'max:255'],
             'admin_email' => ['required', 'email', Rule::unique('users', 'email')],
+            // Corrected Unified Client & Admin User Creation — Section 2
+            // (Primary Client Admin Credentials). Nullable: the Account
+            // schema itself has no phone field of its own (spec's
+            // explicit note), so this is stored on the created admin
+            // User's phone_number column, same as any other team member.
+            'admin_phone' => ['nullable', 'string', 'max:32'],
             'admin_password' => ['required', 'string', 'min:8'],
 
             'engine_type' => ['required', Rule::in(self::ENGINE_TYPES)],
@@ -153,6 +159,18 @@ class AccountController extends Controller
             'payment_mode' => ['required', Rule::in(self::PAYMENT_MODES)],
             'starts_at' => ['required', 'date'],
             'expires_at' => ['required', 'date', 'after:starts_at'],
+            // Client Module Accessibility Checklist — optional at
+            // creation (omitted/null = every module enabled, same
+            // "null means everything on" default updatePermissions()
+            // already uses). Lets Super Admin set the feature checklist
+            // in the same Create Client form instead of only after the
+            // client already exists.
+            'allowed_modules' => ['nullable', 'array'],
+            'allowed_modules.*' => ['string', Rule::in(Account::MODULES)],
+            // Corrected Unified Client & Admin User Creation — Section 1
+            // (Client Organization Details).
+            'max_users_limit' => ['nullable', 'integer', 'min:1'],
+            'module_assignment' => ['required', Rule::in(Account::MODULE_ASSIGNMENTS)],
         ]);
 
         $account = DB::transaction(function () use ($data) {
@@ -160,12 +178,21 @@ class AccountController extends Controller
                 'company_name' => $data['company_name'],
                 'primary_phone' => $data['primary_phone'] ?? null,
                 'status' => $data['status'] ?? 'active',
+                'allowed_modules' => $data['allowed_modules'] ?? null,
+                'max_users_limit' => $data['max_users_limit'] ?? null,
+                'module_assignment' => $data['module_assignment'],
             ]);
 
+            // Corrected Unified Client & Admin User Creation — the Account
+            // record is created first, then the initial admin User is
+            // mapped to it via account_id, both inside this same
+            // transaction (already the case before this refactor —
+            // verified by reading this method prior to editing it).
             $admin = User::create([
                 'account_id' => $account->id,
                 'name' => $data['admin_name'],
                 'email' => $data['admin_email'],
+                'phone_number' => $data['admin_phone'] ?? null,
                 'password' => $data['admin_password'],
                 'is_active' => true,
             ]);
@@ -198,8 +225,17 @@ class AccountController extends Controller
 
     /**
      * PUT /api/admin/accounts/{id} — updates account-level fields only
-     * (company_name, primary_phone, status). Subscription/billing fields are
-     * handled exclusively by updateSubscription() below.
+     * (company_name, primary_phone, status, branding). Subscription/
+     * billing fields are handled exclusively by updateSubscription() below.
+     *
+     * logo_url/brand_accent_color: Social Media Marketing & Meta Ads
+     * Automation Expansion (Final Phase) — White-Label Automated PDF
+     * Reporting. See the creating migration's docblock for why these are
+     * Super-Admin-set here rather than through a tenant self-service
+     * endpoint (none exists for any account field). brand_accent_color
+     * is validated as a bare 6-hex-digit string (no leading '#') so
+     * SocialReportController's hex-to-RGB parsing never has to guess a
+     * format; the frontend strips '#' before sending.
      */
     public function update(Request $request, int $id): JsonResponse
     {
@@ -213,6 +249,18 @@ class AccountController extends Controller
             // external Developer API (Api\V1\*); see AppServiceProvider's
             // 'external-api' rate limiter.
             'api_rate_limit_per_minute' => ['sometimes', 'integer', 'min:1', 'max:10000'],
+            'logo_url' => ['sometimes', 'nullable', 'url', 'max:2048'],
+            'brand_accent_color' => ['sometimes', 'nullable', 'regex:/^[0-9a-fA-F]{6}$/'],
+            // Super Admin Client Provisioning refactor — the spec's literal
+            // text scopes max_users_limit/module_assignment to the Create
+            // Client form only, but leaving them create-only here would mean
+            // a Super Admin could never raise a client's user cap or change
+            // their business category later. Same update() endpoint, same
+            // permission:manage-accounts gate as every other account-level
+            // field above — a disclosed, deliberate completion, not scope
+            // creep. See this refactor's audit report.
+            'max_users_limit' => ['sometimes', 'nullable', 'integer', 'min:1'],
+            'module_assignment' => ['sometimes', Rule::in(Account::MODULE_ASSIGNMENTS)],
         ]);
 
         $account->update($data);

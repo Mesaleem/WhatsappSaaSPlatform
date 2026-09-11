@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Pencil, Plus, RefreshCw, Timer } from 'lucide-react';
+import { Loader2, Pencil, Plus, Power, PowerOff, RefreshCw, Timer } from 'lucide-react';
 import accountService from '../../services/accountService';
 import type { Account, AccountStatus } from '../../types/account';
 import type { BillingModel, EngineType } from '../../types/subscription';
 import CreateAccountModal from '../../components/admin/CreateAccountModal';
 import { TableCard } from '../../components/common/Card';
-import { Pagination, SearchInput, StatusFilterSelect } from '../../components/common/DataTableControls';
+import { ClearFiltersButton, Pagination, SearchInput, StatusFilterSelect } from '../../components/common/DataTableControls';
+import { extractErrorMessage } from '../../utils/apiError';
 import { TableSkeletonRows } from '../../components/common/Skeleton';
 
 const ENGINE_BADGE: Record<EngineType, string> = {
@@ -66,6 +67,10 @@ export default function AccountsPage() {
     open: false,
     account: null,
   });
+  // Client Management & Account Deactivation Engine — quick-toggle action
+  // (Actions column), distinct from the full Edit modal's Status
+  // dropdown, mirroring UsersPage.tsx's handleToggle() UX for users.
+  const [busyId, setBusyId] = useState<number | null>(null);
 
   const load = useCallback(
     async (pageToLoad: number) => {
@@ -105,13 +110,44 @@ export default function AccountsPage() {
     void load(page);
   };
 
+  const handleToggleStatus = async (account: Account) => {
+    const nextStatus: AccountStatus = account.status === 'active' ? 'suspended' : 'active';
+    const verb = nextStatus === 'suspended' ? 'deactivate' : 'reactivate';
+    if (
+      !confirm(
+        nextStatus === 'suspended'
+          ? `Deactivate ${account.company_name}? Every user on this client will be instantly blocked from signing in or using the platform until you reactivate it.`
+          : `Reactivate ${account.company_name}? Its users will be able to sign in again immediately.`,
+      )
+    ) {
+      return;
+    }
+    setBusyId(account.id);
+    try {
+      await accountService.update(account.id, { status: nextStatus });
+      await load(page);
+    } catch (err) {
+      setError(extractErrorMessage(err, `Could not ${verb} this client.`));
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const hasActiveFilters = search !== '' || statusFilter !== '' || from !== '' || to !== '';
+  const clearFilters = () => {
+    setSearch('');
+    setStatusFilter('');
+    setFrom('');
+    setTo('');
+  };
+
   return (
     <div className="p-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-xl font-semibold text-slate-900">Accounts</h1>
+          <h1 className="text-xl font-semibold text-slate-900">Clients</h1>
           <p className="mt-1 text-sm text-slate-500">
-            {total} account{total === 1 ? '' : 's'} provisioned
+            {total} client{total === 1 ? '' : 's'} provisioned
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -128,7 +164,7 @@ export default function AccountsPage() {
             className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700"
           >
             <Plus className="h-4 w-4" />
-            New Account
+            New Client
           </button>
         </div>
       </div>
@@ -158,6 +194,7 @@ export default function AccountsPage() {
             aria-label="Provisioned to"
           />
         </div>
+        <ClearFiltersButton active={hasActiveFilters} onClear={clearFilters} />
       </div>
 
       {error && (
@@ -187,7 +224,7 @@ export default function AccountsPage() {
             ) : accounts.length === 0 ? (
               <tr>
                 <td colSpan={8} className="px-4 py-10 text-center text-slate-400">
-                  No accounts yet. Click "New Account" to provision one.
+                  No clients yet. Click "New Client" to provision one.
                 </td>
               </tr>
             ) : (
@@ -259,7 +296,7 @@ export default function AccountsPage() {
                         <button
                           onClick={() => openEdit(account)}
                           className="rounded-md p-1.5 text-slate-500 hover:bg-slate-100 hover:text-slate-700"
-                          aria-label="Edit account"
+                          aria-label="Edit client"
                           title="Edit"
                         >
                           <Pencil className="h-4 w-4" />
@@ -271,6 +308,23 @@ export default function AccountsPage() {
                           title="Extend subscription"
                         >
                           <Timer className="h-4 w-4" />
+                        </button>
+                        <button
+                          onClick={() => void handleToggleStatus(account)}
+                          disabled={busyId === account.id}
+                          className={`rounded-md p-1.5 hover:bg-slate-100 disabled:opacity-50 ${
+                            account.status === 'active' ? 'text-red-500 hover:text-red-600' : 'text-emerald-600 hover:text-emerald-700'
+                          }`}
+                          aria-label={account.status === 'active' ? 'Deactivate client' : 'Activate client'}
+                          title={account.status === 'active' ? 'Deactivate' : 'Activate'}
+                        >
+                          {busyId === account.id ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : account.status === 'active' ? (
+                            <PowerOff className="h-4 w-4" />
+                          ) : (
+                            <Power className="h-4 w-4" />
+                          )}
                         </button>
                       </div>
                     </td>

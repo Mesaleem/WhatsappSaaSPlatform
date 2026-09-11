@@ -7,8 +7,24 @@ interface ProtectedRouteProps {
   children: ReactNode;
   /** Require this permission (checked against the user's flattened permission list). */
   permission?: string;
-  /** Require this exact role name (e.g. "Super Admin"). */
+  /**
+   * Require this exact role name (e.g. "Super Admin"). Like `permission`
+   * and `module` above, THIS BYPASSES FOR SUPER ADMIN — kept for any
+   * future route that wants "this role, or Super Admin acting on its
+   * behalf." Use `strictRole` below instead for a route that must be
+   * genuinely unreachable by Super Admin.
+   */
   role?: string;
+  /**
+   * Super Admin / Client Admin RBAC boundary refactor — require this
+   * EXACT role name and, unlike `role` above, does NOT bypass for Super
+   * Admin. Some surfaces (the /team/permissions Granular Permission
+   * Matrix) must be truly unreachable by Super Admin, not just absent
+   * from the sidebar, per that refactor's spec: "Hide/Remove the
+   * Granular Permission Matrix screen from the Super Admin view
+   * completely."
+   */
+  strictRole?: string;
   /**
    * Route Guard Protection — require this Account::MODULES slug to be
    * enabled for the current tenant account (see AuthContext::hasModule).
@@ -35,7 +51,7 @@ interface ProtectedRouteProps {
  * behavior this mode replaces, so this guard's only remaining job is
  * authentication and permission/role gating.
  */
-export function ProtectedRoute({ children, permission, role, module }: ProtectedRouteProps) {
+export function ProtectedRoute({ children, permission, role, strictRole, module }: ProtectedRouteProps) {
   const { isAuthenticated, isLoading, user, hasPermission, hasRole, isSuperAdmin, hasModule } = useAuth();
   const location = useLocation();
 
@@ -58,6 +74,10 @@ export function ProtectedRoute({ children, permission, role, module }: Protected
   }
 
   if (role && !superAdmin && !hasRole(role)) {
+    return <Navigate to="/unauthorized" replace />;
+  }
+
+  if (strictRole && !hasRole(strictRole)) {
     return <Navigate to="/unauthorized" replace />;
   }
 

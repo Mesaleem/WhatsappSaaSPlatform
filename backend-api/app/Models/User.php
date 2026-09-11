@@ -25,6 +25,10 @@ class User extends Authenticatable
         'email',
         'password',
         'is_active',
+        // Client Management, User Creation, Multi-Role Permissions &
+        // Feature Module Checklists refactor — see the creating
+        // migration's docblock; nullable, never a login credential.
+        'phone_number',
     ];
 
     /**

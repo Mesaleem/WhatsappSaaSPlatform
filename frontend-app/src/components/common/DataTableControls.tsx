@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { ChevronLeft, ChevronRight, Search } from 'lucide-react';
+import { ChevronLeft, ChevronRight, FilterX, Search } from 'lucide-react';
 
 /**
  * UI Standardization — Data Table Standardization. Shared search bar,
@@ -47,6 +47,31 @@ export function SearchInput({
         className="w-full rounded-lg border border-slate-300 py-2 pl-9 pr-3 text-sm text-slate-900 shadow-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 sm:w-64"
       />
     </div>
+  );
+}
+
+/**
+ * Universal Clear Filters Button — Global Table Filters refactor.
+ * Disabled by default (no active filter), enabled the instant any
+ * filter control on the page has a non-default value. Each page computes
+ * its own `active` boolean from its own filter state (this component has
+ * no opinion on what "a filter" means for a given table) and its own
+ * `onClear` that resets every one of those states back to default —
+ * kept this way, rather than a generic filter-state manager, so adding
+ * this to an existing page never requires restructuring that page's
+ * existing useState calls.
+ */
+export function ClearFiltersButton({ active, onClear }: { active: boolean; onClear: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClear}
+      disabled={!active}
+      className="flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-600 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-white"
+    >
+      <FilterX className="h-4 w-4" />
+      Clear Filters
+    </button>
   );
 }
 

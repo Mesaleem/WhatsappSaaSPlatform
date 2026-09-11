@@ -29,7 +29,7 @@ import {
 } from '../../types/developer';
 import { inputClass, TableCard } from '../../components/common/Card';
 import { PageHeader, PageShell } from '../../components/common/PageShell';
-import { Pagination, SearchInput, StatusFilterSelect } from '../../components/common/DataTableControls';
+import { ClearFiltersButton, Pagination, SearchInput, StatusFilterSelect } from '../../components/common/DataTableControls';
 import { TableSkeletonRows } from '../../components/common/Skeleton';
 import { extractErrorMessage as extractMessage } from '../../utils/apiError';
 
@@ -183,7 +183,7 @@ function CreateApiKeyModal({
           <form onSubmit={(e) => void handleSubmit(e)} className="mt-4 space-y-4">
             {isSuperAdmin && (
               <div>
-                <label className="text-sm font-medium text-slate-700">Client account</label>
+                <label className="text-sm font-medium text-slate-700">Client account <span className="text-red-500">*</span></label>
                 <select
                   value={accountId}
                   onChange={(e) => setAccountId(e.target.value === '' ? '' : Number(e.target.value))}
@@ -201,7 +201,7 @@ function CreateApiKeyModal({
               </div>
             )}
             <div>
-              <label className="text-sm font-medium text-slate-700">Name</label>
+              <label className="text-sm font-medium text-slate-700">Name <span className="text-red-500">*</span></label>
               <input
                 value={name}
                 onChange={(e) => setName(e.target.value)}
@@ -326,6 +326,14 @@ function ApiKeysTab() {
     return true;
   });
 
+  const hasActiveKeyFilters = search !== '' || statusFilter !== '' || from !== '' || to !== '';
+  const clearKeyFilters = () => {
+    setSearch('');
+    setStatusFilter('');
+    setFrom('');
+    setTo('');
+  };
+
   useEffect(() => {
     setPage(1);
   }, [search, statusFilter, from, to]);
@@ -379,6 +387,7 @@ function ApiKeysTab() {
             aria-label="Created to"
           />
         </div>
+        <ClearFiltersButton active={hasActiveKeyFilters} onClear={clearKeyFilters} />
       </div>
 
       {error && (
@@ -580,7 +589,7 @@ function CreateWebhookModal({
           <form onSubmit={(e) => void handleSubmit(e)} className="mt-4 space-y-4">
             {isSuperAdmin && (
               <div>
-                <label className="text-sm font-medium text-slate-700">Client account</label>
+                <label className="text-sm font-medium text-slate-700">Client account <span className="text-red-500">*</span></label>
                 <select
                   value={accountId}
                   onChange={(e) => setAccountId(e.target.value === '' ? '' : Number(e.target.value))}
@@ -598,7 +607,7 @@ function CreateWebhookModal({
               </div>
             )}
             <div>
-              <label className="text-sm font-medium text-slate-700">Webhook URL</label>
+              <label className="text-sm font-medium text-slate-700">Webhook URL <span className="text-red-500">*</span></label>
               <input
                 value={url}
                 onChange={(e) => setUrl(e.target.value)}
@@ -618,7 +627,7 @@ function CreateWebhookModal({
               />
             </div>
             <div>
-              <label className="text-sm font-medium text-slate-700">Events</label>
+              <label className="text-sm font-medium text-slate-700">Events <span className="text-red-500">*</span></label>
               <div className="mt-2 space-y-2">
                 {WEBHOOK_EVENTS.map((event) => (
                   <label key={event} className="flex items-center gap-2 text-sm text-slate-700">
@@ -891,6 +900,12 @@ function WebhooksTab() {
     return true;
   });
 
+  const hasActiveWebhookFilters = search !== '' || statusFilter !== '';
+  const clearWebhookFilters = () => {
+    setSearch('');
+    setStatusFilter('');
+  };
+
   useEffect(() => {
     setPage(1);
   }, [search, statusFilter]);
@@ -927,6 +942,7 @@ function WebhooksTab() {
       <div className="flex flex-wrap items-center gap-3">
         <SearchInput value={search} onChange={setSearch} placeholder="Search by URL or client…" />
         <StatusFilterSelect value={statusFilter} onChange={setStatusFilter} options={WEBHOOK_STATUS_OPTIONS} allLabel="All statuses" />
+        <ClearFiltersButton active={hasActiveWebhookFilters} onClear={clearWebhookFilters} />
       </div>
 
       {error && (

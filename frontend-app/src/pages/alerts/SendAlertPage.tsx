@@ -288,7 +288,7 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
     <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
       <form onSubmit={(e) => void handleSubmit(e)} className="space-y-4">
         <div>
-          <label className="text-sm font-medium text-slate-700">Template</label>
+          <label className="text-sm font-medium text-slate-700">Template <span className="text-red-500">*</span></label>
           <select
             value={templateId}
             onChange={(e) => handleSelectTemplate(e.target.value === '' ? '' : Number(e.target.value))}
@@ -305,7 +305,7 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
         </div>
 
         <div>
-          <label className="text-sm font-medium text-slate-700">Recipient Phone</label>
+          <label className="text-sm font-medium text-slate-700">Recipient Phone <span className="text-red-500">*</span></label>
           <input
             type="text"
             value={recipientPhone}

@@ -28,6 +28,7 @@ import {
 import { useAuth } from '../../core/context/AuthContext';
 import { useTenant } from '../../core/context/TenantContext';
 import analyticsService from '../../services/analyticsService';
+import { ClearFiltersButton } from '../../components/common/DataTableControls';
 import type { ApiErrorResponse } from '../../types/auth';
 import type { PaymentAlert, PaymentAlertStatus } from '../../types/alert';
 import type { AnalyticsChartsResponse, AnalyticsSummary, ChartRange, DateRange } from '../../types/analytics';
@@ -418,6 +419,12 @@ function LogsSection({ resolvedRange }: { resolvedRange: DateRange }) {
     return () => clearTimeout(handle);
   }, [searchInput]);
 
+  const hasActiveLogFilters = searchInput !== '' || status !== '';
+  const clearLogFilters = () => {
+    setSearchInput('');
+    setStatus('');
+  };
+
   const load = useCallback(
     async (pageToLoad: number) => {
       setIsLoading(true);
@@ -492,6 +499,7 @@ function LogsSection({ resolvedRange }: { resolvedRange: DateRange }) {
           >
             <RefreshCw className="h-4 w-4" />
           </button>
+          <ClearFiltersButton active={hasActiveLogFilters} onClear={clearLogFilters} />
         </div>
 
         <div className="flex items-center gap-2">

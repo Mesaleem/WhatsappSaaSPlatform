@@ -57,6 +57,29 @@ class AuthController extends Controller
                 ], 403);
             }
 
+            // Client Management & Account Deactivation Engine.
+            // ROOT-CAUSE FINDING: before this, hasActiveSubscription() (see
+            // Account::hasActiveSubscription()) already returned false for
+            // BOTH an administratively suspended account (status !==
+            // 'active') AND a genuinely lapsed subscription (status
+            // 'active' but currentSubscription not isActive()) — both fell
+            // through to the single "subscription is not active" branch
+            // below, so a Super-Admin-deactivated client saw a MISLEADING
+            // billing message instead of the deactivation notice the spec
+            // requires. This check runs FIRST and specifically, using
+            // Account::isAdministrativelyActive() (status === 'active')
+            // alone — independent of subscription state — so a deactivated
+            // client's users are blocked with the correct message
+            // regardless of what their subscription looks like.
+            if (! $account->isAdministrativelyActive()) {
+                $this->logAttempt($request, $user, 'failed');
+
+                return response()->json([
+                    'message' => 'Your organization account has been suspended. Contact Super Admin.',
+                    'error_code' => 'CLIENT_ACCOUNT_SUSPENDED',
+                ], 403);
+            }
+
             if (! $account->hasActiveSubscription()) {
                 $this->logAttempt($request, $user, 'failed');
 
@@ -97,7 +120,12 @@ class AuthController extends Controller
             LoginAuditLog::create([
                 'user_id' => $user?->id,
                 'account_id' => $user && ! $user->isSuperAdmin() ? $user->account_id : null,
-                'role' => $user?->roles?->first()?->name,
+                // Dynamic Multi-Role Sidebar Aggregation refactor — a user can
+                // now hold more than one role; this audit-log snapshot
+                // joins every currently-assigned role name rather than
+                // silently keeping only whichever role Eloquent's
+                // unordered pivot query happened to return first.
+                'role' => $user?->roles?->pluck('name')->implode(', ') ?: null,
                 'email' => $user?->email ?? $attemptedEmail,
                 'ip_address' => $request->ip(),
                 'user_agent' => $request->userAgent(),
@@ -177,16 +205,30 @@ class AuthController extends Controller
     private function formatUser(User $user): array
     {
         $user->loadMissing(['account.currentSubscription', 'roles.permissions']);
-        $role = $user->roles->first();
 
+        // Dynamic Multi-Role Sidebar Aggregation refactor.
+        // ROOT-CAUSE FINDING: this previously collapsed to a single
+        // 'role' => $user->roles->first() — an ARBITRARY role once a
+        // user holds more than one (Eloquent's belongsToMany pivot query
+        // carries no defined order), silently discarding every other
+        // assigned role's identity. `permissions` below was already
+        // correct for multi-role users (getAllPermissions() already
+        // unions permissions across every assigned role — verified by
+        // reading Spatie's HasRoles trait before this edit), so nav
+        // items gated purely on `permission` already worked; only
+        // role-NAME-based checks (isSuperAdmin(), hasRole()) were at
+        // risk. Exposing the full `roles` array (already eager-loaded
+        // above) lets the frontend check role membership correctly
+        // instead of trusting one arbitrarily-picked role.
         return [
             'id' => $user->id,
             'name' => $user->name,
             'email' => $user->email,
+            'phone_number' => $user->phone_number,
             'is_active' => $user->is_active,
             'account_id' => $user->account_id,
             'account' => $user->account,
-            'role' => $role,
+            'roles' => $user->roles,
             'permissions' => $user->getAllPermissions()->pluck('name'),
             'created_at' => $user->created_at,
         ];

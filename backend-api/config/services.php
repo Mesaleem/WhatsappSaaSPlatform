@@ -42,4 +42,30 @@ return [
         'internal_secret' => env('INTERNAL_API_SECRET'),
     ],
 
+    // Social Media Marketing & Meta Ads Automation Expansion (Phase 1):
+    // the frontend-app SPA's own origin (scheme+host+port, no path), used
+    // ONLY to lock down the postMessage targetOrigin in
+    // SocialAuthController's OAuth-popup callback page. Not used for CORS
+    // (this app has no config/cors.php — CORS is presumably handled at a
+    // reverse-proxy layer outside this Structural Context).
+    'frontend' => [
+        'url' => env('FRONTEND_URL'),
+    ],
+
+    // Social Media Marketing & Meta Ads Automation Expansion (Final
+    // Phase) — AI Ad Copywriter (CopywriterService). Both optional; when
+    // NEITHER key is set (the default — .env.example ships both unset),
+    // CopywriterService falls back to its deterministic template engine
+    // with no external call at all. OpenAI is tried first when both
+    // happen to be set.
+    'openai' => [
+        'key' => env('OPENAI_API_KEY'),
+        'model' => env('OPENAI_MODEL', 'gpt-4o-mini'),
+    ],
+
+    'anthropic' => [
+        'key' => env('ANTHROPIC_API_KEY'),
+        'model' => env('ANTHROPIC_MODEL', 'claude-3-5-haiku-latest'),
+    ],
+
 ];

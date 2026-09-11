@@ -60,5 +60,23 @@ class DatabaseSeeder extends Seeder
             ]
         );
         $demoAdmin->assignRole('admin');
+
+        // Dynamic RBAC Sidebar refactor — dedicated social_marketer test
+        // user on the same Demo Account, for exercising the "restricted
+        // access" role's nav/route gating end-to-end without needing a
+        // Super Admin to hand-provision one. Same firstOrCreate +
+        // assignRole pattern as $demoAdmin above; password is plaintext
+        // here only because User::casts() hashes the `password` attribute
+        // on save (see User model), identical to every other seeded user.
+        $demoMarketer = User::firstOrCreate(
+            ['email' => 'marketer@demo-account.local'],
+            [
+                'name' => 'Demo Social Marketer',
+                'password' => 'password',
+                'is_active' => true,
+                'account_id' => $demoAccount->id,
+            ]
+        );
+        $demoMarketer->assignRole('social_marketer');
     }
 }

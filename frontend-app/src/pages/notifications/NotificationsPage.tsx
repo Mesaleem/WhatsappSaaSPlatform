@@ -18,7 +18,7 @@ import type {
 } from '../../types/notifications';
 import { PageHeader, PageShell } from '../../components/common/PageShell';
 import { Card, TableCard, inputClass } from '../../components/common/Card';
-import { Pagination, SearchInput, StatusFilterSelect } from '../../components/common/DataTableControls';
+import { ClearFiltersButton, Pagination, SearchInput, StatusFilterSelect } from '../../components/common/DataTableControls';
 import { TableSkeletonRows } from '../../components/common/Skeleton';
 import RichTextEditor from '../../components/common/RichTextEditor';
 
@@ -310,14 +310,14 @@ function ComposeTab({
           </div>
 
           <div>
-            <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">Subject</label>
+            <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">Subject <span className="text-red-500">*</span></label>
             <input type="text" value={subject} onChange={(e) => setSubject(e.target.value)} className={inputClass} />
           </div>
         </div>
 
         <div>
           <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-            Message body — use {'{{name}}'} / {'{{email}}'} for per-recipient variables
+            Message body <span className="text-red-500">*</span> — use {'{{name}}'} / {'{{email}}'} for per-recipient variables
           </label>
           <div className="mt-1.5">
             <RichTextEditor mode={mode} value={body} onChange={setBody} onModeChange={setMode} />
@@ -405,7 +405,10 @@ function TemplatesTab() {
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <SearchInput value={search} onChange={setSearch} placeholder="Search name or subject…" />
+        <div className="flex flex-wrap items-center gap-3">
+          <SearchInput value={search} onChange={setSearch} placeholder="Search name or subject…" />
+          <ClearFiltersButton active={search !== ''} onClear={() => setSearch('')} />
+        </div>
         <button
           onClick={() => setEditing('new')}
           className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700"
@@ -535,7 +538,7 @@ function TemplateModal({
         <div className="grid grid-cols-1 gap-6 px-6 py-6 lg:grid-cols-2">
           <div className="space-y-4">
             <div>
-              <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">Name</label>
+              <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">Name <span className="text-red-500">*</span></label>
               <input type="text" value={name} onChange={(e) => setName(e.target.value)} className={inputClass} />
             </div>
             <div>
@@ -543,7 +546,7 @@ function TemplateModal({
               <input type="text" value={category} onChange={(e) => setCategory(e.target.value)} className={inputClass} />
             </div>
             <div>
-              <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">Subject</label>
+              <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">Subject <span className="text-red-500">*</span></label>
               <input type="text" value={subject} onChange={(e) => setSubject(e.target.value)} className={inputClass} />
             </div>
             <div>
@@ -630,6 +633,13 @@ function HistoryTab() {
 
   const filters = useMemo(() => ({ search, from, to }), [search, from, to]);
 
+  const hasActiveHistoryFilters = search !== '' || from !== '' || to !== '';
+  const clearHistoryFilters = () => {
+    setSearch('');
+    setFrom('');
+    setTo('');
+  };
+
   const load = useCallback(
     async (pageToLoad: number) => {
       setIsLoading(true);
@@ -674,6 +684,7 @@ function HistoryTab() {
             aria-label="To date"
           />
         </div>
+        <ClearFiltersButton active={hasActiveHistoryFilters} onClear={clearHistoryFilters} />
       </div>
 
       {error && (
@@ -767,6 +778,14 @@ function MailLogsTab() {
 
   const filters = useMemo(() => ({ search, status, from, to }), [search, status, from, to]);
 
+  const hasActiveMailLogFilters = search !== '' || status !== '' || from !== '' || to !== '';
+  const clearMailLogFilters = () => {
+    setSearch('');
+    setStatus('');
+    setFrom('');
+    setTo('');
+  };
+
   const load = useCallback(
     async (pageToLoad: number) => {
       setIsLoading(true);
@@ -817,6 +836,7 @@ function MailLogsTab() {
             aria-label="To date"
           />
         </div>
+        <ClearFiltersButton active={hasActiveMailLogFilters} onClear={clearMailLogFilters} />
       </div>
 
       {error && (

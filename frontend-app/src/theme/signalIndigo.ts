@@ -47,6 +47,9 @@ export const NAV_TINTS: Record<string, Tint> = {
   team: { bg: '#E0F7FA', fg: '#0E7C90' },
   accounts: { bg: '#EDE9FE', fg: '#6D28D9' },
   gateway: { bg: '#F1F0F4', fg: '#57536B' },
+  // Social Media Marketing & Meta Ads Automation Expansion (Phase 1) —
+  // a fifth semantic tint (Meta-adjacent blue) for the Social Accounts hub.
+  social: { bg: '#DBEAFE', fg: '#1D4ED8' },
 };
 
 export const activeGradient = `linear-gradient(90deg, ${indigo.accentFrom}, ${indigo.accentTo})`;
@@ -61,6 +64,8 @@ export const ROLE_BADGE_CLASS: Record<string, string> = {
   super_admin: 'bg-violet-50 text-violet-700 border-violet-200',
   admin: 'bg-[#EEECFB] text-[#5B4FE0] border-[#DCD8F7]',
   user: 'bg-slate-100 text-slate-600 border-slate-200',
+  // Social Media Marketing & Meta Ads Automation Expansion (Phase 1).
+  social_marketer: 'bg-blue-50 text-blue-700 border-blue-200',
 };
 
 /**
@@ -71,7 +76,15 @@ export const ROLE_BADGE_CLASS: Record<string, string> = {
 export const ROLE_LABEL: Record<string, string> = {
   super_admin: 'Super Admin',
   admin: 'Admin',
-  user: 'User',
+  // Client Management, Team Users, Dynamic RBAC Sidebar & Global Table
+  // Filters refactor — the 'user' role (no rename of the underlying role
+  // slug — RolePermissionSeeder, RoleController and every existing
+  // Rule::exists('roles','name') check all keep working unmodified) is
+  // relabeled "Team Member" everywhere it is displayed, matching the new
+  // Create User modal's role picker language.
+  user: 'Team Member',
+  // Social Media Marketing & Meta Ads Automation Expansion (Phase 1).
+  social_marketer: 'Social Marketer',
 };
 
 export function roleLabel(roleName: string): string {
