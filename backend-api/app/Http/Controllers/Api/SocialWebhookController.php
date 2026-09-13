@@ -86,14 +86,42 @@ class SocialWebhookController extends Controller
      * non-200 response that would make Meta retry (and duplicate-process)
      * the WHOLE delivery instead of just the one entry/handler that failed.
      *
-     * KNOWN GAP (disclosed, carried over from Phase 1, unchanged):
-     * X-Hub-Signature-256 verification is still not implemented — no App
-     * Secret field exists on social_provider_configs (only client_id/
-     * client_secret for the OAuth flow, a different Meta credential).
-     * Same disclosed gap as MetaWebhookController's Module 5 report.
+     * SIGNATURE VERIFICATION (fix, disclosed — closes the gap previously
+     * documented here as "no App Secret field exists"; that claim was
+     * stale as of MetaWebhookController's own X-Hub-Signature-256
+     * hardening, which proved social_provider_configs.client_secret
+     * already serves as the Meta App Secret for HMAC purposes and reads
+     * it via the same SocialProviderConfig::findByProviderCached()
+     * helper this controller already calls in verify() above — no new
+     * schema was needed):
+     *
+     * For provider === 'meta' (the only provider this method actually
+     * processes below), every POST is now verified against
+     * X-Hub-Signature-256 by assertValidSignature(), mirroring
+     * MetaWebhookController::assertValidSignature() exactly (same
+     * fail-closed rules, same local-environment bypass, same
+     * hash_equals() comparison — see that method's docblock for the full
+     * reasoning, including the [Inference, load-bearing] note about one
+     * Meta App Secret serving both OAuth and webhook HMAC purposes).
+     *
+     * Deliberately NOT extended to the other registered providers
+     * (linkedin, google, gemini — see SocialProviderConfig::PROVIDERS):
+     * X-Hub-Signature-256 is Meta's own webhook-signing convention, not a
+     * generic standard, and none of those providers' payloads are acted
+     * on by this method today (the `if ($provider === 'meta')` guard
+     * below is unchanged) — verifying a signature scheme that may not
+     * even apply to those providers, for payloads nothing here processes
+     * yet, would risk rejecting legitimate future webhook traffic this
+     * controller doesn't understand rather than closing a real gap. A
+     * future module adding real processing for another provider should
+     * add that provider's own signature scheme at the same time.
      */
     public function handle(Request $request, string $provider): JsonResponse
     {
+        if ($provider === 'meta') {
+            $this->assertValidSignature($request, $provider);
+        }
+
         $entries = $request->input('entry', []);
 
         Log::info("Social webhook payload received for provider [{$provider}]", [
@@ -126,5 +154,53 @@ class SocialWebhookController extends Controller
         // Meta requires a fast 200 regardless of processing outcome, same
         // reasoning as MetaWebhookController::handle().
         return response()->json(['received' => true]);
+    }
+
+    /**
+     * X-Hub-Signature-256 verification — adapted from
+     * MetaWebhookController::assertValidSignature() for this
+     * controller's dynamic $provider route parameter instead of a
+     * hardcoded 'meta' literal. See that method's docblock (unchanged
+     * here) for the full verification/bypass rules and the
+     * [Inference, load-bearing] note this relies on. Only ever called
+     * for $provider === 'meta' by handle() above.
+     */
+    private function assertValidSignature(Request $request, string $provider): void
+    {
+        if (app()->environment('local')) {
+            return;
+        }
+
+        $header = (string) $request->header('X-Hub-Signature-256', '');
+
+        if ($header === '') {
+            Log::warning("Social webhook rejected for provider [{$provider}]: missing X-Hub-Signature-256 header.", [
+                'ip' => $request->ip(),
+            ]);
+
+            abort(403, 'Missing webhook signature.');
+        }
+
+        $appSecret = (string) (SocialProviderConfig::findByProviderCached($provider)?->client_secret ?? '');
+
+        if ($appSecret === '') {
+            Log::warning("Social webhook rejected for provider [{$provider}]: signature verification could not run — no App Secret configured (social_provider_configs.client_secret is empty).", [
+                'ip' => $request->ip(),
+            ]);
+
+            abort(403, 'Webhook signature verification is misconfigured.');
+        }
+
+        $expected = 'sha256=' . hash_hmac('sha256', $request->getContent(), $appSecret);
+
+        if (! hash_equals($expected, $header)) {
+            Log::warning("Social webhook rejected for provider [{$provider}]: X-Hub-Signature-256 signature mismatch.", [
+                'ip' => $request->ip(),
+                'header_present' => true,
+                'header_length' => strlen($header),
+            ]);
+
+            abort(403, 'Invalid webhook signature.');
+        }
     }
 }

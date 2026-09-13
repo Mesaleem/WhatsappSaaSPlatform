@@ -6,6 +6,8 @@ use App\Http\Controllers\Concerns\ResolvesTenantAccount;
 use App\Http\Controllers\Controller;
 use App\Models\Account;
 use App\Models\Invoice;
+use App\Models\ContactGroup;
+use App\Models\MessageDispatchLog;
 use App\Models\PaymentAlert;
 use App\Models\Subscription;
 use App\Models\WhatsAppSession;
@@ -41,16 +43,61 @@ class AnalyticsController extends Controller
 
         [$from, $to] = $this->resolveRange($request, $subscription?->starts_at ?? now()->subDays(29));
 
-        $query = $account ? PaymentAlert::forAccount($account->id) : PaymentAlert::query();
+        // [New feature, disclosed]: total_sent / total_failed / the
+        // "today" counters below now count EVERY dispatch pathway (Send
+        // Alert web_ui, Send Template web_template, external api, Chatbot,
+        // Journey Builder) via message_dispatch_logs — not payment_alerts
+        // alone — once that table exists. Schema::hasTable() guards this
+        // the same way this file already guards `invoices` below: a
+        // deployment that hasn't yet run the message_dispatch_logs
+        // migration keeps getting the PRE-EXISTING payment_alerts-only
+        // counts (nothing regresses), and it self-heals to the unified
+        // count the moment the migration runs — no second deploy needed.
+        //
+        // total_cost_incurred deliberately stays payment_alerts-scoped
+        // regardless of table availability: cost_deducted is only ever
+        // written on that table — templates, chatbot replies and journey
+        // sends have no cost model anywhere in this codebase, so a
+        // unified "cost across all sources" figure cannot be honestly
+        // produced yet. This is a real, disclosed scope gap, not an
+        // oversight.
+        $dispatchLogsAvailable = Schema::hasTable('message_dispatch_logs');
 
-        $agg = $query
+        // Group Messaging Phase 5 — Dashboard Analytics Upgrade. Both
+        // guarded independently of $dispatchLogsAvailable above: the
+        // recipient_type/group_id/... columns and the success_count/
+        // failure_count columns were added by two LATER migrations on
+        // top of the base message_dispatch_logs table (see those
+        // migrations' own docblocks), each still pending its own
+        // authorization — a deployment could have the base table but
+        // not yet either extension, so this self-heals exactly like
+        // $dispatchLogsAvailable itself rather than erroring.
+        $recipientTypeAvailable = $dispatchLogsAvailable && Schema::hasColumn('message_dispatch_logs', 'recipient_type');
+        $resolutionCountsAvailable = $recipientTypeAvailable && Schema::hasColumn('message_dispatch_logs', 'success_count');
+
+        $costQuery = $account ? PaymentAlert::forAccount($account->id) : PaymentAlert::query();
+        $totalCost = (float) $costQuery
             ->whereBetween('created_at', [$from, $to])
-            ->selectRaw(
-                "SUM(CASE WHEN status = 'sent' THEN 1 ELSE 0 END) as total_sent, ".
-                "SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as total_failed, ".
-                "COALESCE(SUM(CASE WHEN status = 'sent' THEN cost_deducted ELSE 0 END), 0) as total_cost"
-            )
-            ->first();
+            ->where('status', 'sent')
+            ->sum('cost_deducted');
+
+        if ($dispatchLogsAvailable) {
+            $agg = ($account ? MessageDispatchLog::forAccount($account->id) : MessageDispatchLog::query())
+                ->whereBetween('created_at', [$from, $to])
+                ->selectRaw(
+                    "SUM(CASE WHEN status = 'sent' THEN 1 ELSE 0 END) as total_sent, ".
+                    "SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as total_failed"
+                )
+                ->first();
+        } else {
+            $agg = ($account ? PaymentAlert::forAccount($account->id) : PaymentAlert::query())
+                ->whereBetween('created_at', [$from, $to])
+                ->selectRaw(
+                    "SUM(CASE WHEN status = 'sent' THEN 1 ELSE 0 END) as total_sent, ".
+                    "SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as total_failed"
+                )
+                ->first();
+        }
 
         $totalSent = (int) $agg->total_sent;
         $totalFailed = (int) $agg->total_failed;
@@ -87,7 +134,9 @@ class AnalyticsController extends Controller
         // no per-account timezone concept exists in this schema), kept
         // independent of the period-scoped $agg above since the two can
         // legitimately disagree (e.g. a 30-day period average vs. today).
-        $todayQuery = $account ? PaymentAlert::forAccount($account->id) : PaymentAlert::query();
+        $todayQuery = $dispatchLogsAvailable
+            ? ($account ? MessageDispatchLog::forAccount($account->id) : MessageDispatchLog::query())
+            : ($account ? PaymentAlert::forAccount($account->id) : PaymentAlert::query());
         $todayAgg = $todayQuery
             ->whereDate('created_at', now()->toDateString())
             ->selectRaw(
@@ -96,6 +145,30 @@ class AnalyticsController extends Controller
             )
             ->first();
 
+        // Dashboard & Analytics Fix Round 2 — "Today's Group & Individual
+        // Sent/Failed Breakdown". Reuses recipientTypeBreakdown() a
+        // second time, scoped to today's date range instead of the
+        // period range — same sourcing rules (and the same disclosed
+        // batch-vs-recipient fallback) as `recipient_breakdown` above,
+        // just re-windowed. [Disclosed]: the request named the four
+        // leaf fields literally as 'today_individual_sent' /
+        // 'today_individual_failed' / 'today_group_sent' /
+        // 'today_group_failed' while also asking for them under a
+        // 'today_breakdown' key — both are honored: nested under
+        // today_breakdown, using exactly those four literal names
+        // (rather than re-shortening them to 'individual_sent' etc,
+        // which would silently drop half of what was asked for).
+        $todayBreakdown = null;
+        if ($recipientTypeAvailable) {
+            $todayRange = $this->recipientTypeBreakdown($account, now()->startOfDay(), now()->endOfDay(), $resolutionCountsAvailable);
+            $todayBreakdown = [
+                'today_individual_sent' => $todayRange['individual']['sent'],
+                'today_individual_failed' => $todayRange['individual']['failed'],
+                'today_group_sent' => $todayRange['group']['sent'],
+                'today_group_failed' => $todayRange['group']['failed'],
+            ];
+        }
+
         return response()->json([
             'scope' => $account ? 'account' : 'global',
             'period' => ['from' => $from->toDateString(), 'to' => $to->toDateString()],
@@ -103,10 +176,29 @@ class AnalyticsController extends Controller
             'total_sent' => $totalSent,
             'total_failed' => $totalFailed,
             'delivered_rate' => $deliveredRate,
-            'total_cost_incurred' => number_format((float) $agg->total_cost, 4, '.', ''),
+            'total_cost_incurred' => number_format($totalCost, 4, '.', ''),
             'quota' => $quota,
             'total_sent_today' => (int) $todayAgg->total_sent,
             'total_failed_today' => (int) $todayAgg->total_failed,
+            // Dashboard & Analytics Fix Round 2. null under the same
+            // self-healing condition as `recipient_breakdown` below.
+            'today_breakdown' => $todayBreakdown,
+            // [New feature, disclosed]: empty until message_dispatch_logs
+            // exists — see sourceDistribution()'s docblock.
+            'source_distribution' => $dispatchLogsAvailable ? $this->sourceDistribution($account, $from, $to) : [],
+            // Group Messaging Phase 5 — null exactly when
+            // $recipientTypeAvailable is false (see setup above), same
+            // "absent, not fabricated" convention 'quota' above already
+            // uses for a field that isn't meaningful/available yet.
+            'recipient_breakdown' => $recipientTypeAvailable ? $this->recipientTypeBreakdown($account, $from, $to, $resolutionCountsAvailable) : null,
+            // null for the global scope (Super Admin, no client selected)
+            // — Active Contact Groups is a per-tenant concept, same
+            // reasoning as 'quota' above. Also null if the contact_groups
+            // table itself hasn't been migrated yet (Group Messaging
+            // Step 1 — still pending its own authorization).
+            'active_contact_groups' => ($account && Schema::hasTable('contact_groups'))
+                ? ContactGroup::where('account_id', $account->id)->count()
+                : null,
         ]);
     }
 
@@ -166,10 +258,27 @@ class AnalyticsController extends Controller
         // cache after the first one populates it, which is also the fix
         // for "hit repeatedly in duplicate bursts" — there is nothing
         // left to deduplicate once repeats are this cheap.
-        $cacheKey = 'analytics_charts_'.($account?->id ?? 'global').'_'.md5(json_encode($data));
+        // [New feature, disclosed]: the daily sent/failed series below
+        // (feeds the "Message Pulse" chart) now sources from
+        // message_dispatch_logs — every dispatch pathway, not just
+        // payment_alerts — once that table exists; same
+        // Schema::hasTable() self-healing guard as summary() above, so
+        // this degrades to the pre-existing payment_alerts-only series
+        // rather than erroring on a deployment that hasn't migrated yet.
+        // Folded into the existing 60s cache key so a stale/unmigrated
+        // vs. migrated response is never mixed within one cache window.
+        $dispatchLogsAvailable = Schema::hasTable('message_dispatch_logs');
+        // Group Messaging Phase 5 — same two independent guards as
+        // summary() above; see that method's setup comment for why
+        // each is checked separately from $dispatchLogsAvailable.
+        $recipientTypeAvailable = $dispatchLogsAvailable && Schema::hasColumn('message_dispatch_logs', 'recipient_type');
+        $resolutionCountsAvailable = $recipientTypeAvailable && Schema::hasColumn('message_dispatch_logs', 'success_count');
+        $cacheKey = 'analytics_charts_'.($account?->id ?? 'global').'_'.md5(json_encode($data)).'_'.($dispatchLogsAvailable ? 'v2' : 'v1').($recipientTypeAvailable ? 'rt' : '');
 
-        return response()->json(Cache::remember($cacheKey, 60, function () use ($account, $subscription, $from, $to) {
-            $query = $account ? PaymentAlert::forAccount($account->id) : PaymentAlert::query();
+        return response()->json(Cache::remember($cacheKey, 60, function () use ($account, $subscription, $from, $to, $dispatchLogsAvailable, $recipientTypeAvailable, $resolutionCountsAvailable) {
+            $query = $dispatchLogsAvailable
+                ? ($account ? MessageDispatchLog::forAccount($account->id) : MessageDispatchLog::query())
+                : ($account ? PaymentAlert::forAccount($account->id) : PaymentAlert::query());
 
             $rows = $query
                 ->whereBetween('created_at', [$from, $to])
@@ -215,12 +324,24 @@ class AnalyticsController extends Controller
             // 500 if it hasn't.
             $dailyRevenue = $account ? null : $this->globalDailyRevenue($from, $to);
 
+            // Group Messaging Phase 5 — "Individual vs Group" toggle on
+            // the Message Pulse chart. null exactly when
+            // $recipientTypeAvailable is false, same convention as
+            // $dailyRevenue above; the pre-existing `daily` field is
+            // completely unchanged (still every recipient_type
+            // combined), so RevenuePulseChart and any other existing
+            // consumer of `daily` is unaffected.
+            $dailyByRecipientType = $recipientTypeAvailable
+                ? $this->dailyRecipientTypeSeries($account, $from, $to, $resolutionCountsAvailable)
+                : null;
+
             return [
                 'scope' => $account ? 'account' : 'global',
                 'range' => ['from' => $from->toDateString(), 'to' => $to->toDateString()],
                 'daily' => $daily,
                 'engine_breakdown' => $engineBreakdown,
                 'daily_revenue' => $dailyRevenue,
+                'daily_by_recipient_type' => $dailyByRecipientType,
             ];
         }));
     }
@@ -307,6 +428,160 @@ class AnalyticsController extends Controller
     }
 
     /**
+     * Group Messaging Phase 5 — Dashboard Analytics Upgrade. Splits the
+     * summary()-level total_sent/total_failed figures by recipient_type.
+     *
+     * Individual rows are counted directly by `status`, exactly like
+     * every other aggregate in this controller — one row per attempted
+     * send.
+     *
+     * Group rows are different: ONE message_dispatch_logs row covers an
+     * entire batch (see the migration adding success_count/failure_count
+     * for the full root-cause explanation), so they are summed via those
+     * two columns instead of counted by status. When
+     * $resolutionCountsAvailable is false (that migration hasn't run
+     * yet), this falls back to counting resolved BATCHES themselves — a
+     * coarser, disclosed approximation ("batches sent" rather than
+     * "recipients sent") rather than erroring on a missing column.
+     *
+     * @return array{
+     *   individual: array{sent: int, failed: int},
+     *   group: array{sent: int, failed: int, queued_batches: int, recipient_count: int},
+     * }
+     */
+    private function recipientTypeBreakdown(?Account $account, Carbon $from, Carbon $to, bool $resolutionCountsAvailable): array
+    {
+        $base = $account ? MessageDispatchLog::forAccount($account->id) : MessageDispatchLog::query();
+
+        $individual = (clone $base)
+            ->where('recipient_type', 'individual')
+            ->whereBetween('created_at', [$from, $to])
+            ->selectRaw(
+                "SUM(CASE WHEN status = 'sent' THEN 1 ELSE 0 END) as sent, ".
+                "SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed"
+            )
+            ->first();
+
+        $groupQuery = (clone $base)
+            ->where('recipient_type', 'group')
+            ->whereBetween('created_at', [$from, $to]);
+
+        $groupSelect = $resolutionCountsAvailable
+            ? "SUM(COALESCE(success_count, 0)) as sent, SUM(COALESCE(failure_count, 0)) as failed, SUM(CASE WHEN status = 'queued' THEN 1 ELSE 0 END) as queued_batches, SUM(recipient_count) as recipient_count"
+            : "SUM(CASE WHEN status = 'sent' THEN 1 ELSE 0 END) as sent, SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed, SUM(CASE WHEN status = 'queued' THEN 1 ELSE 0 END) as queued_batches, SUM(recipient_count) as recipient_count";
+
+        $groupAgg = $groupQuery->selectRaw($groupSelect)->first();
+
+        return [
+            'individual' => ['sent' => (int) $individual->sent, 'failed' => (int) $individual->failed],
+            'group' => [
+                'sent' => (int) $groupAgg->sent,
+                'failed' => (int) $groupAgg->failed,
+                'queued_batches' => (int) $groupAgg->queued_batches,
+                'recipient_count' => (int) $groupAgg->recipient_count,
+            ],
+        ];
+    }
+
+    /**
+     * Group Messaging Phase 5 — the "Individual vs Group" toggle on the
+     * Message Pulse chart. Gap-filled per calendar day exactly like the
+     * pre-existing `daily` series charts() already builds, just split by
+     * recipient_type using the same sent/failed sourcing rules as
+     * recipientTypeBreakdown() above (see that method's docblock for why
+     * group rows use success_count/failure_count rather than a per-row
+     * status count).
+     *
+     * @return array{
+     *   individual: list<array{date: string, sent: int, failed: int}>,
+     *   group: list<array{date: string, sent: int, failed: int}>,
+     * }
+     */
+    private function dailyRecipientTypeSeries(?Account $account, Carbon $from, Carbon $to, bool $resolutionCountsAvailable): array
+    {
+        $base = $account ? MessageDispatchLog::forAccount($account->id) : MessageDispatchLog::query();
+
+        $individualRows = (clone $base)
+            ->where('recipient_type', 'individual')
+            ->whereBetween('created_at', [$from, $to])
+            ->selectRaw(
+                "DATE(created_at) as bucket_date, ".
+                "SUM(CASE WHEN status = 'sent' THEN 1 ELSE 0 END) as sent, ".
+                "SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed"
+            )
+            ->groupBy('bucket_date')
+            ->get()
+            ->keyBy('bucket_date');
+
+        $groupSelect = $resolutionCountsAvailable
+            ? "DATE(created_at) as bucket_date, SUM(COALESCE(success_count, 0)) as sent, SUM(COALESCE(failure_count, 0)) as failed"
+            : "DATE(created_at) as bucket_date, SUM(CASE WHEN status = 'sent' THEN 1 ELSE 0 END) as sent, SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed";
+
+        $groupRows = (clone $base)
+            ->where('recipient_type', 'group')
+            ->whereBetween('created_at', [$from, $to])
+            ->selectRaw($groupSelect)
+            ->groupBy('bucket_date')
+            ->get()
+            ->keyBy('bucket_date');
+
+        $individual = [];
+        $group = [];
+        $cursor = $from->copy()->startOfDay();
+        $end = $to->copy()->startOfDay();
+
+        while ($cursor->lte($end)) {
+            $key = $cursor->toDateString();
+            $iRow = $individualRows->get($key);
+            $gRow = $groupRows->get($key);
+
+            $individual[] = ['date' => $key, 'sent' => $iRow ? (int) $iRow->sent : 0, 'failed' => $iRow ? (int) $iRow->failed : 0];
+            $group[] = ['date' => $key, 'sent' => $gRow ? (int) $gRow->sent : 0, 'failed' => $gRow ? (int) $gRow->failed : 0];
+            $cursor->addDay();
+        }
+
+        return ['individual' => $individual, 'group' => $group];
+    }
+
+
+    /**
+     * [New feature, disclosed] — "% API vs % Manual Web sends" breakdown
+     * requested for the Dashboard/Analytics audit. Counts EVERY
+     * message_dispatch_logs row in range regardless of status (sent +
+     * failed), the same denominator $attempted above uses — a source
+     * that fails often should still show up as a large share of traffic,
+     * not be hidden by counting only its successes. Only called when
+     * Schema::hasTable('message_dispatch_logs') is true (see summary()'s
+     * docblock); returns [] before that table exists or when it's empty
+     * for the period, rather than a query error.
+     *
+     * @return list<array{source: string, count: int, percent: float}>
+     */
+    private function sourceDistribution(?Account $account, Carbon $from, Carbon $to): array
+    {
+        $counts = ($account ? MessageDispatchLog::forAccount($account->id) : MessageDispatchLog::query())
+            ->whereBetween('created_at', [$from, $to])
+            ->selectRaw('source, count(*) as count')
+            ->groupBy('source')
+            ->pluck('count', 'source');
+
+        $total = (int) $counts->sum();
+
+        if ($total === 0) {
+            return [];
+        }
+
+        return $counts
+            ->map(fn ($count, $source) => [
+                'source' => $source,
+                'count' => (int) $count,
+                'percent' => round(((int) $count / $total) * 100, 2),
+            ])
+            ->values()
+            ->all();
+    }
+
+    /**
      * @return array{0: Carbon, 1: Carbon}
      */
     private function resolveRange(Request $request, Carbon $subscriptionStartsAt): array
@@ -374,10 +649,20 @@ class AnalyticsController extends Controller
         // that agree with this count.
         $activeClients = Account::where('status', 'active')->count();
 
-        $agg = PaymentAlert::selectRaw(
-            "SUM(CASE WHEN status = 'sent' THEN 1 ELSE 0 END) as total_sent, ".
-            "SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as total_failed"
-        )->first();
+        // [New feature, disclosed]: same message_dispatch_logs-over-
+        // payment_alerts preference, guarded and self-healing, as
+        // summary()/charts() above — see summary()'s docblock for the
+        // full reasoning.
+        $dispatchLogsAvailable = Schema::hasTable('message_dispatch_logs');
+        $agg = $dispatchLogsAvailable
+            ? MessageDispatchLog::selectRaw(
+                "SUM(CASE WHEN status = 'sent' THEN 1 ELSE 0 END) as total_sent, ".
+                "SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as total_failed"
+            )->first()
+            : PaymentAlert::selectRaw(
+                "SUM(CASE WHEN status = 'sent' THEN 1 ELSE 0 END) as total_sent, ".
+                "SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as total_failed"
+            )->first();
 
         $totalSent = (int) $agg->total_sent;
         $totalFailed = (int) $agg->total_failed;
@@ -391,7 +676,8 @@ class AnalyticsController extends Controller
         // timezone, matching every other today()/now() call in this
         // controller — there is no per-account timezone concept in this
         // schema to do better than that).
-        $todayAgg = PaymentAlert::whereDate('created_at', now()->toDateString())
+        $todayAgg = ($dispatchLogsAvailable ? MessageDispatchLog::query() : PaymentAlert::query())
+            ->whereDate('created_at', now()->toDateString())
             ->selectRaw(
                 "SUM(CASE WHEN status = 'sent' THEN 1 ELSE 0 END) as total_sent, ".
                 "SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as total_failed"

@@ -1,17 +1,6 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AxiosError } from 'axios';
-import {
-  AlertCircle,
-  CheckCircle2,
-  Download,
-  FileText,
-  Loader2,
-  RefreshCw,
-  Search,
-  Send,
-  X,
-  XCircle,
-} from 'lucide-react';
+import { Loader2, RefreshCw, Users, XCircle } from 'lucide-react';
 import {
   Area,
   AreaChart,
@@ -28,26 +17,44 @@ import {
 import { useAuth } from '../../core/context/AuthContext';
 import { useTenant } from '../../core/context/TenantContext';
 import analyticsService from '../../services/analyticsService';
-import { ClearFiltersButton } from '../../components/common/DataTableControls';
+import messageLogsService from '../../services/messageLogsService';
+import { ClearFiltersButton, Pagination, SearchInput, StatusFilterSelect } from '../../components/common/DataTableControls';
+import { TableCard } from '../../components/common/Card';
+import { TableSkeletonRows } from '../../components/common/Skeleton';
 import type { ApiErrorResponse } from '../../types/auth';
-import type { PaymentAlert, PaymentAlertStatus } from '../../types/alert';
 import type { AnalyticsChartsResponse, AnalyticsSummary, ChartRange, DateRange } from '../../types/analytics';
 import type { EngineType } from '../../types/subscription';
+import type { MessageDispatchLog, MessageDispatchLogFilters, MessageDispatchSource, MessageDispatchStatus } from '../../types/messageLog';
 
-const STATUS_BADGE: Record<PaymentAlertStatus, string> = {
-  pending: 'bg-slate-100 text-slate-600 ring-slate-500/20',
-  queued: 'bg-blue-50 text-blue-700 ring-blue-600/20',
-  sent: 'bg-emerald-50 text-emerald-700 ring-emerald-600/20',
-  failed: 'bg-red-50 text-red-700 ring-red-600/20',
-};
-
-const STATUS_OPTIONS: Array<{ value: PaymentAlertStatus | ''; label: string }> = [
+// Analytics/Dashboard Log Source Discrepancy Fix: same MessageDispatchStatus-
+// keyed status vocabulary MessageLogsPage.tsx and DashboardPage.tsx's
+// "Recent Message Logs" widget already use for message_dispatch_logs rows
+// ('sent' | 'failed' | 'queued' — note there is no 'pending' state here,
+// unlike the old payment_alerts-only PaymentAlertStatus this replaces).
+// Duplicated locally rather than imported/shared, matching this codebase's
+// existing convention of small per-page presentational maps (see
+// DashboardPage.tsx's own local STATUS_BADGE/SOURCE_LABEL).
+const STATUS_OPTIONS: Array<{ value: MessageDispatchStatus | ''; label: string }> = [
   { value: '', label: 'All statuses' },
-  { value: 'pending', label: 'Pending' },
-  { value: 'queued', label: 'Queued' },
   { value: 'sent', label: 'Sent' },
   { value: 'failed', label: 'Failed' },
+  { value: 'queued', label: 'Queued' },
 ];
+
+const STATUS_BADGE: Record<MessageDispatchStatus, string> = {
+  sent: 'bg-emerald-50 text-emerald-700 ring-emerald-600/20',
+  failed: 'bg-red-50 text-red-700 ring-red-600/20',
+  queued: 'bg-amber-50 text-amber-700 ring-amber-600/20',
+};
+
+/** Mirrors MessageLogsPage.tsx's SOURCE_BADGE exactly — same labels/colors, so a source badge reads identically on both pages. */
+const SOURCE_BADGE: Record<MessageDispatchSource, { label: string; className: string }> = {
+  web_ui: { label: 'Web', className: 'bg-indigo-50 text-indigo-700 ring-indigo-600/20' },
+  web_template: { label: 'Template', className: 'bg-violet-50 text-violet-700 ring-violet-600/20' },
+  api: { label: 'API', className: 'bg-amber-50 text-amber-700 ring-amber-600/20' },
+  chatbot: { label: 'Chatbot', className: 'bg-cyan-50 text-cyan-700 ring-cyan-600/20' },
+  journey: { label: 'Journey', className: 'bg-fuchsia-50 text-fuchsia-700 ring-fuchsia-600/20' },
+};
 
 const ENGINE_COLOR: Record<EngineType, string> = {
   qr: '#3b82f6',
@@ -70,6 +77,11 @@ function daysAgoIso(days: number): string {
   const d = new Date();
   d.setDate(d.getDate() - (days - 1));
   return d.toISOString().slice(0, 10);
+}
+
+function formatDateTime(value: string | null): string {
+  if (!value) return '—';
+  return new Date(value).toLocaleString();
 }
 
 /** Derives an explicit {from, to} pair for the currently selected range, so the KPI
@@ -393,53 +405,76 @@ function ChartsSection({ range, resolvedRange }: { range: ChartRange; resolvedRa
   );
 }
 
+/**
+ * Analytics/Dashboard Log Source Discrepancy Fix.
+ *
+ * [Bugfix, disclosed, root cause]: this table used to read `payment_alerts`
+ * via analyticsService.getLogs() (`/alerts/logs`, MessageLogController) —
+ * a table that was, and always was, scoped to payment_alerts only (see
+ * MessageLogController's own docblock). A Send Template / Chatbot /
+ * Journey / Group / external-API send never writes a payment_alerts row,
+ * so this grid silently never showed those sends, while the Dashboard's
+ * "Recent Message Logs" widget (DashboardPage.tsx) had already been fixed
+ * to read `message_dispatch_logs` via messageLogsService — the exact same
+ * root cause and fix, applied here. Now reads the same table via the same
+ * shared service, so the two widgets can never disagree about what "the
+ * most recent messages" are again.
+ *
+ * Two deliberate, disclosed removals that follow directly from switching
+ * the data source, not separate feature decisions:
+ *   - Row click / detail modal removed: the old modal called
+ *     analyticsService.getLogDetail(id) -> GET /alerts/logs/{id}, a
+ *     payment_alerts-only lookup. message_dispatch_logs rows have their
+ *     own id sequence from a different table — reusing that endpoint
+ *     would 404 or, worse, silently show an unrelated payment_alerts
+ *     row that happens to share the same numeric id. No
+ *     MessageDispatchLogController::show() endpoint exists (only
+ *     index()) to replace it with, and adding one was not requested.
+ *   - CSV/PDF export buttons removed: ExportController's /exports/csv|pdf
+ *     pair is also payment_alerts-only (see messageLogsService.ts's own
+ *     docblock — extending export to message_dispatch_logs was
+ *     explicitly flagged there as a follow-up, not done). Keeping the
+ *     buttons wired to the old export would reintroduce this exact bug
+ *     in a new shape: the exported file would silently disagree with
+ *     the table now shown above it.
+ * Both are one-line follow-ups (an admin.templates-style single show()
+ * action, a new export query) if wanted later — flag it if you want that
+ * done; not silently assumed in scope here.
+ */
 function LogsSection({ resolvedRange }: { resolvedRange: DateRange }) {
   // See SummarySection's comment — same reason for this dependency.
   const { selectedAccountId } = useTenant();
-  const [logs, setLogs] = useState<PaymentAlert[]>([]);
-  const [logsScope, setLogsScope] = useState<'account' | 'global'>('account');
+  const [logs, setLogs] = useState<MessageDispatchLog[]>([]);
+  const [scope, setScope] = useState<'account' | 'global'>('account');
   const [page, setPage] = useState(1);
   const [lastPage, setLastPage] = useState(1);
   const [total, setTotal] = useState(0);
+  const [perPage, setPerPage] = useState(15);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState('');
-  const [status, setStatus] = useState<PaymentAlertStatus | ''>('');
-  const [selectedAlertId, setSelectedAlertId] = useState<number | null>(null);
+  const [status, setStatus] = useState<MessageDispatchStatus | ''>('');
 
-  const [isExportingCsv, setIsExportingCsv] = useState(false);
-  const [isExportingPdf, setIsExportingPdf] = useState(false);
-  const [exportError, setExportError] = useState<string | null>(null);
-
-  // Debounce the search box so every keystroke doesn't trigger a fetch.
-  useEffect(() => {
-    const handle = setTimeout(() => setSearch(searchInput.trim()), 400);
-    return () => clearTimeout(handle);
-  }, [searchInput]);
-
-  const hasActiveLogFilters = searchInput !== '' || status !== '';
+  const hasActiveLogFilters = search !== '' || status !== '';
   const clearLogFilters = () => {
-    setSearchInput('');
+    setSearch('');
     setStatus('');
   };
+
+  const filters: MessageDispatchLogFilters = useMemo(
+    () => ({ search, status, from: resolvedRange.from, to: resolvedRange.to }),
+    [search, status, resolvedRange.from, resolvedRange.to],
+  );
 
   const load = useCallback(
     async (pageToLoad: number) => {
       setIsLoading(true);
       setError(null);
       try {
-        const res = await analyticsService.getLogs({
-          page: pageToLoad,
-          per_page: 15,
-          search: search || undefined,
-          status: status || undefined,
-          from: resolvedRange.from,
-          to: resolvedRange.to,
-        });
+        const res = await messageLogsService.list(pageToLoad, perPage, filters);
         setLogs(res.data);
-        setLogsScope(res.scope);
+        setScope(res.scope);
         setPage(res.current_page);
         setLastPage(res.last_page);
         setTotal(res.total);
@@ -450,48 +485,27 @@ function LogsSection({ resolvedRange }: { resolvedRange: DateRange }) {
         setIsLoading(false);
       }
     },
-    [search, status, resolvedRange.from, resolvedRange.to],
+    [perPage, filters],
   );
 
   useEffect(() => {
     void load(1);
   }, [load, selectedAccountId]);
 
-  const runExport = async (kind: 'csv' | 'pdf') => {
-    setExportError(null);
-    const filters = { search: search || undefined, status: status || undefined, from: resolvedRange.from, to: resolvedRange.to };
-    const setBusy = kind === 'csv' ? setIsExportingCsv : setIsExportingPdf;
-    setBusy(true);
-    try {
-      await (kind === 'csv' ? analyticsService.exportCsv(filters) : analyticsService.exportPdf(filters));
-    } catch (err) {
-      setExportError(err instanceof Error ? err.message : `Could not export the ${kind.toUpperCase()}.`);
-    } finally {
-      setBusy(false);
-    }
-  };
+  const showClientColumn = scope === 'global';
+  const columnCount = showClientColumn ? 5 : 4;
 
   return (
-    <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 p-4">
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-2">
-          <div className="relative">
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-            <input
-              type="text"
-              value={searchInput}
-              onChange={(e) => setSearchInput(e.target.value)}
-              placeholder="Search name, phone, or payment ref…"
-              className={`${inputClass} w-64 pl-9`}
-            />
-          </div>
-          <select value={status} onChange={(e) => setStatus(e.target.value as PaymentAlertStatus | '')} className={inputClass}>
-            {STATUS_OPTIONS.map((opt) => (
-              <option key={opt.value} value={opt.value}>
-                {opt.label}
-              </option>
-            ))}
-          </select>
+          <SearchInput value={search} onChange={setSearch} placeholder="Search by phone, template, or group name…" />
+          <StatusFilterSelect
+            value={status}
+            onChange={(v) => setStatus(v as MessageDispatchStatus | '')}
+            options={STATUS_OPTIONS.filter((opt) => opt.value !== '')}
+            allLabel="All statuses"
+          />
           <button
             type="button"
             onClick={() => void load(page)}
@@ -501,238 +515,91 @@ function LogsSection({ resolvedRange }: { resolvedRange: DateRange }) {
           </button>
           <ClearFiltersButton active={hasActiveLogFilters} onClear={clearLogFilters} />
         </div>
-
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => void runExport('csv')}
-            disabled={isExportingCsv}
-            className="flex items-center gap-2 rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
-          >
-            {isExportingCsv ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
-            Export CSV
-          </button>
-          <button
-            type="button"
-            onClick={() => void runExport('pdf')}
-            disabled={isExportingPdf}
-            className="flex items-center gap-2 rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
-          >
-            {isExportingPdf ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileText className="h-4 w-4" />}
-            Export PDF
-          </button>
-        </div>
       </div>
 
-      {exportError && (
-        <div className="flex items-center gap-2 border-b border-red-200 bg-red-50 px-4 py-2.5 text-sm text-red-700">
+      {error && (
+        <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
           <XCircle className="h-4 w-4 flex-shrink-0" />
-          {exportError}
+          {error}
         </div>
       )}
 
-      <div className="overflow-x-auto">
+      <TableCard>
         <table className="min-w-full divide-y divide-slate-200 text-sm">
           <thead className="bg-slate-50">
             <tr>
-              <th className="px-4 py-2.5 text-left font-medium text-slate-600">Customer</th>
-              {logsScope === 'global' && (
+              {showClientColumn && (
                 <th className="px-4 py-2.5 text-left font-medium text-slate-600">Client</th>
               )}
-              <th className="px-4 py-2.5 text-left font-medium text-slate-600">Phone</th>
-              <th className="px-4 py-2.5 text-left font-medium text-slate-600">Amount</th>
-              <th className="px-4 py-2.5 text-left font-medium text-slate-600">Payment Ref</th>
+              <th className="px-4 py-2.5 text-left font-medium text-slate-600">Recipient Phone / Group Name</th>
+              <th className="px-4 py-2.5 text-left font-medium text-slate-600">Source / Template</th>
               <th className="px-4 py-2.5 text-left font-medium text-slate-600">Status</th>
               <th className="px-4 py-2.5 text-left font-medium text-slate-600">Sent At</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
             {isLoading ? (
+              <TableSkeletonRows columns={columnCount} />
+            ) : error ? null : logs.length === 0 ? (
               <tr>
-                <td colSpan={logsScope === 'global' ? 7 : 6} className="px-4 py-8 text-center text-slate-400">
-                  <Loader2 className="mx-auto h-5 w-5 animate-spin" />
-                </td>
-              </tr>
-            ) : error ? (
-              <tr>
-                <td colSpan={logsScope === 'global' ? 7 : 6} className="px-4 py-8 text-center text-red-600">
-                  {error}
-                </td>
-              </tr>
-            ) : logs.length === 0 ? (
-              <tr>
-                <td colSpan={logsScope === 'global' ? 7 : 6} className="px-4 py-8 text-center text-slate-400">
+                <td colSpan={columnCount} className="px-4 py-8 text-center text-slate-400">
                   No message logs match these filters.
                 </td>
               </tr>
             ) : (
               logs.map((log) => (
-                <tr
-                  key={log.id}
-                  onClick={() => setSelectedAlertId(log.id)}
-                  className="cursor-pointer hover:bg-slate-50"
-                >
-                  <td className="px-4 py-2.5 text-slate-800">{log.customer_name}</td>
-                  {logsScope === 'global' && (
+                <tr key={log.id} className="hover:bg-slate-50">
+                  {showClientColumn && (
                     <td className="px-4 py-2.5 text-slate-600">{log.account?.company_name ?? '—'}</td>
                   )}
-                  <td className="px-4 py-2.5 text-slate-600">{log.recipient_phone}</td>
-                  <td className="px-4 py-2.5 text-slate-800">₹{Number(log.amount).toFixed(2)}</td>
-                  <td className="px-4 py-2.5 font-mono text-xs text-slate-600">{log.payment_ref}</td>
                   <td className="px-4 py-2.5">
-                    <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${STATUS_BADGE[log.status]}`}>
+                    {log.recipient_type === 'group' ? (
+                      <div className="flex items-center gap-1.5">
+                        <span className="inline-flex items-center gap-1 rounded-full bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-700 ring-1 ring-inset ring-indigo-600/20">
+                          <Users className="h-3 w-3" />
+                          Group
+                        </span>
+                        <span className="truncate text-xs font-semibold text-slate-800">
+                          {log.group_name ?? '—'} ({log.recipient_count})
+                        </span>
+                      </div>
+                    ) : (
+                      <span className="font-mono text-xs text-slate-700">{log.recipient_phone}</span>
+                    )}
+                  </td>
+                  <td className="px-4 py-2.5 max-w-xs">
+                    <span
+                      className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${SOURCE_BADGE[log.source].className}`}
+                    >
+                      {SOURCE_BADGE[log.source].label}
+                    </span>
+                    {log.template_name && (
+                      <div className="mt-1 truncate text-xs text-slate-500">{log.template_name}</div>
+                    )}
+                  </td>
+                  <td className="px-4 py-2.5">
+                    <span
+                      className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium capitalize ring-1 ring-inset ${STATUS_BADGE[log.status]}`}
+                      title={log.status === 'failed' ? (log.error_reason ?? undefined) : undefined}
+                    >
                       {log.status}
                     </span>
                   </td>
-                  <td className="px-4 py-2.5 text-slate-500">{log.sent_at ? new Date(log.sent_at).toLocaleString() : '—'}</td>
+                  <td className="px-4 py-2.5 text-slate-500">{formatDateTime(log.created_at)}</td>
                 </tr>
               ))
             )}
           </tbody>
         </table>
-      </div>
-
-      <div className="flex items-center justify-between border-t border-slate-200 px-4 py-3 text-sm text-slate-500">
-        <span>{total} total log{total === 1 ? '' : 's'}</span>
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => void load(page - 1)}
-            disabled={page <= 1 || isLoading}
-            className="rounded-lg border border-slate-300 px-3 py-1.5 font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-          >
-            Prev
-          </button>
-          <span>
-            Page {page} of {lastPage}
-          </span>
-          <button
-            type="button"
-            onClick={() => void load(page + 1)}
-            disabled={page >= lastPage || isLoading}
-            className="rounded-lg border border-slate-300 px-3 py-1.5 font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-          >
-            Next
-          </button>
-        </div>
-      </div>
-
-      {selectedAlertId !== null && (
-        <LogDetailModal alertId={selectedAlertId} onClose={() => setSelectedAlertId(null)} />
-      )}
-    </div>
-  );
-}
-
-function LogDetailModal({ alertId, onClose }: { alertId: number; onClose: () => void }) {
-  const [alert, setAlert] = useState<PaymentAlert | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    setIsLoading(true);
-    setError(null);
-    analyticsService
-      .getLogDetail(alertId)
-      .then((data) => {
-        if (!cancelled) setAlert(data);
-      })
-      .catch((err: AxiosError<ApiErrorResponse>) => {
-        if (!cancelled) setError(err.response?.data?.message ?? 'Failed to load this alert.');
-      })
-      .finally(() => {
-        if (!cancelled) setIsLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [alertId]);
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4" onClick={onClose}>
-      <div
-        className="max-h-[85vh] w-full max-w-lg overflow-y-auto rounded-xl bg-white p-6 shadow-xl"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center justify-between">
-          <h2 className="text-base font-semibold text-slate-900">Alert #{alertId}</h2>
-          <button type="button" onClick={onClose} className="text-slate-400 hover:text-slate-600">
-            <X className="h-5 w-5" />
-          </button>
-        </div>
-
-        {isLoading ? (
-          <div className="flex items-center justify-center py-10">
-            <Loader2 className="h-5 w-5 animate-spin text-slate-400" />
-          </div>
-        ) : error ? (
-          <div className="mt-4 flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-            <AlertCircle className="h-4 w-4 flex-shrink-0" />
-            {error}
-          </div>
-        ) : alert ? (
-          <div className="mt-4 space-y-4 text-sm">
-            <div className="grid grid-cols-2 gap-3">
-              <DetailField label="Customer" value={alert.customer_name} />
-              <DetailField label="Phone" value={alert.recipient_phone} />
-              <DetailField label="Amount" value={`₹${Number(alert.amount).toFixed(2)}`} />
-              <DetailField label="Payment Ref" value={alert.payment_ref} mono />
-              <DetailField
-                label="Status"
-                value={
-                  <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${STATUS_BADGE[alert.status]}`}>
-                    {alert.status}
-                  </span>
-                }
-              />
-              <DetailField label="Cost Deducted" value={`₹${Number(alert.cost_deducted).toFixed(4)}`} />
-              <DetailField label="Sent At" value={alert.sent_at ? new Date(alert.sent_at).toLocaleString() : '—'} />
-              <DetailField label="Created At" value={new Date(alert.created_at).toLocaleString()} />
-            </div>
-
-            {alert.error_reason && (
-              <div className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2.5 text-red-700">
-                <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0" />
-                <span>{alert.error_reason}</span>
-              </div>
-            )}
-
-            {alert.status === 'sent' && !alert.error_reason && (
-              <div className="flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2.5 text-emerald-700">
-                <CheckCircle2 className="h-4 w-4 flex-shrink-0" />
-                <span>Delivered successfully.</span>
-              </div>
-            )}
-
-            <div>
-              <p className="mb-1.5 flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-slate-500">
-                <Send className="h-3.5 w-3.5" />
-                Raw Payload Metadata
-              </p>
-              {alert.raw_response ? (
-                <pre className="max-h-48 overflow-auto rounded-lg bg-slate-900 p-3 text-xs text-slate-100">
-                  {JSON.stringify(alert.raw_response, null, 2)}
-                </pre>
-              ) : (
-                <p className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 text-xs text-slate-500">
-                  No raw driver payload was captured for this alert (sent before this was tracked, or no driver
-                  response was returned).
-                </p>
-              )}
-            </div>
-          </div>
-        ) : null}
-      </div>
-    </div>
-  );
-}
-
-function DetailField({ label, value, mono }: { label: string; value: ReactNode; mono?: boolean }) {
-  return (
-    <div>
-      <p className="text-xs font-medium uppercase tracking-wide text-slate-400">{label}</p>
-      <p className={`mt-0.5 text-slate-800 ${mono ? 'font-mono text-xs' : ''}`}>{value}</p>
+        <Pagination
+          page={page}
+          lastPage={lastPage}
+          total={total}
+          perPage={perPage}
+          onPageChange={(p) => void load(p)}
+          onPerPageChange={(pp) => setPerPage(pp)}
+        />
+      </TableCard>
     </div>
   );
 }

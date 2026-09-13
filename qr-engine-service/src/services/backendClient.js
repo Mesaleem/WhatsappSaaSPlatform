@@ -29,6 +29,36 @@ export async function notifyBackend(accountId, status) {
 }
 
 /**
+ * Module 10 (qr-engine-service side) — Baileys-side counterpart to
+ * MetaWebhookController's inbound-message handling. Notifies
+ * backend-api of an inbound WhatsApp message received on a Baileys
+ * ('qr' engine) session, so ChatbotEngineService::handleInboundMessage()
+ * can evaluate chatbot rules / Journey Builder for this tenant exactly
+ * as it already does for Meta-engine accounts.
+ *
+ * Mirrors notifyBackend()'s fire-and-forget error handling: a delivery
+ * failure here must never crash this process or interrupt the live
+ * Baileys socket — it is logged and dropped, same as a status-webhook
+ * failure. Posts to the existing, already-secured
+ * /api/internal/whatsapp-inbound endpoint (WhatsAppInboundController),
+ * which was built for this call and previously had no caller.
+ */
+export async function notifyInboundMessage(accountId, senderPhone, message) {
+  try {
+    await backendHttp.post(
+      '/api/internal/whatsapp-inbound',
+      { account_id: Number(accountId), sender_phone: senderPhone, message },
+      { headers: { 'X-Internal-Secret': INTERNAL_API_SECRET } },
+    );
+  } catch (err) {
+    console.error(
+      `[backendClient] failed to notify backend-api of inbound message for account_id=${accountId}:`,
+      err.response?.data ?? err.message,
+    );
+  }
+}
+
+/**
  * Verifies a frontend Bearer token by asking backend-api who it belongs to,
  * and confirms that user is allowed to see accountId's session (their own
  * account, or Super Admin). This is the multi-tenant isolation boundary for

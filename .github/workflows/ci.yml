@@ -1,0 +1,112 @@
+name: CI
+
+# [New, disclosed — Product Analysis report §6, item 4: "zero test
+# coverage / no CI"]. Runs on GitHub Actions because this repo's origin
+# remote is github.com/Mesaleem/WhatsappSaaSPlatform (verified via
+# `git remote -v`, not assumed).
+#
+# Deliberately does NOT add new PHPUnit test bodies beyond the stock
+# Laravel example tests already in the repo (tests/Unit/ExampleTest.php,
+# tests/Feature/ExampleTest.php) — this environment has no `php` binary
+# reachable anywhere (confirmed: `which php` fails both in the cloud
+# workspace and in this connected-device shell), so any new test code
+# written here could not be executed or verified before being committed.
+# Per this project's own verification discipline, shipping test code
+# that has never actually been run is worse than shipping none — it
+# creates false confidence. This workflow instead gives the backend a
+# REAL php runtime (via shivammathur/setup-php, GitHub-hosted) for the
+# first time, executing the existing example tests and any tests added
+# in a future change from an environment where `php artisan test` can
+# actually be run and its output actually inspected.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  backend-tests:
+    name: backend-api (PHPUnit)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend-api
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          extensions: mbstring, pdo, pdo_sqlite, sqlite3, bcmath, ctype, fileinfo, json, openssl, tokenizer, xml
+          coverage: none
+
+      - name: Copy .env
+        run: cp .env.example .env
+
+      - name: Install Composer dependencies
+        run: composer install --no-interaction --prefer-dist --optimize-autoloader
+
+      - name: Generate app key
+        run: php artisan key:generate
+
+      - name: Prepare sqlite database
+        run: |
+          mkdir -p database
+          touch database/database.sqlite
+
+      - name: Run database migrations
+        env:
+          DB_CONNECTION: sqlite
+          DB_DATABASE: database/database.sqlite
+        run: php artisan migrate --force
+
+      - name: Run PHPUnit
+        env:
+          DB_CONNECTION: sqlite
+          DB_DATABASE: database/database.sqlite
+        run: php artisan test
+
+  frontend-build:
+    name: frontend-app (tsc + build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend-app
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend-app/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type-check
+        run: npx tsc --noEmit
+
+      - name: Build
+        run: npm run build
+
+  qr-engine-service:
+    name: qr-engine-service (syntax check)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: qr-engine-service
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: qr-engine-service/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Syntax-check every source file
+        run: find src -name '*.js' -print0 | xargs -0 -n1 node --check

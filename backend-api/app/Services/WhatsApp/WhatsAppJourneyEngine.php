@@ -4,6 +4,7 @@ namespace App\Services\WhatsApp;
 
 use App\Models\Account;
 use App\Models\Lead;
+use App\Models\MessageDispatchLog;
 use App\Models\Subscription;
 use App\Models\WhatsAppFlow;
 use App\Models\WhatsAppFlowSession;
@@ -224,7 +225,7 @@ class WhatsAppJourneyEngine
 
         if ($validationError !== null) {
             $subscription = $account->currentSubscription;
-            $this->sendText($account, $subscription, $session->phone_number, $validationError."\n\n".(string) ($data['prompt_text'] ?? ''));
+            $this->sendText($account, $subscription, $session->phone_number, $validationError."\n\n".(string) ($data['prompt_text'] ?? ''), $flow->id);
 
             return true;
         }
@@ -411,7 +412,7 @@ class WhatsAppJourneyEngine
             $data = $node['data'] ?? [];
 
             if ($type === 'message') {
-                $this->sendText($account, $subscription, $session->phone_number, (string) ($data['text'] ?? ''));
+                $this->sendText($account, $subscription, $session->phone_number, (string) ($data['text'] ?? ''), $flow->id);
 
                 $next = Collection::make($flow->outgoingEdges($node['id']))->first();
 
@@ -427,7 +428,7 @@ class WhatsAppJourneyEngine
             }
 
             if ($type === 'question') {
-                $this->sendQuestion($account, $subscription, $session->phone_number, $data);
+                $this->sendQuestion($account, $subscription, $session->phone_number, $data, $flow->id);
 
                 $session->forceFill([
                     'current_node_id' => $node['id'],
@@ -461,7 +462,7 @@ class WhatsAppJourneyEngine
                 $completionMessage = trim((string) ($data['completion_message'] ?? ''));
 
                 if ($completionMessage !== '') {
-                    $this->sendText($account, $subscription, $session->phone_number, $completionMessage);
+                    $this->sendText($account, $subscription, $session->phone_number, $completionMessage, $flow->id);
                 }
 
                 $session->forceFill(['status' => WhatsAppFlowSession::STATUS_COMPLETED])->save();
@@ -567,7 +568,7 @@ class WhatsAppJourneyEngine
     /**
      * @param array<string, mixed> $data
      */
-    private function sendQuestion(Account $account, ?Subscription $subscription, string $phone, array $data): void
+    private function sendQuestion(Account $account, ?Subscription $subscription, string $phone, array $data, ?int $flowId = null): void
     {
         $promptText = (string) ($data['prompt_text'] ?? '');
         $inputType = $data['input_type'] ?? 'text';
@@ -613,16 +614,16 @@ class WhatsAppJourneyEngine
             ];
         }
 
-        $this->send($account, $subscription, $phone, $promptText, $metaData);
+        $this->send($account, $subscription, $phone, $promptText, $metaData, $flowId);
     }
 
-    private function sendText(Account $account, ?Subscription $subscription, string $phone, string $text): void
+    private function sendText(Account $account, ?Subscription $subscription, string $phone, string $text, ?int $flowId = null): void
     {
         if (trim($text) === '') {
             return;
         }
 
-        $this->send($account, $subscription, $phone, $text, []);
+        $this->send($account, $subscription, $phone, $text, [], $flowId);
     }
 
     /**
@@ -640,10 +641,11 @@ class WhatsAppJourneyEngine
      *
      * @param array<string, mixed> $metaData
      */
-    private function send(Account $account, ?Subscription $subscription, string $phone, string $text, array $metaData): void
+    private function send(Account $account, ?Subscription $subscription, string $phone, string $text, array $metaData, ?int $flowId = null): void
     {
         if (! $account->hasActiveSubscription() || ! $subscription) {
             Log::warning("WhatsAppJourneyEngine: account #{$account->id} has no active subscription — send skipped.");
+            MessageDispatchLog::record($account->id, 'journey', $phone, success: false, errorReason: 'No active subscription.', referenceType: 'whatsapp_flow', referenceId: $flowId, messagePreview: $text);
 
             return;
         }
@@ -654,6 +656,7 @@ class WhatsAppJourneyEngine
 
         if ($quotaExhausted) {
             Log::warning("WhatsAppJourneyEngine: account #{$account->id} quota exhausted — send skipped.");
+            MessageDispatchLog::record($account->id, 'journey', $phone, success: false, errorReason: 'Quota exhausted.', referenceType: 'whatsapp_flow', referenceId: $flowId, messagePreview: $text);
 
             return;
         }
@@ -664,6 +667,7 @@ class WhatsAppJourneyEngine
             Log::warning("WhatsAppJourneyEngine: account #{$account->id} has no usable WhatsApp engine — send skipped.", [
                 'exception' => $e->getMessage(),
             ]);
+            MessageDispatchLog::record($account->id, 'journey', $phone, success: false, errorReason: $e->getMessage(), referenceType: 'whatsapp_flow', referenceId: $flowId, messagePreview: $text);
 
             return;
         }
@@ -672,6 +676,7 @@ class WhatsAppJourneyEngine
 
         if (empty($result['success'])) {
             Log::warning("WhatsAppJourneyEngine: send failed for account #{$account->id}.", ['error' => $result['error'] ?? null]);
+            MessageDispatchLog::record($account->id, 'journey', $phone, success: false, errorReason: $result['error'] ?? 'The WhatsApp engine rejected the message.', referenceType: 'whatsapp_flow', referenceId: $flowId, messagePreview: $text);
 
             return;
         }
@@ -681,5 +686,7 @@ class WhatsAppJourneyEngine
             $locked?->increment('used_messages');
             $locked?->refreshStatus();
         });
+
+        MessageDispatchLog::record($account->id, 'journey', $phone, success: true, referenceType: 'whatsapp_flow', referenceId: $flowId, messagePreview: $text, gatewayMessageId: $result['message_id'] ?? null);
     }
 }

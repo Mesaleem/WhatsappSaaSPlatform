@@ -10,6 +10,7 @@ import TemplateManagerPage from './pages/admin/TemplateManagerPage';
 import WhatsAppSetupPage from './pages/settings/WhatsAppSetupPage';
 import SendAlertPage from './pages/alerts/SendAlertPage';
 import AnalyticsPage from './pages/analytics/AnalyticsPage';
+import MessageLogsPage from './pages/analytics/MessageLogsPage';
 import BillingPage from './pages/billing/BillingPage';
 import GatewaySettingsPage from './pages/admin/GatewaySettingsPage';
 import QuotaRequestsPage from './pages/admin/QuotaRequestsPage';
@@ -17,6 +18,7 @@ import AdminDeviceSettingsPage from './pages/admin/AdminDeviceSettingsPage';
 import DeveloperPage from './pages/developer/DeveloperPage';
 import ChatbotPage from './pages/chatbot/ChatbotPage';
 import JourneyBuilderPage from './pages/whatsapp/JourneyBuilderPage';
+import ContactGroupsPage from './pages/whatsapp/ContactGroupsPage';
 import UsersPage from './pages/users/UsersPage';
 import TeamPermissionsPage from './pages/team/TeamPermissionsPage';
 import AuditLogsPage from './pages/audit/AuditLogsPage';
@@ -111,6 +113,28 @@ export default function App() {
                 </ProtectedRoute>
               }
             />
+            {/*
+              [New feature, disclosed]: gated on "view-logs" (the same
+              permission the pre-existing /alerts/logs grid uses — see
+              MessageLogController's route group in routes/api.php) rather
+              than "view-analytics", since this exposes the same row-level
+              PII (recipient phone numbers) that permission was created to
+              restrict. Message Logs Governance Fix: module was "analytics"
+              (itself a prior correction of the request's literal,
+              nonexistent 'whatsapp' slug — see Account::MODULES in the
+              backend); it's now its own "message_logs" slug, independently
+              assignable per tenant under the WhatsApp Messaging Suite in
+              "Module & Feature Access" (see types/account.ts's
+              WHATSAPP_SUITE_MODULES).
+            */}
+            <Route
+              path="/message-logs"
+              element={
+                <ProtectedRoute permission="view-logs" module="message_logs">
+                  <MessageLogsPage />
+                </ProtectedRoute>
+              }
+            />
             <Route
               path="/billing"
               element={
@@ -167,6 +191,33 @@ export default function App() {
                 </ProtectedRoute>
               }
             />
+            {/*
+              [Disclosed, superseded]: this route previously omitted
+              `module`, deliberately, specifically so ContactGroupsPage's
+              own locked-upsell card ('Custom Contact Groups are locked
+              under your current plan...') would still render for a
+              tenant without this paid addon, instead of ProtectedRoute
+              redirecting to /unauthorized before the page ever mounted.
+              Per the "Strict Route Protection" architecture rule
+              (explicit instruction — every module-gated feature's route
+              MUST carry a matching `module` guard, no exceptions), that
+              trade-off is now resolved in favor of strict enforcement:
+              `module="contact_groups"` added below. CONSEQUENCE: the
+              locked-upsell branch inside ContactGroupsPage.tsx is now
+              unreachable dead code — a non-subscribed tenant is
+              redirected to /unauthorized before that branch can ever
+              render, the same as every other module-gated route. Left
+              in place rather than deleted, since removing a feature
+              wasn't what was asked here.
+            */}
+            <Route
+              path="/contact-groups"
+              element={
+                <ProtectedRoute permission="send-messages" module="contact_groups">
+                  <ContactGroupsPage />
+                </ProtectedRoute>
+              }
+            />
             <Route
               path="/users"
               element={
@@ -214,7 +265,7 @@ export default function App() {
             <Route
               path="/social/accounts"
               element={
-                <ProtectedRoute permission="manage-social-accounts">
+                <ProtectedRoute permission="manage-social-accounts" module="social_accounts">
                   <SocialAccountsPage />
                 </ProtectedRoute>
               }
@@ -223,7 +274,7 @@ export default function App() {
             <Route
               path="/social/ads"
               element={
-                <ProtectedRoute permission="launch-meta-ads">
+                <ProtectedRoute permission="launch-meta-ads" module="meta_ads">
                   <MetaAdsPage />
                 </ProtectedRoute>
               }
@@ -241,7 +292,7 @@ export default function App() {
             <Route
               path="/social/inbox"
               element={
-                <ProtectedRoute permission="manage-social-leads">
+                <ProtectedRoute permission="manage-social-leads" module="social_inbox">
                   <SocialInboxPage />
                 </ProtectedRoute>
               }
@@ -249,7 +300,7 @@ export default function App() {
             <Route
               path="/social/comment-rules"
               element={
-                <ProtectedRoute permission="manage-comment-automation">
+                <ProtectedRoute permission="manage-comment-automation" module="comment_automation">
                   <CommentRulesPage />
                 </ProtectedRoute>
               }
@@ -258,7 +309,7 @@ export default function App() {
             <Route
               path="/social/leads"
               element={
-                <ProtectedRoute permission="manage-social-leads">
+                <ProtectedRoute permission="manage-social-leads" module="lead_crm">
                   <LeadsPage />
                 </ProtectedRoute>
               }
@@ -266,7 +317,7 @@ export default function App() {
             <Route
               path="/social/reports"
               element={
-                <ProtectedRoute permission="view-social-analytics">
+                <ProtectedRoute permission="view-social-analytics" module="reports">
                   <SocialReportsPage />
                 </ProtectedRoute>
               }

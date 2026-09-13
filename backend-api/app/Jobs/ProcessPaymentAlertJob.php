@@ -3,6 +3,7 @@
 namespace App\Jobs;
 
 use App\Models\Account;
+use App\Models\MessageDispatchLog;
 use App\Models\PaymentAlert;
 use App\Services\WhatsApp\WhatsAppEngineFactory;
 use App\Services\Webhooks\WebhookDispatcher;
@@ -41,8 +42,16 @@ class ProcessPaymentAlertJob implements ShouldQueue
      */
     public int $tries = 1;
 
-    public function __construct(public readonly int $paymentAlertId)
-    {
+    /**
+     * [New feature, disclosed]: $source/$apiKeyId exist only to label the
+     * MessageDispatchLog row this job writes once the send resolves —
+     * every other line of this job's logic is unchanged.
+     */
+    public function __construct(
+        public readonly int $paymentAlertId,
+        public readonly string $source = 'web_ui',
+        public readonly ?int $apiKeyId = null,
+    ) {
     }
 
     public function handle(): void
@@ -130,7 +139,7 @@ class ProcessPaymentAlertJob implements ShouldQueue
         $normalizedPhone = PhoneNumberNormalizer::normalize($alert->recipient_phone);
 
         if ($normalizedPhone === '') {
-            $this->fail($alert, "Recipient phone number '{$alert->recipient_phone}' is not a valid number after normalization.");
+            $this->fail($alert, "Recipient phone number '{$alert->recipient_phone}' is not a valid number after normalization.", messagePreview: $message);
 
             return;
         }
@@ -140,7 +149,7 @@ class ProcessPaymentAlertJob implements ShouldQueue
         ]);
 
         if (empty($result['success'])) {
-            $this->fail($alert, $this->actionableErrorMessage($result['error'] ?? null), $result['raw'] ?? null);
+            $this->fail($alert, $this->actionableErrorMessage($result['error'] ?? null), $result['raw'] ?? null, messagePreview: $message);
 
             return;
         }
@@ -170,6 +179,21 @@ class ProcessPaymentAlertJob implements ShouldQueue
             ])->save();
         });
 
+        // [New feature, disclosed]: logged AFTER the same transaction
+        // commits used_messages, same ordering guarantee as the webhook
+        // fire below — a MessageDispatchLog row can never be observed
+        // before the quota increment it reports on has actually landed.
+        MessageDispatchLog::record(
+            $alert->account_id,
+            $this->source,
+            $alert->recipient_phone,
+            success: true,
+            apiKeyId: $this->apiKeyId,
+            referenceType: 'payment_alert',
+            referenceId: $alert->id,
+            messagePreview: $message,
+        );
+
         // Module 9 — fired AFTER the transaction commits, so a webhook
         // receiver can never observe 'message.sent' before used_messages
         // has actually been incremented and the row is durably saved.
@@ -193,7 +217,15 @@ class ProcessPaymentAlertJob implements ShouldQueue
         return $rawError ?? 'The WhatsApp engine rejected the message.';
     }
 
-    private function fail(PaymentAlert $alert, string $reason, ?array $raw = null): void
+    /**
+     * $messagePreview is null for the 3 failure branches reached BEFORE
+     * the outgoing text is built (no active subscription, quota
+     * exhausted, driver resolution error) — there is nothing to preview
+     * yet at that point — and populated for the 2 branches reached after
+     * (invalid phone, driver rejection), matching exactly what each call
+     * site in process() above actually has in scope.
+     */
+    private function fail(PaymentAlert $alert, string $reason, ?array $raw = null, ?string $messagePreview = null): void
     {
         $alert->forceFill([
             'status' => 'failed',
@@ -202,6 +234,22 @@ class ProcessPaymentAlertJob implements ShouldQueue
             'sent_at' => null,
             'raw_response' => $raw,
         ])->save();
+
+        // [New feature, disclosed]: same single call point as the webhook
+        // fire below, so every failure reason (no subscription, quota
+        // exhausted, driver error, outright rejection) is logged exactly
+        // once, consistent with the 'sent' path in process() above.
+        MessageDispatchLog::record(
+            $alert->account_id,
+            $this->source,
+            $alert->recipient_phone,
+            success: false,
+            errorReason: $reason,
+            apiKeyId: $this->apiKeyId,
+            referenceType: 'payment_alert',
+            referenceId: $alert->id,
+            messagePreview: $messagePreview,
+        );
 
         // Module 9 — every failure path (no active subscription, quota
         // exhausted, driver resolution error, or an outright send

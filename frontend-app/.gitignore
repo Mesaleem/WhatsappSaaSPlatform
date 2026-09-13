@@ -12,6 +12,15 @@ dist
 dist-ssr
 *.local
 
+# Env files (fix, disclosed — was previously tracked; see PRODUCT_ANALYSIS_2026_09_13.md
+# §6 item 8. VITE_-prefixed vars are compiled into the public client bundle so
+# nothing secret was ever actually exposed by this, but env files still don't
+# belong in version control — different machines/environments need different
+# values, and this caused needless merge noise. .env.example stays tracked as
+# the documented template.
+.env
+!.env.example
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

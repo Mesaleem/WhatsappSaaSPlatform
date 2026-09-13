@@ -11,6 +11,9 @@ class MessageTemplate extends Model
 {
     public const STATUSES = ['pending', 'approved', 'rejected'];
 
+    /** Group Messaging Step 1 — matches the lowercase convention STATUSES above already uses on this same table. */
+    public const HEADER_TYPES = ['text', 'image', 'document'];
+
     /** Variable Configurator Panel field types the frontend may send per {{token}}. */
     public const VARIABLE_TYPES = ['string', 'number', 'date', 'select'];
 
@@ -24,6 +27,11 @@ class MessageTemplate extends Model
         'variables_schema',
         'is_super_admin_tested',
         'tested_at',
+        // Group Messaging Step 1 — header_type defaults to 'text' at
+        // the DB level; rejection_reason is nullable and not yet written by
+        // any controller (MessageTemplateController::reject() is unchanged).
+        'header_type',
+        'rejection_reason',
     ];
 
     protected $with = ['account:id,company_name'];

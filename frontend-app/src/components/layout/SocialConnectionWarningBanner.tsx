@@ -21,10 +21,21 @@ import socialService from '../../services/socialService';
  *
  * Never shown to a user without manage-social-accounts — everyone else
  * has no Social Accounts page to be steered toward.
+ *
+ * [Bugfix, disclosed]: this permission check alone is not enough — a
+ * teammate can hold manage-social-accounts (a role-level permission)
+ * while the tenant's own `social_accounts` module has been disabled by
+ * an admin (a separate, per-account toggle — see Account::allowed_modules
+ * and the sidebar's own `requiresModule: 'social_accounts'` gate on this
+ * exact page's nav item and route guard). Without the hasModule() check
+ * added here, this banner kept steering such a user toward a Social
+ * Accounts page their sidebar/route guard both already correctly hide —
+ * confirmed root cause of the "top banner still mentions Social Accounts
+ * after the module was disabled" report.
  */
 export default function SocialConnectionWarningBanner() {
-  const { hasPermission } = useAuth();
-  const canManageSocial = hasPermission('manage-social-accounts');
+  const { hasPermission, hasModule } = useAuth();
+  const canManageSocial = hasPermission('manage-social-accounts') && hasModule('social_accounts');
   const [hasMetaAssetConnected, setHasMetaAssetConnected] = useState<boolean | null>(null);
 
   useEffect(() => {

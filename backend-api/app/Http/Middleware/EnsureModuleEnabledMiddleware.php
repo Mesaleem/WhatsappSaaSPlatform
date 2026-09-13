@@ -29,6 +29,22 @@ use Symfony\Component\HttpFoundation\Response;
  */
 class EnsureModuleEnabledMiddleware
 {
+    /**
+     * Group Messaging Phase 2 — per-module override for the 403 body
+     * below. A module NOT listed here (every module this middleware
+     * already gated before this map existed: chatbot, meta_ads,
+     * social_accounts, message_logs) keeps the exact original generic
+     * message/error_code, unchanged — this only ever ADDS an
+     * override, never alters existing behavior for a route already
+     * using this middleware.
+     */
+    private const CUSTOM_RESPONSES = [
+        'contact_groups' => [
+            'error_code' => 'GROUP_MODULE_DISABLED',
+            'message' => 'Group Messaging is a paid feature. Please upgrade your subscription plan to unlock custom contact groups.',
+        ],
+    ];
+
     public function handle(Request $request, Closure $next, string $module): Response
     {
         // Absolute Super Admin Control — Super Admin is never blocked by
@@ -52,9 +68,12 @@ class EnsureModuleEnabledMiddleware
         $account = Account::findCached((int) $accountId);
 
         if ($account && ! $account->hasModuleEnabled($module)) {
+            $custom = self::CUSTOM_RESPONSES[$module] ?? null;
+
             return response()->json([
-                'message' => 'This feature has been disabled for your account by the Super Admin.',
-                'error_code' => 'MODULE_DISABLED',
+                'success' => false,
+                'message' => $custom['message'] ?? 'This feature has been disabled for your account by the Super Admin.',
+                'error_code' => $custom['error_code'] ?? 'MODULE_DISABLED',
             ], 403);
         }
 

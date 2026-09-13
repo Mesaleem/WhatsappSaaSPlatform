@@ -26,7 +26,17 @@ class VerifyInternalSecret
     {
         $expected = config('services.qr_engine.internal_secret');
 
-        if (! $expected || $request->header('X-Internal-Secret') !== $expected) {
+        // [Fix, disclosed]: hash_equals() instead of !== for a
+        // constant-time comparison, avoiding a byte-by-byte timing side
+        // channel on the shared secret (mirrors the equivalent fix now
+        // applied to qr-engine-service/src/server.js's requireInternalSecret,
+        // which used a plain !== on the other side of this same secret
+        // check). hash_equals() requires both arguments to be strings, so
+        // the provided header is cast to string first — a null header
+        // becomes '', which can never equal a non-empty configured
+        // secret, preserving the existing fail-closed behavior when the
+        // header is missing.
+        if (! $expected || ! hash_equals((string) $expected, (string) $request->header('X-Internal-Secret'))) {
             return response()->json(['message' => 'Unauthorized.'], 401);
         }
 

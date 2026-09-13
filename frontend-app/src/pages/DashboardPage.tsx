@@ -18,6 +18,7 @@ import {
   CalendarDays,
   CheckCircle2,
   Clock,
+  Contact,
   CreditCard,
   Eye,
   IndianRupee,
@@ -39,23 +40,37 @@ import { useAuth } from '../core/context/AuthContext';
 import { useTenant } from '../core/context/TenantContext';
 import analyticsService from '../services/analyticsService';
 import reportsService from '../services/reportsService';
+import messageLogsService from '../services/messageLogsService';
 import QuotaTopUpModal from '../components/billing/QuotaTopUpModal';
 import { indigo, NAV_TINTS, cardShadow, type Tint } from '../theme/signalIndigo';
 import type { ApiErrorResponse } from '../types/auth';
 import type { ModuleAssignment } from '../types/account';
 import type { AnalyticsChartsResponse, AnalyticsSummary, GlobalAnalyticsSummary } from '../types/analytics';
-import type { PaymentAlert, PaymentAlertStatus } from '../types/alert';
+import type { MessageDispatchLog, MessageDispatchSource, MessageDispatchStatus } from '../types/messageLog';
 import type { SocialReportSummary } from '../types/reports';
 import type { EngineType, Subscription } from '../types/subscription';
 import ExpiringSoonModal from '../components/admin/ExpiringSoonModal';
 
 const ENGINE_LABEL: Record<EngineType, string> = { qr: 'QR (Baileys)', meta: 'Meta Cloud API' };
 
-const STATUS_BADGE: Record<PaymentAlertStatus, string> = {
-  pending: 'bg-slate-100 text-slate-600',
-  queued: 'bg-[#E3F0FF] text-[#2563EB]',
+/**
+ * [Bugfix, disclosed]: narrowed from the old PaymentAlertStatus-keyed map —
+ * the Recent Logs widget now sources message_dispatch_logs. Widened again
+ * for Group Messaging Phase 4's new 'queued' status (see types/messageLog.ts).
+ */
+const STATUS_BADGE: Record<MessageDispatchStatus, string> = {
   sent: 'bg-[#E6F8F1] text-[#0E9F6E]',
   failed: 'bg-[#FDECEC] text-[#DC2626]',
+  queued: 'bg-[#FEF3C7] text-[#B45309]',
+};
+
+/** Mirrors MessageLogsPage.tsx's SOURCE_BADGE labels, kept short for this narrower card. */
+const SOURCE_LABEL: Record<MessageDispatchSource, string> = {
+  web_ui: 'Web',
+  web_template: 'Template',
+  api: 'API',
+  chatbot: 'Chatbot',
+  journey: 'Journey',
 };
 
 function extractMessage(err: unknown, fallback: string): string {
@@ -130,6 +145,11 @@ function DailyPulseChart() {
   const { selectedAccountId } = useTenant();
   const [charts, setCharts] = useState<AnalyticsChartsResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  // Group Messaging Phase 5 — Individual vs Group dataset toggle. Local
+  // view-only state, not persisted: the toggle only renders at all once
+  // `daily_by_recipient_type` is actually present (see below), so there
+  // is nothing to restore before that data exists anyway.
+  const [view, setView] = useState<'all' | 'individual' | 'group'>('all');
 
   const load = useCallback(async () => {
     setIsLoading(true);
@@ -147,13 +167,48 @@ function DailyPulseChart() {
     void load();
   }, [load, selectedAccountId]);
 
-  const data = (charts?.daily ?? []).map((d) => ({ date: d.date.slice(5), Sent: d.sent, Failed: d.failed }));
+  // [Disclosed]: `daily` (every recipient_type combined) stays the
+  // default series and is completely unchanged from before. The toggle
+  // itself only renders when `daily_by_recipient_type` is non-null —
+  // i.e. the backend's recipient_type/success_count columns are
+  // actually migrated (self-healing, same as every other new field on
+  // this response) — rather than gating on the viewer's own
+  // hasModule('contact_groups'), since this chart is also rendered on
+  // the Super Admin platform-wide dashboard where no single tenant's
+  // module flags apply.
+  const byRecipientType = charts?.daily_by_recipient_type ?? null;
+  const series =
+    view === 'individual' && byRecipientType
+      ? byRecipientType.individual
+      : view === 'group' && byRecipientType
+        ? byRecipientType.group
+        : charts?.daily ?? [];
+  const data = series.map((d) => ({ date: d.date.slice(5), Sent: d.sent, Failed: d.failed }));
 
   return (
     <div className="rounded-2xl border bg-white p-5" style={{ borderColor: indigo.border, boxShadow: cardShadow }}>
-      <p className="font-display text-sm font-bold" style={{ color: indigo.ink }}>
-        Message Pulse — Last 7 Days
-      </p>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="font-display text-sm font-bold" style={{ color: indigo.ink }}>
+          Message Pulse — Last 7 Days
+        </p>
+        {byRecipientType && (
+          <div className="flex items-center gap-1 rounded-lg border p-0.5 text-xs" style={{ borderColor: indigo.border }}>
+            {(['all', 'individual', 'group'] as const).map((v) => (
+              <button
+                key={v}
+                type="button"
+                onClick={() => setView(v)}
+                className={`rounded-md px-2.5 py-1 font-medium capitalize transition ${
+                  view === v ? 'text-white' : 'hover:bg-slate-50'
+                }`}
+                style={view === v ? { background: '#4F46E5' } : { color: indigo.muted }}
+              >
+                {v}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
       <div className="mt-3 h-56">
         {isLoading ? (
           <div className="flex h-full items-center justify-center">
@@ -503,7 +558,7 @@ function SocialAdsSummaryCards() {
 }
 
 function TenantDashboard({ impersonatedAccountName }: { impersonatedAccountName?: string } = {}) {
-  const { user, hasPermission } = useAuth();
+  const { user, hasPermission, hasModule } = useAuth();
   const navigate = useNavigate();
   const canViewAnalytics = hasPermission('view-analytics');
   const canViewLogs = hasPermission('view-logs');
@@ -522,7 +577,20 @@ function TenantDashboard({ impersonatedAccountName }: { impersonatedAccountName?
   // already showed).
   const moduleAssignment: ModuleAssignment = user?.account?.module_assignment ?? 'both';
   const showWhatsApp = moduleAssignment !== 'social_media';
-  const showSocial = moduleAssignment !== 'whatsapp_messaging' && canViewSocialAnalytics;
+  // [Bugfix, disclosed]: module_assignment/canViewSocialAnalytics alone
+  // do not reflect the tenant's actual per-module toggle — an admin can
+  // disable `allowed_modules.reports` (the same slug the sidebar's
+  // "Social Reports" nav item and its ProtectedRoute both already gate
+  // on) while module_assignment stays 'both' and the user still holds
+  // view-social-analytics. Without hasModule('reports') here, this
+  // Dashboard kept rendering the "Social Media & Meta Ads" summary and
+  // the "View Social Reports" quick action even after that module was
+  // disabled — confirmed root cause of that report. 'reports' (not
+  // 'social_accounts') because both widgets mirror /social/reports'
+  // own data and its own module gate exactly, the same "nav item's
+  // requiresModule matches its destination route's module" convention
+  // this codebase already uses everywhere else.
+  const showSocial = moduleAssignment !== 'whatsapp_messaging' && canViewSocialAnalytics && hasModule('reports');
 
   const subscription = user?.account?.current_subscription ?? null;
 
@@ -530,7 +598,7 @@ function TenantDashboard({ impersonatedAccountName }: { impersonatedAccountName?
   const [summaryError, setSummaryError] = useState<string | null>(null);
   const [isLoadingSummary, setIsLoadingSummary] = useState(canViewAnalytics);
 
-  const [logs, setLogs] = useState<PaymentAlert[]>([]);
+  const [logs, setLogs] = useState<MessageDispatchLog[]>([]);
   const [logsError, setLogsError] = useState<string | null>(null);
   const [isLoadingLogs, setIsLoadingLogs] = useState(canViewLogs);
 
@@ -555,10 +623,15 @@ function TenantDashboard({ impersonatedAccountName }: { impersonatedAccountName?
     setIsLoadingLogs(true);
     setLogsError(null);
     try {
-      const res = await analyticsService.getLogs({ page: 1, per_page: 5 });
+      // [Bugfix, disclosed]: sources message_dispatch_logs (every
+      // dispatch pathway) instead of the old payment_alerts-only
+      // analyticsService.getLogs() — see the widget's own comment below
+      // for the full root-cause explanation. Already newest-first
+      // (MessageDispatchLogController::index() -> latest('id')).
+      const res = await messageLogsService.list(1, 5, {});
       setLogs(res.data);
     } catch (err) {
-      setLogsError(extractMessage(err, 'Failed to load recent transactions.'));
+      setLogsError(extractMessage(err, 'Failed to load recent messages.'));
     } finally {
       setIsLoadingLogs(false);
     }
@@ -571,6 +644,13 @@ function TenantDashboard({ impersonatedAccountName }: { impersonatedAccountName?
   useEffect(() => {
     void loadLogs();
   }, [loadLogs]);
+
+  // [Disclosed, relocated]: the "refresh the cached account on every
+  // visit" fix previously lived here as a Dashboard-only mount effect.
+  // Moved to AppLayout.tsx (the persistent layout shell every page
+  // renders inside, per its own comment) so it covers every
+  // module-gated sidebar item, not only the widgets this one page
+  // happens to render.
 
   const quota = summary?.quota;
   const quotaLabel = quota?.billing_model === 'unlimited'
@@ -647,6 +727,77 @@ function TenantDashboard({ impersonatedAccountName }: { impersonatedAccountName?
           </div>
         )}
 
+        {/*
+          Group Messaging Phase 5 — Dashboard Analytics Upgrade. Individual
+          Messages is shown alongside every other WhatsApp KPI above
+          (canViewAnalytics is the only gate — every tenant sends
+          individually). Group Messages / Active Contact Groups are
+          additionally gated on hasModule('contact_groups') — Group
+          Messaging is a paid addon (see ContactGroupsPage's own locked-
+          card gating), so a tenant without it sees no group-shaped KPI
+          cards at all rather than a permanent "0" advertising a feature
+          they don't have, consistent with how the rest of this Dashboard
+          hides WhatsApp-only or Social-only cards by module/assignment.
+        */}
+        {showWhatsApp && canViewAnalytics && (
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            <StatCard
+              label="Individual Messages"
+              value={isLoadingSummary ? '…' : String(summary?.recipient_breakdown?.individual.sent ?? 0)}
+              sub={isLoadingSummary ? undefined : `${summary?.recipient_breakdown?.individual.failed ?? 0} failed · last 30 days`}
+              icon={Send}
+              tint={NAV_TINTS.send}
+            />
+            {hasModule('contact_groups') && (
+              <>
+                <StatCard
+                  label="Group Messages"
+                  value={isLoadingSummary ? '…' : String(summary?.recipient_breakdown?.group.sent ?? 0)}
+                  sub={isLoadingSummary ? undefined : `${summary?.recipient_breakdown?.group.failed ?? 0} failed · last 30 days`}
+                  icon={Users}
+                  tint={NAV_TINTS.whatsapp}
+                />
+                <StatCard
+                  label="Active Contact Groups"
+                  value={isLoadingSummary ? '…' : String(summary?.active_contact_groups ?? 0)}
+                  sub="Custom contact groups"
+                  icon={Contact}
+                  tint={NAV_TINTS.analytics}
+                  onClick={() => navigate('/contact-groups')}
+                />
+              </>
+            )}
+          </div>
+        )}
+
+        {/*
+          Dashboard & Analytics Fix Round 2 — "Today's Group & Individual
+          Sent/Failed Breakdown". Same gating split as the period-level
+          cards above: Today's Individual Messages is shown to every
+          WhatsApp-enabled tenant, Today's Group Messages is additionally
+          gated on hasModule('contact_groups').
+        */}
+        {showWhatsApp && canViewAnalytics && (
+          <div className="grid gap-4 sm:grid-cols-2">
+            <StatCard
+              label="Today's Individual Messages"
+              value={isLoadingSummary ? '…' : `${summary?.today_breakdown?.today_individual_sent ?? 0} sent`}
+              sub={isLoadingSummary ? undefined : `${summary?.today_breakdown?.today_individual_failed ?? 0} failed today`}
+              icon={Send}
+              tint={NAV_TINTS.send}
+            />
+            {hasModule('contact_groups') && (
+              <StatCard
+                label="Today's Group Messages"
+                value={isLoadingSummary ? '…' : `${summary?.today_breakdown?.today_group_sent ?? 0} sent`}
+                sub={isLoadingSummary ? undefined : `${summary?.today_breakdown?.today_group_failed ?? 0} failed today`}
+                icon={Users}
+                tint={NAV_TINTS.whatsapp}
+              />
+            )}
+          </div>
+        )}
+
         {/* Dynamic Permission & Module-Based Dashboard — Social Media Only / Both. */}
         {showSocial && <SocialAdsSummaryCards />}
 
@@ -670,11 +821,28 @@ function TenantDashboard({ impersonatedAccountName }: { impersonatedAccountName?
         {showWhatsApp && (
         <div className="overflow-hidden rounded-2xl border bg-white" style={{ borderColor: indigo.border, boxShadow: cardShadow }}>
           <div className="flex items-center justify-between px-5 py-3.5" style={{ borderBottom: `1px solid ${indigo.border}` }}>
-            <h3 className="font-display text-sm font-bold" style={{ color: indigo.ink }}>
-              Recent Transactions
-            </h3>
+            <div>
+              {/*
+                [Bugfix, disclosed]: this widget now sources
+                message_dispatch_logs via messageLogsService (every
+                dispatch pathway — web, template, chatbot, journey, API)
+                instead of the old payment_alerts-only
+                analyticsService.getLogs() / /alerts/logs. That table was,
+                and always was, scoped to payment_alerts only (see
+                MessageLogController's own docblock) — a Send Template /
+                Chatbot / Journey / API send never wrote a payment_alerts
+                row, so this list correctly stayed unchanged when only
+                those pathways were used. That was the confirmed root
+                cause of "stale old entry, new sends not appearing" here,
+                not a stale query or a missing refresh — the query was
+                already `latest('id')`, i.e. newest-first, and still is.
+              */}
+              <h3 className="font-display text-sm font-bold" style={{ color: indigo.ink }}>
+                Recent Message Logs
+              </h3>
+            </div>
             {canViewLogs && (
-              <Link to="/analytics" className="text-xs font-semibold" style={{ color: indigo.accentSolid }}>
+              <Link to="/message-logs" className="text-xs font-semibold" style={{ color: indigo.accentSolid }}>
                 View all
               </Link>
             )}
@@ -692,7 +860,7 @@ function TenantDashboard({ impersonatedAccountName }: { impersonatedAccountName?
             </div>
           ) : logs.length === 0 ? (
             <p className="px-5 py-6 text-sm" style={{ color: indigo.muted }}>
-              No transactions yet.
+              No messages sent yet.
             </p>
           ) : (
             <div className="overflow-x-auto">
@@ -700,13 +868,10 @@ function TenantDashboard({ impersonatedAccountName }: { impersonatedAccountName?
                 <thead style={{ background: '#FAFAFF' }}>
                   <tr>
                     <th className="px-5 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wide" style={{ color: indigo.muted }}>
-                      Customer
+                      Recipient
                     </th>
                     <th className="px-5 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wide" style={{ color: indigo.muted }}>
-                      Amount
-                    </th>
-                    <th className="px-5 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wide" style={{ color: indigo.muted }}>
-                      Payment Ref
+                      Source / Template
                     </th>
                     <th className="px-5 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wide" style={{ color: indigo.muted }}>
                       Status
@@ -719,14 +884,14 @@ function TenantDashboard({ impersonatedAccountName }: { impersonatedAccountName?
                 <tbody className="divide-y" style={{ borderColor: indigo.border }}>
                   {logs.map((log) => (
                     <tr key={log.id} style={{ borderColor: indigo.border }}>
+                      <td className="px-5 py-2.5 font-mono text-xs" style={{ color: indigo.ink }}>
+                        {log.recipient_phone}
+                      </td>
                       <td className="px-5 py-2.5" style={{ color: indigo.ink }}>
-                        {log.customer_name}
-                      </td>
-                      <td className="px-5 py-2.5 font-mono tabular-nums" style={{ color: indigo.ink }}>
-                        ₹{Number(log.amount).toFixed(2)}
-                      </td>
-                      <td className="px-5 py-2.5 font-mono text-xs" style={{ color: indigo.muted }}>
-                        {log.payment_ref}
+                        <div className="text-xs font-semibold">{SOURCE_LABEL[log.source]}</div>
+                        {log.template_name && (
+                          <div className="text-xs" style={{ color: indigo.muted }}>{log.template_name}</div>
+                        )}
                       </td>
                       <td className="px-5 py-2.5">
                         <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold ${STATUS_BADGE[log.status]}`}>
@@ -734,7 +899,7 @@ function TenantDashboard({ impersonatedAccountName }: { impersonatedAccountName?
                         </span>
                       </td>
                       <td className="px-5 py-2.5" style={{ color: indigo.muted }}>
-                        {log.sent_at ? new Date(log.sent_at).toLocaleString() : '—'}
+                        {new Date(log.created_at).toLocaleString()}
                       </td>
                     </tr>
                   ))}

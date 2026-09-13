@@ -3,6 +3,7 @@
 namespace App\Services\Templates;
 
 use App\Models\Account;
+use App\Models\MessageDispatchLog;
 use App\Models\MessageTemplate;
 use App\Services\PaymentAlerts\PaymentAlertDispatcher;
 use App\Services\WhatsApp\WhatsAppEngineFactory;
@@ -39,7 +40,21 @@ class TemplateMessageDispatcher
      *   rendered_message?: string,
      * }
      */
-    public static function dispatch(int $accountId, int $templateId, string $recipientPhone, array $variables): array
+    // [New feature, disclosed]: $source/$apiKeyId label the
+    // MessageDispatchLog row this method now writes at every return
+    // point below that represents an actual attempted or completed
+    // send — mirrors ProcessPaymentAlertJob's fail()/success logging
+    // completeness (no active subscription, quota exhausted, driver
+    // resolution error, driver rejection, and the final success are
+    // all logged there too).
+    public static function dispatch(
+        int $accountId,
+        int $templateId,
+        string $recipientPhone,
+        array $variables,
+        string $source = 'web_template',
+        ?int $apiKeyId = null,
+    ): array
     {
         $account = Account::with(['currentSubscription', 'whatsAppSession'])->find($accountId);
 
@@ -48,12 +63,16 @@ class TemplateMessageDispatcher
         }
 
         if (! $account->hasActiveSubscription()) {
+            MessageDispatchLog::record($accountId, $source, $recipientPhone, success: false, errorReason: 'No active subscription or quota exhausted.', apiKeyId: $apiKeyId, referenceType: 'template', referenceId: $templateId);
+
             return ['status' => 'quota_exhausted', 'message' => 'This account has no active subscription, or its message quota is exhausted.'];
         }
 
         $template = MessageTemplate::query()->approvedFor($account->id)->find($templateId);
 
         if (! $template) {
+            MessageDispatchLog::record($accountId, $source, $recipientPhone, success: false, errorReason: 'Template not found, not approved, or not available to this account.', apiKeyId: $apiKeyId, referenceType: 'template', referenceId: $templateId);
+
             return ['status' => 'not_found', 'message' => 'This template does not exist, is not approved, or is not available to this account.'];
         }
 
@@ -76,6 +95,8 @@ class TemplateMessageDispatcher
         }
 
         if (PaymentAlertDispatcher::isWhatsAppDisconnected($account)) {
+            MessageDispatchLog::record($accountId, $source, $recipientPhone, success: false, errorReason: 'WhatsApp account is disconnected.', apiKeyId: $apiKeyId, referenceType: 'template', referenceId: $template->id, templateName: $template->title);
+
             return ['status' => 'disconnected', 'message' => 'WhatsApp account is disconnected. Please connect your device first.'];
         }
 
@@ -98,23 +119,50 @@ class TemplateMessageDispatcher
 
         $normalizedPhone = PhoneNumberNormalizer::normalize($recipientPhone);
         if ($normalizedPhone === '') {
-            return ['status' => 'failed', 'message' => "Recipient phone number '{$recipientPhone}' is not a valid number after normalization."];
+            $msg = "Recipient phone number '{$recipientPhone}' is not a valid number after normalization.";
+            MessageDispatchLog::record($accountId, $source, $recipientPhone, success: false, errorReason: $msg, apiKeyId: $apiKeyId, referenceType: 'template', referenceId: $template->id, templateName: $template->title, messagePreview: $renderedMessage);
+
+            return ['status' => 'failed', 'message' => $msg];
         }
 
         try {
             $driver = WhatsAppEngineFactory::make($account);
         } catch (RuntimeException $e) {
+            MessageDispatchLog::record($accountId, $source, $normalizedPhone, success: false, errorReason: $e->getMessage(), apiKeyId: $apiKeyId, referenceType: 'template', referenceId: $template->id, templateName: $template->title, messagePreview: $renderedMessage);
+
             return ['status' => 'failed', 'message' => $e->getMessage()];
         }
 
         $result = $driver->sendMessage($normalizedPhone, $renderedMessage, ['template_id' => $template->id]);
 
         if (empty($result['success'])) {
-            return ['status' => 'failed', 'message' => $result['error'] ?? 'The WhatsApp engine rejected the message.'];
+            $msg = $result['error'] ?? 'The WhatsApp engine rejected the message.';
+            MessageDispatchLog::record($accountId, $source, $normalizedPhone, success: false, errorReason: $msg, apiKeyId: $apiKeyId, referenceType: 'template', referenceId: $template->id, templateName: $template->title, messagePreview: $renderedMessage);
+
+            return ['status' => 'failed', 'message' => $msg];
         }
 
         $subscription = $account->currentSubscription;
-        if ($subscription && $subscription->billing_model === 'per_message') {
+        // [Bug fix, disclosed]: this increment was previously gated behind
+        // `billing_model === 'per_message'`, so a 'flat_quota' or
+        // 'unlimited' account's used_messages NEVER moved for a message
+        // sent via Send Template — confirmed root cause of "message
+        // metrics and quota counters are not incrementing" for template
+        // sends specifically. ProcessPaymentAlertJob (the Send Alert path)
+        // increments used_messages unconditionally for every successful
+        // send regardless of billing_model, and correctly reserves the
+        // per_message check ONLY for its separate cost_deducted (money
+        // actually charged) calculation — a concept that doesn't even
+        // exist here, since a template send creates no payment_alerts
+        // row. total_allocated_messages/used_messages tracking applies to
+        // every capped plan, not only 'per_message' ones (see
+        // ProcessPaymentAlertJob's own quotaExhausted check above, which
+        // is likewise unconditional on billing_model), so a 'flat_quota'
+        // account could previously send unlimited template messages with
+        // zero quota consumption — a real usage-tracking/billing gap, not
+        // just a display bug. Now unconditional, matching
+        // ProcessPaymentAlertJob exactly.
+        if ($subscription) {
             // Same lock-then-increment pattern as ProcessPaymentAlertJob,
             // so a template send and a payment-alert send racing each
             // other can never both read a stale used_messages value.
@@ -125,6 +173,16 @@ class TemplateMessageDispatcher
             });
         }
 
-        return ['status' => 'sent', 'rendered_message' => $renderedMessage];
+        // Group Messaging Phase 4 — dispatch_log_id is additive (a new
+        // key on this return array), so the existing internal Send Alert
+        // caller and Api\V1\TemplateMessageController::send() (which only
+        // destructure 'status'/'rendered_message'/'message') are both
+        // unaffected. Api\V1\TemplateMessageController::sendMessage()
+        // (the new /v1/send-message individual-recipient path) is the
+        // first caller that actually reads it, to return it as this
+        // endpoint's own dispatch_id.
+        $log = MessageDispatchLog::record($accountId, $source, $normalizedPhone, success: true, apiKeyId: $apiKeyId, referenceType: 'template', referenceId: $template->id, templateName: $template->title, messagePreview: $renderedMessage, gatewayMessageId: $result['message_id'] ?? null);
+
+        return ['status' => 'sent', 'rendered_message' => $renderedMessage, 'dispatch_log_id' => $log->id];
     }
 }

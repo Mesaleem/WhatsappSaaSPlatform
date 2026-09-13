@@ -5,6 +5,7 @@ namespace App\Services\Chatbot;
 use App\Models\Account;
 use App\Models\ChatbotLog;
 use App\Models\ChatbotRule;
+use App\Models\MessageDispatchLog;
 use App\Services\WhatsApp\WhatsAppEngineFactory;
 use App\Services\WhatsApp\WhatsAppJourneyEngine;
 use Illuminate\Support\Collection;
@@ -104,6 +105,8 @@ class ChatbotEngineService
         }
 
         if (! $account->hasActiveSubscription()) {
+            MessageDispatchLog::record($accountId, 'chatbot', $senderPhone, success: false, errorReason: 'No active subscription.', referenceType: 'chatbot_rule', referenceId: $rule->id);
+
             return $this->log($accountId, $rule->id, $senderPhone, $incomingMessage, null, 'failed');
         }
 
@@ -113,12 +116,16 @@ class ChatbotEngineService
             && $subscription->used_messages >= $subscription->total_allocated_messages;
 
         if ($quotaExhausted) {
+            MessageDispatchLog::record($accountId, 'chatbot', $senderPhone, success: false, errorReason: 'No active subscription or quota exhausted.', referenceType: 'chatbot_rule', referenceId: $rule->id);
+
             return $this->log($accountId, $rule->id, $senderPhone, $incomingMessage, null, 'failed');
         }
 
         try {
             $driver = WhatsAppEngineFactory::make($account);
         } catch (RuntimeException $e) {
+            MessageDispatchLog::record($accountId, 'chatbot', $senderPhone, success: false, errorReason: $e->getMessage(), referenceType: 'chatbot_rule', referenceId: $rule->id);
+
             return $this->log($accountId, $rule->id, $senderPhone, $incomingMessage, null, 'failed');
         }
 
@@ -127,6 +134,8 @@ class ChatbotEngineService
         $result = $driver->sendMessage($senderPhone, $replyText, $driverMetaData);
 
         if (empty($result['success'])) {
+            MessageDispatchLog::record($accountId, 'chatbot', $senderPhone, success: false, errorReason: $result['error'] ?? 'The WhatsApp engine rejected the message.', referenceType: 'chatbot_rule', referenceId: $rule->id, messagePreview: $replyText);
+
             return $this->log($accountId, $rule->id, $senderPhone, $incomingMessage, null, 'failed');
         }
 
@@ -140,6 +149,8 @@ class ChatbotEngineService
             $locked?->increment('used_messages');
             $locked?->refreshStatus();
         });
+
+        MessageDispatchLog::record($accountId, 'chatbot', $senderPhone, success: true, referenceType: 'chatbot_rule', referenceId: $rule->id, messagePreview: $replyText, gatewayMessageId: $result['message_id'] ?? null);
 
         return $this->log($accountId, $rule->id, $senderPhone, $incomingMessage, $replyText, 'replied');
     }

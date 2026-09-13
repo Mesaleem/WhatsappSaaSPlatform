@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Lead;
+use App\Models\MessageDispatchLog;
 use App\Models\PaymentAlert;
 use App\Models\SocialProviderConfig;
 use App\Models\WhatsAppSession;
@@ -64,10 +65,23 @@ class MetaWebhookController extends Controller
      * failed) and, as of Module 10, actual inbound messages (value.
      * messages[]), routed into ChatbotEngineService.
      *
-     * KNOWN GAP (disclosed): there is no messages/message-log table in
-     * this codebase yet, so statuses are logged, not persisted. A future
-     * module should introduce that table and replace the Log::info calls
-     * below with real writes keyed on the Meta `id` (WAMID).
+     * PARTIAL FIX (disclosed): 'failed' status callbacks are now also
+     * correlated back to the message_dispatch_logs row that produced the
+     * WAMID (via the new gateway_message_id column — see
+     * correlateFailedStatus() below) and that row's status/error_reason
+     * are updated, so a post-send rejection from Meta (e.g. a template
+     * blocked, a recipient who opted out, an expired 24h session window)
+     * now surfaces as 'failed' in Analytics/Message Logs instead of only
+     * existing in this application's own text logs. 'sent'/'delivered'/
+     * 'read' status callbacks are UNCHANGED — still Log::info only, not
+     * persisted — because message_dispatch_logs.status only distinguishes
+     * queued/sent/failed at send time; a delivered/read RECEIPT is a
+     * different kind of fact (it would need its own timestamp column(s),
+     * e.g. delivered_at/read_at, without corrupting that existing
+     * send-time status) and that schema decision was judged too large to
+     * make unprompted here. 'delivered' still separately correlates to
+     * payment_alerts.gateway_message_id exactly as before, unaffected by
+     * this change.
      *
      * HARDENED (Meta Webhook HMAC-SHA256 Hardening, refactored to be
      * DB-backed): every request is now passed through
@@ -78,12 +92,11 @@ class MetaWebhookController extends Controller
      * Meta App Secret). NOTE: this verification covers ONLY this endpoint
      * (/api/webhooks/meta, WhatsApp Cloud API). SocialWebhookController's
      * separate leadgen/comment webhook (/api/social/webhook/{provider})
-     * has its own, still-unverified, still-disclosed X-Hub-Signature-256
-     * gap — see that controller's handle() docblock. It was explicitly
-     * out of scope for this task, but now reads the SAME
-     * social_provider_configs.client_secret row this method does, so
-     * closing it no longer needs any new schema — flagged as a low-cost
-     * follow-up in the summary report.
+     * now ALSO verifies X-Hub-Signature-256 for provider === 'meta', via
+     * its own assertValidSignature($request, $provider) adapted from this
+     * method — see that controller's handle() docblock. It reads the SAME
+     * social_provider_configs.client_secret row this method does, so no
+     * new schema was needed to close that gap.
      *
      * Module 9 addition: a 'delivered' status is correlated back to the
      * payment_alerts row that produced this WAMID (payment_alerts.
@@ -132,6 +145,10 @@ class MetaWebhookController extends Controller
 
                     if (($status['status'] ?? null) === 'delivered' && ! empty($status['id'])) {
                         $this->fireDeliveredWebhook($status['id']);
+                    }
+
+                    if (($status['status'] ?? null) === 'failed' && ! empty($status['id'])) {
+                        $this->correlateFailedStatus($status['id'], $status['errors'] ?? null);
                     }
                 }
 
@@ -257,6 +274,40 @@ class MetaWebhookController extends Controller
             'payment_ref' => $alert->payment_ref,
             'status' => 'delivered',
             'delivered_at' => now()->toIso8601String(),
+        ]);
+    }
+
+    /**
+     * Correlates a 'failed' Meta status callback back to the
+     * message_dispatch_logs row that produced this WAMID (chatbot/
+     * template/journey sends — see MessageDispatchLog::record()'s new
+     * $gatewayMessageId parameter) and updates that row to status =
+     * 'failed' with Meta's own error detail, so it surfaces correctly in
+     * Analytics/Message Logs instead of staying 'sent' forever despite
+     * Meta having rejected it after the fact.
+     *
+     * Deliberately does NOT touch payment_alerts here — that table has
+     * its own, pre-existing gateway_message_id/status handling
+     * (untouched by this method) and fireDeliveredWebhook() above already
+     * has sole responsibility for it.
+     *
+     * Silently returns if no row matches (not every WAMID belongs to a
+     * message_dispatch_logs row — e.g. it may belong to payment_alerts
+     * instead, or predate this column existing) or if the row is already
+     * 'failed' (idempotent against Meta's at-least-once webhook
+     * redelivery).
+     */
+    private function correlateFailedStatus(string $wamid, ?array $errors): void
+    {
+        $log = MessageDispatchLog::where('gateway_message_id', $wamid)->first();
+
+        if (! $log || $log->status === 'failed') {
+            return;
+        }
+
+        $log->update([
+            'status' => 'failed',
+            'error_reason' => $errors[0]['title'] ?? $errors[0]['message'] ?? 'Meta reported this message as failed.',
         ]);
     }
 

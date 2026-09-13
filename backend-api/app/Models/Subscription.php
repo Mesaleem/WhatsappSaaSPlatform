@@ -76,4 +76,30 @@ class Subscription extends Model
     {
         return $this->refreshStatus() === 'active';
     }
+
+    /**
+     * Group Messaging Phase 4 — credits left before hitting the plan's
+     * cap, or null when there IS no cap to check against (billing_model
+     * 'unlimited', or a capped model with no total_allocated_messages
+     * set yet). [Disclosed correction]: there is no billing_model value
+     * literally named 'LIMITED' — this mirrors computeStatus()'s own
+     * exhaustion condition above exactly (non-'unlimited' AND a cap is
+     * set), just exposed as a number instead of a boolean.
+     */
+    public function remainingQuota(): ?int
+    {
+        if ($this->billing_model === 'unlimited' || $this->total_allocated_messages === null) {
+            return null;
+        }
+
+        return max(0, $this->total_allocated_messages - $this->used_messages);
+    }
+
+    /** True when this subscription can cover $n more messages — always true for an uncapped plan (remainingQuota() === null). */
+    public function hasQuotaFor(int $n): bool
+    {
+        $remaining = $this->remainingQuota();
+
+        return $remaining === null || $remaining >= $n;
+    }
 }

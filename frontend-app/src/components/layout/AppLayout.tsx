@@ -1,4 +1,4 @@
-import { useMemo, useState, type ComponentType } from 'react';
+import { useEffect, useMemo, useState, type ComponentType } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import {
   BarChart3,
@@ -6,7 +6,9 @@ import {
   Building2,
   ChevronsLeft,
   ChevronsRight,
+  ClipboardList,
   Code2,
+  Contact,
   CreditCard,
   History,
   Inbox,
@@ -91,16 +93,66 @@ interface NavItem {
  * nowhere left to land; disabling it was already a no-op everywhere else
  * in the app before this fix and remains one now, by design.
  */
+/**
+ * [Bug fix, disclosed - Sidebar/Social-Suite module gating gap]:
+ * 'Social Accounts' was the only Social Suite nav item that actually
+ * carried `requiresModule` (see the "closes a previously-disclosed gap"
+ * comment on Account::MODULES' 'social_accounts' slug) - the other five
+ * Social Suite items (Meta Ads Launcher, Social Inbox, Comment Rules,
+ * Instant Lead CRM, Social Reports) were gated ONLY by `permission`, with
+ * no `requiresModule` at all. RolePermissionSeeder grants their
+ * underlying permissions (launch-meta-ads, manage-social-leads,
+ * manage-comment-automation, view-social-analytics) to 'admin' /
+ * 'social_marketer' UNCONDITIONALLY - a role grant, not a per-tenant
+ * setting - so disabling the Social Media suite for a client's account
+ * (Account.allowed_modules, via Module & Feature Access / applySocialPlan())
+ * never hid these five items: the permission check alone was always
+ * satisfied regardless of the tenant's module state. This is the
+ * confirmed root cause of "customer still sees Social Media items after
+ * Social Media is disabled" - NOT a permission cache or localStorage
+ * staleness issue (Account's model cache already invalidates correctly
+ * on save, /auth/me and login() already return a fresh
+ * `account.allowed_modules` on every call, and this file's own
+ * `hasModule`-driven useMemo already recomputes whenever `user` changes -
+ * all verified by reading the full chain end-to-end before this fix).
+ * Each item now carries its own SOCIAL_SUITE_MODULES slug, matching
+ * 'Social Accounts' exactly.
+ */
 const NAV_ITEMS: NavItem[] = [
   { label: 'Dashboard', to: '/', icon: LayoutDashboard, tint: NAV_TINTS.dashboard },
   { label: 'WhatsApp Setup', to: '/settings/whatsapp', icon: QrCode, tint: NAV_TINTS.whatsapp, requiresAccount: true, requiresModule: 'whatsapp_setup', hiddenForRoles: ['social_marketer'] },
   { label: 'Send Alert', to: '/alerts/send', icon: Send, tint: NAV_TINTS.send, permission: 'send-messages', requiresModule: 'send_alert', hiddenForSuperAdmin: true },
   { label: 'Analytics', to: '/analytics', icon: BarChart3, tint: NAV_TINTS.analytics, permission: 'view-analytics', requiresModule: 'analytics' },
+  // [New feature, disclosed]: "view-logs" (row-level recipient PII), not
+  // "view-analytics" — see App.tsx's route comment for the full
+  // reasoning. Message Logs Governance Fix: requiresModule was
+  // 'analytics' (piggybacked on the Analytics page's gate, itself a
+  // correction of the request's literal, nonexistent 'whatsapp' slug);
+  // now its own 'message_logs' slug under WHATSAPP_SUITE_MODULES, so a
+  // Super Admin can toggle it independently in "Module & Feature Access".
+  { label: 'Message Logs', to: '/message-logs', icon: ClipboardList, tint: NAV_TINTS.analytics, permission: 'view-logs', requiresModule: 'message_logs' },
   { label: 'Chatbot Rules', to: '/chatbot', icon: Bot, tint: NAV_TINTS.chatbot, permission: 'manage-chatbot', requiresModule: 'chatbot' },
   // Module 5 — No-Code WhatsApp Journey Builder. Same permission/module
   // tier as Chatbot Rules directly above (see routes/api.php's docblock
   // for why this reuses that tier rather than a new permission slug).
   { label: 'Journey Builder', to: '/chatbot/journeys', icon: Target, tint: NAV_TINTS.chatbot, permission: 'manage-chatbot', requiresModule: 'chatbot' },
+  // Group Messaging — Module-to-UI Sync architecture rule (explicit
+  // instruction): gated by requiresModule: 'contact_groups' like every
+  // other module-backed item in this list. [Disclosed, superseded
+  // behavior]: this item previously omitted requiresModule on purpose,
+  // specifically so ContactGroupsPage's locked-upsell card (for a
+  // tenant without this paid addon) stayed reachable through normal
+  // sidebar navigation. Adding requiresModule here is a real,
+  // intentional behavior change, not a bugfix: a tenant WITHOUT
+  // 'contact_groups' no longer sees this item in the sidebar at all,
+  // so they can no longer discover the locked/upsell card by
+  // browsing — only by a direct URL/bookmark (App.tsx's route still
+  // has no `module` guard, left as-is, so that direct link still
+  // renders the locked card rather than a 403). Icon kept as `Contact`
+  // rather than the requested `Users` — 'Team Users' below already
+  // uses the Users icon; reusing it here would make two different
+  // sidebar items visually identical.
+  { label: 'Contact Groups', to: '/contact-groups', icon: Contact, tint: NAV_TINTS.whatsapp, permission: 'send-messages', requiresModule: 'contact_groups' },
   { label: 'Billing & Plans', to: '/billing', icon: CreditCard, tint: NAV_TINTS.billing, permission: 'manage-subscriptions', requiresModule: 'billing' },
   { label: 'Developer API', to: '/developer', icon: Code2, tint: NAV_TINTS.developer, permission: 'manage-developer-settings', requiresModule: 'developer_api' },
   { label: 'Team Users', to: '/users', icon: Users, tint: NAV_TINTS.team, permission: 'manage-team', requiresModule: 'team_management' },
@@ -111,13 +163,13 @@ const NAV_ITEMS: NavItem[] = [
   // way every other module-backed item above it is.
   { label: 'Social Accounts', to: '/social/accounts', icon: Share2, tint: NAV_TINTS.social, permission: 'manage-social-accounts', requiresModule: 'social_accounts' },
   // Social Media Marketing & Meta Ads Automation Expansion (Phase 3).
-  { label: 'Meta Ads Launcher', to: '/social/ads', icon: Rocket, tint: NAV_TINTS.social, permission: 'launch-meta-ads' },
+  { label: 'Meta Ads Launcher', to: '/social/ads', icon: Rocket, tint: NAV_TINTS.social, permission: 'launch-meta-ads', requiresModule: 'meta_ads' },
   // Social Media Marketing & Meta Ads Automation Expansion (Phase 4).
-  { label: 'Social Inbox', to: '/social/inbox', icon: Inbox, tint: NAV_TINTS.social, permission: 'manage-social-leads' },
-  { label: 'Comment Rules', to: '/social/comment-rules', icon: MessageSquare, tint: NAV_TINTS.social, permission: 'manage-comment-automation' },
+  { label: 'Social Inbox', to: '/social/inbox', icon: Inbox, tint: NAV_TINTS.social, permission: 'manage-social-leads', requiresModule: 'social_inbox' },
+  { label: 'Comment Rules', to: '/social/comment-rules', icon: MessageSquare, tint: NAV_TINTS.social, permission: 'manage-comment-automation', requiresModule: 'comment_automation' },
   // Social Media Marketing & Meta Ads Automation Expansion — Final Phase.
-  { label: 'Instant Lead CRM', to: '/social/leads', icon: UserSearch, tint: NAV_TINTS.social, permission: 'manage-social-leads' },
-  { label: 'Social Reports', to: '/social/reports', icon: FileBarChart, tint: NAV_TINTS.social, permission: 'view-social-analytics' },
+  { label: 'Instant Lead CRM', to: '/social/leads', icon: UserSearch, tint: NAV_TINTS.social, permission: 'manage-social-leads', requiresModule: 'lead_crm' },
+  { label: 'Social Reports', to: '/social/reports', icon: FileBarChart, tint: NAV_TINTS.social, permission: 'view-social-analytics', requiresModule: 'reports' },
   { label: 'Manage Clients', to: '/admin/accounts', icon: Building2, tint: NAV_TINTS.accounts, superAdminOnly: true },
   // Dynamic Templates & Variables System — Super Admin Template Designer & Approval Panel.
   { label: 'Template Manager', to: '/admin/templates', icon: Sparkles, tint: NAV_TINTS.accounts, superAdminOnly: true },
@@ -169,7 +221,7 @@ function resolvePageTitle(pathname: string): string {
 }
 
 export default function AppLayout() {
-  const { user, hasPermission, isSuperAdmin, hasModule, hasRole } = useAuth();
+  const { user, hasPermission, isSuperAdmin, hasModule, hasRole, refreshUser } = useAuth();
   const location = useLocation();
   const [isCollapsed, setIsCollapsed] = useState(false);
 
@@ -183,6 +235,36 @@ export default function AppLayout() {
       ),
     [superAdmin, hasAccount, hasPermission, hasModule, hasRole],
   );
+
+  // Session Re-hydration & Refresh (Module-to-UI Sync architecture
+  // rule). AppLayout is a layout route (App.tsx wraps every
+  // authenticated page in this one instance via <Outlet/>) — it mounts
+  // exactly ONCE per session and stays mounted across every in-app
+  // navigation, so this is the correct single place for this, not any
+  // one page. `visibleItems` above is already fully reactive to
+  // `hasModule`/`user` (a plain useMemo, no stale local copy) — the gap
+  // was never that computation, it was that nothing re-fetched
+  // /auth/me after the initial login, so a Super Admin's change made
+  // in another tab/session was invisible here until a hard refresh
+  // remounted the whole app. Two triggers, no polling: every in-app
+  // navigation (covers "toggled it, then just used the sidebar"), and
+  // the browser tab regaining focus (covers "toggled it in another
+  // tab, then switched back to this one without navigating anywhere
+  // in it"). [Disclosed limit]: a tab left open and idle, never
+  // navigated and never refocused, will not update on its own — true
+  // push/polling would be needed for that and was not asked for here.
+  // [Disclosed]: previously lived as a Dashboard-only mount effect;
+  // consolidated here so it applies to every module-gated nav item,
+  // not just the ones Dashboard happens to render.
+  useEffect(() => {
+    void refreshUser();
+  }, [location.pathname, refreshUser]);
+
+  useEffect(() => {
+    const onFocus = () => void refreshUser();
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
+  }, [refreshUser]);
 
   const pageTitle = resolvePageTitle(location.pathname);
 

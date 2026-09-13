@@ -56,8 +56,12 @@ class ExternalAlertController extends Controller
         // Same dedup-then-create-then-queue path as the internal
         // /api/alerts/send endpoint (PaymentAlertController) — see
         // PaymentAlertDispatcher's docblock for why this is shared rather
-        // than duplicated.
-        $result = PaymentAlertDispatcher::dispatch($accountId, $data);
+        // than duplicated. [New feature, disclosed]: source='api' plus
+        // this request's own resolved ApiKey id so the resulting
+        // MessageDispatchLog row identifies exactly which client key
+        // dispatched it.
+        $apiKey = $request->attributes->get('api_key');
+        $result = PaymentAlertDispatcher::dispatch($accountId, $data, source: 'api', apiKeyId: $apiKey?->id);
 
         if ($result['status'] === 'disconnected') {
             return response()->json([

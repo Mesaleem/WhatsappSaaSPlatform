@@ -1,9 +1,10 @@
 import 'dotenv/config';
 import http from 'node:http';
+import crypto from 'node:crypto';
 import express from 'express';
 import cors from 'cors';
 import { Server as SocketIOServer } from 'socket.io';
-import { startSession, logoutSession, getStatus, getQr, sendMessage } from './services/sessionManager.js';
+import { startSession, logoutSession, getStatus, getQr, sendMessage, createGroup, addGroupParticipants } from './services/sessionManager.js';
 import { verifyAccountAccess } from './services/backendClient.js';
 
 /**
@@ -174,7 +175,23 @@ function requireInternalSecret(req, res, next) {
 
   const provided = req.header('X-Internal-Secret');
 
-  if (provided !== INTERNAL_API_SECRET) {
+  // [Fix, disclosed]: constant-time comparison via crypto.timingSafeEqual
+  // instead of !== , to avoid a byte-by-byte timing side channel on the
+  // shared secret (mirrors VerifyInternalSecret.php's use of
+  // hash_equals() on the Laravel side, which this repo already relied on
+  // for the reverse direction — status/inbound notifications FROM this
+  // process TO backend-api never send a comparable header here, so this
+  // was the one place still using a plain string comparison for the
+  // secret check). Buffers must be equal length for timingSafeEqual, so
+  // a length mismatch is checked first and short-circuits to unequal
+  // without leaking timing on length itself (both branches return the
+  // same 401 either way).
+  const providedBuf = Buffer.from(provided ?? '', 'utf8');
+  const expectedBuf = Buffer.from(INTERNAL_API_SECRET, 'utf8');
+  const matches =
+    providedBuf.length === expectedBuf.length && crypto.timingSafeEqual(providedBuf, expectedBuf);
+
+  if (!matches) {
     console.warn(
       `[server] Rejected an internal request from ${req.ip}: X-Internal-Secret header ${
         provided ? 'did not match this process\'s INTERNAL_API_SECRET' : 'was missing'
@@ -239,6 +256,53 @@ app.post('/api/message/send', requireInternalSecret, async (req, res) => {
   } catch (err) {
     console.error(`[server] send-message failed for account_id=${accountId}:`, err);
     res.status(500).json({ success: false, error: 'Internal error while sending the message.' });
+  }
+});
+
+/**
+ * POST /api/group/create — Native WhatsApp Group Re-Architecture, called
+ * by backend-api's NativeWhatsAppGroupService.
+ * Body: { account_id, subject, participants: ["<digits>@s.whatsapp.net", ...] }
+ * (already full JIDs, built by NativeWhatsAppGroupService — same
+ * division of responsibility as /api/message/send's "to" field above).
+ * Response: { success: true, jid, invite_link } on success, or
+ * { success: false, error } (HTTP 422) otherwise — same shape convention
+ * as /api/message/send.
+ */
+app.post('/api/group/create', requireInternalSecret, async (req, res) => {
+  const { account_id: accountId, subject, participants } = req.body ?? {};
+  if (!accountId || !subject || !Array.isArray(participants) || participants.length === 0) {
+    return res.status(422).json({ success: false, error: 'account_id, subject, and a non-empty participants array are required.' });
+  }
+
+  try {
+    const result = await createGroup(accountId, subject, participants);
+    res.status(result.success ? 200 : 422).json(result);
+  } catch (err) {
+    console.error(`[server] group-create failed for account_id=${accountId}:`, err);
+    res.status(500).json({ success: false, error: 'Internal error while creating the WhatsApp group.' });
+  }
+});
+
+/**
+ * POST /api/group/add-participants — Native WhatsApp Group
+ * Re-Architecture, called by backend-api's NativeWhatsAppGroupService.
+ * Body: { account_id, group_jid, participants: ["<digits>@s.whatsapp.net", ...] }.
+ * Response: { success: true } on success, or { success: false, error }
+ * (HTTP 422) otherwise.
+ */
+app.post('/api/group/add-participants', requireInternalSecret, async (req, res) => {
+  const { account_id: accountId, group_jid: groupJid, participants } = req.body ?? {};
+  if (!accountId || !groupJid || !Array.isArray(participants) || participants.length === 0) {
+    return res.status(422).json({ success: false, error: 'account_id, group_jid, and a non-empty participants array are required.' });
+  }
+
+  try {
+    const result = await addGroupParticipants(accountId, groupJid, participants);
+    res.status(result.success ? 200 : 422).json(result);
+  } catch (err) {
+    console.error(`[server] group-add-participants failed for account_id=${accountId}:`, err);
+    res.status(500).json({ success: false, error: 'Internal error while adding participants to the WhatsApp group.' });
   }
 });
 

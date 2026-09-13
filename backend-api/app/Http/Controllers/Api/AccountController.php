@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Account;
+use App\Models\ContactGroup;
 use App\Models\Subscription;
 use App\Models\User;
 use Illuminate\Http\JsonResponse;
@@ -197,6 +198,16 @@ class AccountController extends Controller
                 'is_active' => true,
             ]);
             $admin->assignRole('admin');
+
+            // Group Messaging Step 1 — every new tenant starts with
+            // exactly one default contact group, inside the same
+            // transaction as the rest of account creation so it can never
+            // exist without its account (or vice versa).
+            ContactGroup::create([
+                'account_id' => $account->id,
+                'name' => 'All Contacts',
+                'is_default' => true,
+            ]);
 
             Subscription::create([
                 'account_id' => $account->id,

@@ -57,6 +57,12 @@ export const ACCOUNT_MODULES = [
   'templates',
   'device_settings',
   'social_accounts',
+  // Message Logs Governance Fix — previously gated on 'analytics'
+  // (Core Common), so it couldn't be toggled independently of the
+  // Analytics page. Now its own slug, under the WhatsApp Suite.
+  'message_logs',
+  // Group Messaging Step 1 — Custom Contact Groups, a paid addon.
+  'contact_groups',
 ] as const;
 
 export type AccountModule = (typeof ACCOUNT_MODULES)[number];
@@ -92,6 +98,8 @@ export const ACCOUNT_MODULE_LABELS: Record<AccountModule, string> = {
   templates: 'Template Manager',
   device_settings: 'Device Settings',
   social_accounts: 'Social Accounts',
+  message_logs: 'Message Logs & Audit Trail',
+  contact_groups: 'Custom Contact Groups (Paid Addon)',
 };
 
 /**
@@ -120,6 +128,12 @@ export const WHATSAPP_SUITE_MODULES: AccountModule[] = [
   'chatbot',
   'templates',
   'device_settings',
+  // Message Logs Governance Fix — re-homed here from 'analytics'
+  // (Core Common) so a Super Admin can toggle it independently. See
+  // Account::MODULES in the backend for the other half.
+  'message_logs',
+  // Group Messaging Step 1 — see Account::MODULES in the backend.
+  'contact_groups',
 ];
 
 /** Social Media Suite — gated by its own Master Category checkbox. */

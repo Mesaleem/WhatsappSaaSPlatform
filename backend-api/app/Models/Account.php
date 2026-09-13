@@ -171,6 +171,18 @@ class Account extends Model
         // refactor's audit report.
         'device_settings',
         'social_accounts',
+        // Message Logs Governance Fix — previously piggybacked on the
+        // generic 'analytics' slug (a Core Common module), so a Super
+        // Admin could not gate it independently of the Analytics page.
+        // Re-homed under the WhatsApp Messaging Suite as its own slug.
+        // See routes/api.php's module.guard wrap and frontend-app's
+        // types/account.ts WHATSAPP_SUITE_MODULES for the other half.
+        'message_logs',
+        // Group Messaging Step 1 — Custom Contact Groups, a paid
+        // addon. See ContactGroup/ContactGroupMember models and their
+        // creating migrations; also under WHATSAPP_SUITE_MODULES in
+        // frontend-app's types/account.ts.
+        'contact_groups',
     ];
 
     protected $fillable = [
@@ -268,6 +280,12 @@ class Account extends Model
     public function subscriptions(): HasMany
     {
         return $this->hasMany(Subscription::class);
+    }
+
+    /** Group Messaging Step 1 — every named contact list this account owns, including the AccountController::store()-created default. */
+    public function contactGroups(): HasMany
+    {
+        return $this->hasMany(ContactGroup::class);
     }
 
     /**

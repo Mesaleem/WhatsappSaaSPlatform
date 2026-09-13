@@ -44,6 +44,44 @@ export interface AnalyticsSummary {
   /** Client Admin Dashboard Overhaul — "Today's Broadcast Metrics" card. Server-timezone "today". */
   total_sent_today: number;
   total_failed_today: number;
+  /**
+   * Group Messaging Phase 5 — Dashboard Analytics Upgrade. null when the
+   * backend's recipient_type column isn't migrated yet (self-healing,
+   * same convention as `quota` being null for the global scope — see
+   * AnalyticsController::summary()'s docblock).
+   */
+  recipient_breakdown: RecipientTypeBreakdown | null;
+  /** null when scope === 'global' (per-tenant concept, same as `quota`), or when contact_groups isn't migrated yet. */
+  active_contact_groups: number | null;
+  /**
+   * Dashboard & Analytics Fix Round 2 — "Today's Group & Individual
+   * Sent/Failed Breakdown". Same self-healing null condition as
+   * `recipient_breakdown` above (re-windowed to today instead of the
+   * requested period).
+   */
+  today_breakdown: TodayRecipientBreakdown | null;
+}
+
+/** Dashboard & Analytics Fix Round 2. Field names match AnalyticsController::summary()'s literal keys. */
+export interface TodayRecipientBreakdown {
+  today_individual_sent: number;
+  today_individual_failed: number;
+  today_group_sent: number;
+  today_group_failed: number;
+}
+
+/**
+ * Group Messaging Phase 5. Individual counts are exact (one row per
+ * send). Group counts sum each batch's persisted success_count/
+ * failure_count when available, falling back to counting resolved
+ * BATCHES (not recipients) when the backend migration adding those two
+ * columns hasn't run yet — see AnalyticsController::recipientTypeBreakdown()'s
+ * docblock. `recipient_count` is the sum of every group batch's total
+ * addressee count in range, regardless of resolution state.
+ */
+export interface RecipientTypeBreakdown {
+  individual: { sent: number; failed: number };
+  group: { sent: number; failed: number; queued_batches: number; recipient_count: number };
 }
 
 export interface DailyVolumePoint {
@@ -84,6 +122,17 @@ export interface AnalyticsChartsResponse {
    * Decimal-cast sum, serialized as a string.
    */
   daily_revenue: Array<{ date: string; revenue: string }> | null;
+  /**
+   * Group Messaging Phase 5 — "Individual vs Group" toggle on the
+   * Message Pulse chart. Gap-filled per day like `daily` above (which
+   * stays unchanged, every recipient_type combined); null under the
+   * same self-healing condition as `recipient_breakdown` in
+   * AnalyticsSummary.
+   */
+  daily_by_recipient_type: {
+    individual: DailyVolumePoint[];
+    group: DailyVolumePoint[];
+  } | null;
 }
 
 /**

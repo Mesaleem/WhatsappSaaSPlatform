@@ -35,10 +35,15 @@ class PaymentAlertDispatcher
     }
 
     /**
+     * [New feature, disclosed]: $source/$apiKeyId are threaded through to
+     * ProcessPaymentAlertJob purely so it can write the right
+     * MessageDispatchLog row once the send resolves — this method's own
+     * dedup/create/queue logic is completely unchanged.
+     *
      * @param array{recipient_phone: string, customer_name: string, amount: float|string, payment_ref: string} $data
      * @return array{status: 'queued'|'duplicate'|'disconnected', alert?: PaymentAlert, payment_ref?: string}
      */
-    public static function dispatch(int $accountId, array $data): array
+    public static function dispatch(int $accountId, array $data, string $source = 'web_ui', ?int $apiKeyId = null): array
     {
         $account = Account::with(['currentSubscription', 'whatsAppSession'])->find($accountId);
 
@@ -68,7 +73,7 @@ class PaymentAlertDispatcher
             throw $e;
         }
 
-        ProcessPaymentAlertJob::dispatch($alert->id);
+        ProcessPaymentAlertJob::dispatch($alert->id, $source, $apiKeyId);
 
         return ['status' => 'queued', 'alert' => $alert];
     }
