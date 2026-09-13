@@ -110,7 +110,11 @@ export default function ContactGroupsPage() {
   };
 
   return (
-    <PageShell>
+    // Full-width layout — matches MessageLogsPage.tsx's own
+    // PageShell override (max-w-6xl's default cap left a large empty
+    // gutter next to this page's table, unlike the other data-table
+    // screens).
+    <PageShell maxWidthClassName="max-w-full">
       <PageHeader
         icon={Contact}
         title="Contact Groups"
