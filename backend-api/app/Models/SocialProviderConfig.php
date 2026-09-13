@@ -11,10 +11,23 @@ use Illuminate\Support\Facades\Cache;
  * Platform-level OAuth App credential vault, one row per provider
  * ('meta' | 'linkedin' | 'google'). Mirrors PaymentGatewaySetting's
  * cache-and-invalidate + encrypted-secret pattern exactly.
+ *
+ * DISCLOSED REINTERPRETATION (Social/Ads Launcher Overhaul — Step 1):
+ * 'gemini' was added to PROVIDERS to reuse this exact vault — same
+ * admin UI/endpoint (SocialGatewayController), same caching, same
+ * encryption — as the PLATFORM-level default AI provider key, rather
+ * than standing up a parallel table for one more secret. Gemini is not
+ * an OAuth provider, so for this row only: `client_secret` holds the
+ * Gemini API key itself (not an OAuth app secret), and `client_id`/
+ * `redirect_uri` are simply left null and unused — isFullyConfigured()
+ * below is therefore meaningless for 'gemini' and CopywriterService
+ * checks `client_secret` directly rather than calling it. See
+ * accounts.gemini_api_key's migration docblock for the full per-tenant
+ * -> platform -> env resolution order this feeds into.
  */
 class SocialProviderConfig extends Model
 {
-    public const PROVIDERS = ['meta', 'linkedin', 'google'];
+    public const PROVIDERS = ['meta', 'linkedin', 'google', 'gemini'];
 
     private static function cacheKeyFor(string $provider): string
     {

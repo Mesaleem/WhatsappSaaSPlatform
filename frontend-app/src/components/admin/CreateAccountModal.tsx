@@ -300,6 +300,36 @@ export default function CreateAccountModal({ account, onClose, onSaved }: Create
   const applySocialPlan = () => applyPreset([...CORE_COMMON_MODULES, ...SOCIAL_SUITE_MODULES]);
   const applyFullEnterprisePlan = () => applyPreset(MANAGED_CHECKLIST_MODULES);
 
+  /**
+   * [Bug fix, disclosed]: the Quick Plan preset buttons' "selected" blue
+   * highlight was previously a class hardcoded onto the Full Enterprise
+   * Plan button in JSX, unconditionally, regardless of which preset (if
+   * any) actually matched the current module selection — clicking
+   * WhatsApp Plan or Social Media Plan correctly called applyPreset()
+   * and correctly updated allowedModules/the checkboxes below (verified
+   * by reading commitModules()/isModuleEnabled()), but the highlight
+   * itself was never wired to any state, so it visually never moved off
+   * Full Enterprise Plan. isPresetActive() below does an EXACT match — a
+   * preset's own managed modules must all be enabled AND every other
+   * managed module (i.e. the suite it doesn't include) must be disabled
+   * — so a custom/mixed selection that happens to be a superset of one
+   * preset is correctly shown as unhighlighted (none of the three) here,
+   * not misattributed to that preset.
+   */
+  const isPresetActive = (presetModules: AccountModule[]) =>
+    MANAGED_CHECKLIST_MODULES.every((module) =>
+      presetModules.includes(module) ? isModuleEnabled(module) : !isModuleEnabled(module),
+    );
+
+  const isWhatsappPlanActive = isPresetActive([...CORE_COMMON_MODULES, ...WHATSAPP_SUITE_MODULES]);
+  const isSocialPlanActive = isPresetActive([...CORE_COMMON_MODULES, ...SOCIAL_SUITE_MODULES]);
+  const isFullEnterprisePlanActive = isPresetActive(MANAGED_CHECKLIST_MODULES);
+
+  const PRESET_BUTTON_ACTIVE_CLASS =
+    'rounded-lg border border-indigo-300 bg-indigo-50 px-3 py-1.5 text-xs font-semibold text-indigo-700 transition hover:bg-indigo-100 disabled:opacity-60';
+  const PRESET_BUTTON_INACTIVE_CLASS =
+    'rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-60';
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4">
       <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-xl bg-white shadow-xl">
@@ -620,7 +650,7 @@ export default function CreateAccountModal({ account, onClose, onSaved }: Create
                 type="button"
                 onClick={() => void applyWhatsappPlan()}
                 disabled={modulesBulkBusy}
-                className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-60"
+                className={isWhatsappPlanActive ? PRESET_BUTTON_ACTIVE_CLASS : PRESET_BUTTON_INACTIVE_CLASS}
               >
                 WhatsApp Plan
               </button>
@@ -628,7 +658,7 @@ export default function CreateAccountModal({ account, onClose, onSaved }: Create
                 type="button"
                 onClick={() => void applySocialPlan()}
                 disabled={modulesBulkBusy}
-                className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-60"
+                className={isSocialPlanActive ? PRESET_BUTTON_ACTIVE_CLASS : PRESET_BUTTON_INACTIVE_CLASS}
               >
                 Social Media Plan
               </button>
@@ -636,7 +666,7 @@ export default function CreateAccountModal({ account, onClose, onSaved }: Create
                 type="button"
                 onClick={() => void applyFullEnterprisePlan()}
                 disabled={modulesBulkBusy}
-                className="rounded-lg border border-indigo-300 bg-indigo-50 px-3 py-1.5 text-xs font-semibold text-indigo-700 transition hover:bg-indigo-100 disabled:opacity-60"
+                className={isFullEnterprisePlanActive ? PRESET_BUTTON_ACTIVE_CLASS : PRESET_BUTTON_INACTIVE_CLASS}
               >
                 Full Enterprise Plan
               </button>

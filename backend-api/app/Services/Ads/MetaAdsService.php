@@ -5,6 +5,7 @@ namespace App\Services\Ads;
 use App\Models\Account;
 use App\Models\AdCampaign;
 use App\Models\SocialAccount;
+use App\Models\WhatsAppSession;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use RuntimeException;
@@ -56,6 +57,12 @@ class MetaAdsService
         'LEAD_GENERATION' => 'OUTCOME_LEADS',
         'MESSAGES' => 'OUTCOME_ENGAGEMENT',
         'TRAFFIC' => 'OUTCOME_TRAFFIC',
+        // Step 4 (Click-to-WhatsApp Ads). Pre-ODAX, Click-to-WhatsApp used
+        // the same legacy 'MESSAGES' objective as Click-to-Messenger, only
+        // the AdSet's destination_type differed (WHATSAPP vs MESSENGER) —
+        // [Hypothesis], documented Meta precedent. Mapped to the SAME
+        // OUTCOME_ENGAGEMENT ODAX objective as MESSAGES for that reason.
+        'CLICK_TO_WHATSAPP' => 'OUTCOME_ENGAGEMENT',
     ];
 
     /** AdSet-level optimization_goal per objective. [Hypothesis], see class docblock. */
@@ -63,6 +70,10 @@ class MetaAdsService
         'LEAD_GENERATION' => 'LEAD_GENERATION',
         'MESSAGES' => 'CONVERSATIONS',
         'TRAFFIC' => 'LINK_CLICKS',
+        // Step 4: a WhatsApp chat opened from an ad is the same
+        // "CONVERSATIONS" optimization concept Meta already uses for
+        // Messenger — [Hypothesis], see OBJECTIVE_MAP's note above.
+        'CLICK_TO_WHATSAPP' => 'CONVERSATIONS',
     ];
 
     private const BILLING_EVENT = 'IMPRESSIONS';
@@ -106,6 +117,7 @@ class MetaAdsService
 
         try {
             $metaAdsetId = $this->createAdSet(
+                $account,
                 $adAccount->provider_id,
                 $accessToken,
                 $metaCampaignId,
@@ -256,6 +268,28 @@ class MetaAdsService
             ->first();
     }
 
+    /**
+     * Step 4 (Click-to-WhatsApp Ads). The tenant's connected WhatsApp
+     * Business Cloud API phone number (WhatsAppSession.meta_phone_number_id
+     * — the same field the WhatsApp module itself uses to route inbound
+     * Meta webhook traffic, see MetaWebhookController::handleInboundMessages()).
+     * Deliberately reuses this existing column rather than inventing a
+     * new one — it is already the canonical "this tenant's WhatsApp
+     * Business number" value elsewhere in this codebase.
+     */
+    private function resolveWhatsAppPhoneNumber(Account $account): string
+    {
+        $session = WhatsAppSession::where('account_id', $account->id)->first();
+
+        if (! $session || ! $session->meta_phone_number_id) {
+            throw new RuntimeException(
+                'No WhatsApp Business phone number is configured for this tenant. Configure one under WhatsApp > Meta Config first.'
+            );
+        }
+
+        return $session->meta_phone_number_id;
+    }
+
     private function createCampaign(string $adAccountId, string $accessToken, string $name, string $metaObjective): string
     {
         $response = $this->post($accessToken, "/{$adAccountId}/campaigns", [
@@ -276,6 +310,7 @@ class MetaAdsService
      * @param array<string, mixed> $payload The full launch() payload — targeting_specs read from it here.
      */
     private function createAdSet(
+        Account $account,
         string $adAccountId,
         string $accessToken,
         string $metaCampaignId,
@@ -330,6 +365,41 @@ class MetaAdsService
                 : ['page_id' => $page->provider_id, 'object_store_url' => null];
 
             $body['destination_type'] = $objective === 'LEAD_GENERATION' ? 'ON_AD' : 'MESSENGER';
+        }
+
+        // Step 4 (Click-to-WhatsApp Ads). destination_type => WHATSAPP,
+        // with the tenant's connected WhatsApp Business phone number as
+        // the promoted object, per this step's explicit instruction.
+        //
+        // DISCLOSED [Hypothesis] — NOT independently verified against a
+        // live Meta call: Meta's most commonly documented CTWA path
+        // promotes a Facebook Page whose WhatsApp Business Account is
+        // already linked in Business Manager (promoted_object =
+        // {"page_id": ...} only, same shape as MESSAGES above), with the
+        // actual destination number implied by that Page's own WhatsApp
+        // link — NOT passed explicitly in the API call. This
+        // implementation instead follows the literal instruction given
+        // for this step ("Set the promoted object to the tenant's
+        // connected WhatsApp Business phone number") and sends the
+        // number explicitly via a 'whatsapp_phone_number' key alongside
+        // page_id. If Meta's API rejects an explicit phone number field
+        // on a live call, the fix is to drop it and rely on the Page's
+        // own WhatsApp Business linkage instead — flagged here rather
+        // than silently guessed as correct.
+        if ($objective === 'CLICK_TO_WHATSAPP') {
+            if (! $page) {
+                throw new RuntimeException(
+                    'A connected Facebook Page is required to launch a CLICK_TO_WHATSAPP campaign. Connect one from the Social Hub first.'
+                );
+            }
+
+            $whatsAppNumber = $this->resolveWhatsAppPhoneNumber($account);
+
+            $body['promoted_object'] = [
+                'page_id' => $page->provider_id,
+                'whatsapp_phone_number' => $whatsAppNumber,
+            ];
+            $body['destination_type'] = 'WHATSAPP';
         }
 
         $response = $this->post($accessToken, "/{$adAccountId}/adsets", $body);
@@ -421,12 +491,28 @@ class MetaAdsService
         // ads require the file to be uploaded via /act_X/advideos first
         // and referenced by the returned video_id, not a bare URL; that
         // upload pipeline is not implemented here (see the audit report).
+        // Step 4: WHATSAPP_MESSAGE is the documented CTA type for
+        // Click-to-WhatsApp creatives — [Hypothesis], same disclosure
+        // tier as the rest of this method. The 'link' field is left
+        // pointing at the Page (same as every other objective here);
+        // for a WHATSAPP destination_type, Meta's documented behavior is
+        // that the ad's actual click destination is derived from the
+        // AdSet's destination_type/promoted_object, not this link —
+        // this field is effectively unused for CLICK_TO_WHATSAPP but
+        // Meta's AdCreative schema still requires link_data.link to be
+        // present, so a harmless placeholder is kept rather than adding
+        // creative-shape branching this method doesn't otherwise need.
+        $ctaTypeMap = [
+            'LEAD_GENERATION' => 'SIGN_UP',
+            'CLICK_TO_WHATSAPP' => 'WHATSAPP_MESSAGE',
+        ];
+
         $linkData = [
             'message' => $creative['primary_text'],
             'name' => $creative['headline'],
             'link' => 'https://www.facebook.com/'.$page->provider_id,
             'call_to_action' => [
-                'type' => $objective === 'LEAD_GENERATION' ? 'SIGN_UP' : 'LEARN_MORE',
+                'type' => $ctaTypeMap[$objective] ?? 'LEARN_MORE',
             ],
         ];
 

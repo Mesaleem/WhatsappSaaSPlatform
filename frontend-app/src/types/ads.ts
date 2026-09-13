@@ -4,7 +4,8 @@
  * JSON shape.
  */
 
-export type AdObjective = 'LEAD_GENERATION' | 'MESSAGES' | 'TRAFFIC';
+/** Social/Ads Launcher Overhaul — Step 4 (Click-to-WhatsApp Ads). See backend AdCampaign::OBJECTIVES. */
+export type AdObjective = 'LEAD_GENERATION' | 'MESSAGES' | 'TRAFFIC' | 'CLICK_TO_WHATSAPP';
 
 export type AdCampaignStatus = 'ACTIVE' | 'PAUSED';
 
@@ -12,6 +13,7 @@ export const AD_OBJECTIVE_LABELS: Record<AdObjective, string> = {
   LEAD_GENERATION: 'Lead Generation',
   MESSAGES: 'Messages',
   TRAFFIC: 'Traffic',
+  CLICK_TO_WHATSAPP: 'Click to WhatsApp',
 };
 
 export interface TargetingSpecs {

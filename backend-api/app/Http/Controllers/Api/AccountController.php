@@ -261,6 +261,13 @@ class AccountController extends Controller
             // creep. See this refactor's audit report.
             'max_users_limit' => ['sometimes', 'nullable', 'integer', 'min:1'],
             'module_assignment' => ['sometimes', Rule::in(Account::MODULE_ASSIGNMENTS)],
+            // Social/Ads Launcher Overhaul — Step 1. Per-tenant AI
+            // provider key override; see accounts.gemini_api_key's
+            // migration docblock. Same Super-Admin-only tier as every
+            // other field in this endpoint. Empty string clears the
+            // override (falls back to the platform/env key) rather than
+            // storing an empty secret.
+            'gemini_api_key' => ['sometimes', 'nullable', 'string', 'max:1000'],
         ]);
 
         $account->update($data);

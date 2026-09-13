@@ -21,6 +21,7 @@ import {
   Share2,
   Smartphone,
   Sparkles,
+  Target,
   UserSearch,
   Users,
   Zap,
@@ -96,6 +97,10 @@ const NAV_ITEMS: NavItem[] = [
   { label: 'Send Alert', to: '/alerts/send', icon: Send, tint: NAV_TINTS.send, permission: 'send-messages', requiresModule: 'send_alert', hiddenForSuperAdmin: true },
   { label: 'Analytics', to: '/analytics', icon: BarChart3, tint: NAV_TINTS.analytics, permission: 'view-analytics', requiresModule: 'analytics' },
   { label: 'Chatbot Rules', to: '/chatbot', icon: Bot, tint: NAV_TINTS.chatbot, permission: 'manage-chatbot', requiresModule: 'chatbot' },
+  // Module 5 — No-Code WhatsApp Journey Builder. Same permission/module
+  // tier as Chatbot Rules directly above (see routes/api.php's docblock
+  // for why this reuses that tier rather than a new permission slug).
+  { label: 'Journey Builder', to: '/chatbot/journeys', icon: Target, tint: NAV_TINTS.chatbot, permission: 'manage-chatbot', requiresModule: 'chatbot' },
   { label: 'Billing & Plans', to: '/billing', icon: CreditCard, tint: NAV_TINTS.billing, permission: 'manage-subscriptions', requiresModule: 'billing' },
   { label: 'Developer API', to: '/developer', icon: Code2, tint: NAV_TINTS.developer, permission: 'manage-developer-settings', requiresModule: 'developer_api' },
   { label: 'Team Users', to: '/users', icon: Users, tint: NAV_TINTS.team, permission: 'manage-team', requiresModule: 'team_management' },

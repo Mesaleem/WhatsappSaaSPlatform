@@ -43,18 +43,29 @@ export async function verifyAccountAccess(token, accountId) {
   const user = data?.user;
   if (!user) return false;
 
-  // NOTE: the platform's Super Admin role was renamed 'Super Admin' ->
-  // 'super_admin' (see backend-api's RolePermissionSeeder::LEGACY_ROLE_RENAMES)
-  // in the Spatie roles table. This comparison was never updated for that
-  // rename, so it silently always evaluated to false — every Super Admin
-  // request fell through to the String(account_id) === String(accountId)
-  // branch, which can never match a Super Admin whose own account_id is
-  // null. That made the live Socket.IO QR/status stream reject a Super
-  // Admin's connection ('forbidden') for BOTH their own test device and
-  // every client account, even though the REST endpoints on the Laravel
-  // side (TenantIsolationMiddleware / SubscriptionGuardMiddleware) already
-  // correctly allow it. Root cause confirmed by reading the seeder's
-  // LEGACY_ROLE_RENAMES map and User::isSuperAdmin() (hasRole('super_admin')).
-  const isSuperAdmin = user.role?.name === 'super_admin';
+  // [Bug fix, disclosed — corrects the previous comment here, which
+  // misdiagnosed this]: backend-api's GET /api/auth/me never returns a
+  // singular `user.role` field at all — AuthController::formatUser()
+  // returns `'roles' => $user->roles` (the PLURAL Eloquent collection of
+  // every role the user holds; see that method's own docblock: it was
+  // deliberately changed from a single arbitrary role to the full array
+  // so multi-role users are represented correctly). So `user.role?.name`
+  // here was ALWAYS undefined, for every user including Super Admin — a
+  // field-name/shape mismatch (`role` vs `roles`, singular object vs
+  // array), not a stale role-name string as the previous comment claimed
+  // (that string, 'super_admin', was already correct; it just could
+  // never be reached through `user.role?.name`). This made isSuperAdmin
+  // always false, so a Super Admin's Socket.IO connection always fell
+  // through to `String(user.account_id) === String(accountId)` — which
+  // can never match, since a Super Admin's own account_id is null —
+  // rejecting ('forbidden') their own test device AND every client
+  // account's live QR/status stream, exactly the symptom reported
+  // ("You aren't authorized to manage this account's WhatsApp
+  // connection.") even though the REST endpoints on the Laravel side
+  // (TenantIsolationMiddleware) already correctly allow Super Admin.
+  // Root cause confirmed by reading AuthController::formatUser() and
+  // User::isSuperAdmin() (hasRole('super_admin')) directly, not inferred.
+  const roles = Array.isArray(user.roles) ? user.roles : [];
+  const isSuperAdmin = roles.some((role) => role?.name === 'super_admin');
   return isSuperAdmin || String(user.account_id) === String(accountId);
 }

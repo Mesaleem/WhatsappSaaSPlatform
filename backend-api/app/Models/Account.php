@@ -204,6 +204,27 @@ class Account extends Model
         // profile endpoint exists for any of these).
         'logo_url',
         'brand_accent_color',
+        // Social/Ads Launcher Overhaul — Step 1 (Gemini Pro Engine).
+        // Genuinely per-tenant AI provider key override — see the
+        // creating migration's docblock for the full 3-tier resolution
+        // order (tenant -> platform social_provider_configs -> env).
+        // Super-Admin-set via the same AccountController::update()
+        // endpoint as logo_url/brand_accent_color above.
+        'gemini_api_key',
+    ];
+
+    /**
+     * gemini_api_key is a secret (a tenant's own AI provider credential)
+     * and must never round-trip into a JSON response the way every other
+     * $fillable Account attribute does by default — this app had no
+     * $hidden array on Account at all before this, because nothing
+     * secret lived on this model until now. Mirrors SocialProviderConfig
+     * ::$hidden's treatment of its own client_secret/webhook_verify_token.
+     *
+     * @var list<string>
+     */
+    protected $hidden = [
+        'gemini_api_key',
     ];
 
     protected function casts(): array
@@ -216,6 +237,9 @@ class Account extends Model
             'allow_instagram' => 'boolean',
             'allow_linkedin' => 'boolean',
             'allow_youtube' => 'boolean',
+            // Same Crypt::encryptString/decryptString transparent cast
+            // used for SocialProviderConfig's secret columns.
+            'gemini_api_key' => 'encrypted',
         ];
     }
 

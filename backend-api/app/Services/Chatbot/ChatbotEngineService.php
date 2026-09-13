@@ -6,6 +6,7 @@ use App\Models\Account;
 use App\Models\ChatbotLog;
 use App\Models\ChatbotRule;
 use App\Services\WhatsApp\WhatsAppEngineFactory;
+use App\Services\WhatsApp\WhatsAppJourneyEngine;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -44,9 +45,29 @@ class ChatbotEngineService
     /** Meta's own hard limit on a quick-reply button's title length. */
     private const MAX_BUTTON_TITLE_LENGTH = 20;
 
-    public function handleInboundMessage(int $accountId, string $senderPhone, string $incomingMessage): ?ChatbotLog
+    /**
+     * Module 5 (No-Code WhatsApp Journey Builder) addition: $referral is
+     * an optional trailing param (backward-compatible with both existing
+     * call sites — Internal\WhatsAppInboundController never passes it,
+     * MetaWebhookController passes it only when the inbound message
+     * carried a Click-to-WhatsApp referral). WhatsAppJourneyEngine is
+     * tried FIRST, before any chatbot_rules matching — an active or
+     * newly-triggered journey session owns the conversation; only when
+     * it declines (no session, no flow trigger matched — the common
+     * case for every tenant with zero WhatsAppFlow rows) does this fall
+     * through to the pre-existing process() below, completely unchanged.
+     * See WhatsAppJourneyEngine's class docblock for the full contract.
+     */
+    public function handleInboundMessage(int $accountId, string $senderPhone, string $incomingMessage, ?array $referral = null): ?ChatbotLog
     {
         try {
+            if (app(WhatsAppJourneyEngine::class)->handleInboundMessage($accountId, $senderPhone, $incomingMessage, $referral)) {
+                // Consumed by a Journey — no ChatbotLog row is created for
+                // it (flows do not yet have their own log table, a
+                // disclosed scope gap — see WhatsAppJourneyEngine::send()).
+                return null;
+            }
+
             return $this->process($accountId, $senderPhone, $incomingMessage);
         } catch (Throwable $e) {
             // Both call sites (Meta webhook, Baileys internal endpoint) MUST

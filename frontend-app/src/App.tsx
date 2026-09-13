@@ -16,6 +16,7 @@ import QuotaRequestsPage from './pages/admin/QuotaRequestsPage';
 import AdminDeviceSettingsPage from './pages/admin/AdminDeviceSettingsPage';
 import DeveloperPage from './pages/developer/DeveloperPage';
 import ChatbotPage from './pages/chatbot/ChatbotPage';
+import JourneyBuilderPage from './pages/whatsapp/JourneyBuilderPage';
 import UsersPage from './pages/users/UsersPage';
 import TeamPermissionsPage from './pages/team/TeamPermissionsPage';
 import AuditLogsPage from './pages/audit/AuditLogsPage';
@@ -155,6 +156,14 @@ export default function App() {
               element={
                 <ProtectedRoute permission="manage-chatbot" module="chatbot">
                   <ChatbotPage />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/chatbot/journeys"
+              element={
+                <ProtectedRoute permission="manage-chatbot" module="chatbot">
+                  <JourneyBuilderPage />
                 </ProtectedRoute>
               }
             />

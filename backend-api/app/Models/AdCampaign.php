@@ -13,7 +13,15 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  */
 class AdCampaign extends Model
 {
-    public const OBJECTIVES = ['LEAD_GENERATION', 'MESSAGES', 'TRAFFIC'];
+    /**
+     * Social/Ads Launcher Overhaul — Step 4 (Click-to-WhatsApp Ads).
+     * CLICK_TO_WHATSAPP added alongside the original three — see
+     * MetaAdsService::OBJECTIVE_MAP/OPTIMIZATION_GOAL_MAP and
+     * createAdSet()'s destination_type/promoted_object branch for the
+     * Meta-side mapping, and that class's docblock for the disclosed
+     * [Hypothesis] status of the exact promoted_object shape.
+     */
+    public const OBJECTIVES = ['LEAD_GENERATION', 'MESSAGES', 'TRAFFIC', 'CLICK_TO_WHATSAPP'];
 
     public const STATUS_ACTIVE = 'ACTIVE';
     public const STATUS_PAUSED = 'PAUSED';

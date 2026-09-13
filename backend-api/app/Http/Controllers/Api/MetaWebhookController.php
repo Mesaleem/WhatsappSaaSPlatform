@@ -3,10 +3,13 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Models\Lead;
 use App\Models\PaymentAlert;
+use App\Models\SocialProviderConfig;
 use App\Models\WhatsAppSession;
 use App\Services\Chatbot\ChatbotEngineService;
 use App\Services\Webhooks\WebhookDispatcher;
+use App\Support\PhoneNumberNormalizer;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
@@ -66,12 +69,21 @@ class MetaWebhookController extends Controller
      * module should introduce that table and replace the Log::info calls
      * below with real writes keyed on the Meta `id` (WAMID).
      *
-     * KNOWN GAP (disclosed): Meta's X-Hub-Signature-256 header is not
-     * verified here because no App Secret field was specified/stored by
-     * this module (only Phone Number ID / WABA ID / Access Token). Adding
-     * signature verification requires storing the Meta App Secret and
-     * should be treated as a required hardening item before production
-     * use — see the Module 5 report.
+     * HARDENED (Meta Webhook HMAC-SHA256 Hardening, refactored to be
+     * DB-backed): every request is now passed through
+     * assertValidSignature() below BEFORE any payload parsing/processing
+     * — see that method's docblock for the exact verification and bypass
+     * rules, and for the [Inference] this refactor relies on (that the
+     * WhatsApp Cloud API webhook and the OAuth app credential share one
+     * Meta App Secret). NOTE: this verification covers ONLY this endpoint
+     * (/api/webhooks/meta, WhatsApp Cloud API). SocialWebhookController's
+     * separate leadgen/comment webhook (/api/social/webhook/{provider})
+     * has its own, still-unverified, still-disclosed X-Hub-Signature-256
+     * gap — see that controller's handle() docblock. It was explicitly
+     * out of scope for this task, but now reads the SAME
+     * social_provider_configs.client_secret row this method does, so
+     * closing it no longer needs any new schema — flagged as a low-cost
+     * follow-up in the summary report.
      *
      * Module 9 addition: a 'delivered' status is correlated back to the
      * payment_alerts row that produced this WAMID (payment_alerts.
@@ -97,6 +109,8 @@ class MetaWebhookController extends Controller
      */
     public function handle(Request $request): JsonResponse
     {
+        $this->assertValidSignature($request);
+
         $entries = $request->input('entry', []);
 
         foreach ($entries as $entry) {
@@ -124,7 +138,7 @@ class MetaWebhookController extends Controller
                 $messages = $value['messages'] ?? [];
 
                 if (! empty($messages)) {
-                    $this->handleInboundMessages($value['metadata']['phone_number_id'] ?? null, $messages);
+                    $this->handleInboundMessages($value['metadata']['phone_number_id'] ?? null, $messages, $value['contacts'] ?? []);
                 }
             }
         }
@@ -133,6 +147,94 @@ class MetaWebhookController extends Controller
         // outcome; failures here are logged, never surfaced as non-200s,
         // to avoid Meta disabling the webhook after repeated failures.
         return response()->json(['received' => true]);
+    }
+
+    /**
+     * Meta Webhook HMAC-SHA256 Hardening — DB-backed refactor.
+     *
+     * Verifies the X-Hub-Signature-256 header Meta signs every webhook
+     * delivery with, computed over the RAW (unparsed) request body. No
+     * .env/config value is read for the secret any more — it is fetched
+     * dynamically from social_provider_configs (provider='meta'),
+     * .client_secret, via SocialProviderConfig::findByProviderCached()
+     * (the same cached-lookup, cache-invalidated-on-save/delete helper
+     * SocialAuthController's OAuth flow already relies on — Cache::
+     * remember(3600s), so this adds no extra query per webhook delivery
+     * once warm). hash_equals() is used for the comparison to avoid a
+     * timing side channel on the byte-by-byte match.
+     *
+     * [Inference, load-bearing — flagged]: this reuses the SAME
+     * client_secret column SocialAuthController uses as the Meta App's
+     * OAuth client_secret, rather than a distinct field. Meta's platform
+     * model has exactly one "App Secret" per Meta App (App Dashboard >
+     * Settings > Basic), and that one value is documented to serve BOTH
+     * as the OAuth client secret AND as the HMAC key for X-Hub-
+     * Signature-256 on every webhook subscription registered under that
+     * App — so this is correct as long as this platform's WhatsApp Cloud
+     * API integration and its Marketing/Lead-Ads OAuth integration are
+     * registered under the SAME Meta App. If they are ever split across
+     * two different Meta Apps, this column would hold the wrong App's
+     * secret for this endpoint and a dedicated field would be needed —
+     * nothing in this codebase's schema currently distinguishes that
+     * case, so it could not be verified from code alone.
+     *
+     * Bypass: app()->environment('local') only — local/dev convenience,
+     * so a developer's own Meta App Secret does not need to be seeded
+     * just to exercise this endpoint with hand-crafted test payloads. No
+     * config-based off-toggle exists any more (this task removed it);
+     * every other environment always verifies.
+     *
+     * When not bypassed:
+     *   - A missing X-Hub-Signature-256 header is rejected.
+     *   - An empty/unconfigured client_secret for provider='meta' (no
+     *     row, or a row with a null client_secret) is treated as a
+     *     misconfiguration and rejected (fail CLOSED, not open) — same
+     *     reasoning as before this refactor: verifying "on" with nothing
+     *     to verify against would silently accept any payload.
+     *   - A signature that does not match is rejected.
+     * Every rejection path logs a Log::warning() with the requester IP
+     * and whether the header was present/well-formed (never the computed
+     * or expected signature value, and never the secret itself), then
+     * aborts with HTTP 403 — unchanged from the prior version, kept for
+     * consistency with this controller's verify() method.
+     */
+    private function assertValidSignature(Request $request): void
+    {
+        if (app()->environment('local')) {
+            return;
+        }
+
+        $header = (string) $request->header('X-Hub-Signature-256', '');
+
+        if ($header === '') {
+            Log::warning('Meta webhook rejected: missing X-Hub-Signature-256 header.', [
+                'ip' => $request->ip(),
+            ]);
+
+            abort(403, 'Missing webhook signature.');
+        }
+
+        $appSecret = (string) (SocialProviderConfig::findByProviderCached('meta')?->client_secret ?? '');
+
+        if ($appSecret === '') {
+            Log::warning('Meta webhook rejected: signature verification could not run — no Meta App Secret configured (social_provider_configs, provider=meta, client_secret is empty).', [
+                'ip' => $request->ip(),
+            ]);
+
+            abort(403, 'Webhook signature verification is misconfigured.');
+        }
+
+        $expected = 'sha256=' . hash_hmac('sha256', $request->getContent(), $appSecret);
+
+        if (! hash_equals($expected, $header)) {
+            Log::warning('Meta webhook rejected: X-Hub-Signature-256 signature mismatch.', [
+                'ip' => $request->ip(),
+                'header_present' => true,
+                'header_length' => strlen($header),
+            ]);
+
+            abort(403, 'Invalid webhook signature.');
+        }
     }
 
     private function fireDeliveredWebhook(string $wamid): void
@@ -159,9 +261,16 @@ class MetaWebhookController extends Controller
     }
 
     /**
+     * Step 4 (Click-to-WhatsApp Ads) addition: $contacts is the sibling
+     * value.contacts[] array from the same webhook payload (WhatsApp
+     * Cloud API sends the sender's profile name there, keyed by wa_id) —
+     * used only to enrich a captured CTWA lead's lead_name; unrelated to
+     * chatbot routing below.
+     *
      * @param array<int, array<string, mixed>> $messages
+     * @param array<int, array<string, mixed>> $contacts
      */
-    private function handleInboundMessages(?string $phoneNumberId, array $messages): void
+    private function handleInboundMessages(?string $phoneNumberId, array $messages, array $contacts = []): void
     {
         if (! $phoneNumberId) {
             Log::warning('Meta webhook delivered inbound message(s) with no phone_number_id in metadata — cannot resolve tenant.');
@@ -187,8 +296,48 @@ class MetaWebhookController extends Controller
                 continue;
             }
 
-            if ($type !== 'text') {
-                Log::debug('Meta webhook: non-text inbound message type not matched against chatbot rules.', [
+            // Step 4 (Click-to-WhatsApp Ads): a message carrying a
+            // `referral` object is the first inbound message after a
+            // user tapped a CLICK_TO_WHATSAPP ad — [Hypothesis],
+            // documented WhatsApp Cloud API behavior (message.referral,
+            // not nested under `context`). Captured BEFORE the
+            // text-only/interactive gate below since referral can in
+            // principle accompany any inbound message type, and
+            // regardless of type this must still fall through to the
+            // Chatbot/Journey engine afterward exactly as before.
+            $referral = $message['referral'] ?? null;
+
+            if (! empty($referral)) {
+                $this->captureCtwaLead($accountId, $from, $message, $contacts);
+            }
+
+            // Module 5 (No-Code WhatsApp Journey Builder) widening: a
+            // 'question' node with input_type buttons/list sends an
+            // interactive message, so the customer's ANSWER arrives as
+            // type='interactive', not 'text'. Previously this whole type
+            // was dropped before reaching ChatbotEngineService — now the
+            // button/list reply's title (or id, if no title) is flattened
+            // into a plain string and passed through the SAME
+            // handleInboundMessage(string $incomingMessage) signature
+            // chatbot_rules already used for plain text, so
+            // WhatsAppJourneyEngine (and, unaffected, chatbot_rules
+            // matching for ordinary text) needs no separate code path.
+            // Every OTHER non-text type (image, audio, location, ...) is
+            // still dropped exactly as before.
+            $body = match ($type) {
+                'text' => (string) ($message['text']['body'] ?? ''),
+                'interactive' => (string) (
+                    $message['interactive']['button_reply']['title']
+                    ?? $message['interactive']['list_reply']['title']
+                    ?? $message['interactive']['button_reply']['id']
+                    ?? $message['interactive']['list_reply']['id']
+                    ?? ''
+                ),
+                default => null,
+            };
+
+            if ($body === null) {
+                Log::debug('Meta webhook: unsupported inbound message type not matched against chatbot rules/journeys.', [
                     'account_id' => $accountId,
                     'type' => $type,
                 ]);
@@ -196,13 +345,66 @@ class MetaWebhookController extends Controller
                 continue;
             }
 
-            $body = $message['text']['body'] ?? '';
-
             if (trim($body) === '') {
                 continue;
             }
 
-            app(ChatbotEngineService::class)->handleInboundMessage($accountId, $from, $body);
+            app(ChatbotEngineService::class)->handleInboundMessage($accountId, $from, $body, $referral);
         }
+    }
+
+    /**
+     * Step 4 (Click-to-WhatsApp Ads) — Inbound Referral Lead Capture.
+     * Creates/upserts a Lead row (provider = 'whatsapp_ctwa') BEFORE
+     * control passes to the Chatbot engine, per this step's explicit
+     * instruction. Upserted on provider_lead_id = the inbound message's
+     * WAMID (message.id) for the same redelivery-safety guarantee
+     * MetaLeadWebhookHandler relies on for Lead Ads leads (leads.
+     * provider_lead_id is a unique index) — a Meta webhook retry of the
+     * SAME message therefore updates the same row instead of creating a
+     * duplicate. Deliberately does NOT also run
+     * Lead::isDuplicatePhoneWithin24Hours() — that guard exists to
+     * collapse repeat FORM submissions from the same person; a CTWA
+     * referral is an individual ad-click attribution event, and
+     * intentionally allowed to recur (e.g. the same person clicking a
+     * different ad, or messaging again days later).
+     *
+     * @param array<string, mixed> $message
+     * @param array<int, array<string, mixed>> $contacts
+     */
+    private function captureCtwaLead(int $accountId, string $from, array $message, array $contacts): void
+    {
+        $referral = $message['referral'] ?? [];
+        $wamid = $message['id'] ?? null;
+
+        if (! $wamid) {
+            Log::warning('Meta webhook: CTWA referral message had no WAMID — cannot upsert Lead safely, skipped.', [
+                'account_id' => $accountId,
+            ]);
+
+            return;
+        }
+
+        $normalizedPhone = PhoneNumberNormalizer::normalize($from);
+
+        $leadName = null;
+        foreach ($contacts as $contact) {
+            if (($contact['wa_id'] ?? null) === $from) {
+                $leadName = $contact['profile']['name'] ?? null;
+                break;
+            }
+        }
+
+        Lead::updateOrCreate(
+            ['provider_lead_id' => (string) $wamid],
+            [
+                'account_id' => $accountId,
+                'provider' => 'whatsapp_ctwa',
+                'ad_id' => $referral['source_id'] ?? null,
+                'lead_name' => $leadName,
+                'lead_phone' => $normalizedPhone !== '' ? $normalizedPhone : $from,
+                'raw_field_data' => $referral,
+            ]
+        );
     }
 }

@@ -9,6 +9,7 @@ use App\Models\WhatsAppSession;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Throwable;
 
 class WhatsAppController extends Controller
@@ -138,6 +139,36 @@ class WhatsAppController extends Controller
         return $this->forwardToQrEngine('logout', $account->id);
     }
 
+    /**
+     * [Bug fix, disclosed]: previously this returned qr-engine-service's
+     * raw HTTP status verbatim (`$response->status()`) to the browser. If
+     * qr-engine-service's requireInternalSecret() middleware rejects the
+     * X-Internal-Secret header (e.g. INTERNAL_API_SECRET differs between
+     * backend-api's .env and qr-engine-service's .env — both are
+     * git-ignored, machine-local files that must be kept identical by
+     * hand; see qr-engine-service/.env.example), it replies 401 — and
+     * that bare 401 reached the browser as the response to a perfectly
+     * authenticated Laravel request. frontend-app's axios interceptor
+     * (axiosInstance.ts) treats ANY 401 from ANY endpoint as "this
+     * user's own session token is invalid" and force-logs them out
+     * (AuthContext's AUTH_EVENT_UNAUTHORIZED handler) — so an internal
+     * service-to-service credential mismatch masqueraded as the user's
+     * own WhatsApp Cloud API / Sanctum session being invalid, logging
+     * out a perfectly-authenticated user the instant they clicked
+     * Connect WhatsApp. Root cause confirmed by reading server.js's
+     * requireInternalSecret() and axiosInstance.ts's response
+     * interceptor together.
+     *
+     * Fix: an upstream 401/403 (an authentication/authorization failure
+     * between OUR OWN two backend services) is remapped to 502 Bad
+     * Gateway before it ever reaches the browser — a 502 is not
+     * special-cased by the frontend interceptor, so it surfaces as an
+     * ordinary "failed to start" error/toast instead of a global logout.
+     * Every other upstream failure status (422 bad payload, 500, etc.)
+     * still passes through unchanged, exactly as before this fix — only
+     * 401/403 are remapped, since those are the two statuses the
+     * frontend's global interceptor treats as "log the user out."
+     */
     private function forwardToQrEngine(string $path, int $accountId): JsonResponse
     {
         $baseUrl = rtrim((string) config('services.qr_engine.url'), '/');
@@ -154,9 +185,23 @@ class WhatsAppController extends Controller
         }
 
         if ($response->failed()) {
+            $status = $response->status();
+
+            if ($status === 401 || $status === 403) {
+                Log::error('qr-engine-service rejected our internal request (401/403) — likely an INTERNAL_API_SECRET mismatch between backend-api/.env and qr-engine-service/.env on this machine. Remapped to 502 so this never masquerades as the calling user\'s own session being invalid.', [
+                    'path' => $path,
+                    'account_id' => $accountId,
+                    'upstream_status' => $status,
+                ]);
+
+                return response()->json([
+                    'message' => 'The WhatsApp engine service rejected the request (internal configuration error).',
+                ], 502);
+            }
+
             return response()->json([
                 'message' => $response->json('message') ?? 'The WhatsApp engine service rejected the request.',
-            ], $response->status());
+            ], $status);
         }
 
         return response()->json($response->json());

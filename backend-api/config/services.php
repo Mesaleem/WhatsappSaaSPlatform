@@ -68,4 +68,17 @@ return [
         'model' => env('ANTHROPIC_MODEL', 'claude-3-5-haiku-latest'),
     ],
 
+    // Social/Ads Launcher Overhaul — Step 1 (Gemini Pro Engine). Final,
+    // lowest-priority fallback in CopywriterService's key resolution —
+    // see accounts.gemini_api_key's migration docblock for the full
+    // tenant -> platform (social_provider_configs) -> env order. Model
+    // defaults to 'gemini-1.5-pro' rather than the deprecated/retired
+    // 'gemini-pro' model id — [Disclosed]: "Gemini Pro" in the current
+    // Generative Language API is the 1.5-pro model family, not a
+    // still-servable 'gemini-pro' id.
+    'gemini' => [
+        'key' => env('GEMINI_API_KEY'),
+        'model' => env('GEMINI_MODEL', 'gemini-1.5-pro'),
+    ],
+
 ];

@@ -25,6 +25,7 @@ use App\Http\Controllers\Api\MessageTemplateController;
 use App\Http\Controllers\Api\Internal\WhatsAppStatusController;
 use App\Http\Controllers\Api\Internal\WhatsAppInboundController;
 use App\Http\Controllers\Api\ChatbotRuleController;
+use App\Http\Controllers\Api\WhatsAppFlowController;
 use App\Http\Controllers\Api\ChatbotLogController;
 use App\Http\Controllers\Api\TeamController;
 use App\Http\Controllers\Api\QuotaRequestController;
@@ -35,16 +36,25 @@ use App\Http\Controllers\Api\MailLogController;
 use App\Http\Controllers\Api\NotificationBroadcastController;
 use App\Http\Controllers\Api\SocialAuthController;
 use App\Http\Controllers\Api\AdCampaignController;
+use App\Http\Controllers\Api\OrganicPostController;
 use App\Http\Controllers\Api\CommentAutomationRuleController;
 use App\Http\Controllers\Api\SocialInboxController;
 use App\Http\Controllers\Api\SocialWebhookController;
 use App\Http\Controllers\Api\Admin\SocialGatewayController;
 use App\Http\Controllers\Api\LeadController;
 use App\Http\Controllers\Api\AICopywriterController;
+use App\Http\Controllers\Api\SocialMediaController;
 use App\Http\Controllers\Api\SocialReportController;
 use Illuminate\Support\Facades\Route;
 
 Route::post('/auth/login', [AuthController::class, 'login']);
+
+// Social/Ads Launcher Overhaul — Step 2. Publicly fetchable ad-creative
+// media (images/videos a tenant uploaded) — see SocialMediaController::
+// show()'s docblock for why this is deliberately NOT behind auth:sanctum.
+Route::get('/media/social/{path}', [SocialMediaController::class, 'show'])
+    ->where('path', '.*')
+    ->name('social.media.show');
 
 // Service-to-service webhook from qr-engine-service. Deliberately NOT under
 // auth:sanctum — there is no user, only a shared secret (VerifyInternalSecret).
@@ -230,6 +240,33 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::middleware('permission:manage-chatbot|whatsapp.delete')->delete('/rules/{id}', [ChatbotRuleController::class, 'destroy']);
         });
 
+        // Module 5 — No-Code WhatsApp Journey Builder. Reuses the SAME
+        // manage-chatbot permission tier (+ the existing granular
+        // whatsapp.view/create/edit/delete permissions already seeded
+        // above) rather than introducing a new permission slug — a
+        // Journey is, functionally, an advanced/multi-turn evolution of
+        // the chatbot_rules feature this whole route group already
+        // gates, and every role that can manage chatbot rules today
+        // manages journeys too without any seeder change (avoiding
+        // ANOTHER pending "re-run the seeder" manual step on top of the
+        // two already-pending migrations — see this session's summary
+        // report). Gated on the SAME 'chatbot' module slug for the same
+        // reason.
+        Route::middleware('module.guard:chatbot')->prefix('whatsapp/flows')->group(function () {
+            Route::middleware('permission:manage-chatbot|whatsapp.view')->group(function () {
+                Route::get('/', [WhatsAppFlowController::class, 'index']);
+                Route::get('/{id}', [WhatsAppFlowController::class, 'show']);
+                Route::get('/{id}/sessions', [WhatsAppFlowController::class, 'sessions']);
+            });
+            Route::middleware('permission:manage-chatbot|whatsapp.create')->post('/', [WhatsAppFlowController::class, 'store']);
+            Route::middleware('permission:manage-chatbot|whatsapp.edit')->group(function () {
+                Route::put('/{id}', [WhatsAppFlowController::class, 'update']);
+                Route::post('/{id}/toggle', [WhatsAppFlowController::class, 'toggle']);
+                Route::post('/{id}/test', [WhatsAppFlowController::class, 'test']);
+            });
+            Route::middleware('permission:manage-chatbot|whatsapp.delete')->delete('/{id}', [WhatsAppFlowController::class, 'destroy']);
+        });
+
         // Social Media Marketing & Meta Ads Automation Expansion (Phase 1).
         // Gated the same tier as chatbot/team above: an active-subscription
         // admin-console feature. redirect()/index()/bind()/destroy() all
@@ -317,6 +354,28 @@ Route::middleware('auth:sanctum')->group(function () {
         // Ad Creation Wizard on MetaAdsPage.tsx).
         Route::middleware('permission:launch-meta-ads')->prefix('social/ai')->group(function () {
             Route::post('/generate', [AICopywriterController::class, 'generate']);
+        });
+
+        // Social/Ads Launcher Overhaul — Step 2. Multipart media upload
+        // for the Ad Creation Wizard's creative step — same permission
+        // tier as the AI Copywriter and the launcher itself, since all
+        // three are steps of the one wizard. See SocialMediaController.
+        Route::middleware('permission:launch-meta-ads')->prefix('social/media')->group(function () {
+            Route::post('/upload', [SocialMediaController::class, 'upload']);
+        });
+
+        // Social/Ads Launcher Overhaul — Step 3 (Organic Multi-Channel
+        // Publishing Engine). Gated on manage-social-accounts + the
+        // 'social_accounts' module (NOT launch-meta-ads/'meta_ads' — an
+        // organic, budget-free post is asset administration/content
+        // publishing, the same tier as connecting the asset itself in
+        // Phase 1 above, not a paid-campaign action). Both the
+        // permission and module slug already exist and are already
+        // seeded/co-assigned (RolePermissionSeeder) — no seeder changes
+        // needed. See OrganicPostController/OrganicPublishService.
+        Route::middleware(['module.guard:social_accounts', 'permission:manage-social-accounts'])->prefix('social/organic-posts')->group(function () {
+            Route::get('/', [OrganicPostController::class, 'index']);
+            Route::post('/', [OrganicPostController::class, 'store']);
         });
 
         // Social Media Marketing & Meta Ads Automation Expansion — Final
