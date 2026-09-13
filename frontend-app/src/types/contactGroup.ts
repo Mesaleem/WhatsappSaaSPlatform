@@ -47,3 +47,18 @@ export interface CreateContactGroupPayload {
   group_type?: ContactGroupType;
   contacts?: ContactGroupContactInput[];
 }
+
+/** POST /api/groups/{id}/send-template — payload accepted by contactGroupsService.sendTemplate(). */
+export interface SendGroupTemplatePayload {
+  template_id: number;
+  variables: Record<string, string>;
+}
+
+export interface SendGroupTemplateResponse {
+  success: boolean;
+  message: string;
+  /** Present only when success === true. */
+  dispatch_id?: number;
+  /** Present only when success === true — 1 for a native_wa_group (one message, one credit), N for an internal_segment (one credit per member). */
+  queued_recipients_count?: number;
+}

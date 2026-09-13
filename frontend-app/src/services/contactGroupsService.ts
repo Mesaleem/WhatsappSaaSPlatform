@@ -4,6 +4,8 @@ import type {
   ContactGroup,
   ContactGroupContactInput,
   CreateContactGroupPayload,
+  SendGroupTemplatePayload,
+  SendGroupTemplateResponse,
 } from '../types/contactGroup';
 
 /**
@@ -45,6 +47,19 @@ const contactGroupsService = {
 
   remove(id: number) {
     return axiosInstance.delete<{ success: boolean }>(`/groups/${id}`).then((res) => res.data);
+  },
+
+  /**
+   * POST /api/groups/{id}/send-template — the internal, session-authenticated
+   * counterpart to the external Developer API's POST /api/v1/send-message
+   * (recipient_type: "group"). Sends ONE template to ONE group; a caller
+   * sending to multiple groups calls this once per group id (see
+   * SendAlertPage.tsx's group-recipient submit handler).
+   */
+  sendTemplate(groupId: number, payload: SendGroupTemplatePayload) {
+    return axiosInstance
+      .post<SendGroupTemplateResponse>(`/groups/${groupId}/send-template`, payload)
+      .then((res) => res.data);
   },
 };
 

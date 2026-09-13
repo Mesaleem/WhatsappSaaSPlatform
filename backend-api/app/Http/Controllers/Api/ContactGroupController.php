@@ -9,6 +9,7 @@ use App\Jobs\SyncNativeWhatsAppGroupParticipantsJob;
 use App\Models\Account;
 use App\Models\ContactGroup;
 use App\Models\ContactGroupMember;
+use App\Services\Groups\GroupMessageDispatcher;
 use App\Support\PhoneNumberNormalizer;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -279,5 +280,75 @@ class ContactGroupController extends Controller
         $group->delete();
 
         return response()->json(['success' => true]);
+    }
+
+    /**
+     * POST /api/groups/{id}/send-template — internal, Sanctum-authenticated
+     * counterpart to Api\V1\TemplateMessageController::sendMessage()'s
+     * recipient_type=group branch. Added so the web app's own Send Alert
+     * screen can send an approved template straight to a Contact Group,
+     * not only via the external Developer API (which, until this action
+     * existed, was the ONLY way to trigger a group send at all — there
+     * was no session-authenticated route for it).
+     *
+     * Delegates to the exact same GroupMessageDispatcher::dispatch() the
+     * external API path already uses — identical quota reservation,
+     * template-approval, and module-guard rules, nothing forked or
+     * duplicated. Tagged source: 'web_template', the SAME
+     * MessageDispatchLog source label MessageTemplateController::send()'s
+     * individual-recipient path already uses for this same screen — so
+     * Analytics/Message Logs need no new source badge or filter entry
+     * for a group send made from here (SOURCE_BADGE/SOURCE_OPTIONS in
+     * AnalyticsPage.tsx/MessageLogsPage.tsx already cover 'web_template').
+     *
+     * No apiKeyId is passed (stays null) — this request is Sanctum
+     * session-authenticated, not API-key authenticated, so there is no
+     * ApiKey row to attribute the send to.
+     *
+     * {id} is the ContactGroup id. Not separately looked up here before
+     * calling dispatch() — GroupMessageDispatcher::dispatch() itself
+     * re-queries ContactGroup::where('account_id', $accountId)->find(),
+     * the same tenant-scoped lookup every other action in this
+     * controller relies on, so a tenant can never target another
+     * tenant's group by guessing/incrementing an id.
+     */
+    public function sendTemplate(Request $request, int $id): JsonResponse
+    {
+        $account = $this->requireAccount($request);
+
+        $data = $request->validate([
+            'template_id' => ['required', 'integer', 'exists:message_templates,id'],
+            'variables' => ['sometimes', 'array'],
+        ]);
+
+        $result = GroupMessageDispatcher::dispatch(
+            $account->id,
+            $id,
+            $data['template_id'],
+            $data['variables'] ?? [],
+            source: 'web_template',
+        );
+
+        return match ($result['status']) {
+            'queued' => response()->json([
+                'success' => true,
+                'message' => 'Group message queued.',
+                'dispatch_id' => $result['dispatch_id'],
+                'queued_recipients_count' => $result['queued_recipients_count'],
+            ]),
+            'group_access_denied' => response()->json(['success' => false, 'message' => $result['message']], 403),
+            'empty_group' => response()->json(['success' => false, 'message' => $result['message']], 422),
+            'template_not_approved' => response()->json(['success' => false, 'message' => $result['message']], 422),
+            'not_found' => response()->json(['success' => false, 'message' => $result['message']], 404),
+            'disconnected' => response()->json(['success' => false, 'message' => $result['message'], 'error_code' => 'WHATSAPP_DISCONNECTED'], 422),
+            'quota_exhausted' => response()->json(['success' => false, 'message' => $result['message']], 403),
+            'insufficient_quota' => response()->json([
+                'success' => false,
+                'message' => "This group dispatch requires {$result['required']} credits, but your account only has {$result['remaining']} remaining credits.",
+            ], 402),
+            'group_not_synced' => response()->json(['success' => false, 'message' => $result['message'] ?? 'This native WhatsApp group has not finished syncing yet.'], 422),
+            'unsupported_engine' => response()->json(['success' => false, 'message' => $result['message'] ?? 'This WhatsApp engine does not support group messaging.'], 422),
+            default => response()->json(['success' => false, 'message' => $result['message'] ?? 'Could not queue this group dispatch.'], 422),
+        };
     }
 }

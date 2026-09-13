@@ -495,6 +495,14 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::post('/create', [ContactGroupController::class, 'store']);
             Route::post('/add-contacts', [ContactGroupController::class, 'addContacts']);
             Route::delete('/{id}', [ContactGroupController::class, 'destroy']);
+            // [New, disclosed]: previously there was NO session-authenticated
+            // way to send a message to a group at all — GroupMessageDispatcher
+            // was only reachable from the external, API-key-gated
+            // /api/v1/send-message endpoint. This is the internal, Sanctum
+            // counterpart the Send Alert screen now calls. Same
+            // permission:send-messages + module.guard:contact_groups gate as
+            // every other route in this group — no new permission tier.
+            Route::post('/{id}/send-template', [ContactGroupController::class, 'sendTemplate']);
         });
 
         // Module 7: analytics KPIs/charts — same sensitivity tier as
