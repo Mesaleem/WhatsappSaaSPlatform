@@ -36,8 +36,18 @@ return [
     ],
 
     // qr-engine-service (Module 4): Baileys QR microservice bridge.
+    // [Windows IPv6/IPv4 resolution fix, disclosed]: default changed from
+    // 'localhost' to the literal '127.0.0.1'. On Windows, resolving the
+    // hostname 'localhost' can try the IPv6 loopback (::1) before falling
+    // back to IPv4, costing a real connect delay (or an outright failure
+    // if qr-engine-service is only bound to IPv4) on every single call —
+    // this was a concrete, reported cause of cross-device "the Node
+    // service isn't reachable" symptoms after pulling this repo onto a
+    // new machine. A literal IP skips hostname resolution entirely, so
+    // there is nothing to get ambiguous. Pairs with qr-engine-service's
+    // own explicit HOST bind in server.js.
     'qr_engine' => [
-        'url' => env('QR_ENGINE_SERVICE_URL', 'http://localhost:4000'),
+        'url' => env('QR_ENGINE_SERVICE_URL', 'http://127.0.0.1:4000'),
         // Shared secret — must be IDENTICAL to qr-engine-service's INTERNAL_API_SECRET.
         'internal_secret' => env('INTERNAL_API_SECRET'),
     ],

@@ -169,6 +169,18 @@ class WhatsAppController extends Controller
      * 401/403 are remapped, since those are the two statuses the
      * frontend's global interceptor treats as "log the user out."
      */
+    /**
+     * [Timeout hardening, disclosed]: connectTimeout() and timeout() are
+     * set SEPARATELY (previously only a single ->timeout(10) covered
+     * both). connectTimeout() bounds only the TCP handshake — the phase
+     * that actually hangs when the target host/port is unreachable or
+     * mis-resolved (e.g. the 'localhost' -> ::1 vs 127.0.0.1 ambiguity
+     * this same fix's config/services.php change addresses) — while
+     * timeout() bounds the request end-to-end including qr-engine-
+     * service's own response time. Both at 5s per spec; previously a
+     * hung TCP connect could silently eat the full 10s before the
+     * generic timeout ever kicked in.
+     */
     private function forwardToQrEngine(string $path, int $accountId): JsonResponse
     {
         $baseUrl = rtrim((string) config('services.qr_engine.url'), '/');
@@ -176,9 +188,16 @@ class WhatsAppController extends Controller
 
         try {
             $response = Http::withHeaders(['X-Internal-Secret' => $secret])
-                ->timeout(10)
+                ->connectTimeout(5)
+                ->timeout(5)
                 ->post("{$baseUrl}/api/qr/{$path}", ['account_id' => $accountId]);
         } catch (Throwable $e) {
+            Log::error('qr-engine-service is unreachable — connection or request timed out or failed outright.', [
+                'path' => $path,
+                'account_id' => $accountId,
+                'exception' => $e->getMessage(),
+            ]);
+
             return response()->json([
                 'message' => 'The WhatsApp engine service is unreachable. Please try again shortly.',
             ], 502);

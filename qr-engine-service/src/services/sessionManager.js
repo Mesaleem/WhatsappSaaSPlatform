@@ -163,7 +163,23 @@ export async function startSession(accountId, broadcast, { isReconnect = false }
         const loggedOut = statusCode === DisconnectReason.loggedOut;
         console.log(`[qr-engine] CONNECTION_CLOSED account_id=${id} status_code=${statusCode ?? 'unknown'} logged_out=${loggedOut}`);
 
-        if (loggedOut) {
+        // [Corrupted-session cleanup, disclosed]: badSession means
+        // Baileys itself has determined this account's auth state
+        // (sessions/<accountId>/ — this codebase's actual session
+        // directory; there is no auth_info_baileys or .wwebjs_auth here,
+        // those are whatsapp-web.js/Puppeteer naming, a different library
+        // this codebase does not use) is corrupt and cannot be resumed.
+        // Previously this fell through to the generic "any other close
+        // reason -> reconnect" branch below, which would retry up to
+        // MAX_RECONNECT_ATTEMPTS times against the SAME corrupted files —
+        // guaranteed to keep failing the same way every time, never
+        // actually fixing anything, and only delaying the moment the
+        // caller could start a fresh pairing. Treated the same as
+        // loggedOut: wipe the corrupted files immediately so the very
+        // next start-session call begins from a clean pairing instead of
+        // silently hanging/looping against unrecoverable state.
+        if (loggedOut || statusCode === DisconnectReason.badSession) {
+          console.log(`[qr-engine] CONNECTION_CLOSED account_id=${id} clearing ${loggedOut ? 'logged-out' : 'corrupted'} session files`);
           await clearSessionFiles(id);
           sessions.delete(id);
           broadcast(id, { status: 'disconnected', qr: null });
@@ -178,7 +194,16 @@ export async function startSession(accountId, broadcast, { isReconnect = false }
 
         if (record.reconnectAttempts > MAX_RECONNECT_ATTEMPTS) {
           logger.error({ accountId: id }, 'giving up after max reconnect attempts');
-          console.log(`[qr-engine] CONNECTION_CLOSED account_id=${id} giving up after ${MAX_RECONNECT_ATTEMPTS} reconnect attempts`);
+          console.log(`[qr-engine] CONNECTION_CLOSED account_id=${id} giving up after ${MAX_RECONNECT_ATTEMPTS} reconnect attempts, clearing session files`);
+          // [Corrupted-session cleanup, disclosed]: repeatedly failing to
+          // reconnect for a non-loggedOut, non-badSession reason (a flaky
+          // network, a hung Baileys handshake) still very often means the
+          // local auth files are in a state Baileys can't cleanly resume
+          // from. Previously these files were left on disk after giving
+          // up, so the NEXT start-session call would try to resume the
+          // same bad state and could fail the same way again. Clearing
+          // them here guarantees the next attempt always starts clean.
+          await clearSessionFiles(id);
           sessions.delete(id);
           broadcast(id, { status: 'disconnected', qr: null });
           await notifyBackend(id, 'disconnected');

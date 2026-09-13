@@ -6,13 +6,65 @@ import { Server as SocketIOServer } from 'socket.io';
 import { startSession, logoutSession, getStatus, getQr, sendMessage } from './services/sessionManager.js';
 import { verifyAccountAccess } from './services/backendClient.js';
 
+/**
+ * [Cross-device boot-stall hardening, disclosed]: added because a "silent
+ * stall" during boot (nodemon prints "starting `node src/server.js`" and
+ * then nothing — no "listening on :PORT", no error) is exactly what an
+ * uncaught synchronous throw or an unhandled promise rejection during
+ * module load looks like when nothing is listening for it: Node's default
+ * behavior for an uncaughtException IS to print a stack trace and exit,
+ * but if something upstream (a wrapper script, a misbehaving library) or a
+ * future refactor ever attaches an empty/no-op handler, that default is
+ * silently lost. These two listeners are placed as the very first thing
+ * this file does — before any other import's top-level code has a chance
+ * to run — specifically so a broken dependency load (a native binding
+ * mismatch, a bad optional dependency, etc.) prints its full stack trace
+ * instead of vanishing. uncaughtException logs and exits(1) — Node's own
+ * guidance is that the process is in an undefined state afterward and
+ * should not keep running; nodemon will auto-restart it in dev.
+ * unhandledRejection only logs — most such rejections here are recoverable
+ * (an individual Baileys session's own promise chain), and process-wide
+ * exit-on-every-rejection is unnecessarily aggressive for a multi-tenant
+ * service where one account's failure must not take down every other
+ * account's live session.
+ */
+process.on('uncaughtException', (err) => {
+  console.error('[server] FATAL uncaughtException — this process cannot continue safely:', err);
+  process.exit(1);
+});
+
+process.on('unhandledRejection', (reason) => {
+  console.error('[server] unhandledRejection (process continues running):', reason);
+});
+
 const PORT = process.env.PORT || 4000;
+// [Windows IPv6/IPv4 resolution fix, disclosed]: binding explicitly to an
+// IPv4 literal instead of leaving the host unspecified removes any
+// ambiguity about which interface this process is actually reachable on.
+// Pairs with the matching change on the Laravel side (config/services.php
+// qr_engine.url default: 'localhost' -> '127.0.0.1') — 'localhost' can
+// resolve to the IPv6 loopback (::1) first on Windows, and if this
+// process were only listening on IPv4, that would cost a slow
+// connect-then-fallback delay (or an outright failure) before the caller
+// route to 127.0.0.1. Overridable via HOST for a LAN-reachable deployment.
+const HOST = process.env.HOST || '0.0.0.0';
 const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || 'http://localhost:5173';
 const INTERNAL_API_SECRET = process.env.INTERNAL_API_SECRET || '';
 
 const app = express();
 app.use(cors({ origin: FRONTEND_ORIGIN }));
 app.use(express.json());
+
+// [Diagnostic logging, disclosed]: confirms whether a request from
+// Laravel is reaching this process at all — the exact symptom reported
+// ("no incoming request logs appear in the Node terminal") is otherwise
+// impossible to distinguish from "Laravel never sent the request" versus
+// "Laravel sent it but it never arrived" versus "it arrived but a
+// downstream handler swallowed it silently". Placed before every route.
+app.use((req, res, next) => {
+  console.log(`[INCOMING REQUEST] ${req.method} ${req.originalUrl}`);
+  next();
+});
 
 const httpServer = http.createServer(app);
 const io = new SocketIOServer(httpServer, {
@@ -64,11 +116,39 @@ io.on('connection', (socket) => {
   });
 });
 
-/** Only backend-api should ever be able to call these two routes. */
+/**
+ * Only backend-api should ever be able to call these two routes.
+ *
+ * [Diagnostic logging added, disclosed]: this never used to log a
+ * rejection at all, so a secret mismatch between this process and
+ * backend-api was invisible from qr-engine-service's own console — the
+ * only symptom was a bare 401 on the Laravel side. The most common cause
+ * in practice: INTERNAL_API_SECRET is loaded once at process startup
+ * (`import 'dotenv/config'` in server.js) — editing .env after this
+ * process is already running does NOT take effect until it is
+ * restarted. Neither branch below ever logs the secret values
+ * themselves, only which failure mode occurred.
+ */
 function requireInternalSecret(req, res, next) {
-  if (!INTERNAL_API_SECRET || req.header('X-Internal-Secret') !== INTERNAL_API_SECRET) {
+  if (!INTERNAL_API_SECRET) {
+    console.warn(
+      '[server] Rejected an internal request: this process has no INTERNAL_API_SECRET loaded (env var is empty/unset). ' +
+        'If you just created or edited qr-engine-service/.env, restart this process — dotenv only loads .env once, at startup.',
+    );
     return res.status(401).json({ message: 'Unauthorized.' });
   }
+
+  const provided = req.header('X-Internal-Secret');
+
+  if (provided !== INTERNAL_API_SECRET) {
+    console.warn(
+      `[server] Rejected an internal request from ${req.ip}: X-Internal-Secret header ${
+        provided ? 'did not match this process\'s INTERNAL_API_SECRET' : 'was missing'
+      }. If backend-api/.env's INTERNAL_API_SECRET was changed recently, restart BOTH backend-api and this process so they agree again.`,
+    );
+    return res.status(401).json({ message: 'Unauthorized.' });
+  }
+
   next();
 }
 
@@ -128,6 +208,27 @@ app.post('/api/message/send', requireInternalSecret, async (req, res) => {
   }
 });
 
-httpServer.listen(PORT, () => {
-  console.log(`qr-engine-service listening on :${PORT}`);
+// [Disclosed]: an explicit 'error' listener on the server itself — not
+// just the process-wide uncaughtException handler above — because
+// http.Server emits 'error' (e.g. EADDRINUSE when port 4000 is already
+// held by a leftover process from a previous run) as an ordinary event,
+// not a thrown exception; without a listener for it, EventEmitter's
+// default behavior is to throw it asynchronously, which the
+// uncaughtException handler above WOULD still catch, but naming the
+// likely cause (address already in use) here gives a much faster answer
+// than a bare stack trace does.
+httpServer.on('error', (err) => {
+  if (err?.code === 'EADDRINUSE') {
+    console.error(
+      `[server] FATAL: port ${PORT} is already in use on ${HOST} — another process (maybe a previous run of this ` +
+        'service that never fully exited) is already listening there. Find and stop it, then restart this process.',
+    );
+  } else {
+    console.error('[server] FATAL: failed to start listening:', err);
+  }
+  process.exit(1);
+});
+
+httpServer.listen(PORT, HOST, () => {
+  console.log(`qr-engine-service listening on ${HOST}:${PORT}`);
 });
