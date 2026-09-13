@@ -48,8 +48,25 @@ return [
     // own explicit HOST bind in server.js.
     'qr_engine' => [
         'url' => env('QR_ENGINE_SERVICE_URL', 'http://127.0.0.1:4000'),
+
         // Shared secret — must be IDENTICAL to qr-engine-service's INTERNAL_API_SECRET.
-        'internal_secret' => env('INTERNAL_API_SECRET'),
+        //
+        // [Local-dev fallback, disclosed]: if INTERNAL_API_SECRET is missing
+        // from .env AND we're running in `local`, fall back to the same
+        // placeholder value already committed in backend-api/.env.example
+        // (mirrored in qr-engine-service/.env.example) — so a fresh
+        // `git pull` with no .env set up at all still works, instead of
+        // every WhatsApp QR/session call failing with a 401 (remapped to
+        // 502 by WhatsAppController). Scoped to `local` only — the same
+        // gate already used by MetaWebhookController::assertValidSignature()
+        // and ResolvesTenantAccount::requireAccount() elsewhere in this
+        // app — so in every other environment a missing secret still fails
+        // CLOSED exactly as before (null here -> header never matches the
+        // real qr-engine-service secret -> 401 -> 502). If you run
+        // `php artisan config:cache`, this value is baked in at cache
+        // time — re-run it after changing APP_ENV or INTERNAL_API_SECRET.
+        'internal_secret' => env('INTERNAL_API_SECRET')
+            ?: (app()->environment('local') ? 'devsecret_9f3a1c7b2e4d6a8f0b1c3d5e7f9a0b2c' : null),
     ],
 
     // Social Media Marketing & Meta Ads Automation Expansion (Phase 1):

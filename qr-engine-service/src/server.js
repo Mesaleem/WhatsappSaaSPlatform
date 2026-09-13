@@ -49,7 +49,41 @@ const PORT = process.env.PORT || 4000;
 // route to 127.0.0.1. Overridable via HOST for a LAN-reachable deployment.
 const HOST = process.env.HOST || '0.0.0.0';
 const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || 'http://localhost:5173';
-const INTERNAL_API_SECRET = process.env.INTERNAL_API_SECRET || '';
+// [Local-dev secret fallback, disclosed]: if INTERNAL_API_SECRET is not
+// set in qr-engine-service/.env AND this process is not explicitly marked
+// production (NODE_ENV=production), fall back to the SAME placeholder
+// value already committed in both backend-api/.env.example and
+// qr-engine-service/.env.example (INTERNAL_API_SECRET=devsecret_...) —
+// reusing that exact value instead of inventing a second, different
+// hardcoded string means there is only ever one well-known dev secret to
+// reason about. This mirrors backend-api's own config/services.php
+// fallback, which is gated the same way (there: APP_ENV=local).
+//
+// IMPORTANT — this does not fully satisfy "strictly fails closed in
+// production" by itself: NODE_ENV is not read anywhere else in this repo,
+// and nothing here (no Dockerfile, no PM2/ecosystem config) currently sets
+// NODE_ENV=production for a real deployment. Until your actual production
+// process explicitly sets NODE_ENV=production, this guard provides NO
+// protection there — a missing .env in that environment would silently
+// use this same public, git-committed placeholder instead of rejecting
+// requests as it did before this change. Set NODE_ENV=production wherever
+// this service actually runs outside your own machine.
+const IS_PRODUCTION = process.env.NODE_ENV === 'production';
+const LOCAL_DEV_FALLBACK_SECRET = 'devsecret_9f3a1c7b2e4d6a8f0b1c3d5e7f9a0b2c';
+const INTERNAL_API_SECRET = process.env.INTERNAL_API_SECRET
+  || (IS_PRODUCTION ? '' : LOCAL_DEV_FALLBACK_SECRET);
+
+if (!process.env.INTERNAL_API_SECRET && !IS_PRODUCTION) {
+  console.warn(
+    '[server] INTERNAL_API_SECRET is not set in qr-engine-service/.env — ' +
+      'falling back to the shared LOCAL-DEV-ONLY secret (soft warning, not ' +
+      'a rejection). Requests are accepted as long as backend-api resolves ' +
+      'to the same fallback value (true whenever backend-api/.env also has ' +
+      'no INTERNAL_API_SECRET set while APP_ENV=local there). Create a real ' +
+      'qr-engine-service/.env with your own secret before this runs ' +
+      'anywhere but your own machine.',
+  );
+}
 
 const app = express();
 app.use(cors({ origin: FRONTEND_ORIGIN }));

@@ -186,6 +186,15 @@ class WhatsAppController extends Controller
         $baseUrl = rtrim((string) config('services.qr_engine.url'), '/');
         $secret = config('services.qr_engine.internal_secret');
 
+        // [Local-dev fallback, disclosed]: config('services.qr_engine.internal_secret')
+        // now silently resolves to a shared placeholder when INTERNAL_API_SECRET is
+        // unset AND APP_ENV=local (see config/services.php). Logged here — not in the
+        // config file itself, to avoid a warning on every config resolution — as a
+        // soft warning, not a rejection: the request still proceeds.
+        if (! env('INTERNAL_API_SECRET') && app()->environment('local')) {
+            Log::warning('INTERNAL_API_SECRET is not set in backend-api/.env — using the local-dev fallback shared secret (must match qr-engine-service\'s own fallback). Set a real INTERNAL_API_SECRET before this runs anywhere but your own machine.');
+        }
+
         try {
             $response = Http::withHeaders(['X-Internal-Secret' => $secret])
                 ->connectTimeout(5)
