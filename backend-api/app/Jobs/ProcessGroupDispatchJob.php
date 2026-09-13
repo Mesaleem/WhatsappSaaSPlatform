@@ -290,10 +290,47 @@ class ProcessGroupDispatchJob implements ShouldQueue
 
         if (! empty($result['success'])) {
             $log->resolveGroupDispatch(1, 0);
-        } else {
-            $log->resolveGroupDispatch(0, 1);
-            $log->forceFill(['error_reason' => $result['error'] ?? 'The QR engine rejected the message.'])->save();
+
+            return;
         }
+
+        $errorMessage = $result['error'] ?? 'The QR engine rejected the message.';
+
+        $log->resolveGroupDispatch(0, 1);
+        $log->forceFill(['error_reason' => $errorMessage])->save();
+
+        // [New, disclosed — closes part of the "no way to know a native
+        // WhatsApp group was deleted/left" gap]: flips this group's own
+        // sync_status to 'failed' so it shows up on the Contact Groups
+        // page (NativeGroupCell already renders a red "Sync failed"
+        // badge + Recreate action for this status — reused as-is, no new
+        // status value introduced) and GroupMessageDispatcher::dispatch()
+        // refuses further sends to it until recreated (its existing
+        // isSyncedNativeGroup() gate), instead of silently failing every
+        // future send forever with the group still showing "Synced".
+        //
+        // [Important, disclosed limitation]: this can only flag a send
+        // that Baileys/qr-engine-service actually REPORTS as failed.
+        // Whether sending to a group you were removed from, or that was
+        // deleted, reliably produces a thrown/caught error at all is
+        // [Unknown] — verified against this repo's installed
+        // @whiskeysockets/baileys@7.0.0-rc14 source only for IQ-style
+        // requests (WABinary/generic-utils.js's assertNodeErrorFree()),
+        // not confirmed for the message-send path specifically, and this
+        // environment has no live WhatsApp session to test the real
+        // behavior against. If WhatsApp silently drops the message
+        // instead of returning an error, this will NOT catch it — it
+        // only ever reacts to failures qr-engine-service actually
+        // reports, never anything else. Not gated on error text/code
+        // (no verified way to distinguish "group gone" from a transient
+        // failure) — ANY reported send failure marks the group failed;
+        // see ContactGroupController::recreate()'s docblock for the
+        // false-positive trade-off this creates and how the frontend
+        // discloses it before a user acts on it.
+        $group->forceFill([
+            'sync_status' => ContactGroup::SYNC_STATUS_FAILED,
+            'sync_error' => "A message to this group failed: {$errorMessage}. If the WhatsApp group was deleted or this account was removed from it, delete and recreate it below.",
+        ])->save();
     }
 
     private function resolveAllFailed(MessageDispatchLog $log, int $memberCount, string $reason): void

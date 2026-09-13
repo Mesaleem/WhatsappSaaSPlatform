@@ -109,6 +109,25 @@ export default function ContactGroupsPage() {
     }
   };
 
+  /**
+   * [Disclosed]: this ALWAYS creates a brand-new WhatsApp group — it can
+   * never confirm the old one is actually gone (see
+   * ContactGroupController::recreate()'s docblock). The confirm() prompt
+   * below exists specifically to surface that duplicate-group risk
+   * before the user commits to it, since a "Sync failed" badge can come
+   * from a transient send error, not only an actual deletion.
+   */
+  const handleRecreate = async (group: ContactGroup) => {
+    const confirmMessage = `Recreate "${group.name}"? This creates a brand-new WhatsApp group with the same members. If the old group still exists on WhatsApp, it will NOT be deleted — you may end up with two groups.`;
+    if (!confirm(confirmMessage)) return;
+    try {
+      await contactGroupsService.recreate(group.id);
+      void load();
+    } catch (err) {
+      setError(extractMessage(err, 'Failed to recreate this group.'));
+    }
+  };
+
   return (
     // Full-width layout — matches MessageLogsPage.tsx's own
     // PageShell override (max-w-6xl's default cap left a large empty
@@ -202,7 +221,7 @@ export default function ContactGroupsPage() {
                       </td>
                       <td className="px-4 py-3">
                         {group.group_type === 'native_wa_group' ? (
-                          <NativeGroupCell group={group} />
+                          <NativeGroupCell group={group} onRecreate={() => void handleRecreate(group)} />
                         ) : (
                           <span className="text-xs text-slate-400">—</span>
                         )}
@@ -282,7 +301,7 @@ function GroupTypeBadge({ type }: { type: ContactGroupType }) {
 }
 
 /** Sync status badge + JID/invite-link display for a native_wa_group row. */
-function NativeGroupCell({ group }: { group: ContactGroup }) {
+function NativeGroupCell({ group, onRecreate }: { group: ContactGroup; onRecreate: () => void }) {
   const [copied, setCopied] = useState(false);
 
   const handleCopy = () => {
@@ -304,13 +323,22 @@ function NativeGroupCell({ group }: { group: ContactGroup }) {
 
   if (group.sync_status === 'failed') {
     return (
-      <span
-        className="inline-flex items-center gap-1 rounded-full bg-red-50 px-2 py-0.5 text-xs font-medium text-red-700 ring-1 ring-inset ring-red-600/20"
-        title={group.sync_error ?? 'Sync failed.'}
-      >
-        <AlertTriangle className="h-3 w-3" />
-        Sync failed
-      </span>
+      <div className="flex items-center gap-2">
+        <span
+          className="inline-flex items-center gap-1 rounded-full bg-red-50 px-2 py-0.5 text-xs font-medium text-red-700 ring-1 ring-inset ring-red-600/20"
+          title={group.sync_error ?? 'Sync failed.'}
+        >
+          <AlertTriangle className="h-3 w-3" />
+          Sync failed
+        </span>
+        <button
+          onClick={onRecreate}
+          className="flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
+        >
+          <RefreshCw className="h-3 w-3" />
+          Recreate
+        </button>
+      </div>
     );
   }
 

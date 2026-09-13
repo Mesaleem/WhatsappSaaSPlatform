@@ -61,6 +61,20 @@ const contactGroupsService = {
       .post<SendGroupTemplateResponse>(`/groups/${groupId}/send-template`, payload)
       .then((res) => res.data);
   },
+
+  /**
+   * POST /api/groups/{id}/recreate — only valid for a native_wa_group
+   * whose sync_status is 'failed'. See ContactGroupController::
+   * recreate()'s docblock for the disclosed duplicate-group risk: this
+   * ALWAYS makes a brand-new WhatsApp group, it can never reuse or
+   * verify the old one — ContactGroupsPage.tsx's confirm() prompt
+   * surfaces that before calling this.
+   */
+  recreate(groupId: number) {
+    return axiosInstance
+      .post<{ success: boolean; data: ContactGroup; message?: string }>(`/groups/${groupId}/recreate`)
+      .then((res) => res.data);
+  },
 };
 
 export default contactGroupsService;

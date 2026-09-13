@@ -351,4 +351,92 @@ class ContactGroupController extends Controller
             default => response()->json(['success' => false, 'message' => $result['message'] ?? 'Could not queue this group dispatch.'], 422),
         };
     }
+
+    /**
+     * POST /api/groups/{id}/recreate — one-click response to a
+     * native_wa_group whose sync_status is 'failed', whether that
+     * happened at initial creation (CreateNativeWhatsAppGroupJob) or
+     * later, when a send to it failed (ProcessGroupDispatchJob's new
+     * sync_status flip — see that method's docblock). Re-runs group
+     * creation for the SAME ContactGroup row, reusing its existing name
+     * and member list: resets wa_group_jid/invite_link/sync_error and
+     * sync_status back to 'pending', then re-dispatches
+     * CreateNativeWhatsAppGroupJob — the exact same job
+     * ContactGroupController::storeNativeGroup() dispatches for a brand
+     * new group, which is why resetting to 'pending' first is required:
+     * that job no-ops unless sync_status === SYNC_STATUS_PENDING
+     * (see its own docblock/guard).
+     *
+     * [Disclosed, important, must be surfaced to the user before they
+     * click this — see contactGroupsService.ts/ContactGroupsPage.tsx]:
+     * this ALWAYS creates a brand-new WhatsApp group with a new JID via
+     * Baileys' groupCreate() — it can never detect or reuse the old
+     * group even if that old group still actually exists on WhatsApp
+     * (e.g. the failure that triggered this was a transient error, not
+     * an actual deletion — see ProcessGroupDispatchJob's own disclosed
+     * uncertainty about what failures are even detectable). In that
+     * case this produces a genuine duplicate: the old group keeps
+     * existing on WhatsApp with its members, orphaned from this app,
+     * while this row now points at a second, new, empty-until-synced
+     * group. There is no way to avoid this risk from the backend alone
+     * — only the person clicking Recreate can know whether the original
+     * group is actually gone.
+     */
+    public function recreate(Request $request, int $id): JsonResponse
+    {
+        $account = $this->requireAccount($request);
+
+        $group = ContactGroup::where('account_id', $account->id)->find($id);
+        abort_if(! $group, 404, 'Contact group not found.');
+
+        if (! $group->isNative()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Only native WhatsApp groups can be recreated.',
+            ], 422);
+        }
+
+        if ($group->sync_status === ContactGroup::SYNC_STATUS_PENDING) {
+            return response()->json([
+                'success' => false,
+                'message' => 'This group is already syncing.',
+            ], 409);
+        }
+
+        // Same two preconditions storeNativeGroup() enforces for a brand
+        // new native group — re-checked here since the account's engine/
+        // connection state can have changed since this group was first
+        // created.
+        $engineType = $account->currentSubscription?->engine_type;
+
+        if ($engineType !== 'qr') {
+            return response()->json([
+                'success' => false,
+                'error_code' => 'NATIVE_GROUP_REQUIRES_QR_ENGINE',
+                'message' => 'Native WhatsApp Groups require the QR (Baileys) engine. The official Meta Cloud API does not support WhatsApp group messaging.',
+            ], 422);
+        }
+
+        if ($account->whatsAppSession?->status !== 'connected') {
+            return response()->json([
+                'success' => false,
+                'error_code' => 'WHATSAPP_NOT_CONNECTED',
+                'message' => 'Connect your WhatsApp device first — a live session is required to create a real WhatsApp group.',
+            ], 422);
+        }
+
+        $group->forceFill([
+            'wa_group_jid' => null,
+            'invite_link' => null,
+            'sync_status' => ContactGroup::SYNC_STATUS_PENDING,
+            'sync_error' => null,
+        ])->save();
+
+        CreateNativeWhatsAppGroupJob::dispatch($group->id);
+
+        return response()->json([
+            'success' => true,
+            'data' => $group->fresh()->loadCount('members'),
+        ]);
+    }
 }

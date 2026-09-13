@@ -503,6 +503,12 @@ Route::middleware('auth:sanctum')->group(function () {
             // permission:send-messages + module.guard:contact_groups gate as
             // every other route in this group — no new permission tier.
             Route::post('/{id}/send-template', [ContactGroupController::class, 'sendTemplate']);
+            // [New, disclosed]: one-click response to a native_wa_group
+            // stuck at sync_status='failed' (initial creation failure, or
+            // a later send failure now also flips this — see
+            // ProcessGroupDispatchJob). See recreate()'s own docblock for
+            // the disclosed duplicate-group risk this carries.
+            Route::post('/{id}/recreate', [ContactGroupController::class, 'recreate']);
         });
 
         // Module 7: analytics KPIs/charts — same sensitivity tier as
