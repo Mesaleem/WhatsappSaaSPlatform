@@ -603,6 +603,12 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/accounts/{id}', [AccountController::class, 'show']);
         Route::put('/accounts/{id}', [AccountController::class, 'update']);
         Route::put('/accounts/{id}/subscription', [AccountController::class, 'updateSubscription']);
+        // 3-Tier Hierarchy & Agent-Client Scope Engine (Phase 4) —
+        // Agent Quota Pool & Allocation. Same permission:manage-accounts
+        // gate as every other route in this group; the actual
+        // Agent-vs-pool restriction lives in AccountController::
+        // updateQuota()/QuotaService, not in route middleware.
+        Route::put('/accounts/{id}/quota', [AccountController::class, 'updateQuota']);
         // Absolute Super Admin Control — Dynamic Client Privilege Toggles.
         Route::patch('/accounts/{id}/permissions', [AccountController::class, 'updatePermissions']);
 

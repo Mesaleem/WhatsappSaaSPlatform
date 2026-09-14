@@ -45,6 +45,20 @@ interface NavItem {
   /** Only shown to Super Admin, regardless of permission. */
   superAdminOnly?: boolean;
   /**
+   * 3-Tier Hierarchy & Agent-Client Scope Engine (Phase 3 UI) — shown
+   * only to a user whose own account_type is 'agent' (never Super
+   * Admin, regardless of any other flag). "My Clients" is the only
+   * item using this today; it deliberately points at the same
+   * `/admin/accounts` route as the Super-Admin-only "Manage Clients"
+   * item above (AccountsPage itself already renders correctly for
+   * either viewer — Phase 1's ownedByAgent() scoping and Phase 3's
+   * AccountsPage "Filter by Agent" UI both key off the caller's own
+   * type server/client-side, not off which nav item was clicked) —
+   * see isNavItemVisible/resolvePageTitle below for how the resulting
+   * duplicate `to` is handled safely.
+   */
+  agentOnly?: boolean;
+  /**
    * Hidden from Super Admin even though they hold the permission (Super
    * Admin bypasses ordinary permission checks — see isNavItemVisible
    * below). Send Alert is the only item using this: Super Admin now
@@ -171,6 +185,7 @@ const NAV_ITEMS: NavItem[] = [
   { label: 'Instant Lead CRM', to: '/social/leads', icon: UserSearch, tint: NAV_TINTS.social, permission: 'manage-social-leads', requiresModule: 'lead_crm' },
   { label: 'Social Reports', to: '/social/reports', icon: FileBarChart, tint: NAV_TINTS.social, permission: 'view-social-analytics', requiresModule: 'reports' },
   { label: 'Manage Clients', to: '/admin/accounts', icon: Building2, tint: NAV_TINTS.accounts, superAdminOnly: true },
+  { label: 'My Clients', to: '/admin/accounts', icon: Building2, tint: NAV_TINTS.accounts, agentOnly: true },
   // Dynamic Templates & Variables System — Super Admin Template Designer & Approval Panel.
   { label: 'Template Manager', to: '/admin/templates', icon: Sparkles, tint: NAV_TINTS.accounts, superAdminOnly: true },
   { label: 'Admin Gateway Settings', to: '/admin/billing/gateway-settings', icon: Settings, tint: NAV_TINTS.gateway, superAdminOnly: true },
@@ -193,6 +208,7 @@ function isNavItemVisible(
   item: NavItem,
   opts: {
     isSuperAdmin: boolean;
+    isAgent: boolean;
     hasAccount: boolean;
     hasPermission: (p: string) => boolean;
     hasModule: (m: AccountModule) => boolean;
@@ -200,6 +216,7 @@ function isNavItemVisible(
   },
 ): boolean {
   if (item.superAdminOnly) return opts.isSuperAdmin;
+  if (item.agentOnly) return opts.isAgent;
   if (item.hiddenForSuperAdmin && opts.isSuperAdmin) return false;
   if (!opts.isSuperAdmin && item.hiddenForRoles?.some((role) => opts.hasRole(role))) return false;
   if (item.requiresAccount && !opts.hasAccount) return false;
@@ -209,9 +226,9 @@ function isNavItemVisible(
 }
 
 /** Longest matching `to` prefix wins, so "/admin/billing/gateway-settings" doesn't fall through to "/billing"'s title. */
-function resolvePageTitle(pathname: string): string {
+function resolvePageTitle(pathname: string, items: NavItem[]): string {
   let best: NavItem | null = null;
-  for (const item of NAV_ITEMS) {
+  for (const item of items) {
     const matches = item.to === '/' ? pathname === '/' : pathname.startsWith(item.to);
     if (matches && (!best || item.to.length > best.to.length)) {
       best = item;
@@ -227,13 +244,15 @@ export default function AppLayout() {
 
   const hasAccount = !!user?.account_id;
   const superAdmin = isSuperAdmin();
+  // 3-Tier Hierarchy & Agent-Client Scope Engine (Phase 3 UI).
+  const isAgent = !superAdmin && user?.account?.account_type === 'agent';
 
   const visibleItems = useMemo(
     () =>
       NAV_ITEMS.filter((item) =>
-        isNavItemVisible(item, { isSuperAdmin: superAdmin, hasAccount, hasPermission, hasModule, hasRole }),
+        isNavItemVisible(item, { isSuperAdmin: superAdmin, isAgent, hasAccount, hasPermission, hasModule, hasRole }),
       ),
-    [superAdmin, hasAccount, hasPermission, hasModule, hasRole],
+    [superAdmin, isAgent, hasAccount, hasPermission, hasModule, hasRole],
   );
 
   // Session Re-hydration & Refresh (Module-to-UI Sync architecture
@@ -266,7 +285,7 @@ export default function AppLayout() {
     return () => window.removeEventListener('focus', onFocus);
   }, [refreshUser]);
 
-  const pageTitle = resolvePageTitle(location.pathname);
+  const pageTitle = resolvePageTitle(location.pathname, visibleItems);
 
   return (
     <div className="flex h-screen overflow-hidden" style={{ background: indigo.canvas }}>
@@ -292,7 +311,7 @@ export default function AppLayout() {
         <nav className="flex-1 space-y-1 overflow-y-auto px-2.5 py-3">
           {visibleItems.map((item) => (
             <NavLink
-              key={item.to}
+              key={`${item.to}::${item.label}`}
               to={item.to}
               end={item.to === '/'}
               className={({ isActive }) =>

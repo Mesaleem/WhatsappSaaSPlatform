@@ -38,13 +38,14 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../core/context/AuthContext';
 import { useTenant } from '../core/context/TenantContext';
+import accountService from '../services/accountService';
 import analyticsService from '../services/analyticsService';
 import reportsService from '../services/reportsService';
 import messageLogsService from '../services/messageLogsService';
 import QuotaTopUpModal from '../components/billing/QuotaTopUpModal';
 import { indigo, NAV_TINTS, cardShadow, type Tint } from '../theme/signalIndigo';
 import type { ApiErrorResponse } from '../types/auth';
-import type { ModuleAssignment } from '../types/account';
+import type { Account, ModuleAssignment } from '../types/account';
 import type { AnalyticsChartsResponse, AnalyticsSummary, GlobalAnalyticsSummary } from '../types/analytics';
 import type { MessageDispatchLog, MessageDispatchSource, MessageDispatchStatus } from '../types/messageLog';
 import type { SocialReportSummary } from '../types/reports';
@@ -557,6 +558,111 @@ function SocialAdsSummaryCards() {
   );
 }
 
+/**
+ * 3-Tier Hierarchy & Agent-Client Scope Engine (Phase 3 UI, requirement
+ * 4) — an Agent's own Dashboard additionally shows this aggregated
+ * overview of their managed Sub-Clients, on top of (not instead of) the
+ * ordinary TenantDashboard widgets below (an Agent's own account still
+ * has its own WhatsApp/Analytics/etc. modules, gated exactly like any
+ * other tenant's).
+ *
+ * [Disclosed]: sourced entirely client-side from the existing GET
+ * /api/admin/accounts (AccountController::index(), already forced to
+ * this Agent's own ownedByAgent() scope server-side since Phase 1) —
+ * this phase adds no dedicated aggregate endpoint, per its stated
+ * frontend-only scope. Requested at per_page=100 (that endpoint's own
+ * ceiling) to approximate "every Sub-Client" without one; an Agent with
+ * more than 100 Sub-Clients will see an undercount here (the "Total
+ * Sub-Clients" card still shows the real, non-paginated total from the
+ * API — only "Combined Message Pulse" and "Quota Health" are capped to
+ * the first 100 rows, and the sub-label says so). A real fix would add
+ * a lightweight backend summary endpoint mirroring
+ * AnalyticsController::globalSummary() but scoped ownedByAgent() —
+ * flagged for a future phase, not built here.
+ */
+function AgentSubClientsOverview() {
+  const navigate = useNavigate();
+  const [accounts, setAccounts] = useState<Account[]>([]);
+  const [total, setTotal] = useState(0);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setIsLoading(true);
+      setError(null);
+      try {
+        const res = await accountService.list({ per_page: 100 });
+        if (cancelled) return;
+        setAccounts(res.data);
+        setTotal(res.total);
+      } catch (err) {
+        if (!cancelled) setError(extractMessage(err, 'Failed to load your Sub-Clients.'));
+      } finally {
+        if (!cancelled) setIsLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const combinedUsed = accounts.reduce((sum, a) => sum + (a.current_subscription?.used_messages ?? 0), 0);
+  const combinedAllocated = accounts.reduce(
+    (sum, a) => sum + (a.current_subscription?.total_allocated_messages ?? 0),
+    0,
+  );
+  const atRiskCount = accounts.filter((a) => {
+    const s = a.current_subscription;
+    if (!s || s.billing_model === 'unlimited' || s.total_allocated_messages == null) return false;
+    return s.used_messages / s.total_allocated_messages >= 0.8;
+  }).length;
+  const capped = total > accounts.length;
+
+  return (
+    <div>
+      <h3 className="mb-3 font-display text-sm font-bold" style={{ color: indigo.ink }}>
+        Your Sub-Clients
+      </h3>
+      {error && (
+        <div className="mb-3 flex items-center gap-2 rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+          <XCircle className="h-4 w-4 flex-shrink-0" />
+          {error}
+        </div>
+      )}
+      <div className="grid gap-4 sm:grid-cols-3">
+        <StatCard
+          label="Total Sub-Clients"
+          value={isLoading ? '…' : String(total)}
+          sub="Provisioned under your agent account"
+          icon={Building2}
+          tint={NAV_TINTS.accounts}
+          onClick={() => navigate('/admin/accounts')}
+        />
+        <StatCard
+          label="Combined Message Pulse"
+          value={isLoading ? '…' : combinedUsed.toLocaleString()}
+          sub={
+            isLoading
+              ? undefined
+              : `of ${combinedAllocated.toLocaleString()} allocated${capped ? ` (first ${accounts.length} of ${total})` : ''}`
+          }
+          icon={MessageSquare}
+          tint={NAV_TINTS.send}
+        />
+        <StatCard
+          label="Quota Health"
+          value={isLoading ? '…' : `${atRiskCount} at risk`}
+          sub={`Sub-clients at/above 80% of quota${capped ? ` (first ${accounts.length} of ${total})` : ''}`}
+          icon={CreditCard}
+          tint={NAV_TINTS.billing}
+        />
+      </div>
+    </div>
+  );
+}
+
 function TenantDashboard({ impersonatedAccountName }: { impersonatedAccountName?: string } = {}) {
   const { user, hasPermission, hasModule } = useAuth();
   const navigate = useNavigate();
@@ -683,6 +789,13 @@ function TenantDashboard({ impersonatedAccountName }: { impersonatedAccountName?
               : <>Here's what's happening with {user?.account?.company_name}.</>}
           </p>
         </div>
+
+        {/* 3-Tier Hierarchy & Agent-Client Scope Engine (Phase 3 UI,
+            requirement 4) — an Agent's own account_type, never an
+            impersonated Super-Admin view (impersonatedAccountName is
+            only ever set for Super Admin — see DashboardPage's own
+            selection logic below). */}
+        {user?.account?.account_type === 'agent' && <AgentSubClientsOverview />}
 
         {summaryError && (
           <div className="flex items-center gap-2 rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">

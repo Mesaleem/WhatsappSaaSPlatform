@@ -38,6 +38,12 @@ interface AuthContextValue {
    * means "every module enabled" — the default until a Super Admin
    * explicitly narrows it via Manage Clients (mirrors
    * Account::hasModuleEnabled() on the backend).
+   *
+   * 3-Tier Hierarchy & Agent-Client Scope Engine (Phase 2): for a Client
+   * nested under an Agent, this also honors whatever the Agent CURRENTLY
+   * has enabled, via the account's `effective_modules` (see
+   * Account::effectiveModules() on the backend) rather than the raw
+   * `allowed_modules` column alone.
    */
   hasModule: (module: AccountModule) => boolean;
   /**
@@ -141,7 +147,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const hasModule = useCallback(
     (module: AccountModule) => {
       if (isSuperAdmin()) return true;
-      const allowedModules = user?.account?.allowed_modules ?? null;
+      const account = user?.account;
+      if (!account) return false;
+      // 3-Tier Hierarchy & Agent-Client Scope Engine (Phase 2) — prefer
+      // the backend's authoritative, already-hierarchy-capped
+      // effective_modules (see Account::effectiveModules()) over the
+      // raw allowed_modules column. `account` here is whichever account
+      // the current user belongs to — an Agent's own Agent account, or
+      // a Client's own (possibly Agent-owned) account — so this one
+      // check already covers both cases the spec calls out separately;
+      // effective_modules is what makes a Client's check also honor its
+      // Agent's current grants, without duplicating that intersection
+      // logic here. Falls back to the pre-Phase-2 allowed_modules check
+      // only when effective_modules isn't present (e.g. a cached user
+      // object from before the next /auth/me refresh) — identical
+      // behavior to before this phase existed.
+      if (account.effective_modules) {
+        return account.effective_modules.includes(module);
+      }
+      const allowedModules = account.allowed_modules ?? null;
       return allowedModules === null || allowedModules.includes(module);
     },
     [user, isSuperAdmin],

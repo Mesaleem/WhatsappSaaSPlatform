@@ -18,6 +18,7 @@ import {
   X,
 } from 'lucide-react';
 import accountService from '../../services/accountService';
+import { useAuth } from '../../core/context/AuthContext';
 import {
   ACCOUNT_MODULES,
   ACCOUNT_MODULE_LABELS,
@@ -29,6 +30,7 @@ import {
   type Account,
   type AccountModule,
   type AccountStatus,
+  type AccountType,
   type CreateAccountPayload,
   type ModuleAssignment,
   type UpdateAccountPayload,
@@ -71,6 +73,26 @@ function generatePassword(): string {
 export default function CreateAccountModal({ account, onClose, onSaved }: CreateAccountModalProps) {
   const isEditMode = account !== null;
   const sub = account?.current_subscription ?? null;
+  const { user, isSuperAdmin, hasModule } = useAuth();
+  const superAdmin = isSuperAdmin();
+  // 3-Tier Hierarchy & Agent-Client Scope Engine (Phase 2/3) — true only
+  // for a real Agent viewer managing one of their own Sub-Clients (never
+  // Super Admin, and never an Agent's own account since Agents don't
+  // reach this modal in edit mode against themselves — the "Manage
+  // Clients"/"My Clients" list only ever opens it against a Sub-Client
+  // row). Drives both the "Inherited limit" notice and which module
+  // checkboxes below are delegable.
+  const isAgentViewer = !superAdmin && user?.account?.account_type === 'agent';
+  /**
+   * Requirement 2 (Agent Module Delegation UI Matrix): a module is
+   * delegable to a Sub-Client only if the viewer already has it
+   * themselves. Reuses AuthContext's own hasModule() rather than
+   * duplicating its effective_modules logic — hasModule() already
+   * returns true unconditionally for Super Admin, so this is a no-op
+   * (every module stays delegable) for every caller except a real Agent
+   * viewer, exactly matching this requirement's scope.
+   */
+  const canDelegateModule = (module: AccountModule) => hasModule(module);
 
   // Section 1 — Company & Admin
   const [companyName, setCompanyName] = useState(account?.company_name ?? '');
@@ -84,6 +106,17 @@ export default function CreateAccountModal({ account, onClose, onSaved }: Create
   const [maxUsersLimit, setMaxUsersLimit] = useState(
     account?.max_users_limit != null ? String(account.max_users_limit) : '',
   );
+  // 3-Tier Hierarchy & Agent-Client Scope Engine (Phase 3 UI) — Super
+  // Admin, create mode only (see the JSX below and this modal's summary
+  // disclosure: AccountController::update() has no path to change
+  // account_type/agent_id post-creation, so editing an existing account
+  // never shows these two fields). 'client' is the correct create-mode
+  // default: it is this table's own pre-Phase-1 default and everything
+  // this modal creates today should keep behaving exactly as before
+  // unless a Super Admin deliberately picks 'agent'.
+  const [accountType, setAccountType] = useState<'agent' | 'client'>('client');
+  const [parentAgentId, setParentAgentId] = useState<string>('');
+  const [agents, setAgents] = useState<Account[]>([]);
   // Section 2 — Primary Client Admin Credentials (create mode only).
   const [adminName, setAdminName] = useState('');
   const [adminEmail, setAdminEmail] = useState('');
@@ -123,6 +156,23 @@ export default function CreateAccountModal({ account, onClose, onSaved }: Create
   const [modulesBulkBusy, setModulesBulkBusy] = useState(false);
   const [modulesError, setModulesError] = useState<string | null>(null);
   const [modulesSaved, setModulesSaved] = useState(false);
+
+  useEffect(() => {
+    if (isEditMode || !superAdmin) return;
+    let cancelled = false;
+    accountService
+      .listAgents()
+      .then((data) => {
+        if (!cancelled) setAgents(data);
+      })
+      .catch(() => {
+        // Non-critical: the "Parent Agent" dropdown just stays empty
+        // (Super Admin can still create a direct/platform client).
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isEditMode, superAdmin]);
 
   const validate = (): string | null => {
     if (!companyName.trim()) return 'Company name is required.';
@@ -191,6 +241,10 @@ export default function CreateAccountModal({ account, onClose, onSaved }: Create
           status,
           max_users_limit: maxUsersLimit.trim() ? Number(maxUsersLimit) : undefined,
           module_assignment: moduleAssignment,
+          // 3-Tier Hierarchy (Phase 3 UI) — Super Admin only; see the
+          // accountType/parentAgentId state declarations above.
+          account_type: superAdmin ? accountType : undefined,
+          agent_id: superAdmin && accountType === 'client' && parentAgentId ? Number(parentAgentId) : undefined,
           // "Module & Feature Access" now renders during Create too —
           // whatever Core Common / suite selection the Super Admin left
           // it in (default: the 4 Core Common items) ships with the
@@ -387,6 +441,44 @@ export default function CreateAccountModal({ account, onClose, onSaved }: Create
                   <option value="expired">Expired</option>
                 </select>
               </Field>
+              {/* 3-Tier Hierarchy & Agent-Client Scope Engine (Phase 3
+                  UI) — Super Admin, create mode only: AccountController
+                  ::update() has no path to change either field after
+                  creation, so an edit-mode modal never shows them. */}
+              {superAdmin && !isEditMode && (
+                <>
+                  <Field label="Account Type" hint="Agent (Reseller) or a direct Client.">
+                    <select
+                      value={accountType}
+                      onChange={(e) => {
+                        const next = e.target.value as AccountType;
+                        setAccountType(next === 'agent' ? 'agent' : 'client');
+                        if (next === 'agent') setParentAgentId('');
+                      }}
+                      className={inputClass}
+                    >
+                      <option value="client">Client</option>
+                      <option value="agent">Agent (Reseller)</option>
+                    </select>
+                  </Field>
+                  {accountType === 'client' && (
+                    <Field label="Parent Agent" hint="Optional — leave unassigned for a direct platform client.">
+                      <select
+                        value={parentAgentId}
+                        onChange={(e) => setParentAgentId(e.target.value)}
+                        className={inputClass}
+                      >
+                        <option value="">No parent agent (direct client)</option>
+                        {agents.map((agent) => (
+                          <option key={agent.id} value={agent.id}>
+                            {agent.company_name}
+                          </option>
+                        ))}
+                      </select>
+                    </Field>
+                  )}
+                </>
+              )}
               <Field label="Module Assignment" required hint="Which widget set this client's Dashboard shows.">
                 <select
                   value={moduleAssignment}
@@ -634,6 +726,19 @@ export default function CreateAccountModal({ account, onClose, onSaved }: Create
                 : 'Core features are included for every client. Pick a Quick Plan preset or build a custom mix below.'}
             </p>
 
+            {/* Requirement 2 — Agent Module Delegation UI Matrix. Only
+                a real Agent viewer sees this; Super Admin (canDelegateModule
+                always true) never does. */}
+            {isAgentViewer && (
+              <div
+                role="note"
+                className="mt-3 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800"
+              >
+                <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                <span>Inherited limit: You can only grant modules enabled on your own agent plan.</span>
+              </div>
+            )}
+
             {modulesError && (
               <div
                 role="alert"
@@ -684,12 +789,14 @@ export default function CreateAccountModal({ account, onClose, onSaved }: Create
                 {CORE_COMMON_MODULES.map((module) => {
                   const enabled = isModuleEnabled(module);
                   const busy = modulesBusy === module;
+                  const locked = !canDelegateModule(module);
                   return (
                     <label
                       key={module}
+                      title={locked ? 'Not enabled on your own agent plan.' : undefined}
                       className={`flex items-center justify-between gap-3 rounded-lg border px-3 py-2 text-sm transition ${
                         enabled ? 'border-indigo-200 bg-indigo-50/50' : 'border-slate-200'
-                      }`}
+                      } ${locked ? 'opacity-50' : ''}`}
                     >
                       <span className={enabled ? 'text-slate-900' : 'text-slate-500'}>
                         {ACCOUNT_MODULE_LABELS[module]}
@@ -699,9 +806,9 @@ export default function CreateAccountModal({ account, onClose, onSaved }: Create
                         <input
                           type="checkbox"
                           checked={enabled}
-                          disabled={busy}
+                          disabled={busy || locked}
                           onChange={() => void toggleModule(module)}
-                          className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 disabled:opacity-60"
+                          className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 disabled:opacity-60 disabled:cursor-not-allowed"
                         />
                       </span>
                     </label>
@@ -715,10 +822,16 @@ export default function CreateAccountModal({ account, onClose, onSaved }: Create
               icon={MessageSquare}
               modules={WHATSAPP_SUITE_MODULES}
               isModuleEnabled={isModuleEnabled}
+              canDelegateModule={canDelegateModule}
               modulesBusy={modulesBusy}
               modulesBulkBusy={modulesBulkBusy}
               onToggleModule={(module) => void toggleModule(module)}
-              onToggleSuite={(enableAll) => void toggleSuite(WHATSAPP_SUITE_MODULES, enableAll)}
+              onToggleSuite={(enableAll) =>
+                void toggleSuite(
+                  enableAll ? WHATSAPP_SUITE_MODULES.filter(canDelegateModule) : WHATSAPP_SUITE_MODULES,
+                  enableAll,
+                )
+              }
             />
 
             <SuiteSection
@@ -726,10 +839,16 @@ export default function CreateAccountModal({ account, onClose, onSaved }: Create
               icon={Share2}
               modules={SOCIAL_SUITE_MODULES}
               isModuleEnabled={isModuleEnabled}
+              canDelegateModule={canDelegateModule}
               modulesBusy={modulesBusy}
               modulesBulkBusy={modulesBulkBusy}
               onToggleModule={(module) => void toggleModule(module)}
-              onToggleSuite={(enableAll) => void toggleSuite(SOCIAL_SUITE_MODULES, enableAll)}
+              onToggleSuite={(enableAll) =>
+                void toggleSuite(
+                  enableAll ? SOCIAL_SUITE_MODULES.filter(canDelegateModule) : SOCIAL_SUITE_MODULES,
+                  enableAll,
+                )
+              }
             />
 
             {modulesSaved && !modulesBusy && !modulesBulkBusy && !modulesError && (
@@ -857,6 +976,7 @@ function SuiteSection({
   icon: Icon,
   modules,
   isModuleEnabled,
+  canDelegateModule,
   modulesBusy,
   modulesBulkBusy,
   onToggleModule,
@@ -866,13 +986,28 @@ function SuiteSection({
   icon: typeof ShieldCheck;
   modules: AccountModule[];
   isModuleEnabled: (module: AccountModule) => boolean;
+  /**
+   * Requirement 2 — Agent Module Delegation UI Matrix. Always true for
+   * Super Admin (see CreateAccountModal's canDelegateModule); narrows
+   * to the viewer's own effective_modules only for a real Agent viewer.
+   */
+  canDelegateModule: (module: AccountModule) => boolean;
   modulesBusy: AccountModule | null;
   modulesBulkBusy: boolean;
   onToggleModule: (module: AccountModule) => void;
   onToggleSuite: (enableAll: boolean) => void;
 }) {
-  const enabledCount = modules.filter((module) => isModuleEnabled(module)).length;
-  const allEnabled = enabledCount === modules.length;
+  // The "Select all" master checkbox's checked/indeterminate state is
+  // derived against the DELEGABLE subset (falling back to every module
+  // in this suite only if the viewer can delegate none of them) so it
+  // can still read as fully checked once an Agent viewer has granted
+  // everything they themselves have — rather than being permanently
+  // stuck indeterminate because of modules they could never grant in
+  // the first place.
+  const delegableModules = modules.filter(canDelegateModule);
+  const relevantModules = delegableModules.length > 0 ? delegableModules : modules;
+  const enabledCount = relevantModules.filter((module) => isModuleEnabled(module)).length;
+  const allEnabled = enabledCount === relevantModules.length;
   const someEnabled = enabledCount > 0 && !allEnabled;
 
   return (
@@ -897,12 +1032,14 @@ function SuiteSection({
         {modules.map((module) => {
           const enabled = isModuleEnabled(module);
           const busy = modulesBusy === module;
+          const locked = !canDelegateModule(module);
           return (
             <label
               key={module}
+              title={locked ? 'Not enabled on your own agent plan.' : undefined}
               className={`flex items-center justify-between gap-3 rounded-lg border px-3 py-2 text-sm transition ${
                 enabled ? 'border-indigo-200 bg-indigo-50/50' : 'border-slate-200'
-              }`}
+              } ${locked ? 'opacity-50' : ''}`}
             >
               <span className={enabled ? 'text-slate-900' : 'text-slate-500'}>{ACCOUNT_MODULE_LABELS[module]}</span>
               <span className="flex items-center gap-2">
@@ -910,9 +1047,9 @@ function SuiteSection({
                 <input
                   type="checkbox"
                   checked={enabled}
-                  disabled={busy}
+                  disabled={busy || locked}
                   onChange={() => onToggleModule(module)}
-                  className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 disabled:opacity-60"
+                  className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 disabled:opacity-60 disabled:cursor-not-allowed"
                 />
               </span>
             </label>

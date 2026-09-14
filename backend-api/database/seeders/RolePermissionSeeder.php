@@ -147,6 +147,26 @@ class RolePermissionSeeder extends Seeder
             'view-analytics',
             'view-audit-logs',
         ],
+
+        // 3-Tier Hierarchy & Agent-Client Scope Engine (Phase 2) — Agent
+        // (Reseller). Deliberately just this ONE permission, not a
+        // parallel copy of 'admin's list: an Agent's primary user is
+        // ADDITIONALLY assigned 'admin' at account-creation time (see
+        // AccountController::store()), which already covers that same
+        // user's own normal account operations (billing, team, WhatsApp
+        // setup, ...). manage-accounts is the only thing 'admin' does NOT
+        // already grant and the only thing this role exists to add — it
+        // is what lets that user pass routes/api.php's
+        // permission:manage-accounts gate on /api/admin/accounts at all.
+        // Getting past that gate does NOT by itself mean unrestricted
+        // access to every account: AccountController's own
+        // account_type-driven scoping (TenantIsolationMiddleware +
+        // AccountController::callerAgentScopeId(), both Phase 1) confines
+        // an Agent to its own agent_id tree regardless of holding this
+        // permission platform-wide by role name.
+        'agent' => [
+            'manage-accounts',
+        ],
         // Social Media Marketing & Meta Ads Automation Expansion (Phase 1).
         // Deliberately restricted to ONLY these four permissions — this
         // role has no access to WhatsApp, Billing, or Developer settings

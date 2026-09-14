@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Support\Facades\Cache;
@@ -186,6 +187,13 @@ class Account extends Model
     ];
 
     protected $fillable = [
+        // 3-Tier Hierarchy & Agent-Client Scope Engine (Phase 1). No
+        // endpoint sets either of these yet in this phase (the schema +
+        // relationships + scoping engine only) — listed here so a future
+        // phase's provisioning endpoint can mass-assign them without a
+        // second Account.php edit.
+        'account_type',
+        'agent_id',
         'company_name',
         'primary_phone',
         'status',
@@ -244,6 +252,8 @@ class Account extends Model
         return [
             'allowed_modules' => 'array',
             'max_users_limit' => 'integer',
+            // 3-Tier Hierarchy (Phase 1).
+            'agent_id' => 'integer',
             'is_platform_device' => 'boolean',
             'allow_facebook' => 'boolean',
             'allow_instagram' => 'boolean',
@@ -258,6 +268,50 @@ class Account extends Model
     public function users(): HasMany
     {
         return $this->hasMany(User::class);
+    }
+
+    /**
+     * 3-Tier Hierarchy & Agent-Client Scope Engine (Phase 1) — the Agent
+     * (Reseller) account that provisioned this account, when this is a
+     * Client nested under an Agent rather than a direct/platform client.
+     * Null for a direct client and for an Agent account itself (Agents
+     * are not themselves nested under another Agent in this phase).
+     */
+    public function agent(): BelongsTo
+    {
+        return $this->belongsTo(self::class, 'agent_id');
+    }
+
+    /**
+     * 3-Tier Hierarchy & Agent-Client Scope Engine (Phase 1) — every
+     * Client account this Agent owns. Only meaningful when this
+     * account's own account_type is 'agent'; empty for a plain client,
+     * since nothing else points its agent_id at one.
+     */
+    public function subClients(): HasMany
+    {
+        return $this->hasMany(self::class, 'agent_id');
+    }
+
+    /**
+     * 3-Tier Hierarchy (Phase 1) — every Account row that is itself an
+     * Agent (Reseller), independent of who owns it.
+     */
+    public function scopeAgentsOnly(Builder $query): Builder
+    {
+        return $query->where('account_type', 'agent');
+    }
+
+    /**
+     * 3-Tier Hierarchy (Phase 1) — every account owned by the given
+     * Agent. Used by AccountController's Super-Admin ?agent_id= filter
+     * and by its Agent-scoping guard (an Agent's own user can never see
+     * another Agent's clients, regardless of what it passes as
+     * ?agent_id= or a route {id}).
+     */
+    public function scopeOwnedByAgent(Builder $query, int $agentId): Builder
+    {
+        return $query->where('agent_id', $agentId);
     }
 
     /**
@@ -332,18 +386,73 @@ class Account extends Model
     }
 
     /**
+     * 3-Tier Hierarchy & Agent-Client Scope Engine (Phase 2) — Hierarchical
+     * Module Delegation Engine. The full set of modules this account can
+     * ACTUALLY use right now, after applying the live hierarchy cap: an
+     * Agent (or a direct/platform client with no agent_id) is capped only
+     * by its own allowed_modules; a Client nested under an Agent is
+     * additionally capped by whatever that Agent CURRENTLY has. Recomputed
+     * on every call rather than stored — if Super Admin narrows an Agent's
+     * own modules, every one of that Agent's Sub-Clients loses the same
+     * module immediately, with no need to touch each Sub-Client's row (see
+     * AccountService::resolveDelegatedModules() for the complementary,
+     * write-time half of this: what an AGENT is allowed to newly GRANT).
+     * null allowed_modules still means "every module" at each tier, same
+     * zero-regression convention hasModuleEnabled() already used.
+     *
+     * Deliberately only ONE hop up (not recursive beyond the immediate
+     * agent_id row): this phase's model is exactly Super Admin -> Agent ->
+     * Client, and agent_id has no DB-level FK on this project's sqlite
+     * default (see this hierarchy's first migration's docblock) to rule
+     * out a malformed cycle. Stopping at one hop means a cycle degrades to
+     * "capped by that one row's own allowed_modules" instead of an
+     * infinite loop.
+     *
+     * Uses Account::findCached() (not a plain query) for the agent
+     * lookup — the same cached-and-invalidated-on-save accessor every
+     * other "resolve a tenant account by id" call in this app already
+     * uses, so this adds no new N+1 query pattern.
+     *
+     * @return list<string>
+     */
+    public function effectiveModules(): array
+    {
+        $own = $this->allowed_modules ?? self::MODULES;
+
+        if ($this->agent_id === null) {
+            return array_values($own);
+        }
+
+        $agentAccount = self::findCached($this->agent_id);
+
+        if ($agentAccount === null) {
+            // Dangling agent_id (its Agent account no longer resolves).
+            // Fail CLOSED to zero modules rather than silently treating a
+            // missing agent as "no cap" — currently unreachable in
+            // practice (no account-deletion endpoint exists anywhere in
+            // this codebase, per this hierarchy's first migration's
+            // docblock), kept only so this method never mis-grants if
+            // that ever changes.
+            return [];
+        }
+
+        $agentOwnModules = $agentAccount->allowed_modules ?? self::MODULES;
+
+        return array_values(array_intersect($own, $agentOwnModules));
+    }
+
+    /**
      * Absolute Super Admin Control — whether this client currently has the
-     * given module/feature enabled. NULL allowed_modules (the default) is
-     * treated as "every module enabled" so existing accounts see zero
-     * regression until a Super Admin explicitly narrows them.
+     * given module/feature enabled. Delegates to effectiveModules() (Phase
+     * 2 of the 3-Tier Hierarchy) so the check is capped by the live
+     * Agent-Client hierarchy, not just this account's own allowed_modules
+     * column — zero behavior change for any account with no agent_id
+     * (effectiveModules() reduces to the exact same "null = everything,
+     * else in_array" check this method used to do inline).
      */
     public function hasModuleEnabled(string $module): bool
     {
-        if ($this->allowed_modules === null) {
-            return true;
-        }
-
-        return in_array($module, $this->allowed_modules, true);
+        return in_array($module, $this->effectiveModules(), true);
     }
 
     /**

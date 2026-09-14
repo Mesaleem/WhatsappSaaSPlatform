@@ -8,6 +8,23 @@ import type { BillingModel, EngineType, PaymentMode, Subscription } from './subs
 export type AccountStatus = 'active' | 'suspended' | 'expired';
 
 /**
+ * 3-Tier Hierarchy & Agent-Client Scope Engine (Phase 1/2). Mirrors
+ * backend-api's accounts.account_type enum exactly. 'super_admin' is
+ * included for schema completeness only — the platform's actual Super
+ * Admin is a User with account_id=null (see types/auth.ts's User),
+ * never an Account row; no Account in this app is expected to carry
+ * this value in practice.
+ */
+export type AccountType = 'super_admin' | 'agent' | 'client';
+
+/** The minimal Agent-account summary AccountController eager-loads onto a Sub-Client's `agent` relation. */
+export interface AccountAgentSummary {
+  id: number;
+  company_name: string;
+  account_type: AccountType;
+}
+
+/**
  * Super Admin Client Provisioning, Client Admin Mapping, User Limits,
  * Granular Permission Matrix & Adaptive Dashboards refactor — the
  * client's coarse business-category, DISTINCT from ACCOUNT_MODULES below
@@ -161,12 +178,29 @@ export interface Account {
   status: AccountStatus;
   current_subscription: Subscription | null;
   owner?: AccountOwner | null;
+  /** 3-Tier Hierarchy & Agent-Client Scope Engine (Phase 1). Defaults to 'client' for every account created before this phase. */
+  account_type: AccountType;
+  /** 3-Tier Hierarchy (Phase 1). Null for a direct/platform client and for an Agent account itself. */
+  agent_id: number | null;
+  /** 3-Tier Hierarchy (Phase 1) — populated on GET /api/admin/accounts and /api/admin/accounts/{id} responses; absent (not null) elsewhere. */
+  agent?: AccountAgentSummary | null;
   /**
    * Absolute Super Admin Control. null = every module enabled (the
    * default for every account until a Super Admin explicitly narrows
    * it) — see Account::hasModuleEnabled() on the backend.
    */
   allowed_modules: AccountModule[] | null;
+  /**
+   * 3-Tier Hierarchy & Agent-Client Scope Engine (Phase 2) — Hierarchical
+   * Module Delegation Engine: the live, hierarchy-capped set of modules
+   * this account can actually use right now (may be narrower than
+   * allowed_modules if this account's Agent has since lost a module —
+   * see Account::effectiveModules() on the backend). Present only on
+   * /auth/me and GET /api/admin/accounts/{id} (AuthContext::hasModule()
+   * falls back to allowed_modules when this is absent, e.g. on the
+   * accounts list).
+   */
+  effective_modules?: AccountModule[];
   /** White-Label Automated PDF Reporting — Final Phase. Both nullable; unset = no branding applied (SimplePdfWriter::renderBrandedReport() falls back to a default accent color and omits the logo line). */
   logo_url: string | null;
   brand_accent_color: string | null;
@@ -181,6 +215,21 @@ export interface Account {
 /** GET /api/admin/accounts/{id} — adds full subscription history. */
 export interface AccountDetail extends Account {
   subscriptions: Subscription[]; // ordered newest starts_at first
+  /**
+   * 3-Tier Hierarchy & Agent-Client Scope Engine (Phase 4) — Agent Quota
+   * Pool & Allocation: how much of the viewing Agent's own pool is still
+   * unallocated (computed as if THIS account's current allocation were
+   * freed up first — see AccountController::show()). Present only when
+   * the viewer is an Agent; absent (not null) for Super Admin, who has
+   * no pool ceiling of their own. null = the Agent's own pool has no
+   * ceiling (their subscription is 'unlimited' or uncapped).
+   */
+  agent_remaining_pool?: number | null;
+}
+
+/** PUT /api/admin/accounts/{id}/quota — 3-Tier Hierarchy (Phase 4). */
+export interface UpdateQuotaPayload {
+  total_allocated_messages: number;
 }
 
 /** Shape of a Laravel paginate() response. */
@@ -197,6 +246,19 @@ export interface CreateAccountPayload {
   company_name: string;
   primary_phone?: string;
   status?: AccountStatus;
+
+  /**
+   * 3-Tier Hierarchy & Agent-Client Scope Engine (Phase 3 UI) — Super
+   * Admin only; AccountController::store() force-derives both fields
+   * for any non-Super-Admin caller regardless of what is sent (see its
+   * docblock), so these are omitted entirely by CreateAccountModal for
+   * an Agent caller creating their own Sub-Client. Omit/undefined =
+   * 'client' with no agent_id (today's existing default behavior,
+   * unchanged).
+   */
+  account_type?: AccountType;
+  /** Optional — a direct/platform client has no agent_id. Only meaningful when account_type is 'client'. */
+  agent_id?: number | null;
 
   admin_name: string;
   admin_email: string;

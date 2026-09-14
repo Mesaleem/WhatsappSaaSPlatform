@@ -220,6 +220,13 @@ class AuthController extends Controller
         // risk. Exposing the full `roles` array (already eager-loaded
         // above) lets the frontend check role membership correctly
         // instead of trusting one arbitrarily-picked role.
+        // 3-Tier Hierarchy & Agent-Client Scope Engine (Phase 2) — API
+        // Response Audit: effective_modules alongside allowed_modules on
+        // this same 'account' payload (see Account::effectiveModules()),
+        // so the frontend's hasModule() can honor the live Agent-Client
+        // hierarchy cap without re-implementing the intersection itself.
+        $user->account?->setAttribute('effective_modules', $user->account->effectiveModules());
+
         return [
             'id' => $user->id,
             'name' => $user->name,

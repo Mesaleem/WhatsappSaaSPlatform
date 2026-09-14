@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Loader2, Pencil, Plus, Power, PowerOff, RefreshCw, Timer } from 'lucide-react';
+import { Gauge, Loader2, Pencil, Plus, Power, PowerOff, RefreshCw, Timer } from 'lucide-react';
 import accountService from '../../services/accountService';
 import type { Account, AccountStatus } from '../../types/account';
+import { useAuth } from '../../core/context/AuthContext';
 import type { BillingModel, EngineType } from '../../types/subscription';
 import CreateAccountModal from '../../components/admin/CreateAccountModal';
+import UpdateQuotaModal from '../../components/admin/UpdateQuotaModal';
 import { TableCard } from '../../components/common/Card';
 import { ClearFiltersButton, Pagination, SearchInput, StatusFilterSelect } from '../../components/common/DataTableControls';
 import { extractErrorMessage } from '../../utils/apiError';
@@ -49,6 +51,16 @@ export default function AccountsPage() {
   // Read once on mount only; the dropdown below is the source of truth
   // after that, same as every other filter on this page.
   const [searchParams] = useSearchParams();
+  const { user, isSuperAdmin } = useAuth();
+  const superAdmin = isSuperAdmin();
+  // 3-Tier Hierarchy & Agent-Client Scope Engine (Phase 4) — the
+  // "Edit Quota" action is Agent-only (see this phase's spec); the
+  // only two roles that ever reach this page at all are Super Admin
+  // and Agent (AppLayout's superAdminOnly/agentOnly nav gating), so
+  // !superAdmin is equivalent here, but checked explicitly for the
+  // same defensiveness/clarity precedent CreateAccountModal already
+  // set for isAgentViewer.
+  const isAgentViewer = !superAdmin && user?.account?.account_type === 'agent';
 
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [page, setPage] = useState(1);
@@ -61,12 +73,23 @@ export default function AccountsPage() {
   );
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
+  // 3-Tier Hierarchy (Phase 3 UI) — Super Admin's "Filter by Agent"
+  // dropdown. Meaningless for an Agent viewer (their own results are
+  // already forced server-side to their own Sub-Clients regardless of
+  // this — see AccountController::index()), so this stays empty/unused
+  // and the dropdown itself is hidden for them (see `superAdmin` below).
+  const [agentFilter, setAgentFilter] = useState<number | ''>('');
+  const [agents, setAgents] = useState<Account[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [modalState, setModalState] = useState<{ open: boolean; account: Account | null }>({
     open: false,
     account: null,
   });
+  // 3-Tier Hierarchy & Agent-Client Scope Engine (Phase 4) — separate
+  // from `modalState` above (CreateAccountModal) since "Edit Quota"
+  // opens a distinct, narrower modal, not the full account editor.
+  const [quotaModalAccount, setQuotaModalAccount] = useState<Account | null>(null);
   // Client Management & Account Deactivation Engine — quick-toggle action
   // (Actions column), distinct from the full Edit modal's Status
   // dropdown, mirroring UsersPage.tsx's handleToggle() UX for users.
@@ -84,6 +107,8 @@ export default function AccountsPage() {
           status: statusFilter || undefined,
           from: from || undefined,
           to: to || undefined,
+          account_type: 'client',
+          agent_id: agentFilter || undefined,
         });
         setAccounts(res.data);
         setPage(res.current_page);
@@ -95,18 +120,41 @@ export default function AccountsPage() {
         setIsLoading(false);
       }
     },
-    [perPage, search, statusFilter, from, to],
+    [perPage, search, statusFilter, from, to, agentFilter],
   );
 
   useEffect(() => {
     void load(1);
   }, [load]);
 
+  useEffect(() => {
+    if (!superAdmin) return;
+    let cancelled = false;
+    accountService
+      .listAgents()
+      .then((data) => {
+        if (!cancelled) setAgents(data);
+      })
+      .catch(() => {
+        // Non-critical: the "Filter by Agent" dropdown just stays empty.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [superAdmin]);
+
   const openCreate = () => setModalState({ open: true, account: null });
   const openEdit = (account: Account) => setModalState({ open: true, account });
   const closeModal = () => setModalState({ open: false, account: null });
   const handleSaved = () => {
     closeModal();
+    void load(page);
+  };
+
+  const openEditQuota = (account: Account) => setQuotaModalAccount(account);
+  const closeQuotaModal = () => setQuotaModalAccount(null);
+  const handleQuotaSaved = () => {
+    closeQuotaModal();
     void load(page);
   };
 
@@ -133,12 +181,13 @@ export default function AccountsPage() {
     }
   };
 
-  const hasActiveFilters = search !== '' || statusFilter !== '' || from !== '' || to !== '';
+  const hasActiveFilters = search !== '' || statusFilter !== '' || from !== '' || to !== '' || agentFilter !== '';
   const clearFilters = () => {
     setSearch('');
     setStatusFilter('');
     setFrom('');
     setTo('');
+    setAgentFilter('');
   };
 
   return (
@@ -177,6 +226,21 @@ export default function AccountsPage() {
           options={STATUS_OPTIONS}
           allLabel="All statuses"
         />
+        {superAdmin && (
+          <select
+            value={agentFilter}
+            onChange={(e) => setAgentFilter(e.target.value ? Number(e.target.value) : '')}
+            className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+            aria-label="Filter by Agent"
+          >
+            <option value="">All Agents</option>
+            {agents.map((agent) => (
+              <option key={agent.id} value={agent.id}>
+                {agent.company_name}
+              </option>
+            ))}
+          </select>
+        )}
         <div className="flex items-center gap-2">
           <input
             type="date"
@@ -309,6 +373,16 @@ export default function AccountsPage() {
                         >
                           <Timer className="h-4 w-4" />
                         </button>
+                        {isAgentViewer && (
+                          <button
+                            onClick={() => openEditQuota(account)}
+                            className="rounded-md p-1.5 text-slate-500 hover:bg-slate-100 hover:text-slate-700"
+                            aria-label="Edit quota"
+                            title="Edit Quota"
+                          >
+                            <Gauge className="h-4 w-4" />
+                          </button>
+                        )}
                         <button
                           onClick={() => void handleToggleStatus(account)}
                           disabled={busyId === account.id}
@@ -347,6 +421,10 @@ export default function AccountsPage() {
 
       {modalState.open && (
         <CreateAccountModal account={modalState.account} onClose={closeModal} onSaved={handleSaved} />
+      )}
+
+      {quotaModalAccount && (
+        <UpdateQuotaModal account={quotaModalAccount} onClose={closeQuotaModal} onSaved={handleQuotaSaved} />
       )}
     </div>
   );

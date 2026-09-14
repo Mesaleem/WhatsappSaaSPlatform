@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Concerns\ResolvesTenantAccount;
 use App\Http\Controllers\Controller;
+use App\Models\Account;
 use App\Models\LoginAuditLog;
 use App\Services\Pdf\SimplePdfWriter;
 use Illuminate\Http\JsonResponse;
@@ -22,6 +23,13 @@ use Symfony\Component\HttpFoundation\StreamedResponse;
  *   - admin: forced to their own account's rows (TenantIsolationMiddleware
  *     already resolves account_id to their own regardless of any query
  *     param — see ResolvesTenantAccount's docblock).
+ *   - agent (3-Tier Hierarchy & Agent-Client Scope Engine, Phase 4):
+ *     forced to their own Agent account's rows PLUS every one of their
+ *     Sub-Clients' rows (account_id IN [own, ...owned-by-agent]) — an
+ *     Agent needs visibility across the whole reseller tree they're
+ *     accountable for, not just their own organization's logins. Treated
+ *     the same as 'admin' for the per-user narrowing below (i.e. NOT
+ *     narrowed to their own single user_id) for the same reason.
  *   - user (plain staff): further narrowed to ONLY their own login rows —
  *     a staff member should not see their coworkers' login history.
  */
@@ -170,13 +178,31 @@ class AuditLogController extends Controller
 
         $query = LoginAuditLog::query();
 
-        if ($account) {
+        // 3-Tier Hierarchy & Agent-Client Scope Engine (Phase 4) —
+        // agent_scope_id is set by TenantIsolationMiddleware (this
+        // route group is wrapped in it, unlike /admin/accounts) only
+        // when the caller's own account is an Agent; non-null here means
+        // $account above already resolved to that same Agent's own
+        // account (ResolvesTenantAccount reads the same 'account_id'
+        // attribute TenantIsolationMiddleware sets to the caller's own
+        // account_id for any non-Super-Admin). Expands the single-account
+        // filter below into "this Agent's own account OR any of their
+        // Sub-Clients' accounts" instead.
+        $agentScopeId = $request->attributes->get('agent_scope_id');
+
+        if ($agentScopeId) {
+            $query->where(function ($q) use ($agentScopeId) {
+                $q->where('account_id', $agentScopeId)
+                    ->orWhereIn('account_id', Account::query()->where('agent_id', $agentScopeId)->pluck('id'));
+            });
+        } elseif ($account) {
             $query->where('account_id', $account->id);
         }
 
         // A plain 'user' role never sees anyone else's login rows, even
-        // within their own account.
-        if (! $user->isSuperAdmin() && ! $user->hasRole('admin')) {
+        // within their own account. 'agent' is treated like 'admin' here
+        // (Phase 4) — see this class's docblock.
+        if (! $user->isSuperAdmin() && ! $user->hasRole('admin') && ! $user->hasRole('agent')) {
             $query->where('user_id', $user->id);
         }
 

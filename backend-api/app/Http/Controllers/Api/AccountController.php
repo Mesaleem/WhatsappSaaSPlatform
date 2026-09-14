@@ -7,6 +7,8 @@ use App\Models\Account;
 use App\Models\ContactGroup;
 use App\Models\Subscription;
 use App\Models\User;
+use App\Services\AccountService;
+use App\Services\QuotaService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -14,6 +16,12 @@ use Illuminate\Validation\Rule;
 
 class AccountController extends Controller
 {
+    public function __construct(
+        private readonly AccountService $accountService,
+        private readonly QuotaService $quotaService,
+    ) {
+    }
+
     private const ENGINE_TYPES = ['qr', 'meta'];
     private const BILLING_MODELS = ['flat_quota', 'per_message', 'unlimited'];
     // 'stripe' added in Module 8 alongside the automated checkout flow —
@@ -21,6 +29,43 @@ class AccountController extends Controller
     // able to select it, same as 'razorpay' already could.
     private const PAYMENT_MODES = ['cash', 'razorpay', 'stripe'];
     private const ACCOUNT_STATUSES = ['active', 'suspended', 'expired'];
+
+    /**
+     * 3-Tier Hierarchy & Agent-Client Scope Engine (Phase 1) — non-null
+     * only when the caller's OWN account is an Agent (Reseller) and the
+     * caller is not Super Admin: the agent_id every cross-tenant Account
+     * query/lookup in this controller must then be constrained to, so an
+     * Agent can only ever see/manage its own sub-clients. Always null
+     * for Super Admin (unrestricted) and for a plain client (who has no
+     * `manage-accounts` reach on this controller at all today — see
+     * TenantIsolationMiddleware's docblock for the disclosed permission
+     * gap this phase does not close).
+     */
+    private function callerAgentScopeId(Request $request): ?int
+    {
+        $user = $request->user();
+
+        if (! $user || $user->isSuperAdmin()) {
+            return null;
+        }
+
+        return $user->account?->account_type === 'agent' ? $user->account_id : null;
+    }
+
+    /**
+     * 3-Tier Hierarchy (Phase 1) — guards every {id}-addressed action
+     * (show/update/updateSubscription/updatePermissions) so an Agent
+     * caller gets the SAME 404 for "doesn't exist" and "exists but isn't
+     * yours" — deliberate, matching the non-disclosure precedent
+     * TenantIsolationMiddleware already applies to a Super Admin's own
+     * bad ?account_id=.
+     */
+    private function assertCallerCanAccessAccount(Request $request, Account $account): void
+    {
+        $agentScopeId = $this->callerAgentScopeId($request);
+
+        abort_if($agentScopeId !== null && $account->agent_id !== $agentScopeId, 404);
+    }
 
     /**
      * GET /api/admin/accounts — paginated accounts with current subscription,
@@ -35,8 +80,12 @@ class AccountController extends Controller
     {
         $perPage = min((int) $request->integer('per_page', 15), 100);
 
+        // 3-Tier Hierarchy & Agent-Client Scope Engine (Phase 1).
+        $isSuperAdmin = (bool) $request->user()?->isSuperAdmin();
+        $agentScopeId = $this->callerAgentScopeId($request);
+
         $accounts = Account::query()
-            ->with(['currentSubscription', 'owner:id,name,email,account_id'])
+            ->with(['currentSubscription', 'owner:id,name,email,account_id', 'agent:id,company_name,account_type'])
             ->when($request->filled('search'), function ($query) use ($request) {
                 $search = $request->string('search')->toString();
                 $query->where(function ($q) use ($search) {
@@ -47,6 +96,44 @@ class AccountController extends Controller
             ->when($request->filled('status'), function ($query) use ($request) {
                 $query->where('status', $request->string('status')->toString());
             })
+            // 3-Tier Hierarchy & Agent-Client Scope Engine (Phase 1) —
+            // ?agent_id= is honored only for Super Admin, per this
+            // phase's spec; an Agent caller's own forced scope below
+            // always wins instead (a client-supplied ?agent_id= from an
+            // Agent is silently ignored rather than trusted, mirroring
+            // TenantIsolationMiddleware's own "a regular user's
+            // ?account_id= override is never honored" precedent).
+            ->when($isSuperAdmin && $request->filled('agent_id'), function ($query) use ($request) {
+                $query->ownedByAgent($request->integer('agent_id'));
+            })
+            ->when($agentScopeId, function ($query, $scopeId) {
+                $query->ownedByAgent($scopeId);
+            })
+            // 3-Tier Hierarchy (Phase 3 UI) — Super Admin's "Filter by
+            // Agent" dropdown sends ?agent_id= (above, unchanged) for
+            // narrowing the Clients table to one Agent's Sub-Clients;
+            // this new ?account_type= is what AccountsPage now sends
+            // as account_type=client on every load so an Agent-type
+            // account row can never leak into that "Clients" table
+            // (index() previously returned every account_type
+            // undifferentiated — a pre-existing gap this phase's UI
+            // surfaced, not a regression), and what the Parent
+            // Agent / Filter-by-Agent dropdowns send as
+            // account_type=agent to list Agents themselves. Restricted
+            // to the two real values a caller ever has a reason to ask
+            // for; 'super_admin' is excluded since no Account row is
+            // expected to carry it (see the Phase 1 migration's
+            // docblock) and validating against it would just always
+            // return zero rows. Super-Admin-only, same as ?agent_id=
+            // above — an Agent caller's own forced ownedByAgent() scope
+            // already fully determines which accounts they see, so
+            // honoring this for them too would only let them narrow
+            // their own results, but not widen them; still ignored for
+            // consistency with the existing agent_id precedent.
+            ->when(
+                $isSuperAdmin && $request->filled('account_type') && in_array($request->string('account_type')->toString(), ['agent', 'client'], true),
+                fn ($query) => $query->where('account_type', $request->string('account_type')->toString())
+            )
             // Universal Data Table Audit — Date Range Pickers: filters on
             // the account's own provisioning date (created_at), the same
             // field the table's UI has no other way to slice by.
@@ -76,13 +163,18 @@ class AccountController extends Controller
      * soonest-expiring first so the most urgent renewal is always at the
      * top of the modal.
      */
-    public function expiringSoon(): JsonResponse
+    public function expiringSoon(Request $request): JsonResponse
     {
         $now = now();
         $window = $now->copy()->addDays(7);
 
+        // 3-Tier Hierarchy & Agent-Client Scope Engine (Phase 1) — same
+        // forced isolation as index() above.
+        $agentScopeId = $this->callerAgentScopeId($request);
+
         $accounts = Account::query()
             ->with(['currentSubscription', 'owner:id,name,email,account_id'])
+            ->when($agentScopeId, fn ($query, $scopeId) => $query->ownedByAgent($scopeId))
             ->whereHas('currentSubscription', function ($q) use ($now, $window) {
                 $q->where('status', 'active')->whereBetween('expires_at', [$now, $window]);
             })
@@ -118,15 +210,42 @@ class AccountController extends Controller
     /**
      * GET /api/admin/accounts/{id} — full profile with subscription history.
      */
-    public function show(int $id): JsonResponse
+    public function show(Request $request, int $id): JsonResponse
     {
         $account = Account::with([
             'owner:id,name,email,account_id',
+            'agent:id,company_name,account_type',
             'subscriptions' => fn ($q) => $q->orderByDesc('starts_at'),
         ])->findOrFail($id);
 
+        // 3-Tier Hierarchy & Agent-Client Scope Engine (Phase 1).
+        $this->assertCallerCanAccessAccount($request, $account);
+
         $account->subscriptions->each->refreshStatus();
         $account->setRelation('currentSubscription', $account->subscriptions->first());
+
+        // 3-Tier Hierarchy & Agent-Client Scope Engine (Phase 2) — API
+        // Response Audit: effective_modules alongside allowed_modules so
+        // the frontend can render active-vs-inherited without
+        // recomputing the hierarchy intersection itself.
+        $account->setAttribute('effective_modules', $account->effectiveModules());
+
+        // 3-Tier Hierarchy & Agent-Client Scope Engine (Phase 4) — Agent
+        // Quota Pool & Allocation: how much of the VIEWING Agent's own
+        // pool is still unallocated, computed as if this Sub-Client's
+        // current allocation were freed up (so re-saving the same value
+        // in UpdateQuotaModal never falsely reads as "over pool"). Only
+        // meaningful, and only present at all, for an Agent caller —
+        // absent (not null) for Super Admin, who has no pool ceiling of
+        // their own to report.
+        $agentScopeId = $this->callerAgentScopeId($request);
+        if ($agentScopeId !== null) {
+            $agentAccount = Account::findCached($agentScopeId);
+            $account->setAttribute(
+                'agent_remaining_pool',
+                $agentAccount ? $this->quotaService->remainingPool($agentAccount, $account->id) : null,
+            );
+        }
 
         return response()->json($account);
     }
@@ -137,7 +256,21 @@ class AccountController extends Controller
      */
     public function store(Request $request): JsonResponse
     {
-        $data = $request->validate([
+        // 3-Tier Hierarchy & Agent-Client Scope Engine (Phase 2) — resolved
+        // BEFORE validation on purpose: account_type/agent_id are only
+        // added to the validation rules at all for Super Admin (below).
+        // An Agent's submitted values for either are never trusted (same
+        // precedent as every other spoofable param this controller
+        // already defends — ?account_id=, ?agent_id=) and are force-set
+        // after validation regardless — so validating them for an Agent
+        // caller would only produce a confusing 422 for a value that was
+        // always going to be discarded, e.g. a garbage agent_id that
+        // fails Rule::exists() even though it's about to be overridden
+        // with the Agent's own account_id anyway.
+        $agentScopeId = $this->callerAgentScopeId($request);
+        $isSuperAdmin = (bool) $request->user()?->isSuperAdmin();
+
+        $rules = [
             'company_name' => ['required', 'string', 'max:255'],
             'primary_phone' => ['nullable', 'string', 'max:32'],
             'status' => ['sometimes', Rule::in(self::ACCOUNT_STATUSES)],
@@ -172,7 +305,54 @@ class AccountController extends Controller
             // (Client Organization Details).
             'max_users_limit' => ['nullable', 'integer', 'min:1'],
             'module_assignment' => ['required', Rule::in(Account::MODULE_ASSIGNMENTS)],
-        ]);
+        ];
+
+        if ($isSuperAdmin) {
+            // 3-Tier Hierarchy & Agent-Client Scope Engine (Phase 2) —
+            // only Super Admin's account_type/agent_id are ever validated
+            // (and therefore only ever present in $data below); see this
+            // method's opening comment for why an Agent's own submitted
+            // values skip validation entirely rather than being rejected.
+            $rules['account_type'] = ['sometimes', Rule::in(['agent', 'client'])];
+            $rules['agent_id'] = ['sometimes', 'nullable', 'integer', Rule::exists('accounts', 'id')->where('account_type', 'agent')];
+        }
+
+        $data = $request->validate($rules);
+
+        // Who is allowed to set account_type/agent_id, and what an Agent
+        // caller is forced to regardless of what it submitted.
+        if ($agentScopeId !== null) {
+            // An Agent can only ever create a Client that is its OWN
+            // sub-client — account_type from an Agent caller is silently
+            // ignored/forced, never trusted, and agent_id is always the
+            // caller's own account_id, never whatever (if anything) was
+            // submitted. Agents do not create other Agents in this phase.
+            $data['account_type'] = 'client';
+            $data['agent_id'] = $agentScopeId;
+        } elseif (! $isSuperAdmin) {
+            // Reachable only once some future role/permission actually
+            // lets a non-Agent, non-Super-Admin caller reach this route
+            // at all (not possible today — see
+            // TenantIsolationMiddleware's docblock) — fails closed to a
+            // plain, unattached client rather than trusting the request.
+            $data['account_type'] = 'client';
+            $data['agent_id'] = null;
+        } else {
+            // Super Admin: trusted as submitted. Omitted account_type
+            // defaults to 'client' (the column's own DB default);
+            // omitted/null agent_id stays null (a direct platform client).
+            $data['account_type'] = $data['account_type'] ?? 'client';
+            $data['agent_id'] = $data['agent_id'] ?? null;
+        }
+
+        // Hierarchical Module Delegation Engine (Phase 2) — an Agent can
+        // never grant its new Sub-Client a module it doesn't itself hold.
+        // No-op (returns $data['allowed_modules'] unchanged) for every
+        // caller except an Agent — see AccountService::resolveDelegatedModules().
+        $data['allowed_modules'] = $this->accountService->resolveDelegatedModules(
+            $agentScopeId !== null ? $request->user()->account : null,
+            $data['allowed_modules'] ?? null,
+        );
 
         $account = DB::transaction(function () use ($data) {
             $account = Account::create([
@@ -182,6 +362,9 @@ class AccountController extends Controller
                 'allowed_modules' => $data['allowed_modules'] ?? null,
                 'max_users_limit' => $data['max_users_limit'] ?? null,
                 'module_assignment' => $data['module_assignment'],
+                // 3-Tier Hierarchy & Agent-Client Scope Engine (Phase 2).
+                'account_type' => $data['account_type'],
+                'agent_id' => $data['agent_id'],
             ]);
 
             // Corrected Unified Client & Admin User Creation — the Account
@@ -198,6 +381,18 @@ class AccountController extends Controller
                 'is_active' => true,
             ]);
             $admin->assignRole('admin');
+
+            // 3-Tier Hierarchy & Agent-Client Scope Engine (Phase 2) — an
+            // Agent account's primary user ADDITIONALLY gets the 'agent'
+            // role, which is what actually lets it pass
+            // routes/api.php's permission:manage-accounts gate on
+            // /api/admin/accounts at all (seeded in RolePermissionSeeder).
+            // 'admin' above, unchanged, still covers this user's own
+            // normal account operations (billing, team, WhatsApp setup,
+            // ...) exactly like any other account's primary Admin.
+            if ($account->account_type === 'agent') {
+                $admin->assignRole('agent');
+            }
 
             // Group Messaging Step 1 — every new tenant starts with
             // exactly one default contact group, inside the same
@@ -251,6 +446,7 @@ class AccountController extends Controller
     public function update(Request $request, int $id): JsonResponse
     {
         $account = Account::findOrFail($id);
+        $this->assertCallerCanAccessAccount($request, $account);
 
         $data = $request->validate([
             'company_name' => ['sometimes', 'string', 'max:255'],
@@ -294,6 +490,8 @@ class AccountController extends Controller
     public function updateSubscription(Request $request, int $id): JsonResponse
     {
         $account = Account::findOrFail($id);
+        $this->assertCallerCanAccessAccount($request, $account);
+
         $subscription = $account->currentSubscription;
 
         if (! $subscription) {
@@ -341,6 +539,53 @@ class AccountController extends Controller
     }
 
     /**
+     * PUT /api/admin/accounts/{id}/quota — 3-Tier Hierarchy & Agent-Client
+     * Scope Engine (Phase 4): Agent Quota Pool & Allocation. Deliberately
+     * narrower than updateSubscription() above (numeric quota only — no
+     * engine/billing/pricing fields): its whole purpose is the pool-limit
+     * check below, which only makes sense against a single well-defined
+     * number, not an arbitrary subscription mutation (e.g. switching a
+     * Sub-Client to 'unlimited' here would make "how much of my pool is
+     * left" undefined — that combination stays on the existing broader
+     * endpoint, Super-Admin-oriented as before).
+     *
+     * The pool-limit validation itself only ever runs for an Agent caller
+     * (assertWithinPool() is a no-op otherwise) — a Super Admin has no
+     * pool of their own to be bounded by, matching every other Super-
+     * Admin-vs-Agent asymmetry already established in Phase 1/2 (e.g.
+     * AccountService::resolveDelegatedModules()).
+     */
+    public function updateQuota(Request $request, int $id): JsonResponse
+    {
+        $account = Account::findOrFail($id);
+        $this->assertCallerCanAccessAccount($request, $account);
+
+        $data = $request->validate([
+            'total_allocated_messages' => ['required', 'integer', 'min:1'],
+        ]);
+
+        $agentScopeId = $this->callerAgentScopeId($request);
+        if ($agentScopeId !== null) {
+            $agentAccount = Account::findOrFail($agentScopeId);
+            $this->quotaService->assertWithinPool($agentAccount, $data['total_allocated_messages'], $account->id);
+        }
+
+        $subscription = $account->currentSubscription;
+
+        if (! $subscription) {
+            return response()->json([
+                'message' => 'This account has no subscription to allocate a quota against.',
+            ], 404);
+        }
+
+        $subscription->total_allocated_messages = $data['total_allocated_messages'];
+        $subscription->save();
+        $subscription->refreshStatus();
+
+        return response()->json($subscription->fresh());
+    }
+
+    /**
      * PATCH /api/admin/accounts/{id}/permissions — Absolute Super Admin
      * Control: dynamically start/stop specific feature modules for a
      * client. allowed_modules=null resets the account to "every module
@@ -350,13 +595,27 @@ class AccountController extends Controller
     public function updatePermissions(Request $request, int $id): JsonResponse
     {
         $account = Account::findOrFail($id);
+        $this->assertCallerCanAccessAccount($request, $account);
 
         $data = $request->validate([
             'allowed_modules' => ['nullable', 'array'],
             'allowed_modules.*' => ['string', Rule::in(Account::MODULES)],
         ]);
 
-        $account->update(['allowed_modules' => $data['allowed_modules'] ?? null]);
+        // Hierarchical Module Delegation Engine (Phase 2) — an Agent
+        // updating one of its OWN sub-clients (assertCallerCanAccessAccount
+        // above already guarantees that's the only $account reachable
+        // here for a non-Super-Admin) can never grant a module it
+        // doesn't itself currently hold. No-op for Super Admin — see
+        // AccountService::resolveDelegatedModules().
+        $agentScopeId = $this->callerAgentScopeId($request);
+
+        $account->update([
+            'allowed_modules' => $this->accountService->resolveDelegatedModules(
+                $agentScopeId !== null ? $request->user()->account : null,
+                $data['allowed_modules'] ?? null,
+            ),
+        ]);
 
         return response()->json($account->fresh());
     }

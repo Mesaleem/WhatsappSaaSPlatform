@@ -3,10 +3,12 @@ import type {
   Account,
   AccountDetail,
   AccountStatus,
+  AccountType,
   CreateAccountPayload,
   PaginatedResponse,
   UpdateAccountPayload,
   UpdateAccountPermissionsPayload,
+  UpdateQuotaPayload,
 } from '../types/account';
 import type { Subscription, UpdateSubscriptionPayload } from '../types/subscription';
 import type { ExpiringSoonAccount } from '../types/analytics';
@@ -22,6 +24,22 @@ export interface ListAccountsParams {
   /** Date Range Pickers — filters by the account's own provisioning date (created_at), inclusive, 'YYYY-MM-DD'. */
   from?: string;
   to?: string;
+  /**
+   * 3-Tier Hierarchy (Phase 3 UI) — Super Admin's "Filter by Agent"
+   * dropdown on AccountsPage. Backend honors this only for a
+   * Super-Admin caller (AccountController::index()); silently ignored
+   * for an Agent caller, whose own results are always forced to their
+   * own ownedByAgent() scope regardless of what is sent here.
+   */
+  agent_id?: number;
+  /**
+   * 3-Tier Hierarchy (Phase 3 UI) — restricts the listing to one
+   * account_type ('client' for the ordinary Clients table so any
+   * existing Agent-type account row no longer leaks into it; 'agent'
+   * for the Agent-picker dropdowns, see listAgents() below). Same
+   * Super-Admin-only backend restriction as agent_id above.
+   */
+  account_type?: AccountType;
 }
 
 /**
@@ -33,6 +51,23 @@ const accountService = {
     return axiosInstance
       .get<PaginatedResponse<Account>>(BASE, { params })
       .then((res) => res.data);
+  },
+
+  /**
+   * 3-Tier Hierarchy (Phase 3 UI) — every Agent-type account, for the
+   * Super Admin's "Parent Agent" (CreateAccountModal) and "Filter by
+   * Agent" (AccountsPage) pickers. Super Admin only — see
+   * ListAccountsParams.account_type. [Disclosed limit]: no dedicated
+   * "all agents" endpoint exists yet, so this is a plain list() call
+   * capped at the endpoint's own per_page=100 ceiling
+   * (AccountController::index()); a platform with more than 100 Agent
+   * accounts needs a real search/autocomplete here instead of this
+   * flat dropdown — out of this phase's stated frontend-only scope.
+   */
+  listAgents() {
+    return axiosInstance
+      .get<PaginatedResponse<Account>>(BASE, { params: { account_type: 'agent', per_page: 100 } })
+      .then((res) => res.data.data);
   },
 
   get(id: number) {
@@ -52,6 +87,20 @@ const accountService = {
   updateSubscription(id: number, payload: UpdateSubscriptionPayload) {
     return axiosInstance
       .put<Subscription>(`${BASE}/${id}/subscription`, payload)
+      .then((res) => res.data);
+  },
+
+  /**
+   * 3-Tier Hierarchy & Agent-Client Scope Engine (Phase 4) — Agent Quota
+   * Pool & Allocation. Deliberately narrower than updateSubscription()
+   * above (numeric quota only) — see UpdateQuotaModal.tsx and
+   * AccountController::updateQuota()'s docblock. A 422 here (an Agent
+   * over-allocating past their own pool) carries a field-level message
+   * on total_allocated_messages — surface it with extractErrorMessage().
+   */
+  updateQuota(id: number, payload: UpdateQuotaPayload) {
+    return axiosInstance
+      .put<Subscription>(`${BASE}/${id}/quota`, payload)
       .then((res) => res.data);
   },
 

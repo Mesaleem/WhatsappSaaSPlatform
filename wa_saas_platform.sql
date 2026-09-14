@@ -24,9 +24,12 @@ DROP TABLE IF EXISTS `accounts`;
 /*!50503 SET character_set_client = utf8mb4 */;
 CREATE TABLE `accounts` (
   `id` bigint unsigned NOT NULL AUTO_INCREMENT,
+  `account_type` enum('super_admin','agent','client') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'client',
+  `agent_id` bigint unsigned DEFAULT NULL,
   `company_name` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
   `logo_url` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `brand_accent_color` varchar(7) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `gemini_api_key` text COLLATE utf8mb4_unicode_ci,
   `primary_phone` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `status` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'active',
   `is_platform_device` tinyint(1) NOT NULL DEFAULT '0',
@@ -41,7 +44,10 @@ CREATE TABLE `accounts` (
   `created_at` timestamp NULL DEFAULT NULL,
   `updated_at` timestamp NULL DEFAULT NULL,
   PRIMARY KEY (`id`),
-  KEY `accounts_status_index` (`status`)
+  KEY `accounts_status_index` (`status`),
+  KEY `accounts_agent_id_index` (`agent_id`),
+  KEY `accounts_account_type_index` (`account_type`),
+  CONSTRAINT `accounts_agent_id_foreign` FOREIGN KEY (`agent_id`) REFERENCES `accounts` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB AUTO_INCREMENT=3 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
@@ -51,7 +57,7 @@ CREATE TABLE `accounts` (
 
 LOCK TABLES `accounts` WRITE;
 /*!40000 ALTER TABLE `accounts` DISABLE KEYS */;
-INSERT INTO `accounts` VALUES (1,'Demo Account',NULL,NULL,'+91 90000 00000','active',0,60,'[\"dashboard\", \"analytics\", \"billing\", \"team_management\", \"whatsapp_setup\", \"send_alert\", \"chatbot\", \"templates\", \"device_settings\", \"social_accounts\", \"meta_ads\", \"lead_crm\", \"social_inbox\", \"comment_automation\", \"reports\"]',NULL,'both',0,0,0,0,'2026-09-09 01:32:59','2026-09-11 02:46:50'),(2,'Super Admin — WhatsApp Test Device',NULL,NULL,NULL,'active',1,60,NULL,NULL,'both',0,0,0,0,'2026-09-10 01:15:22','2026-09-10 01:15:22');
+INSERT INTO `accounts` VALUES (1,'client',NULL,'Demo Account',NULL,NULL,NULL,'+91 90000 00000','active',0,60,'[\"dashboard\", \"analytics\", \"billing\", \"team_management\", \"whatsapp_setup\", \"send_alert\", \"templates\", \"device_settings\", \"message_logs\", \"contact_groups\"]',NULL,'whatsapp_messaging',0,0,0,0,'2026-09-09 01:32:59','2026-09-14 01:29:17'),(2,'client',NULL,'Super Admin — WhatsApp Test Device',NULL,NULL,NULL,NULL,'active',1,60,NULL,NULL,'both',0,0,0,0,'2026-09-10 01:15:22','2026-09-10 01:15:22');
 /*!40000 ALTER TABLE `accounts` ENABLE KEYS */;
 UNLOCK TABLES;
 
@@ -192,6 +198,7 @@ CREATE TABLE `cache` (
 
 LOCK TABLES `cache` WRITE;
 /*!40000 ALTER TABLE `cache` DISABLE KEYS */;
+INSERT INTO `cache` VALUES ('spatie.permission.cache','a:3:{s:5:\"alias\";a:4:{s:1:\"a\";s:2:\"id\";s:1:\"b\";s:4:\"name\";s:1:\"c\";s:10:\"guard_name\";s:1:\"r\";s:5:\"roles\";}s:11:\"permissions\";a:27:{i:0;a:4:{s:1:\"a\";i:1;s:1:\"b\";s:15:\"manage-accounts\";s:1:\"c\";s:3:\"web\";s:1:\"r\";a:2:{i:0;i:1;i:1;i:5;}}i:1;a:4:{s:1:\"a\";i:2;s:1:\"b\";s:20:\"manage-subscriptions\";s:1:\"c\";s:3:\"web\";s:1:\"r\";a:2:{i:0;i:1;i:1;i:2;}}i:2;a:4:{s:1:\"a\";i:3;s:1:\"b\";s:13:\"send-messages\";s:1:\"c\";s:3:\"web\";s:1:\"r\";a:3:{i:0;i:1;i:1;i:2;i:2;i:3;}}i:3;a:4:{s:1:\"a\";i:4;s:1:\"b\";s:14:\"view-analytics\";s:1:\"c\";s:3:\"web\";s:1:\"r\";a:3:{i:0;i:1;i:1;i:2;i:2;i:3;}}i:4;a:4:{s:1:\"a\";i:5;s:1:\"b\";s:9:\"view-logs\";s:1:\"c\";s:3:\"web\";s:1:\"r\";a:2:{i:0;i:1;i:1;i:2;}}i:5;a:4:{s:1:\"a\";i:6;s:1:\"b\";s:23:\"manage-billing-settings\";s:1:\"c\";s:3:\"web\";s:1:\"r\";a:1:{i:0;i:1;}}i:6;a:4:{s:1:\"a\";i:7;s:1:\"b\";s:25:\"manage-developer-settings\";s:1:\"c\";s:3:\"web\";s:1:\"r\";a:2:{i:0;i:1;i:1;i:2;}}i:7;a:4:{s:1:\"a\";i:8;s:1:\"b\";s:14:\"manage-chatbot\";s:1:\"c\";s:3:\"web\";s:1:\"r\";a:2:{i:0;i:1;i:1;i:2;}}i:8;a:4:{s:1:\"a\";i:9;s:1:\"b\";s:11:\"manage-team\";s:1:\"c\";s:3:\"web\";s:1:\"r\";a:3:{i:0;i:1;i:1;i:2;i:2;i:4;}}i:9;a:4:{s:1:\"a\";i:10;s:1:\"b\";s:12:\"manage-roles\";s:1:\"c\";s:3:\"web\";s:1:\"r\";a:2:{i:0;i:1;i:1;i:2;}}i:10;a:4:{s:1:\"a\";i:11;s:1:\"b\";s:16:\"manage-templates\";s:1:\"c\";s:3:\"web\";s:1:\"r\";a:1:{i:0;i:1;}}i:11;a:4:{s:1:\"a\";i:12;s:1:\"b\";s:15:\"view-audit-logs\";s:1:\"c\";s:3:\"web\";s:1:\"r\";a:3:{i:0;i:1;i:1;i:2;i:2;i:3;}}i:12;a:4:{s:1:\"a\";i:13;s:1:\"b\";s:20:\"manage-notifications\";s:1:\"c\";s:3:\"web\";s:1:\"r\";a:2:{i:0;i:1;i:1;i:2;}}i:13;a:4:{s:1:\"a\";i:14;s:1:\"b\";s:22:\"manage-social-settings\";s:1:\"c\";s:3:\"web\";s:1:\"r\";a:1:{i:0;i:1;}}i:14;a:4:{s:1:\"a\";i:15;s:1:\"b\";s:22:\"manage-social-accounts\";s:1:\"c\";s:3:\"web\";s:1:\"r\";a:3:{i:0;i:1;i:1;i:2;i:2;i:4;}}i:15;a:4:{s:1:\"a\";i:16;s:1:\"b\";s:15:\"launch-meta-ads\";s:1:\"c\";s:3:\"web\";s:1:\"r\";a:3:{i:0;i:1;i:1;i:2;i:2;i:4;}}i:16;a:4:{s:1:\"a\";i:17;s:1:\"b\";s:19:\"manage-social-leads\";s:1:\"c\";s:3:\"web\";s:1:\"r\";a:3:{i:0;i:1;i:1;i:2;i:2;i:4;}}i:17;a:4:{s:1:\"a\";i:18;s:1:\"b\";s:21:\"view-social-analytics\";s:1:\"c\";s:3:\"web\";s:1:\"r\";a:3:{i:0;i:1;i:1;i:2;i:2;i:4;}}i:18;a:4:{s:1:\"a\";i:19;s:1:\"b\";s:25:\"manage-comment-automation\";s:1:\"c\";s:3:\"web\";s:1:\"r\";a:3:{i:0;i:1;i:1;i:2;i:2;i:4;}}i:19;a:4:{s:1:\"a\";i:20;s:1:\"b\";s:13:\"whatsapp.view\";s:1:\"c\";s:3:\"web\";s:1:\"r\";a:1:{i:0;i:1;}}i:20;a:4:{s:1:\"a\";i:21;s:1:\"b\";s:15:\"whatsapp.create\";s:1:\"c\";s:3:\"web\";s:1:\"r\";a:1:{i:0;i:1;}}i:21;a:4:{s:1:\"a\";i:22;s:1:\"b\";s:13:\"whatsapp.edit\";s:1:\"c\";s:3:\"web\";s:1:\"r\";a:1:{i:0;i:1;}}i:22;a:4:{s:1:\"a\";i:23;s:1:\"b\";s:15:\"whatsapp.delete\";s:1:\"c\";s:3:\"web\";s:1:\"r\";a:1:{i:0;i:1;}}i:23;a:4:{s:1:\"a\";i:24;s:1:\"b\";s:15:\"social_ads.view\";s:1:\"c\";s:3:\"web\";s:1:\"r\";a:1:{i:0;i:1;}}i:24;a:4:{s:1:\"a\";i:25;s:1:\"b\";s:17:\"social_ads.launch\";s:1:\"c\";s:3:\"web\";s:1:\"r\";a:1:{i:0;i:1;}}i:25;a:4:{s:1:\"a\";i:26;s:1:\"b\";s:22:\"social_ads.edit_budget\";s:1:\"c\";s:3:\"web\";s:1:\"r\";a:1:{i:0;i:1;}}i:26;a:4:{s:1:\"a\";i:27;s:1:\"b\";s:23:\"social_ads.delete_rules\";s:1:\"c\";s:3:\"web\";s:1:\"r\";a:1:{i:0;i:1;}}}s:5:\"roles\";a:5:{i:0;a:3:{s:1:\"a\";i:1;s:1:\"b\";s:11:\"super_admin\";s:1:\"c\";s:3:\"web\";}i:1;a:3:{s:1:\"a\";i:5;s:1:\"b\";s:5:\"agent\";s:1:\"c\";s:3:\"web\";}i:2;a:3:{s:1:\"a\";i:2;s:1:\"b\";s:5:\"admin\";s:1:\"c\";s:3:\"web\";}i:3;a:3:{s:1:\"a\";i:3;s:1:\"b\";s:4:\"user\";s:1:\"c\";s:3:\"web\";}i:4;a:3:{s:1:\"a\";i:4;s:1:\"b\";s:15:\"social_marketer\";s:1:\"c\";s:3:\"web\";}}}',1789456534);
 /*!40000 ALTER TABLE `cache` ENABLE KEYS */;
 UNLOCK TABLES;
 
@@ -355,6 +362,72 @@ CREATE TABLE `comment_automation_rules` (
 LOCK TABLES `comment_automation_rules` WRITE;
 /*!40000 ALTER TABLE `comment_automation_rules` DISABLE KEYS */;
 /*!40000 ALTER TABLE `comment_automation_rules` ENABLE KEYS */;
+UNLOCK TABLES;
+
+--
+-- Table structure for table `contact_group_members`
+--
+
+DROP TABLE IF EXISTS `contact_group_members`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!50503 SET character_set_client = utf8mb4 */;
+CREATE TABLE `contact_group_members` (
+  `id` bigint unsigned NOT NULL AUTO_INCREMENT,
+  `group_id` bigint unsigned NOT NULL,
+  `phone_number` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `name` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `created_at` timestamp NULL DEFAULT NULL,
+  `updated_at` timestamp NULL DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `contact_group_members_group_id_phone_number_unique` (`group_id`,`phone_number`),
+  CONSTRAINT `contact_group_members_group_id_foreign` FOREIGN KEY (`group_id`) REFERENCES `contact_groups` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB AUTO_INCREMENT=5 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
+
+--
+-- Dumping data for table `contact_group_members`
+--
+
+LOCK TABLES `contact_group_members` WRITE;
+/*!40000 ALTER TABLE `contact_group_members` DISABLE KEYS */;
+INSERT INTO `contact_group_members` VALUES (3,3,'917236062374',NULL,'2026-09-13 11:47:53','2026-09-13 11:47:53'),(4,3,'917021593034',NULL,'2026-09-13 11:47:53','2026-09-13 11:47:53');
+/*!40000 ALTER TABLE `contact_group_members` ENABLE KEYS */;
+UNLOCK TABLES;
+
+--
+-- Table structure for table `contact_groups`
+--
+
+DROP TABLE IF EXISTS `contact_groups`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!50503 SET character_set_client = utf8mb4 */;
+CREATE TABLE `contact_groups` (
+  `id` bigint unsigned NOT NULL AUTO_INCREMENT,
+  `account_id` bigint unsigned NOT NULL,
+  `name` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `group_type` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'internal_segment',
+  `wa_group_jid` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `invite_link` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `sync_status` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `sync_error` text COLLATE utf8mb4_unicode_ci,
+  `is_default` tinyint(1) NOT NULL DEFAULT '0',
+  `created_at` timestamp NULL DEFAULT NULL,
+  `updated_at` timestamp NULL DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `contact_groups_account_id_is_default_index` (`account_id`,`is_default`),
+  KEY `contact_groups_account_id_group_type_index` (`account_id`,`group_type`),
+  CONSTRAINT `contact_groups_account_id_foreign` FOREIGN KEY (`account_id`) REFERENCES `accounts` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB AUTO_INCREMENT=4 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
+
+--
+-- Dumping data for table `contact_groups`
+--
+
+LOCK TABLES `contact_groups` WRITE;
+/*!40000 ALTER TABLE `contact_groups` DISABLE KEYS */;
+INSERT INTO `contact_groups` VALUES (3,1,'XYZ','native_wa_group','120363432118739170@g.us','https://chat.whatsapp.com/IUgzSMZDeUmFMrdnr8xUrn','failed','A message to this group failed: forbidden. If the WhatsApp group was deleted or this account was removed from it, delete and recreate it below.',0,'2026-09-13 11:47:53','2026-09-13 12:10:32');
+/*!40000 ALTER TABLE `contact_groups` ENABLE KEYS */;
 UNLOCK TABLES;
 
 --
@@ -593,7 +666,7 @@ CREATE TABLE `login_audit_logs` (
   KEY `login_audit_logs_status_index` (`status`),
   CONSTRAINT `login_audit_logs_account_id_foreign` FOREIGN KEY (`account_id`) REFERENCES `accounts` (`id`) ON DELETE SET NULL,
   CONSTRAINT `login_audit_logs_user_id_foreign` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE SET NULL
-) ENGINE=InnoDB AUTO_INCREMENT=19 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=27 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -602,7 +675,7 @@ CREATE TABLE `login_audit_logs` (
 
 LOCK TABLES `login_audit_logs` WRITE;
 /*!40000 ALTER TABLE `login_audit_logs` DISABLE KEYS */;
-INSERT INTO `login_audit_logs` VALUES (1,2,1,'admin','admin@demo-account.local','127.0.0.1','Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36','success','2026-09-09 04:29:58','2026-09-09 04:29:58','2026-09-09 04:29:58'),(2,2,1,'admin','admin@demo-account.local','127.0.0.1','Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36','success','2026-09-09 05:04:27','2026-09-09 05:04:27','2026-09-09 05:04:27'),(3,1,NULL,'super_admin','superadmin@wa-saas.local','127.0.0.1','Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36','success','2026-09-09 06:28:03','2026-09-09 06:28:03','2026-09-09 06:28:03'),(4,1,NULL,'super_admin','superadmin@wa-saas.local','127.0.0.1','Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36','success','2026-09-09 06:29:36','2026-09-09 06:29:36','2026-09-09 06:29:36'),(5,1,NULL,'super_admin','superadmin@wa-saas.local','127.0.0.1','Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36','success','2026-09-09 06:35:02','2026-09-09 06:35:02','2026-09-09 06:35:02'),(6,1,NULL,'super_admin','superadmin@wa-saas.local','127.0.0.1','Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36','success','2026-09-09 06:48:34','2026-09-09 06:48:34','2026-09-09 06:48:34'),(7,NULL,NULL,NULL,'admin@demo-account.local','127.0.0.1','Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36','failed','2026-09-09 06:53:50','2026-09-09 06:53:50','2026-09-09 06:53:50'),(8,2,1,'admin','admin@demo-account.local','127.0.0.1','Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36','success','2026-09-09 06:53:59','2026-09-09 06:53:59','2026-09-09 06:53:59'),(9,2,1,'admin','admin@demo-account.local','127.0.0.1','Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36','success','2026-09-09 07:41:14','2026-09-09 07:41:14','2026-09-09 07:41:14'),(10,1,NULL,'super_admin','superadmin@wa-saas.local','127.0.0.1','Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36','success','2026-09-10 01:11:56','2026-09-10 01:11:56','2026-09-10 01:11:56'),(11,2,1,'admin','admin@demo-account.local','127.0.0.1','Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36','success','2026-09-10 01:12:17','2026-09-10 01:12:17','2026-09-10 01:12:17'),(12,1,NULL,'super_admin','superadmin@wa-saas.local','127.0.0.1','Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36','success','2026-09-10 05:16:48','2026-09-10 05:16:48','2026-09-10 05:16:48'),(13,NULL,NULL,NULL,'admin@demo-account.local','127.0.0.1','Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36','failed','2026-09-10 05:16:56','2026-09-10 05:16:56','2026-09-10 05:16:56'),(14,2,1,'admin','admin@demo-account.local','127.0.0.1','Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36','success','2026-09-10 05:17:09','2026-09-10 05:17:09','2026-09-10 05:17:09'),(15,NULL,NULL,NULL,'marketer@demo-account.local','127.0.0.1','Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36','failed','2026-09-10 05:48:35','2026-09-10 05:48:35','2026-09-10 05:48:35'),(16,3,1,'social_marketer','marketer@demo-account.local','127.0.0.1','Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36','success','2026-09-10 05:48:44','2026-09-10 05:48:44','2026-09-10 05:48:44'),(17,2,1,'admin','admin@demo-account.local','127.0.0.1','Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36','success','2026-09-10 06:52:44','2026-09-10 06:52:44','2026-09-10 06:52:44'),(18,2,1,'admin','admin@demo-account.local','127.0.0.1','Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36','success','2026-09-10 06:53:44','2026-09-10 06:53:44','2026-09-10 06:53:44');
+INSERT INTO `login_audit_logs` VALUES (1,2,1,'admin','admin@demo-account.local','127.0.0.1','Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36','success','2026-09-09 04:29:58','2026-09-09 04:29:58','2026-09-09 04:29:58'),(2,2,1,'admin','admin@demo-account.local','127.0.0.1','Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36','success','2026-09-09 05:04:27','2026-09-09 05:04:27','2026-09-09 05:04:27'),(3,1,NULL,'super_admin','superadmin@wa-saas.local','127.0.0.1','Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36','success','2026-09-09 06:28:03','2026-09-09 06:28:03','2026-09-09 06:28:03'),(4,1,NULL,'super_admin','superadmin@wa-saas.local','127.0.0.1','Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36','success','2026-09-09 06:29:36','2026-09-09 06:29:36','2026-09-09 06:29:36'),(5,1,NULL,'super_admin','superadmin@wa-saas.local','127.0.0.1','Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36','success','2026-09-09 06:35:02','2026-09-09 06:35:02','2026-09-09 06:35:02'),(6,1,NULL,'super_admin','superadmin@wa-saas.local','127.0.0.1','Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36','success','2026-09-09 06:48:34','2026-09-09 06:48:34','2026-09-09 06:48:34'),(7,NULL,NULL,NULL,'admin@demo-account.local','127.0.0.1','Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36','failed','2026-09-09 06:53:50','2026-09-09 06:53:50','2026-09-09 06:53:50'),(8,2,1,'admin','admin@demo-account.local','127.0.0.1','Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36','success','2026-09-09 06:53:59','2026-09-09 06:53:59','2026-09-09 06:53:59'),(9,2,1,'admin','admin@demo-account.local','127.0.0.1','Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36','success','2026-09-09 07:41:14','2026-09-09 07:41:14','2026-09-09 07:41:14'),(10,1,NULL,'super_admin','superadmin@wa-saas.local','127.0.0.1','Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36','success','2026-09-10 01:11:56','2026-09-10 01:11:56','2026-09-10 01:11:56'),(11,2,1,'admin','admin@demo-account.local','127.0.0.1','Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36','success','2026-09-10 01:12:17','2026-09-10 01:12:17','2026-09-10 01:12:17'),(12,1,NULL,'super_admin','superadmin@wa-saas.local','127.0.0.1','Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36','success','2026-09-10 05:16:48','2026-09-10 05:16:48','2026-09-10 05:16:48'),(13,NULL,NULL,NULL,'admin@demo-account.local','127.0.0.1','Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36','failed','2026-09-10 05:16:56','2026-09-10 05:16:56','2026-09-10 05:16:56'),(14,2,1,'admin','admin@demo-account.local','127.0.0.1','Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36','success','2026-09-10 05:17:09','2026-09-10 05:17:09','2026-09-10 05:17:09'),(15,NULL,NULL,NULL,'marketer@demo-account.local','127.0.0.1','Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36','failed','2026-09-10 05:48:35','2026-09-10 05:48:35','2026-09-10 05:48:35'),(16,3,1,'social_marketer','marketer@demo-account.local','127.0.0.1','Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36','success','2026-09-10 05:48:44','2026-09-10 05:48:44','2026-09-10 05:48:44'),(17,2,1,'admin','admin@demo-account.local','127.0.0.1','Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36','success','2026-09-10 06:52:44','2026-09-10 06:52:44','2026-09-10 06:52:44'),(18,2,1,'admin','admin@demo-account.local','127.0.0.1','Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36','success','2026-09-10 06:53:44','2026-09-10 06:53:44','2026-09-10 06:53:44'),(19,NULL,NULL,NULL,'superadmin@wa-saas.local','127.0.0.1','Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36','failed','2026-09-11 10:59:15','2026-09-11 10:59:15','2026-09-11 10:59:15'),(20,1,NULL,'super_admin','superadmin@wa-saas.local','127.0.0.1','Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36','success','2026-09-11 10:59:23','2026-09-11 10:59:23','2026-09-11 10:59:23'),(21,1,NULL,'super_admin','superadmin@wa-saas.local','127.0.0.1','Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36','success','2026-09-13 02:18:05','2026-09-13 02:18:05','2026-09-13 02:18:05'),(22,2,1,'admin','admin@demo-account.local','127.0.0.1','Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36','success','2026-09-13 02:19:20','2026-09-13 02:19:20','2026-09-13 02:19:20'),(23,NULL,NULL,NULL,'admin@demo-account.local','127.0.0.1','Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36','failed','2026-09-13 05:38:29','2026-09-13 05:38:29','2026-09-13 05:38:29'),(24,2,1,'admin','admin@demo-account.local','127.0.0.1','Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36','success','2026-09-13 05:38:37','2026-09-13 05:38:37','2026-09-13 05:38:37'),(25,2,1,'admin','admin@demo-account.local','127.0.0.1','Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36','success','2026-09-13 10:30:17','2026-09-13 10:30:17','2026-09-13 10:30:17'),(26,2,1,'admin','admin@demo-account.local','127.0.0.1','Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36','success','2026-09-13 10:44:02','2026-09-13 10:44:02','2026-09-13 10:44:02');
 /*!40000 ALTER TABLE `login_audit_logs` ENABLE KEYS */;
 UNLOCK TABLES;
 
@@ -676,6 +749,59 @@ LOCK TABLES `mail_settings` WRITE;
 UNLOCK TABLES;
 
 --
+-- Table structure for table `message_dispatch_logs`
+--
+
+DROP TABLE IF EXISTS `message_dispatch_logs`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!50503 SET character_set_client = utf8mb4 */;
+CREATE TABLE `message_dispatch_logs` (
+  `id` bigint unsigned NOT NULL AUTO_INCREMENT,
+  `account_id` bigint unsigned NOT NULL,
+  `source` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `api_key_id` bigint unsigned DEFAULT NULL,
+  `recipient_phone` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `recipient_type` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'individual',
+  `group_id` bigint unsigned DEFAULT NULL,
+  `group_name` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `recipient_count` int unsigned NOT NULL DEFAULT '1',
+  `success_count` int unsigned DEFAULT NULL,
+  `failure_count` int unsigned DEFAULT NULL,
+  `status` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `error_reason` text COLLATE utf8mb4_unicode_ci,
+  `has_media` tinyint(1) NOT NULL DEFAULT '0',
+  `reference_type` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `reference_id` bigint unsigned DEFAULT NULL,
+  `template_name` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `message_preview` varchar(200) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `sent_at` timestamp NULL DEFAULT NULL,
+  `gateway_message_id` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `created_at` timestamp NULL DEFAULT NULL,
+  `updated_at` timestamp NULL DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `message_dispatch_logs_api_key_id_foreign` (`api_key_id`),
+  KEY `message_dispatch_logs_account_id_created_at_index` (`account_id`,`created_at`),
+  KEY `message_dispatch_logs_account_id_status_index` (`account_id`,`status`),
+  KEY `message_dispatch_logs_account_id_source_index` (`account_id`,`source`),
+  KEY `message_dispatch_logs_group_id_foreign` (`group_id`),
+  KEY `message_dispatch_logs_gateway_message_id_index` (`gateway_message_id`),
+  CONSTRAINT `message_dispatch_logs_account_id_foreign` FOREIGN KEY (`account_id`) REFERENCES `accounts` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `message_dispatch_logs_api_key_id_foreign` FOREIGN KEY (`api_key_id`) REFERENCES `api_keys` (`id`) ON DELETE SET NULL,
+  CONSTRAINT `message_dispatch_logs_group_id_foreign` FOREIGN KEY (`group_id`) REFERENCES `contact_groups` (`id`) ON DELETE SET NULL
+) ENGINE=InnoDB AUTO_INCREMENT=5 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
+
+--
+-- Dumping data for table `message_dispatch_logs`
+--
+
+LOCK TABLES `message_dispatch_logs` WRITE;
+/*!40000 ALTER TABLE `message_dispatch_logs` DISABLE KEYS */;
+INSERT INTO `message_dispatch_logs` VALUES (1,1,'web_template',NULL,'917021593034','individual',NULL,NULL,1,NULL,NULL,'sent',NULL,0,'template',1,NULL,NULL,'2026-09-13 08:51:55',NULL,'2026-09-13 08:51:55','2026-09-13 08:51:55'),(2,1,'web_template',NULL,'917021593034','individual',NULL,NULL,1,NULL,NULL,'sent',NULL,0,'template',1,'Pyament Related','Hello salee,m,\n\nyour payment is done for for your information\n\npayemnt refrence number : pau-yeuw88\npayment amount : 5000\ncustomer name : salee,m\n\nThanks you','2026-09-13 09:10:26',NULL,'2026-09-13 09:10:26','2026-09-13 09:10:26'),(3,1,'web_template',NULL,'group:3','group',3,'XYZ',1,1,0,'sent',NULL,0,NULL,NULL,'Pyament Related','Hello saleem,\n\nyour payment is done for for your information\n\npayemnt refrence number : ghhg677676\npayment amount : 656\ncustomer name : saleem\n\nThanks you','2026-09-13 12:00:33',NULL,'2026-09-13 12:00:32','2026-09-13 12:00:33'),(4,1,'web_template',NULL,'group:3','group',3,'XYZ',1,0,1,'failed','forbidden',0,NULL,NULL,'Pyament Related','Hello tesq,\n\nyour payment is done for for your information\n\npayemnt refrence number : wsdf\npayment amount : 12\ncustomer name : tesq\n\nThanks you',NULL,NULL,'2026-09-13 12:10:31','2026-09-13 12:10:32');
+/*!40000 ALTER TABLE `message_dispatch_logs` ENABLE KEYS */;
+UNLOCK TABLES;
+
+--
 -- Table structure for table `message_templates`
 --
 
@@ -689,9 +815,11 @@ CREATE TABLE `message_templates` (
   `title` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
   `template_body` text COLLATE utf8mb4_unicode_ci NOT NULL,
   `variables_schema` json DEFAULT NULL,
+  `header_type` enum('text','image','document') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'text',
   `status` enum('pending','approved','rejected') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'pending',
   `is_super_admin_tested` tinyint(1) NOT NULL DEFAULT '0',
   `tested_at` timestamp NULL DEFAULT NULL,
+  `rejection_reason` text COLLATE utf8mb4_unicode_ci,
   `created_by` bigint unsigned DEFAULT NULL,
   `created_at` timestamp NULL DEFAULT NULL,
   `updated_at` timestamp NULL DEFAULT NULL,
@@ -702,7 +830,7 @@ CREATE TABLE `message_templates` (
   KEY `message_templates_industry_type_index` (`industry_type`),
   CONSTRAINT `message_templates_account_id_foreign` FOREIGN KEY (`account_id`) REFERENCES `accounts` (`id`) ON DELETE CASCADE,
   CONSTRAINT `message_templates_created_by_foreign` FOREIGN KEY (`created_by`) REFERENCES `users` (`id`) ON DELETE SET NULL
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=2 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -711,6 +839,7 @@ CREATE TABLE `message_templates` (
 
 LOCK TABLES `message_templates` WRITE;
 /*!40000 ALTER TABLE `message_templates` DISABLE KEYS */;
+INSERT INTO `message_templates` VALUES (1,1,'Social Media','Pyament Related','Hello {{customer_name}},\n\nyour payment is done for for your information\n\npayemnt refrence number : {{payment_refrence}}\npayment amount : {{amount}}\ncustomer name : {{customer_name}}\n\nThanks you','[{\"key\": \"customer_name\", \"type\": \"string\", \"label\": \"Customer Name\", \"required\": true}, {\"key\": \"payment_refrence\", \"type\": \"string\", \"label\": \"Payment Refrence\", \"required\": true}, {\"key\": \"amount\", \"type\": \"string\", \"label\": \"Amount\", \"required\": true}]','text','approved',1,'2026-09-13 02:44:33',NULL,1,'2026-09-13 02:44:33','2026-09-13 02:49:11');
 /*!40000 ALTER TABLE `message_templates` ENABLE KEYS */;
 UNLOCK TABLES;
 
@@ -726,7 +855,7 @@ CREATE TABLE `migrations` (
   `migration` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
   `batch` int NOT NULL,
   PRIMARY KEY (`id`)
-) ENGINE=InnoDB AUTO_INCREMENT=50 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=65 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -735,7 +864,7 @@ CREATE TABLE `migrations` (
 
 LOCK TABLES `migrations` WRITE;
 /*!40000 ALTER TABLE `migrations` DISABLE KEYS */;
-INSERT INTO `migrations` VALUES (1,'0001_01_01_000000_create_users_table',1),(2,'0001_01_01_000001_create_cache_table',1),(3,'0001_01_01_000002_create_jobs_table',1),(4,'2026_09_08_100505_create_personal_access_tokens_table',1),(5,'2026_09_08_100507_create_permission_tables',1),(6,'2026_09_08_100510_create_accounts_table',1),(7,'2026_09_08_100511_add_account_id_and_is_active_to_users_table',1),(8,'2026_09_08_100520_create_subscriptions_table',1),(9,'2026_09_08_100521_update_accounts_table_for_provisioning',1),(10,'2026_09_08_100530_create_whatsapp_sessions_table',1),(11,'2026_09_08_100540_add_meta_config_to_whatsapp_sessions_table',1),(12,'2026_09_08_120000_create_payment_alerts_table',1),(13,'2026_09_08_130000_add_raw_response_and_analytics_index_to_payment_alerts',1),(14,'2026_09_08_140000_create_payment_gateway_settings_table',1),(15,'2026_09_08_140001_create_invoices_table',1),(16,'2026_09_09_150000_create_api_keys_table',1),(17,'2026_09_09_150001_create_webhook_subscriptions_table',1),(18,'2026_09_09_150002_create_webhook_deliveries_table',1),(19,'2026_09_09_150003_add_gateway_message_id_to_payment_alerts_table',1),(20,'2026_09_09_150004_add_api_rate_limit_to_accounts_table',1),(21,'2026_09_09_160000_create_chatbot_rules_table',1),(22,'2026_09_09_160001_create_chatbot_logs_table',1),(23,'2026_09_09_170000_add_allowed_modules_to_accounts_table',2),(24,'2026_09_09_170001_create_mail_settings_table',3),(25,'2026_09_09_180000_create_login_audit_logs_table',4),(26,'2026_09_09_180001_create_notification_templates_table',4),(27,'2026_09_09_180002_create_notification_broadcasts_table',4),(28,'2026_09_09_180003_create_in_app_notifications_table',4),(29,'2026_09_09_190000_create_mail_logs_table',5),(30,'2026_09_09_200000_add_performance_indexes',6),(31,'2026_09_09_210000_create_message_templates_table',7),(32,'2026_09_09_220000_add_variables_schema_to_message_templates_table',8),(33,'2026_09_09_230000_add_status_paid_at_index_to_invoices_table',9),(34,'2026_09_09_230100_add_status_index_to_whatsapp_sessions_table',9),(35,'2026_09_09_240000_add_testing_gate_to_message_templates_table',10),(36,'2026_09_09_250000_add_is_platform_device_to_accounts_table',11),(37,'2026_09_10_090000_add_social_platform_flags_to_accounts_table',12),(38,'2026_09_10_090001_create_social_provider_configs_table',12),(39,'2026_09_10_090002_create_social_accounts_table',12),(40,'2026_09_10_100000_make_subscriptions_expires_at_nullable',13),(41,'2026_09_10_110000_create_leads_table',14),(42,'2026_09_10_120000_create_ad_campaigns_table',15),(43,'2026_09_10_130000_create_comment_automation_rules_table',16),(44,'2026_09_10_130001_create_comment_automation_events_table',16),(45,'2026_09_10_140000_add_branding_fields_to_accounts_table',17),(46,'2026_09_10_140001_create_ad_campaign_daily_metrics_table',17),(47,'2026_09_11_090000_add_phone_number_to_users_table',18),(48,'2026_09_11_100000_add_provisioning_fields_to_accounts_table',18),(49,'2026_09_11_120000_create_quota_requests_table',19);
+INSERT INTO `migrations` VALUES (1,'0001_01_01_000000_create_users_table',1),(2,'0001_01_01_000001_create_cache_table',1),(3,'0001_01_01_000002_create_jobs_table',1),(4,'2026_09_08_100505_create_personal_access_tokens_table',1),(5,'2026_09_08_100507_create_permission_tables',1),(6,'2026_09_08_100510_create_accounts_table',1),(7,'2026_09_08_100511_add_account_id_and_is_active_to_users_table',1),(8,'2026_09_08_100520_create_subscriptions_table',1),(9,'2026_09_08_100521_update_accounts_table_for_provisioning',1),(10,'2026_09_08_100530_create_whatsapp_sessions_table',1),(11,'2026_09_08_100540_add_meta_config_to_whatsapp_sessions_table',1),(12,'2026_09_08_120000_create_payment_alerts_table',1),(13,'2026_09_08_130000_add_raw_response_and_analytics_index_to_payment_alerts',1),(14,'2026_09_08_140000_create_payment_gateway_settings_table',1),(15,'2026_09_08_140001_create_invoices_table',1),(16,'2026_09_09_150000_create_api_keys_table',1),(17,'2026_09_09_150001_create_webhook_subscriptions_table',1),(18,'2026_09_09_150002_create_webhook_deliveries_table',1),(19,'2026_09_09_150003_add_gateway_message_id_to_payment_alerts_table',1),(20,'2026_09_09_150004_add_api_rate_limit_to_accounts_table',1),(21,'2026_09_09_160000_create_chatbot_rules_table',1),(22,'2026_09_09_160001_create_chatbot_logs_table',1),(23,'2026_09_09_170000_add_allowed_modules_to_accounts_table',2),(24,'2026_09_09_170001_create_mail_settings_table',3),(25,'2026_09_09_180000_create_login_audit_logs_table',4),(26,'2026_09_09_180001_create_notification_templates_table',4),(27,'2026_09_09_180002_create_notification_broadcasts_table',4),(28,'2026_09_09_180003_create_in_app_notifications_table',4),(29,'2026_09_09_190000_create_mail_logs_table',5),(30,'2026_09_09_200000_add_performance_indexes',6),(31,'2026_09_09_210000_create_message_templates_table',7),(32,'2026_09_09_220000_add_variables_schema_to_message_templates_table',8),(33,'2026_09_09_230000_add_status_paid_at_index_to_invoices_table',9),(34,'2026_09_09_230100_add_status_index_to_whatsapp_sessions_table',9),(35,'2026_09_09_240000_add_testing_gate_to_message_templates_table',10),(36,'2026_09_09_250000_add_is_platform_device_to_accounts_table',11),(37,'2026_09_10_090000_add_social_platform_flags_to_accounts_table',12),(38,'2026_09_10_090001_create_social_provider_configs_table',12),(39,'2026_09_10_090002_create_social_accounts_table',12),(40,'2026_09_10_100000_make_subscriptions_expires_at_nullable',13),(41,'2026_09_10_110000_create_leads_table',14),(42,'2026_09_10_120000_create_ad_campaigns_table',15),(43,'2026_09_10_130000_create_comment_automation_rules_table',16),(44,'2026_09_10_130001_create_comment_automation_events_table',16),(45,'2026_09_10_140000_add_branding_fields_to_accounts_table',17),(46,'2026_09_10_140001_create_ad_campaign_daily_metrics_table',17),(47,'2026_09_11_090000_add_phone_number_to_users_table',18),(48,'2026_09_11_100000_add_provisioning_fields_to_accounts_table',18),(49,'2026_09_11_120000_create_quota_requests_table',19),(50,'2026_09_11_190000_add_gemini_api_key_to_accounts_table',20),(51,'2026_09_11_193000_create_organic_posts_table',20),(52,'2026_09_11_200000_create_whatsapp_flows_table',21),(53,'2026_09_11_200001_create_whatsapp_flow_sessions_table',21),(54,'2026_09_11_165503_add_performance_optimization_indexes',22),(55,'2026_09_13_120000_create_message_dispatch_logs_table',22),(56,'2026_09_13_130000_add_template_metadata_to_message_dispatch_logs_table',23),(57,'2026_09_13_140000_create_contact_groups_table',24),(58,'2026_09_13_140001_create_contact_group_members_table',24),(59,'2026_09_13_140002_add_group_messaging_fields_to_message_dispatch_logs_table',24),(60,'2026_09_13_140003_add_header_type_and_rejection_reason_to_message_templates_table',24),(61,'2026_09_13_140003_add_resolution_counts_to_message_dispatch_logs_table',25),(62,'2026_09_13_150000_add_native_group_support_to_contact_groups_table',26),(63,'2026_09_13_160000_add_gateway_message_id_to_message_dispatch_logs_table',26),(64,'2026_09_14_090000_add_account_type_and_agent_id_to_accounts_table',27);
 /*!40000 ALTER TABLE `migrations` ENABLE KEYS */;
 UNLOCK TABLES;
 
@@ -865,6 +994,45 @@ CREATE TABLE `notification_templates` (
 LOCK TABLES `notification_templates` WRITE;
 /*!40000 ALTER TABLE `notification_templates` DISABLE KEYS */;
 /*!40000 ALTER TABLE `notification_templates` ENABLE KEYS */;
+UNLOCK TABLES;
+
+--
+-- Table structure for table `organic_posts`
+--
+
+DROP TABLE IF EXISTS `organic_posts`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!50503 SET character_set_client = utf8mb4 */;
+CREATE TABLE `organic_posts` (
+  `id` bigint unsigned NOT NULL AUTO_INCREMENT,
+  `account_id` bigint unsigned NOT NULL,
+  `social_account_id` bigint unsigned DEFAULT NULL,
+  `provider` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `platform` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `caption` text COLLATE utf8mb4_unicode_ci NOT NULL,
+  `media_url` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `media_type` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `status` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'pending',
+  `external_post_id` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `error_message` text COLLATE utf8mb4_unicode_ci,
+  `published_at` timestamp NULL DEFAULT NULL,
+  `created_at` timestamp NULL DEFAULT NULL,
+  `updated_at` timestamp NULL DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `organic_posts_social_account_id_foreign` (`social_account_id`),
+  KEY `organic_posts_account_id_platform_status_index` (`account_id`,`platform`,`status`),
+  CONSTRAINT `organic_posts_account_id_foreign` FOREIGN KEY (`account_id`) REFERENCES `accounts` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `organic_posts_social_account_id_foreign` FOREIGN KEY (`social_account_id`) REFERENCES `social_accounts` (`id`) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
+
+--
+-- Dumping data for table `organic_posts`
+--
+
+LOCK TABLES `organic_posts` WRITE;
+/*!40000 ALTER TABLE `organic_posts` DISABLE KEYS */;
+/*!40000 ALTER TABLE `organic_posts` ENABLE KEYS */;
 UNLOCK TABLES;
 
 --
@@ -1016,7 +1184,7 @@ CREATE TABLE `personal_access_tokens` (
   UNIQUE KEY `personal_access_tokens_token_unique` (`token`),
   KEY `personal_access_tokens_tokenable_type_tokenable_id_index` (`tokenable_type`,`tokenable_id`),
   KEY `personal_access_tokens_expires_at_index` (`expires_at`)
-) ENGINE=InnoDB AUTO_INCREMENT=20 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=26 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -1025,7 +1193,7 @@ CREATE TABLE `personal_access_tokens` (
 
 LOCK TABLES `personal_access_tokens` WRITE;
 /*!40000 ALTER TABLE `personal_access_tokens` DISABLE KEYS */;
-INSERT INTO `personal_access_tokens` VALUES (3,'App\\Models\\User',1,'api-token','60263ed0f823032f26f0fdb8312e958ad14205d7233406ea4c3a0acf952a28e9','[\"*\"]','2026-09-09 06:27:34',NULL,'2026-09-09 03:51:41','2026-09-09 06:27:34'),(6,'App\\Models\\User',2,'api-token','7d7d70b45d203d05dccc44336e5d004a6a8cf80e61ff15646d36fd37d75661bc','[\"manage-subscriptions\",\"send-messages\",\"view-analytics\",\"view-logs\",\"manage-developer-settings\",\"manage-chatbot\",\"manage-team\",\"manage-roles\"]','2026-09-09 06:43:03',NULL,'2026-09-09 05:04:27','2026-09-09 06:43:03'),(7,'App\\Models\\User',1,'api-token','b18fe3ecd4e5f8073e97f6125efd96f10a55b983564009b326bed3f9946f644e','[\"*\"]',NULL,NULL,'2026-09-09 06:28:03','2026-09-09 06:28:03'),(8,'App\\Models\\User',1,'api-token','a702b763afe66cf29414b75c74d6fc6a67adae6701f4fe7deed01fc38a31ecb7','[\"*\"]',NULL,NULL,'2026-09-09 06:29:36','2026-09-09 06:29:36'),(9,'App\\Models\\User',1,'api-token','f00ca6e86c97e24506244916d255b1b1c9280a90f9637ca86ea1665556454ebb','[\"*\"]',NULL,NULL,'2026-09-09 06:35:02','2026-09-09 06:35:02'),(11,'App\\Models\\User',2,'api-token','074bf0431264c90689da79caf8b2d61cb78d8d76f038a490b43461e6fd16115f','[\"manage-subscriptions\",\"send-messages\",\"view-analytics\",\"view-logs\",\"manage-developer-settings\",\"manage-chatbot\",\"manage-team\",\"manage-roles\",\"view-audit-logs\",\"manage-notifications\"]','2026-09-09 07:33:41',NULL,'2026-09-09 06:53:59','2026-09-09 07:33:41'),(12,'App\\Models\\User',2,'api-token','e803f5aa32cb6ca27b9659b12b6183e070bd2056671d91638fd445af5636a5ba','[\"manage-subscriptions\",\"send-messages\",\"view-analytics\",\"view-logs\",\"manage-developer-settings\",\"manage-chatbot\",\"manage-team\",\"manage-roles\",\"view-audit-logs\",\"manage-notifications\"]','2026-09-09 07:46:04',NULL,'2026-09-09 07:41:14','2026-09-09 07:46:04'),(13,'App\\Models\\User',1,'api-token','7704fba3042b328f8457cca1b8f740cc8001bd3f3c164f3c374fcf8634d6674c','[\"*\"]','2026-09-10 05:04:57',NULL,'2026-09-10 01:11:56','2026-09-10 05:04:57'),(14,'App\\Models\\User',2,'api-token','093120056bf3bf4ad5307c86195398826eea4773da83463f07173e60f7249c7e','[\"manage-subscriptions\",\"send-messages\",\"view-analytics\",\"view-logs\",\"manage-developer-settings\",\"manage-chatbot\",\"manage-team\",\"manage-roles\",\"view-audit-logs\",\"manage-notifications\"]','2026-09-10 05:05:33',NULL,'2026-09-10 01:12:17','2026-09-10 05:05:33'),(15,'App\\Models\\User',1,'api-token','00cd8b4b00a665bab1b93f8006c5f4f0663260f38955ca747b1c39c76f079d7c','[\"*\"]','2026-09-11 04:18:24',NULL,'2026-09-10 05:16:48','2026-09-11 04:18:24'),(19,'App\\Models\\User',2,'api-token','270a754d9191baec65caa98dd89130451b2700909c5bde060931673f34bb2799','[\"manage-subscriptions\",\"send-messages\",\"view-analytics\",\"view-logs\",\"manage-developer-settings\",\"manage-chatbot\",\"manage-team\",\"manage-roles\",\"view-audit-logs\",\"manage-notifications\",\"manage-social-accounts\",\"launch-meta-ads\",\"manage-social-leads\",\"view-social-analytics\",\"manage-comment-automation\"]','2026-09-11 04:18:25',NULL,'2026-09-10 06:53:44','2026-09-11 04:18:25');
+INSERT INTO `personal_access_tokens` VALUES (3,'App\\Models\\User',1,'api-token','60263ed0f823032f26f0fdb8312e958ad14205d7233406ea4c3a0acf952a28e9','[\"*\"]','2026-09-09 06:27:34',NULL,'2026-09-09 03:51:41','2026-09-09 06:27:34'),(6,'App\\Models\\User',2,'api-token','7d7d70b45d203d05dccc44336e5d004a6a8cf80e61ff15646d36fd37d75661bc','[\"manage-subscriptions\",\"send-messages\",\"view-analytics\",\"view-logs\",\"manage-developer-settings\",\"manage-chatbot\",\"manage-team\",\"manage-roles\"]','2026-09-09 06:43:03',NULL,'2026-09-09 05:04:27','2026-09-09 06:43:03'),(7,'App\\Models\\User',1,'api-token','b18fe3ecd4e5f8073e97f6125efd96f10a55b983564009b326bed3f9946f644e','[\"*\"]',NULL,NULL,'2026-09-09 06:28:03','2026-09-09 06:28:03'),(8,'App\\Models\\User',1,'api-token','a702b763afe66cf29414b75c74d6fc6a67adae6701f4fe7deed01fc38a31ecb7','[\"*\"]',NULL,NULL,'2026-09-09 06:29:36','2026-09-09 06:29:36'),(9,'App\\Models\\User',1,'api-token','f00ca6e86c97e24506244916d255b1b1c9280a90f9637ca86ea1665556454ebb','[\"*\"]',NULL,NULL,'2026-09-09 06:35:02','2026-09-09 06:35:02'),(11,'App\\Models\\User',2,'api-token','074bf0431264c90689da79caf8b2d61cb78d8d76f038a490b43461e6fd16115f','[\"manage-subscriptions\",\"send-messages\",\"view-analytics\",\"view-logs\",\"manage-developer-settings\",\"manage-chatbot\",\"manage-team\",\"manage-roles\",\"view-audit-logs\",\"manage-notifications\"]','2026-09-09 07:33:41',NULL,'2026-09-09 06:53:59','2026-09-09 07:33:41'),(12,'App\\Models\\User',2,'api-token','e803f5aa32cb6ca27b9659b12b6183e070bd2056671d91638fd445af5636a5ba','[\"manage-subscriptions\",\"send-messages\",\"view-analytics\",\"view-logs\",\"manage-developer-settings\",\"manage-chatbot\",\"manage-team\",\"manage-roles\",\"view-audit-logs\",\"manage-notifications\"]','2026-09-09 07:46:04',NULL,'2026-09-09 07:41:14','2026-09-09 07:46:04'),(13,'App\\Models\\User',1,'api-token','7704fba3042b328f8457cca1b8f740cc8001bd3f3c164f3c374fcf8634d6674c','[\"*\"]','2026-09-10 05:04:57',NULL,'2026-09-10 01:11:56','2026-09-10 05:04:57'),(14,'App\\Models\\User',2,'api-token','093120056bf3bf4ad5307c86195398826eea4773da83463f07173e60f7249c7e','[\"manage-subscriptions\",\"send-messages\",\"view-analytics\",\"view-logs\",\"manage-developer-settings\",\"manage-chatbot\",\"manage-team\",\"manage-roles\",\"view-audit-logs\",\"manage-notifications\"]','2026-09-10 05:05:33',NULL,'2026-09-10 01:12:17','2026-09-10 05:05:33'),(15,'App\\Models\\User',1,'api-token','00cd8b4b00a665bab1b93f8006c5f4f0663260f38955ca747b1c39c76f079d7c','[\"*\"]','2026-09-11 04:18:24',NULL,'2026-09-10 05:16:48','2026-09-11 04:18:24'),(19,'App\\Models\\User',2,'api-token','270a754d9191baec65caa98dd89130451b2700909c5bde060931673f34bb2799','[\"manage-subscriptions\",\"send-messages\",\"view-analytics\",\"view-logs\",\"manage-developer-settings\",\"manage-chatbot\",\"manage-team\",\"manage-roles\",\"view-audit-logs\",\"manage-notifications\",\"manage-social-accounts\",\"launch-meta-ads\",\"manage-social-leads\",\"view-social-analytics\",\"manage-comment-automation\"]','2026-09-11 04:18:25',NULL,'2026-09-10 06:53:44','2026-09-11 04:18:25'),(20,'App\\Models\\User',1,'api-token','22673b54b919361852eabcf828de2a5ea37f0ca5d245dc63b109fa7dafe1f202','[\"*\"]','2026-09-11 11:25:47',NULL,'2026-09-11 10:59:23','2026-09-11 11:25:47'),(21,'App\\Models\\User',1,'api-token','19f41e4853c60c2fd02bf4e8552dc9f5e78ff68dba2468bf6ca0ae62fb38f90f','[\"*\"]','2026-09-14 01:46:02',NULL,'2026-09-13 02:18:05','2026-09-14 01:46:02'),(22,'App\\Models\\User',2,'api-token','33dc4364439eed9d344a495a851d6268fffc8f53af170696a018cfbcb0697da4','[\"manage-subscriptions\",\"send-messages\",\"view-analytics\",\"view-logs\",\"manage-developer-settings\",\"manage-chatbot\",\"manage-team\",\"manage-roles\",\"view-audit-logs\",\"manage-notifications\",\"manage-social-accounts\",\"launch-meta-ads\",\"manage-social-leads\",\"view-social-analytics\",\"manage-comment-automation\"]','2026-09-13 04:21:10',NULL,'2026-09-13 02:19:20','2026-09-13 04:21:10'),(24,'App\\Models\\User',2,'api-token','9a5c5e4c7954ef668372623711e213b5447bc481c286e0f8eedae7bbec2b6283','[\"manage-subscriptions\",\"send-messages\",\"view-analytics\",\"view-logs\",\"manage-developer-settings\",\"manage-chatbot\",\"manage-team\",\"manage-roles\",\"view-audit-logs\",\"manage-notifications\",\"manage-social-accounts\",\"launch-meta-ads\",\"manage-social-leads\",\"view-social-analytics\",\"manage-comment-automation\"]','2026-09-13 10:43:20',NULL,'2026-09-13 10:30:16','2026-09-13 10:43:20'),(25,'App\\Models\\User',2,'api-token','5a6293421795a3766ee9b8503e99b2ea8a1d6fa6f71ed8b1f8fa8b91d677810f','[\"manage-subscriptions\",\"send-messages\",\"view-analytics\",\"view-logs\",\"manage-developer-settings\",\"manage-chatbot\",\"manage-team\",\"manage-roles\",\"view-audit-logs\",\"manage-notifications\",\"manage-social-accounts\",\"launch-meta-ads\",\"manage-social-leads\",\"view-social-analytics\",\"manage-comment-automation\"]','2026-09-14 01:46:43',NULL,'2026-09-13 10:44:02','2026-09-14 01:46:43');
 /*!40000 ALTER TABLE `personal_access_tokens` ENABLE KEYS */;
 UNLOCK TABLES;
 
@@ -1093,7 +1261,7 @@ CREATE TABLE `role_has_permissions` (
 
 LOCK TABLES `role_has_permissions` WRITE;
 /*!40000 ALTER TABLE `role_has_permissions` DISABLE KEYS */;
-INSERT INTO `role_has_permissions` VALUES (1,1),(2,1),(3,1),(4,1),(5,1),(6,1),(7,1),(8,1),(9,1),(10,1),(11,1),(12,1),(13,1),(14,1),(15,1),(16,1),(17,1),(18,1),(19,1),(20,1),(21,1),(22,1),(23,1),(24,1),(25,1),(26,1),(27,1),(2,2),(3,2),(4,2),(5,2),(7,2),(8,2),(9,2),(10,2),(12,2),(13,2),(15,2),(16,2),(17,2),(18,2),(19,2),(3,3),(4,3),(12,3),(9,4),(15,4),(16,4),(17,4),(18,4),(19,4);
+INSERT INTO `role_has_permissions` VALUES (1,1),(2,1),(3,1),(4,1),(5,1),(6,1),(7,1),(8,1),(9,1),(10,1),(11,1),(12,1),(13,1),(14,1),(15,1),(16,1),(17,1),(18,1),(19,1),(20,1),(21,1),(22,1),(23,1),(24,1),(25,1),(26,1),(27,1),(2,2),(3,2),(4,2),(5,2),(7,2),(8,2),(9,2),(10,2),(12,2),(13,2),(15,2),(16,2),(17,2),(18,2),(19,2),(3,3),(4,3),(12,3),(9,4),(15,4),(16,4),(17,4),(18,4),(19,4),(1,5);
 /*!40000 ALTER TABLE `role_has_permissions` ENABLE KEYS */;
 UNLOCK TABLES;
 
@@ -1112,7 +1280,7 @@ CREATE TABLE `roles` (
   `updated_at` timestamp NULL DEFAULT NULL,
   PRIMARY KEY (`id`),
   UNIQUE KEY `roles_name_guard_name_unique` (`name`,`guard_name`)
-) ENGINE=InnoDB AUTO_INCREMENT=5 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=6 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -1121,7 +1289,7 @@ CREATE TABLE `roles` (
 
 LOCK TABLES `roles` WRITE;
 /*!40000 ALTER TABLE `roles` DISABLE KEYS */;
-INSERT INTO `roles` VALUES (1,'super_admin','web','2026-09-09 01:32:58','2026-09-09 02:16:26'),(2,'admin','web','2026-09-09 01:32:58','2026-09-11 02:58:02'),(3,'user','web','2026-09-09 01:32:58','2026-09-11 02:58:02'),(4,'social_marketer','web','2026-09-10 01:18:43','2026-09-10 01:18:43');
+INSERT INTO `roles` VALUES (1,'super_admin','web','2026-09-09 01:32:58','2026-09-09 02:16:26'),(2,'admin','web','2026-09-09 01:32:58','2026-09-14 01:44:50'),(3,'user','web','2026-09-09 01:32:58','2026-09-14 01:44:50'),(4,'social_marketer','web','2026-09-10 01:18:43','2026-09-10 01:18:43'),(5,'agent','web','2026-09-14 01:44:50','2026-09-14 01:44:50');
 /*!40000 ALTER TABLE `roles` ENABLE KEYS */;
 UNLOCK TABLES;
 
@@ -1258,7 +1426,7 @@ CREATE TABLE `subscriptions` (
 
 LOCK TABLES `subscriptions` WRITE;
 /*!40000 ALTER TABLE `subscriptions` DISABLE KEYS */;
-INSERT INTO `subscriptions` VALUES (1,1,'qr','flat_quota',NULL,5000,1,4999.00,'razorpay','2026-09-08 18:30:00','2027-09-08 18:30:00','active','2026-09-09 01:32:59','2026-09-09 04:26:45'),(2,2,'qr','unlimited',NULL,NULL,0,0.00,'cash','2026-09-10 01:27:54',NULL,'active','2026-09-10 01:27:54','2026-09-10 01:27:54');
+INSERT INTO `subscriptions` VALUES (1,1,'qr','flat_quota',NULL,5000,8,4999.00,'razorpay','2026-09-08 18:30:00','2027-09-08 18:30:00','active','2026-09-09 01:32:59','2026-09-13 12:10:31'),(2,2,'qr','unlimited',NULL,NULL,0,0.00,'cash','2026-09-10 01:27:54',NULL,'active','2026-09-10 01:27:54','2026-09-10 01:27:54');
 /*!40000 ALTER TABLE `subscriptions` ENABLE KEYS */;
 UNLOCK TABLES;
 
@@ -1362,6 +1530,73 @@ LOCK TABLES `webhook_subscriptions` WRITE;
 UNLOCK TABLES;
 
 --
+-- Table structure for table `whatsapp_flow_sessions`
+--
+
+DROP TABLE IF EXISTS `whatsapp_flow_sessions`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!50503 SET character_set_client = utf8mb4 */;
+CREATE TABLE `whatsapp_flow_sessions` (
+  `id` bigint unsigned NOT NULL AUTO_INCREMENT,
+  `account_id` bigint unsigned NOT NULL,
+  `flow_id` bigint unsigned NOT NULL,
+  `phone_number` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `current_node_id` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `context_data` json DEFAULT NULL,
+  `status` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'active',
+  `last_interaction_at` timestamp NULL DEFAULT NULL,
+  `created_at` timestamp NULL DEFAULT NULL,
+  `updated_at` timestamp NULL DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `whatsapp_flow_sessions_flow_id_foreign` (`flow_id`),
+  KEY `whatsapp_flow_sessions_account_id_phone_number_status_index` (`account_id`,`phone_number`,`status`),
+  CONSTRAINT `whatsapp_flow_sessions_account_id_foreign` FOREIGN KEY (`account_id`) REFERENCES `accounts` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `whatsapp_flow_sessions_flow_id_foreign` FOREIGN KEY (`flow_id`) REFERENCES `whatsapp_flows` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
+
+--
+-- Dumping data for table `whatsapp_flow_sessions`
+--
+
+LOCK TABLES `whatsapp_flow_sessions` WRITE;
+/*!40000 ALTER TABLE `whatsapp_flow_sessions` DISABLE KEYS */;
+/*!40000 ALTER TABLE `whatsapp_flow_sessions` ENABLE KEYS */;
+UNLOCK TABLES;
+
+--
+-- Table structure for table `whatsapp_flows`
+--
+
+DROP TABLE IF EXISTS `whatsapp_flows`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!50503 SET character_set_client = utf8mb4 */;
+CREATE TABLE `whatsapp_flows` (
+  `id` bigint unsigned NOT NULL AUTO_INCREMENT,
+  `account_id` bigint unsigned NOT NULL,
+  `name` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `trigger_type` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `trigger_value` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `graph_data` json NOT NULL,
+  `is_active` tinyint(1) NOT NULL DEFAULT '1',
+  `created_at` timestamp NULL DEFAULT NULL,
+  `updated_at` timestamp NULL DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `whatsapp_flows_account_id_is_active_trigger_type_index` (`account_id`,`is_active`,`trigger_type`),
+  CONSTRAINT `whatsapp_flows_account_id_foreign` FOREIGN KEY (`account_id`) REFERENCES `accounts` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
+
+--
+-- Dumping data for table `whatsapp_flows`
+--
+
+LOCK TABLES `whatsapp_flows` WRITE;
+/*!40000 ALTER TABLE `whatsapp_flows` DISABLE KEYS */;
+/*!40000 ALTER TABLE `whatsapp_flows` ENABLE KEYS */;
+UNLOCK TABLES;
+
+--
 -- Table structure for table `whatsapp_sessions`
 --
 
@@ -1393,7 +1628,7 @@ CREATE TABLE `whatsapp_sessions` (
 
 LOCK TABLES `whatsapp_sessions` WRITE;
 /*!40000 ALTER TABLE `whatsapp_sessions` DISABLE KEYS */;
-INSERT INTO `whatsapp_sessions` VALUES (1,1,NULL,NULL,NULL,NULL,'connecting','2026-09-09 04:11:44','2026-09-09 04:11:39','2026-09-09 05:17:49'),(2,2,NULL,NULL,NULL,NULL,'connecting',NULL,'2026-09-10 01:30:44','2026-09-10 01:30:44');
+INSERT INTO `whatsapp_sessions` VALUES (1,1,NULL,NULL,NULL,NULL,'connected','2026-09-14 00:02:20','2026-09-09 04:11:39','2026-09-14 00:02:20'),(2,2,NULL,NULL,NULL,NULL,'connecting',NULL,'2026-09-10 01:30:44','2026-09-10 01:30:44');
 /*!40000 ALTER TABLE `whatsapp_sessions` ENABLE KEYS */;
 UNLOCK TABLES;
 
@@ -1414,4 +1649,4 @@ UNLOCK TABLES;
 /*!40101 SET COLLATION_CONNECTION=@OLD_COLLATION_CONNECTION */;
 /*!40111 SET SQL_NOTES=@OLD_SQL_NOTES */;
 
--- Dump completed on 2026-09-11 15:20:22
+-- Dump completed on 2026-09-14 12:46:49
