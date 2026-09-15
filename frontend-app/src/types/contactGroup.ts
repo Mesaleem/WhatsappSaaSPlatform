@@ -54,6 +54,26 @@ export interface SendGroupTemplatePayload {
   variables: Record<string, string>;
 }
 
+/**
+ * "Select an existing group" extension — one entry from
+ * GET /api/groups/available-native (ContactGroupController::
+ * availableNativeGroups()), a REAL WhatsApp group the tenant's connected
+ * number already belongs to that hasn't been imported as a ContactGroup
+ * yet. Deliberately thinner than ContactGroup itself — this is only ever
+ * used to populate a picker, not rendered as a row in the main table.
+ */
+export interface AvailableNativeGroup {
+  jid: string;
+  subject: string;
+  participants_count: number;
+}
+
+/** Payload accepted by contactGroupsService.importNative(); name is optional and defaults server-side to the WhatsApp group's own subject (see ContactGroupController::importNative()). */
+export interface ImportNativeGroupPayload {
+  group_jid: string;
+  name?: string;
+}
+
 export interface SendGroupTemplateResponse {
   success: boolean;
   message: string;

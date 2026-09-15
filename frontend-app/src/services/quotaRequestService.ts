@@ -15,7 +15,7 @@ const quotaRequestService = {
       .then((res) => res.data);
   },
 
-  /** GET /api/admin/quota-requests — Super Admin only. Defaults to pending-only. */
+  /** GET /api/admin/quota-requests — Super Admin or the owning Agent. Defaults to pending-only. */
   list(status: QuotaRequestStatus | 'all' = 'pending', page = 1, perPage = 15) {
     return axiosInstance
       .get<QuotaRequestListResponse>('/admin/quota-requests', {
@@ -24,7 +24,7 @@ const quotaRequestService = {
       .then((res) => res.data);
   },
 
-  /** POST /api/admin/quota-requests/{id}/approve — Super Admin only. */
+  /** POST /api/admin/quota-requests/{id}/approve — Super Admin or the owning Agent. */
   approve(id: number) {
     return axiosInstance
       .post<ApproveQuotaRequestResponse>(`/admin/quota-requests/${id}/approve`)

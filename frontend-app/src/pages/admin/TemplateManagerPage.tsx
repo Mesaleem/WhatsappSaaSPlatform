@@ -15,11 +15,13 @@ import {
 } from 'lucide-react';
 import accountService from '../../services/accountService';
 import templateService from '../../services/templateService';
+import { useAuth } from '../../core/context/AuthContext';
 import type { Account } from '../../types/account';
 import type {
   MessageTemplate,
   MessageTemplateStatus,
   SaveMessageTemplatePayload,
+  TemplateHeaderType,
   TemplateVariableSchemaField,
   TemplateVariableType,
 } from '../../types/templates';
@@ -28,7 +30,20 @@ import { PageHeader, PageShell } from '../../components/common/PageShell';
 import { ClearFiltersButton, Pagination, SearchInput, StatusFilterSelect } from '../../components/common/DataTableControls';
 import { TableSkeletonRows } from '../../components/common/Skeleton';
 import { extractErrorCode, extractErrorMessage as extractMessage } from '../../utils/apiError';
+import ConfirmModal from '../../components/common/ConfirmModal';
 
+
+/**
+ * Media Templates (QR/Baileys-only) -- mirrors MessageTemplate::HEADER_TYPES.
+ * Only actually sends as media on the 'qr' engine -- see
+ * TemplateMessageDispatcher's docblock; a 'meta'-engine client still
+ * gets plain text regardless of this setting.
+ */
+const HEADER_TYPE_OPTIONS: { value: TemplateHeaderType; label: string; hint: string }[] = [
+  { value: 'text', label: 'Text', hint: 'Plain message, no attachment.' },
+  { value: 'image', label: 'Image', hint: 'e.g. a promo banner or photo.' },
+  { value: 'document', label: 'Document', hint: 'e.g. a PDF bill or invoice.' },
+];
 
 /** Same {{token}} extraction as the backend's MessageTemplate::variableNames() — kept in sync deliberately. */
 function extractVariables(body: string): string[] {
@@ -70,13 +85,27 @@ const VARIABLE_TYPE_OPTIONS: { value: TemplateVariableType; label: string }[] = 
   { value: 'select', label: 'Dropdown / Select' },
 ];
 
+// Tiered Template Approval Workflow for 3-Tier Hierarchy -- three new
+// tab/filter values sitting between "just submitted" and the
+// pre-existing 'pending' (awaiting Super Admin's final test + approve).
+// Mirrors MessageTemplate::STATUSES exactly.
 const STATUS_OPTIONS: { value: MessageTemplateStatus; label: string }[] = [
-  { value: 'pending', label: 'Pending' },
+  { value: 'pending_agent_review', label: 'Pending Agent Review' },
+  { value: 'pending_admin_review', label: 'Pending Admin Review' },
+  { value: 'pending_meta_approval', label: 'Pending Meta Approval' },
+  { value: 'pending', label: 'Pending Final Review' },
   { value: 'approved', label: 'Approved' },
   { value: 'rejected', label: 'Rejected' },
 ];
 
+const STATUS_LABEL: Record<MessageTemplateStatus, string> = Object.fromEntries(
+  STATUS_OPTIONS.map((o) => [o.value, o.label]),
+) as Record<MessageTemplateStatus, string>;
+
 const STATUS_BADGE: Record<MessageTemplateStatus, string> = {
+  pending_agent_review: 'bg-sky-50 text-sky-700 ring-sky-600/20',
+  pending_admin_review: 'bg-violet-50 text-violet-700 ring-violet-600/20',
+  pending_meta_approval: 'bg-fuchsia-50 text-fuchsia-700 ring-fuchsia-600/20',
   pending: 'bg-amber-50 text-amber-700 ring-amber-600/20',
   approved: 'bg-emerald-50 text-emerald-700 ring-emerald-600/20',
   rejected: 'bg-red-50 text-red-700 ring-red-600/20',
@@ -85,18 +114,29 @@ const STATUS_BADGE: Record<MessageTemplateStatus, string> = {
 function TemplateModal({
   template,
   accounts,
+  allowGlobal,
   onClose,
   onSaved,
 }: {
   /** null = create new; a MessageTemplate = editing an existing one. */
   template: MessageTemplate | null;
   accounts: Account[];
+  /**
+   * Tiered Template Approval Workflow, Rule 4 -- false for an Agent
+   * viewer (they may only author for their own account or their own
+   * Sub-Clients, never a global/null-account_id template; the backend's
+   * store()/update() reject account_id=null from an Agent caller with a
+   * 422). Always true for Super Admin.
+   */
+  allowGlobal: boolean;
   onClose: () => void;
   onSaved: () => void;
 }) {
   const [title, setTitle] = useState(template?.title ?? '');
   const [industryType, setIndustryType] = useState(template?.industry_type ?? '');
   const [templateBody, setTemplateBody] = useState(template?.template_body ?? '');
+  const [headerType, setHeaderType] = useState<TemplateHeaderType>(template?.header_type ?? 'text');
+  const [headerMediaUrl, setHeaderMediaUrl] = useState(template?.header_media_url ?? '');
   const [accountId, setAccountId] = useState<number | ''>(template?.account_id ?? '');
   const [variablesSchema, setVariablesSchema] = useState<TemplateVariableSchemaField[]>(
     template?.variables_schema ?? [],
@@ -132,6 +172,10 @@ function TemplateModal({
       setError('Title and template body are required.');
       return;
     }
+    if (!allowGlobal && accountId === '') {
+      setError('Select an account -- as an Agent you can only create templates for your own account or one of your Sub-Clients, never a global template.');
+      return;
+    }
     const incompleteSelect = variablesSchema.find(
       (f) => f.type === 'select' && (!f.options || f.options.filter((o) => o.trim()).length === 0),
     );
@@ -148,6 +192,8 @@ function TemplateModal({
         template_body: templateBody,
         account_id: accountId === '' ? null : accountId,
         variables_schema: variablesSchema,
+        header_type: headerType,
+        header_media_url: headerType === 'text' ? null : headerMediaUrl.trim(),
       };
       if (template) {
         await templateService.update(template.id, payload);
@@ -196,13 +242,20 @@ function TemplateModal({
           </div>
 
           <div>
-            <label className="text-sm font-medium text-slate-700">Assign to client account (optional)</label>
+            <label className="text-sm font-medium text-slate-700">
+              {allowGlobal ? 'Assign to client account (optional)' : 'Assign to account'}
+              {!allowGlobal && <span className="text-red-500"> *</span>}
+            </label>
             <select
               value={accountId}
               onChange={(e) => setAccountId(e.target.value === '' ? '' : Number(e.target.value))}
               className={inputClass}
             >
-              <option value="">Global — available to every client</option>
+              {allowGlobal ? (
+                <option value="">Global — available to every client</option>
+              ) : (
+                <option value="">Select an account…</option>
+              )}
               {accounts.map((a) => (
                 <option key={a.id} value={a.id}>
                   {a.company_name}
@@ -222,6 +275,56 @@ function TemplateModal({
               placeholder="Hello {{name}}, your dose {{dose_name}} is scheduled at {{dose_time}}."
               className={`${inputClass} font-mono text-sm`}
             />
+          </div>
+
+          <div>
+            <label className="text-sm font-medium text-slate-700">Header type</label>
+            <div className="mt-1 grid grid-cols-1 gap-2 sm:grid-cols-3">
+              {HEADER_TYPE_OPTIONS.map((opt) => (
+                <button
+                  type="button"
+                  key={opt.value}
+                  onClick={() => setHeaderType(opt.value)}
+                  className={`rounded-lg border px-3 py-2 text-left text-sm ${
+                    headerType === opt.value
+                      ? 'border-indigo-500 bg-indigo-50 text-indigo-700'
+                      : 'border-slate-300 text-slate-700 hover:bg-slate-50'
+                  }`}
+                >
+                  <div className="font-medium">{opt.label}</div>
+                  <div className="text-xs text-slate-500">{opt.hint}</div>
+                </button>
+              ))}
+            </div>
+
+            {headerType !== 'text' && (
+              <div className="mt-3">
+                <p className="mb-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                  Only sends as media on the QR (Baileys) engine. A client on the Meta Cloud API engine still
+                  receives this template as plain text — Meta requires its own separate template-media approval,
+                  which isn't supported here yet.
+                </p>
+                <label className="text-sm font-medium text-slate-700">
+                  Media URL
+                  <span className="ml-1 text-xs font-normal text-slate-400">
+                    (optional default — a direct link to the {headerType === 'image' ? 'image' : 'PDF/document'};
+                    the template body becomes the caption. Left blank, or overridden per-send via the API's
+                    media_url field; if the effective URL is missing or unreachable, the message still sends as
+                    plain text.)
+                  </span>
+                </label>
+                <input
+                  value={headerMediaUrl}
+                  onChange={(e) => setHeaderMediaUrl(e.target.value)}
+                  placeholder={
+                    headerType === 'image'
+                      ? 'https://example.com/files/banner.jpg'
+                      : 'https://example.com/files/invoice.pdf'
+                  }
+                  className={inputClass}
+                />
+              </div>
+            )}
           </div>
 
           {variablesSchema.length > 0 && (
@@ -505,6 +608,16 @@ function TestTemplateModal({
 }
 
 export default function TemplateManagerPage() {
+  const { user, isSuperAdmin } = useAuth();
+  const viewerIsSuperAdmin = isSuperAdmin();
+  // Tiered Template Approval Workflow for 3-Tier Hierarchy -- this page
+  // is now reachable by an Agent (Reseller), not just Super Admin (see
+  // RolePermissionSeeder's 'agent' role + App.tsx's manage-templates
+  // permission gate, unchanged). Everything below that differs by
+  // viewer branches on these two.
+  const viewerAccount = user?.account ?? null;
+  const viewerIsAgent = !viewerIsSuperAdmin && viewerAccount?.account_type === 'agent';
+
   const [templates, setTemplates] = useState<MessageTemplate[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [search, setSearch] = useState('');
@@ -538,6 +651,12 @@ export default function TemplateManagerPage() {
     }
   }, []);
 
+  const modalAccounts = useMemo(() => {
+    if (!viewerIsAgent || !viewerAccount) return accounts;
+    if (accounts.some((a) => a.id === viewerAccount.id)) return accounts;
+    return [viewerAccount, ...accounts];
+  }, [accounts, viewerIsAgent, viewerAccount]);
+
   useEffect(() => {
     void load();
   }, [load]);
@@ -555,9 +674,14 @@ export default function TemplateManagerPage() {
   };
 
   const handleReject = async (t: MessageTemplate) => {
+    // Tiered Template Approval Workflow -- optional reason, surfaced to
+    // the submitting account's owner via an in-app notification server-
+    // side. A cancelled prompt (null) still rejects with no reason,
+    // matching this button's pre-existing one-click behavior exactly.
+    const reason = window.prompt('Reason for rejecting this template (optional):', '') ?? undefined;
     setBusyId(t.id);
     try {
-      await templateService.reject(t.id);
+      await templateService.reject(t.id, reason || undefined);
       await load();
     } catch (err) {
       setError(extractMessage(err, 'Could not reject this template.'));
@@ -566,14 +690,23 @@ export default function TemplateManagerPage() {
     }
   };
 
-  const handleDelete = async (t: MessageTemplate) => {
-    if (!confirm(`Delete "${t.title}"? This cannot be undone.`)) return;
+  const [pendingDelete, setPendingDelete] = useState<MessageTemplate | null>(null);
+
+  const handleDelete = (t: MessageTemplate) => {
+    setPendingDelete(t);
+  };
+
+  const confirmDelete = async () => {
+    if (!pendingDelete) return;
+    const t = pendingDelete;
     setBusyId(t.id);
     try {
       await templateService.remove(t.id);
       await load();
+      setPendingDelete(null);
     } catch (err) {
       setError(extractMessage(err, 'Could not delete this template.'));
+      setPendingDelete(null);
     } finally {
       setBusyId(null);
     }
@@ -681,7 +814,7 @@ export default function TemplateManagerPage() {
                     <span
                       className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset ${STATUS_BADGE[t.status]}`}
                     >
-                      {t.status}
+                      {STATUS_LABEL[t.status]}
                     </span>
                     <div
                       className={`mt-1 flex items-center gap-1 text-[11px] ${
@@ -691,17 +824,46 @@ export default function TemplateManagerPage() {
                       <ShieldCheck className="h-3 w-3" />
                       {t.is_super_admin_tested ? 'Tested' : 'Not tested'}
                     </div>
+                    {t.status === 'rejected' && t.rejection_reason && (
+                      <div className="mt-1 max-w-[220px] truncate text-[11px] text-red-500" title={t.rejection_reason}>
+                        Reason: {t.rejection_reason}
+                      </div>
+                    )}
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex items-center justify-end gap-3">
-                      <button
-                        onClick={() => setTestModalTemplate(t)}
-                        className="flex items-center gap-1 text-xs font-medium text-indigo-600 hover:text-indigo-700"
-                      >
-                        <Send className="h-3.5 w-3.5" />
-                        Send Template
-                      </button>
-                      {t.status !== 'approved' && (
+                      {/*
+                        Tiered Template Approval Workflow -- Send Template
+                        (the real WhatsApp test-fire) and Delete are
+                        Super-Admin-only server-side now (see
+                        MessageTemplateController::test()/destroy()'s
+                        docblocks: an Agent test-firing would spend a send
+                        through the SUPER ADMIN's own connected WhatsApp
+                        number, and delete rights were never part of this
+                        feature's spec) -- hidden rather than shown-then-403.
+                      */}
+                      {viewerIsSuperAdmin && (
+                        <button
+                          onClick={() => setTestModalTemplate(t)}
+                          className="flex items-center gap-1 text-xs font-medium text-indigo-600 hover:text-indigo-700"
+                        >
+                          <Send className="h-3.5 w-3.5" />
+                          Send Template
+                        </button>
+                      )}
+                      {/*
+                        Approve/Reject: Super Admin retains its unchanged,
+                        any-status override (Rule 3), still gated by the
+                        pre-existing testing flag. An Agent only ever sees
+                        these for a 'pending_agent_review' row it owns
+                        (the backend's own ownership + status checks are
+                        the real gate; this just avoids offering a button
+                        that would 422) and is never subject to the
+                        Super-Admin testing-gate disable -- that gate
+                        belongs to the FINAL Super-Admin approval, not an
+                        Agent's intermediate one.
+                      */}
+                      {viewerIsSuperAdmin && t.status !== 'approved' && (
                         <button
                           onClick={() => void handleApprove(t)}
                           disabled={busyId === t.id || !t.is_super_admin_tested}
@@ -716,7 +878,18 @@ export default function TemplateManagerPage() {
                           Approve
                         </button>
                       )}
-                      {t.status !== 'rejected' && (
+                      {viewerIsAgent && t.status === 'pending_agent_review' && (
+                        <button
+                          onClick={() => void handleApprove(t)}
+                          disabled={busyId === t.id}
+                          title="Forwards to Super Admin for final review — this does not make the template live by itself."
+                          className="flex items-center gap-1 text-xs font-medium text-emerald-600 hover:text-emerald-700 disabled:opacity-60"
+                        >
+                          <CheckCircle2 className="h-3.5 w-3.5" />
+                          Approve
+                        </button>
+                      )}
+                      {viewerIsSuperAdmin && t.status !== 'rejected' && (
                         <button
                           onClick={() => void handleReject(t)}
                           disabled={busyId === t.id}
@@ -726,6 +899,23 @@ export default function TemplateManagerPage() {
                           Reject
                         </button>
                       )}
+                      {viewerIsAgent && t.status === 'pending_agent_review' && (
+                        <button
+                          onClick={() => void handleReject(t)}
+                          disabled={busyId === t.id}
+                          className="flex items-center gap-1 text-xs font-medium text-amber-600 hover:text-amber-700 disabled:opacity-60"
+                        >
+                          <XCircle className="h-3.5 w-3.5" />
+                          Reject
+                        </button>
+                      )}
+                      {/*
+                        Every row in `templates` is already server-scoped
+                        to what this viewer may touch (index()'s own
+                        Super-Admin/Agent branch) -- no extra ownership
+                        check needed client-side, same as the pre-existing
+                        Edit button before this feature.
+                      */}
                       <button
                         onClick={() => setModalState({ open: true, template: t })}
                         className="flex items-center gap-1 text-xs font-medium text-indigo-600 hover:text-indigo-700"
@@ -733,14 +923,16 @@ export default function TemplateManagerPage() {
                         <Pencil className="h-3.5 w-3.5" />
                         Edit
                       </button>
-                      <button
-                        onClick={() => void handleDelete(t)}
-                        disabled={busyId === t.id}
-                        className="flex items-center gap-1 text-xs font-medium text-red-600 hover:text-red-700 disabled:opacity-60"
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                        Delete
-                      </button>
+                      {viewerIsSuperAdmin && (
+                        <button
+                          onClick={() => handleDelete(t)}
+                          disabled={busyId === t.id}
+                          className="flex items-center gap-1 text-xs font-medium text-red-600 hover:text-red-700 disabled:opacity-60"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                          Delete
+                        </button>
+                      )}
                     </div>
                   </td>
                 </tr>
@@ -768,7 +960,8 @@ export default function TemplateManagerPage() {
       {modalState.open && (
         <TemplateModal
           template={modalState.template}
-          accounts={accounts}
+          accounts={modalAccounts}
+          allowGlobal={!viewerIsAgent}
           onClose={() => setModalState({ open: false, template: null })}
           onSaved={() => {
             setModalState({ open: false, template: null });
@@ -782,6 +975,18 @@ export default function TemplateManagerPage() {
           template={testModalTemplate}
           onClose={() => setTestModalTemplate(null)}
           onTested={() => void load()}
+        />
+      )}
+
+      {pendingDelete && (
+        <ConfirmModal
+          title="Delete template"
+          message={`Delete "${pendingDelete.title}"? This cannot be undone.`}
+          confirmLabel="Delete"
+          variant="danger"
+          isLoading={busyId === pendingDelete.id}
+          onConfirm={() => void confirmDelete()}
+          onCancel={() => setPendingDelete(null)}
         />
       )}
     </PageShell>

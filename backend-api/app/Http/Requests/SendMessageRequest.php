@@ -50,6 +50,11 @@ class SendMessageRequest extends FormRequest
             'recipient_phone' => ['required_if:recipient_type,individual', 'string', 'max:20'],
             'group_id' => ['required_if:recipient_type,group', 'integer'],
             'variables' => ['sometimes', 'array'],
+            // Media Templates (send-time override, QR/Baileys-only,
+            // individual recipients only -- see TemplateMessageController::
+            // sendToGroup(), unchanged) -- same lenient, never-422-on-bad-URL
+            // rule as SendTemplateMessageRequest's own media_url.
+            'media_url' => ['sometimes', 'nullable', 'string', 'max:2048'],
             ...MessageTemplate::variableValidationRules($this->targetSchema()),
         ];
     }

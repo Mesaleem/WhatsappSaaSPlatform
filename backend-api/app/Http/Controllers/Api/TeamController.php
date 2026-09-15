@@ -137,18 +137,31 @@ class TeamController extends Controller
             ], 403);
         }
 
+        // Admin Role Assignment Restriction (see roles()'s own docblock
+        // for the full rationale) — 'agent' is never assignable by
+        // anyone here; 'admin' is additionally excluded for a plain
+        // Client Admin caller but allowed for an Agent caller, who may
+        // add a co-Admin to one of its own clients' teams.
+        //
+        // Deliberately keyed off the CALLER's own account (like roles()
+        // above), NOT $account (the resolved TARGET tenant) — since the
+        // Agent Client-Switcher lets an Agent act AS one of its own
+        // Sub-Clients via ?account_id=, $account here is that Sub-Client
+        // (account_type 'client') while the caller is still the Agent.
+        // Keying off $account instead would wrongly strip 'admin' from
+        // an Agent inviting a co-Admin into its own Sub-Client's team.
+        $isAgent = (bool) (! $request->attributes->get('is_super_admin') && $request->user()?->account?->account_type === 'agent');
+        $excludedRoleNames = $isAgent
+            ? ['super_admin', 'agent']
+            : ['super_admin', 'admin', 'agent'];
+
         $data = $request->validate([
             'name' => ['required', 'string', 'max:255'],
             'email' => ['required', 'email', Rule::unique('users', 'email')],
             'phone_number' => ['nullable', 'string', 'max:32'],
             'password' => ['required', 'string', 'min:8'],
             'role_names' => ['required', 'array', 'min:1'],
-            // Admin Role Assignment Restriction — 'admin' excluded
-            // alongside 'super_admin': this endpoint is only reachable by
-            // a non-Super-Admin caller (see the guard above), and Primary
-            // Admin creation is reserved exclusively for
-            // AccountController::store() during Super-Admin client setup.
-            'role_names.*' => ['string', 'distinct', Rule::exists('roles', 'name')->where(fn ($q) => $q->whereNotIn('name', ['super_admin', 'admin']))],
+            'role_names.*' => ['string', 'distinct', Rule::exists('roles', 'name')->where(fn ($q) => $q->whereNotIn('name', $excludedRoleNames))],
         ]);
 
         $user = User::create([
@@ -283,14 +296,36 @@ class TeamController extends Controller
         return response()->json(['message' => 'Team member removed.']);
     }
 
-    /** GET /api/team/roles — assignable roles for the invite form's picker (excludes Super Admin). */
-    public function roles(): JsonResponse
+    /**
+     * GET /api/team/roles — assignable roles for the invite form's
+     * picker, scoped by the CALLER's own tier (not a flat list):
+     *  - 'super_admin' is never assignable here, full stop.
+     *  - 'agent' is never assignable by anyone here either: granting
+     *    the bare Spatie role without ALSO converting the target
+     *    account's account_type to 'agent' does nothing functionally
+     *    (callerAgentScopeId()/isNavItemVisible() key off account_type,
+     *    not role name) — it would just be a confusing dead option.
+     *    Promoting an account to Agent is AccountController::update()'s
+     *    job (Existing-Account Conversion), not this endpoint's.
+     *  - 'admin' is excluded for a plain Client Admin caller (Primary
+     *    Admin creation/addition is reserved for AccountController::
+     *    store()'s atomic account+admin creation) but IS offered to an
+     *    Agent caller: an Agent already acts as the effective "Super
+     *    Admin" for its own Sub-Client tree (manage-accounts), so it
+     *    may add an additional/co-Admin to one of its own clients'
+     *    teams the same way it could have provisioned one at
+     *    account-creation time.
+     */
+    public function roles(Request $request): JsonResponse
     {
-        // Admin Role Assignment Restriction — 'admin' excluded alongside
-        // 'super_admin' so the Invite/Edit form's role picker never offers
-        // it; Primary Admin creation is reserved for Super Admin during
-        // client setup (AccountController::store()), never this endpoint.
-        $roles = Role::whereNotIn('name', ['super_admin', 'admin'])->orderBy('name')->get(['id', 'name']);
+        $user = $request->user();
+        $isAgent = (bool) ($user && ! $user->isSuperAdmin() && $user->account?->account_type === 'agent');
+
+        $excludedRoleNames = $isAgent
+            ? ['super_admin', 'agent']
+            : ['super_admin', 'admin', 'agent'];
+
+        $roles = Role::whereNotIn('name', $excludedRoleNames)->orderBy('name')->get(['id', 'name']);
 
         return response()->json(['data' => $roles]);
     }

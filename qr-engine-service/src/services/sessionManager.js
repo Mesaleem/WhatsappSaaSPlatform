@@ -10,6 +10,7 @@ import {
   fetchLatestBaileysVersion,
   Browsers,
 } from '@whiskeysockets/baileys';
+import axios from 'axios';
 import { notifyBackend, notifyInboundMessage } from './backendClient.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -60,7 +61,124 @@ export function getQr(accountId) {
  * without this, backend-api would never learn about the disconnect until
  * someone manually forced a re-sync.
  */
-export async function sendMessage(accountId, to, message) {
+/**
+ * Distinguishes "the media_url the caller supplied is unreachable/
+ * invalid" (the caller's fault -- sendMessage() maps this to a
+ * 400-style result, see below) from every other failure in
+ * sendMessage() (Baileys/session errors -- still mapped to the existing
+ * 422-style result).
+ */
+class MediaFetchError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'MediaFetchError';
+  }
+}
+
+// Whole-file in-memory buffering (see fetchMediaBuffer() below) replaces
+// the old { url } form, where Baileys/axios streamed the source instead
+// of us holding it all in memory at once -- this cap keeps a mistaken or
+// hostile media_url from ballooning the process's memory. Comfortably
+// above anything a WhatsApp template attachment needs.
+const MAX_MEDIA_BYTES = 25 * 1024 * 1024; // 25 MB
+
+const DEFAULT_MIMETYPES = {
+  image: 'image/jpeg',
+  video: 'video/mp4',
+  document: 'application/pdf',
+  audio: 'audio/mpeg',
+};
+
+/**
+ * Fetches `url` into an in-memory Buffer ourselves, before Baileys or
+ * WhatsApp's own servers are ever involved.
+ *
+ * Previously buildContent() below handed Baileys a raw { url } reference
+ * and let Baileys fetch it internally as part of its own
+ * encrypt-then-upload-to-WhatsApp's-CDN pipeline. That entangled two
+ * unrelated failure modes -- "this third-party media host is slow/down/
+ * wrong" vs. "WhatsApp's own upload servers rejected it" -- behind one
+ * generic Baileys error ("Media upload failed on all hosts") that gave
+ * no way to tell which had actually happened (this is what surfaced in
+ * production: a valid, reachable media_url still failed this way,
+ * because Baileys' own internal fetch-and-upload pipeline offered no way
+ * to see which stage broke). Fetching up front means a bad media_url
+ * fails right here, with a clear reason, before Baileys or WhatsApp are
+ * involved at all.
+ */
+async function fetchMediaBuffer(url) {
+  let response;
+  try {
+    response = await axios.get(url, {
+      responseType: 'arraybuffer',
+      timeout: 20000,
+      maxRedirects: 5,
+      maxContentLength: MAX_MEDIA_BYTES,
+      maxBodyLength: MAX_MEDIA_BYTES,
+      // Some file hosts reject (or silently redirect to an error/login
+      // page for) requests with no User-Agent at all.
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; WA-SaaS-Bot/1.0)' },
+      validateStatus: (status) => status >= 200 && status < 300,
+    });
+  } catch (err) {
+    throw new MediaFetchError(`Could not download media from the provided URL: ${err.message}`);
+  }
+
+  const contentType = String(response.headers?.['content-type'] || '').split(';')[0].trim();
+  if (contentType.startsWith('text/html')) {
+    // The overwhelmingly common shape of "this link doesn't actually
+    // serve a file" -- an error page, login wall, or redirect target the
+    // host renders instead of the file. We don't try to whitelist every
+    // legitimate image/document content type beyond this.
+    throw new MediaFetchError('The media URL did not return a file — it returned an HTML page.');
+  }
+
+  const buffer = Buffer.from(response.data);
+  console.log(`[qr-engine] MEDIA_FETCHED url=${url} bytes=${buffer.length} content_type=${contentType || 'unknown'}`);
+  return { buffer, contentType: contentType || null };
+}
+
+/**
+ * Developer API Platform for WhatsApp Group Creation & Unified
+ * Messaging -- builds the Baileys content object for sendMessage()
+ * below. Plain text (media === null/undefined) is unchanged from
+ * before this feature ({ text: message }).
+ *
+ * Media is now fetched into a Buffer ourselves (fetchMediaBuffer()
+ * above) rather than handed to Baileys as a raw { url } reference --
+ * see that function's docblock for why. `mimetype` comes from the
+ * fetch's actual Content-Type response header when available, falling
+ * back to a per-type default only when the header is missing.
+ *
+ * @param {{type: string, url: string, caption?: string, filename?: string}|null} [media]
+ * @throws {MediaFetchError} if media is present but its URL can't be fetched as a usable file.
+ */
+async function buildContent(message, media) {
+  if (!media || !media.type || !media.url) {
+    return { text: message };
+  }
+
+  const caption = media.caption || message || undefined;
+  const { buffer, contentType } = await fetchMediaBuffer(media.url);
+  const mimetype = contentType || DEFAULT_MIMETYPES[media.type] || 'application/octet-stream';
+
+  switch (media.type) {
+    case 'image':
+      return { image: buffer, caption, mimetype };
+    case 'video':
+      return { video: buffer, caption, mimetype };
+    case 'document':
+      return { document: buffer, caption, fileName: media.filename || 'document', mimetype };
+    case 'audio':
+      // WhatsApp audio messages carry no caption -- Baileys' own audio
+      // content type has no such field, unlike image/video/document.
+      return { audio: buffer, mimetype: 'audio/mpeg' };
+    default:
+      return { text: message };
+  }
+}
+
+export async function sendMessage(accountId, to, message, media = null) {
   const id = String(accountId);
   const session = getHealthySession(id);
 
@@ -70,8 +188,28 @@ export async function sendMessage(accountId, to, message) {
     return { success: false, error: 'Session disconnected' };
   }
 
+  let content;
   try {
-    const sent = await session.sock.sendMessage(to, { text: message });
+    content = await buildContent(message, media);
+  } catch (err) {
+    if (err instanceof MediaFetchError) {
+      // Caller's payload is at fault (bad/unreachable media_url), not
+      // Baileys or the session -- sendMessage() never even attempts to
+      // send here. code: 'MEDIA_UNREACHABLE' lets the HTTP layer map
+      // this to 400 instead of the generic 422 used below.
+      logger.warn({ err, accountId: id, mediaUrl: media?.url }, 'media fetch failed');
+      console.error(`[qr-engine] MEDIA_FETCH_FAILED account_id=${id} url=${media?.url}:`, err.message);
+      return { success: false, error: err.message, code: 'MEDIA_UNREACHABLE' };
+    }
+    throw err;
+  }
+
+  try {
+    // 60s per WhatsApp CDN host attempt -- see fetchMediaBuffer()'s
+    // logging above for whether a given failure correlates with a larger
+    // file needing more of that time than the previous, shorter, implicit
+    // Baileys default allowed.
+    const sent = await session.sock.sendMessage(to, content, { mediaUploadTimeoutMs: 60000 });
     const messageId = sent?.key?.id ?? null;
     console.log(`[qr-engine] MESSAGE_SENT account_id=${id} message_id=${messageId ?? 'unknown'}`);
     return { success: true, message_id: messageId };
@@ -184,6 +322,82 @@ export async function addGroupParticipants(accountId, groupJid, participantJids)
     logger.error({ err, accountId: id, groupJid }, 'groupParticipantsUpdate failed');
     console.error(`[qr-engine] GROUP_ADD_PARTICIPANTS_FAILED account_id=${id} group_jid=${groupJid}:`, err);
     return { success: false, error: err?.message || 'Failed to add participants to the WhatsApp group.' };
+  }
+}
+
+/**
+ * Native WhatsApp Group Re-Architecture, "select an existing group"
+ * extension — lists every real WhatsApp group the connected account is
+ * CURRENTLY a participant of, via Baileys' groupFetchAllParticipating().
+ * Read-only: never creates, joins, or modifies anything. Same
+ * health-check-first, never-throws contract as createGroup()/
+ * addGroupParticipants() above, so server.js's route handler doesn't
+ * need a third error-shape convention.
+ *
+ * Returns { success: true, groups: [{ jid, subject, participants_count }] }
+ * on success — deliberately NOT the full Baileys metadata (participant
+ * JIDs, admin flags, descriptions, etc.) since this is only ever used to
+ * populate a picker list; ContactGroupController::importNative() fetches
+ * the full metadata itself (via a second call) only for the one group the
+ * user actually selects, keeping this list call cheap regardless of how
+ * many groups the account belongs to.
+ */
+export async function listGroups(accountId) {
+  const id = String(accountId);
+  const session = getHealthySession(id);
+
+  if (session.error) {
+    console.log(`[qr-engine] GROUP_LIST_HEALTH_CHECK_FAILED account_id=${id} reason=${session.error}`);
+    await notifyBackend(id, 'disconnected');
+    return { success: false, error: 'Session disconnected' };
+  }
+
+  try {
+    const metadataByJid = await session.sock.groupFetchAllParticipating();
+    const groups = Object.values(metadataByJid || {}).map((meta) => ({
+      jid: meta.id,
+      subject: meta.subject || '(untitled group)',
+      participants_count: Array.isArray(meta.participants) ? meta.participants.length : 0,
+    }));
+    console.log(`[qr-engine] GROUP_LIST_FETCHED account_id=${id} count=${groups.length}`);
+    return { success: true, groups };
+  } catch (err) {
+    logger.error({ err, accountId: id }, 'groupFetchAllParticipating failed');
+    console.error(`[qr-engine] GROUP_LIST_FAILED account_id=${id}:`, err);
+    return { success: false, error: err?.message || 'Failed to list WhatsApp groups.' };
+  }
+}
+
+/**
+ * Native WhatsApp Group Re-Architecture, "select an existing group"
+ * extension — full Baileys metadata (including the participant list) for
+ * ONE group, by JID. Used by ContactGroupController::importNative() right
+ * after the user picks a group from listGroups()'s summary, so the
+ * imported ContactGroup starts with its real member list already
+ * populated instead of showing 0 members.
+ *
+ * Returns { success: true, jid, subject, participants: [{ jid, is_admin }] }.
+ */
+export async function getGroupMetadata(accountId, groupJid) {
+  const id = String(accountId);
+  const session = getHealthySession(id);
+
+  if (session.error) {
+    console.log(`[qr-engine] GROUP_METADATA_HEALTH_CHECK_FAILED account_id=${id} reason=${session.error}`);
+    await notifyBackend(id, 'disconnected');
+    return { success: false, error: 'Session disconnected' };
+  }
+
+  try {
+    const meta = await session.sock.groupMetadata(groupJid);
+    const participants = Array.isArray(meta.participants)
+      ? meta.participants.map((p) => ({ jid: p.id, is_admin: p.admin != null }))
+      : [];
+    return { success: true, jid: meta.id, subject: meta.subject || '(untitled group)', participants };
+  } catch (err) {
+    logger.error({ err, accountId: id, groupJid }, 'groupMetadata failed');
+    console.error(`[qr-engine] GROUP_METADATA_FAILED account_id=${id} group_jid=${groupJid}:`, err);
+    return { success: false, error: err?.message || 'Failed to fetch this group\'s details.' };
   }
 }
 

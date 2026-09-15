@@ -448,7 +448,9 @@ class AccountController extends Controller
         $account = Account::findOrFail($id);
         $this->assertCallerCanAccessAccount($request, $account);
 
-        $data = $request->validate([
+        $isSuperAdmin = (bool) $request->user()?->isSuperAdmin();
+
+        $rules = [
             'company_name' => ['sometimes', 'string', 'max:255'],
             'primary_phone' => ['sometimes', 'nullable', 'string', 'max:32'],
             'status' => ['sometimes', Rule::in(self::ACCOUNT_STATUSES)],
@@ -475,11 +477,80 @@ class AccountController extends Controller
             // override (falls back to the platform/env key) rather than
             // storing an empty secret.
             'gemini_api_key' => ['sometimes', 'nullable', 'string', 'max:1000'],
-        ]);
+        ];
 
-        $account->update($data);
+        // 3-Tier Hierarchy & Agent-Client Scope Engine — Existing-Account
+        // Conversion. store()'s docblock previously said update() had "no
+        // path to change account_type/agent_id after creation"; that was a
+        // deliberate Phase-3 scope cut, not a permanent limitation — this
+        // closes it. Super-Admin-only (never an Agent, even one editing
+        // its own Sub-Client, same precedent as account_type in store()):
+        // an Agent could otherwise promote its own Sub-Client into a
+        // peer Agent, escaping its scope entirely.
+        if ($isSuperAdmin) {
+            $rules['account_type'] = ['sometimes', Rule::in(['agent', 'client'])];
+            $rules['agent_id'] = ['sometimes', 'nullable', 'integer', Rule::exists('accounts', 'id')->where('account_type', 'agent')];
+        }
 
-        return response()->json($account->load(['currentSubscription', 'owner:id,name,email,account_id']));
+        $data = $request->validate($rules);
+
+        $isConvertingType = array_key_exists('account_type', $data) && $data['account_type'] !== $account->account_type;
+        $newType = $data['account_type'] ?? $account->account_type;
+
+        if ($isConvertingType) {
+            if ($newType === 'agent') {
+                // Promoting an existing Client to Agent (Reseller). An
+                // Agent is always top-level, directly under Super Admin —
+                // never itself a Sub-Client of another Agent ("Agents do
+                // not create other Agents" — store()'s own docblock) — so
+                // this clears agent_id regardless of what (if anything)
+                // was submitted alongside it.
+                $data['agent_id'] = null;
+            } else {
+                // Demoting an existing Agent back to a plain Client.
+                // Refused if it still has Sub-Clients of its own —
+                // demoting it would leave those Sub-Clients' agent_id
+                // pointing at an account that is no longer an Agent,
+                // silently breaking every agent_id-scoped check in the
+                // app (module delegation, quota pool, quota-request
+                // routing). Reassign or remove them first.
+                abort_if(
+                    Account::where('agent_id', $account->id)->exists(),
+                    422,
+                    'This account still has its own Sub-Clients. Reassign or remove them before demoting it back to a Client.'
+                );
+            }
+        }
+
+        DB::transaction(function () use ($account, $data, $isConvertingType, $newType) {
+            $account->update($data);
+
+            if (! $isConvertingType) {
+                return;
+            }
+
+            // The 'agent' Spatie role (not just account_type) is what
+            // actually lets this account's owner user pass
+            // permission:manage-accounts on /api/admin/accounts and the
+            // other Agent-widened gates (Route Master's permissions-tree,
+            // Quota Top-Up Requests) — mirrors store()'s own
+            // $admin->assignRole('agent') exactly. 'admin' is left
+            // untouched either way: it already covers this user's own
+            // normal account operations regardless of account_type.
+            $owner = $account->owner;
+
+            if (! $owner) {
+                return;
+            }
+
+            if ($newType === 'agent') {
+                $owner->assignRole('agent');
+            } else {
+                $owner->removeRole('agent');
+            }
+        });
+
+        return response()->json($account->fresh()->load(['currentSubscription', 'owner:id,name,email,account_id']));
     }
 
     /**

@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Middleware\AuthenticateApiKey;
+use App\Http\Middleware\ApiAuthMiddleware;
 use App\Http\Middleware\EnsureModuleEnabledMiddleware;
 use App\Http\Middleware\SubscriptionGuardMiddleware;
 use App\Http\Middleware\TenantIsolationMiddleware;
@@ -31,6 +32,10 @@ return Application::configure(basePath: dirname(__DIR__))
             'module.guard' => EnsureModuleEnabledMiddleware::class,
             // Module 9 — external Developer API (Api\V1\*) Bearer API-key auth.
             'auth.apikey' => AuthenticateApiKey::class,
+            // Developer API Platform for WhatsApp Group Creation & Unified
+            // Messaging -- dual-factor (X-API-KEY + X-API-SECRET) auth, scoped
+            // only to the new /api/v1/whatsapp/* routes (see routes/api.php).
+            'auth.apisecret' => ApiAuthMiddleware::class,
             'role' => RoleMiddleware::class,
             'permission' => PermissionMiddleware::class,
             'role_or_permission' => RoleOrPermissionMiddleware::class,

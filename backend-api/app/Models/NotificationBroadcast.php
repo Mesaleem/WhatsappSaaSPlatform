@@ -5,9 +5,14 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use App\Traits\LogsActivity;
 
 class NotificationBroadcast extends Model
 {
+    use LogsActivity;
+
+    /** IMPLEMENT: Dynamic Route Master with Super-Admin Bypass & Global Audit Tracking — module label shown in the Activity Logs UI. */
+    protected string $auditModuleName = 'Notification Broadcasts';
     protected $fillable = [
         'template_id',
         'account_id',

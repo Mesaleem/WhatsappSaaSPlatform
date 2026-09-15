@@ -11,6 +11,7 @@ import { TableCard } from '../../components/common/Card';
 import { ClearFiltersButton, Pagination, SearchInput, StatusFilterSelect } from '../../components/common/DataTableControls';
 import { extractErrorMessage } from '../../utils/apiError';
 import { TableSkeletonRows } from '../../components/common/Skeleton';
+import ConfirmModal from '../../components/common/ConfirmModal';
 
 const ENGINE_BADGE: Record<EngineType, string> = {
   qr: 'bg-blue-50 text-blue-700 ring-blue-600/20',
@@ -158,24 +159,25 @@ export default function AccountsPage() {
     void load(page);
   };
 
-  const handleToggleStatus = async (account: Account) => {
+  const [pendingToggle, setPendingToggle] = useState<Account | null>(null);
+
+  const handleToggleStatus = (account: Account) => {
+    setPendingToggle(account);
+  };
+
+  const confirmToggleStatus = async () => {
+    if (!pendingToggle) return;
+    const account = pendingToggle;
     const nextStatus: AccountStatus = account.status === 'active' ? 'suspended' : 'active';
     const verb = nextStatus === 'suspended' ? 'deactivate' : 'reactivate';
-    if (
-      !confirm(
-        nextStatus === 'suspended'
-          ? `Deactivate ${account.company_name}? Every user on this client will be instantly blocked from signing in or using the platform until you reactivate it.`
-          : `Reactivate ${account.company_name}? Its users will be able to sign in again immediately.`,
-      )
-    ) {
-      return;
-    }
     setBusyId(account.id);
     try {
       await accountService.update(account.id, { status: nextStatus });
       await load(page);
+      setPendingToggle(null);
     } catch (err) {
       setError(extractErrorMessage(err, `Could not ${verb} this client.`));
+      setPendingToggle(null);
     } finally {
       setBusyId(null);
     }
@@ -384,7 +386,7 @@ export default function AccountsPage() {
                           </button>
                         )}
                         <button
-                          onClick={() => void handleToggleStatus(account)}
+                          onClick={() => handleToggleStatus(account)}
                           disabled={busyId === account.id}
                           className={`rounded-md p-1.5 hover:bg-slate-100 disabled:opacity-50 ${
                             account.status === 'active' ? 'text-red-500 hover:text-red-600' : 'text-emerald-600 hover:text-emerald-700'
@@ -425,6 +427,22 @@ export default function AccountsPage() {
 
       {quotaModalAccount && (
         <UpdateQuotaModal account={quotaModalAccount} onClose={closeQuotaModal} onSaved={handleQuotaSaved} />
+      )}
+
+      {pendingToggle && (
+        <ConfirmModal
+          title={pendingToggle.status === 'active' ? 'Deactivate client' : 'Reactivate client'}
+          message={
+            pendingToggle.status === 'active'
+              ? `Deactivate ${pendingToggle.company_name}? Every user on this client will be instantly blocked from signing in or using the platform until you reactivate it.`
+              : `Reactivate ${pendingToggle.company_name}? Its users will be able to sign in again immediately.`
+          }
+          confirmLabel={pendingToggle.status === 'active' ? 'Deactivate' : 'Reactivate'}
+          variant={pendingToggle.status === 'active' ? 'danger' : 'default'}
+          isLoading={busyId === pendingToggle.id}
+          onConfirm={() => void confirmToggleStatus()}
+          onCancel={() => setPendingToggle(null)}
+        />
       )}
     </div>
   );

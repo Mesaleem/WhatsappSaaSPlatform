@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use App\Traits\LogsActivity;
 
 /**
  * A named, tenant-scoped contact list. Two kinds, distinguished by
@@ -27,6 +28,10 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  */
 class ContactGroup extends Model
 {
+    use LogsActivity;
+
+    /** IMPLEMENT: Dynamic Route Master with Super-Admin Bypass & Global Audit Tracking — module label shown in the Activity Logs UI. */
+    protected string $auditModuleName = 'Contact Groups';
     public const GROUP_TYPE_INTERNAL = 'internal_segment';
     public const GROUP_TYPE_NATIVE = 'native_wa_group';
 

@@ -3,10 +3,12 @@ import type {
   AvailableTemplate,
   ClientApiKey,
   MessageTemplate,
+  MyTemplateSummary,
   RegenerateClientApiKeyResponse,
   SaveMessageTemplatePayload,
   SendTemplateMessagePayload,
   SendTemplateMessageResponse,
+  SubmitTemplateRequestPayload,
   TestTemplateMessagePayload,
   TestTemplateMessageResponse,
 } from '../types/templates';
@@ -37,9 +39,17 @@ const templateService = {
       .then((res) => res.data);
   },
 
-  reject(id: number) {
+  /**
+   * Tiered Template Approval Workflow -- `reason` is optional (matches
+   * the backend's `sometimes` validation): Super Admin/Agent may reject
+   * with just a click, same as before this feature, or supply a short
+   * reason that's stored on the template and surfaced to the submitter.
+   */
+  reject(id: number, reason?: string) {
     return axiosInstance
-      .patch<{ message: string; data: MessageTemplate }>(`/message-templates/${id}/reject`)
+      .patch<{ message: string; data: MessageTemplate }>(`/message-templates/${id}/reject`, {
+        rejection_reason: reason ?? null,
+      })
       .then((res) => res.data);
   },
 
@@ -60,6 +70,24 @@ const templateService = {
   // --- Client Admin Dynamic Form Engine ---
   available() {
     return axiosInstance.get<{ data: AvailableTemplate[] }>('/alerts/message-templates').then((res) => res.data.data);
+  },
+
+  /**
+   * POST /api/alerts/message-templates/request -- Tiered Template
+   * Approval Workflow for 3-Tier Hierarchy. Submitted for the caller's
+   * OWN account (server-resolved); routed to pending_agent_review or
+   * pending_admin_review purely by that account's own agent_id.
+   * [Not yet wired to a page in this pass -- see the feature's summary.]
+   */
+  submitRequest(payload: SubmitTemplateRequestPayload) {
+    return axiosInstance
+      .post<{ message: string; data: MessageTemplate }>('/alerts/message-templates/request', payload)
+      .then((res) => res.data);
+  },
+
+  /** GET /api/alerts/message-templates/mine -- "My Templates" list (any status), for a plain Client Admin/User. */
+  mine() {
+    return axiosInstance.get<{ data: MyTemplateSummary[] }>('/alerts/message-templates/mine').then((res) => res.data.data);
   },
 
   sendTemplateMessage(payload: SendTemplateMessagePayload) {

@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use App\Traits\LogsActivity;
 
 /**
  * Social Media Marketing & Meta Ads Automation Expansion — Phase 3.
@@ -13,6 +14,10 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  */
 class AdCampaign extends Model
 {
+    use LogsActivity;
+
+    /** IMPLEMENT: Dynamic Route Master with Super-Admin Bypass & Global Audit Tracking — module label shown in the Activity Logs UI. */
+    protected string $auditModuleName = 'Meta Ads Launcher';
     /**
      * Social/Ads Launcher Overhaul — Step 4 (Click-to-WhatsApp Ads).
      * CLICK_TO_WHATSAPP added alongside the original three — see

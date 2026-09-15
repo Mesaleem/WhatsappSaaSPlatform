@@ -36,6 +36,7 @@ class TemplateMessageController extends Controller
             $data['variables'] ?? [],
             source: 'api',
             apiKeyId: $apiKey?->id,
+            mediaUrl: $data['media_url'] ?? null,
         );
 
         return match ($result['status']) {
@@ -73,7 +74,7 @@ class TemplateMessageController extends Controller
     }
 
     /**
-     * @param array{template_id: int, recipient_phone: string, variables?: array<string, string>} $data
+     * @param array{template_id: int, recipient_phone: string, variables?: array<string, string>, media_url?: string} $data
      */
     private function sendToIndividual(int $accountId, ?int $apiKeyId, array $data): JsonResponse
     {
@@ -84,6 +85,7 @@ class TemplateMessageController extends Controller
             $data['variables'] ?? [],
             source: 'api',
             apiKeyId: $apiKeyId,
+            mediaUrl: $data['media_url'] ?? null,
         );
 
         // [Disclosed]: this endpoint's own response contract (per the

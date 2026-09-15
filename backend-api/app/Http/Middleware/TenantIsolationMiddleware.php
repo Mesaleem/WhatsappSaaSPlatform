@@ -13,10 +13,11 @@ class TenantIsolationMiddleware
      * Injects the EFFECTIVE tenant account_id into the request scope so
      * downstream controllers/queries can strictly isolate tenant data.
      *
-     * Non-Super-Admin users: always their own account_id. A ?account_id=
-     * query parameter from a regular tenant user is never honored here —
-     * only Super Admin may select a different tenant, preserving the
-     * original isolation guarantee for everyone else.
+     * Non-Super-Admin, non-Agent users: always their own account_id. A
+     * ?account_id= query parameter from a plain Client Admin/User/Social
+     * Marketer is never honored here — only Super Admin, and now an
+     * Agent acting within its own Sub-Client tree (see the Agent
+     * Client-Switcher branch below), may select a different tenant.
      *
      * Super Admin users (account_id === null on the user row): carry no
      * tenant of their own. They may optionally pass ?account_id=X to scope
@@ -83,6 +84,27 @@ class TenantIsolationMiddleware
                 $accountId = (int) $requestedAccountId;
             } else {
                 $accountId = null;
+            }
+        } elseif ($isAgent) {
+            // Agent Client-Switcher: an Agent may pass ?account_id=X to act
+            // AS one of their own Sub-Clients for this one request, scoped
+            // strictly to their own tree — mirroring the Super Admin
+            // override above but bounded by ownership instead of being
+            // unrestricted. $accountId still starts as the Agent's OWN
+            // account_id (set above), so omitting the query param, or
+            // passing the Agent's own id back, is always a no-op.
+            $requestedAccountId = $request->query('account_id');
+
+            if ($requestedAccountId !== null && $requestedAccountId !== '') {
+                $targetAccount = Account::whereKey($requestedAccountId)->first();
+                $isOwnAccount = $targetAccount && (int) $targetAccount->id === $accountId;
+                $isOwnedSubClient = $targetAccount && $targetAccount->agent_id === $accountId;
+
+                if (! $targetAccount || (! $isOwnAccount && ! $isOwnedSubClient)) {
+                    return response()->json(['message' => 'The selected client account was not found or is not one of your Sub-Clients.'], 404);
+                }
+
+                $accountId = (int) $targetAccount->id;
             }
         }
 

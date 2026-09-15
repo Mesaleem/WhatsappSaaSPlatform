@@ -1,9 +1,11 @@
 import axiosInstance from '../core/api/axiosInstance';
 import type {
   AddContactsResult,
+  AvailableNativeGroup,
   ContactGroup,
   ContactGroupContactInput,
   CreateContactGroupPayload,
+  ImportNativeGroupPayload,
   SendGroupTemplatePayload,
   SendGroupTemplateResponse,
 } from '../types/contactGroup';
@@ -33,6 +35,31 @@ const contactGroupsService = {
   create(payload: CreateContactGroupPayload) {
     return axiosInstance
       .post<{ success: boolean; data: ContactGroup }>('/groups/create', payload)
+      .then((res) => res.data.data);
+  },
+
+  /**
+   * GET /api/groups/available-native — "select an existing group"
+   * extension. Lists the tenant's real WhatsApp groups not yet imported.
+   * Throws (doesn't unwrap error_code) the same way create() does for a
+   * disconnected session/non-qr engine — ContactGroupsPage.tsx's caller
+   * catches and renders the message, same pattern as storeNativeGroup's
+   * existing 422s.
+   */
+  availableNative() {
+    return axiosInstance
+      .get<{ success: boolean; data: AvailableNativeGroup[] }>('/groups/available-native')
+      .then((res) => res.data.data);
+  },
+
+  /**
+   * POST /api/groups/import-native — "select an existing group"
+   * extension. Adopts one of availableNative()'s groups as a
+   * ContactGroup, importing its real current member list server-side.
+   */
+  importNative(payload: ImportNativeGroupPayload) {
+    return axiosInstance
+      .post<{ success: boolean; data: ContactGroup }>('/groups/import-native', payload)
       .then((res) => res.data.data);
   },
 

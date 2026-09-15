@@ -3,7 +3,7 @@ import { Users2, XCircle } from 'lucide-react';
 import billingService from '../../services/billingService';
 import { useTenant } from '../../core/context/TenantContext';
 import { TableCard } from '../common/Card';
-import { Pagination, SearchInput, StatusFilterSelect } from '../common/DataTableControls';
+import { ClearFiltersButton, Pagination, SearchInput, StatusFilterSelect } from '../common/DataTableControls';
 import { TableSkeletonRows } from '../common/Skeleton';
 import type { ClientBillingSummaryRow, ClientPaymentStatus } from '../../types/billing';
 
@@ -89,6 +89,14 @@ export default function ClientBillingSummaryTable() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [load, selectedAccountId, perPage]);
 
+  const hasActiveFilters = search !== '' || statusFilter !== '' || from !== '' || to !== '';
+  const clearFilters = () => {
+    setSearch('');
+    setStatusFilter('');
+    setFrom('');
+    setTo('');
+  };
+
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -128,6 +136,7 @@ export default function ClientBillingSummaryTable() {
               aria-label="To date"
             />
           </div>
+          <ClearFiltersButton active={hasActiveFilters} onClear={clearFilters} />
         </div>
       </div>
 

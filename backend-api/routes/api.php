@@ -1,6 +1,8 @@
 <?php
 
 use App\Http\Controllers\Api\AccountController;
+use App\Http\Controllers\Api\RouteMasterController;
+use App\Http\Controllers\Api\ActivityLogController;
 use App\Http\Controllers\Api\AdminUserController;
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\RoleController;
@@ -21,6 +23,8 @@ use App\Http\Controllers\Api\ApiKeyController;
 use App\Http\Controllers\Api\WebhookSubscriptionController;
 use App\Http\Controllers\Api\V1\ExternalAlertController;
 use App\Http\Controllers\Api\V1\TemplateMessageController;
+use App\Http\Controllers\Api\V1\GroupController as V1GroupController;
+use App\Http\Controllers\Api\V1\UnifiedMessageController;
 use App\Http\Controllers\Api\ClientApiKeyController;
 use App\Http\Controllers\Api\MessageTemplateController;
 use App\Http\Controllers\Api\Internal\WhatsAppStatusController;
@@ -123,6 +127,19 @@ Route::middleware(['auth.apikey', 'throttle:external-api'])->prefix('v1')->group
     // recipient_type-based routing (individual vs group) happens
     // inside the controller action itself, not at the route level.
     Route::post('/send-message', [TemplateMessageController::class, 'sendMessage']);
+});
+
+// Developer API Platform for WhatsApp Group Creation & Unified
+// Messaging -- a SEPARATE dual-factor-authenticated (X-API-KEY +
+// X-API-SECRET) tier, deliberately NOT added to the auth.apikey group
+// above: every pre-existing route in that group keeps its original
+// single-factor contract untouched (see ApiAuthMiddleware's own
+// docblock for the full rationale). Shares the same 'external-api'
+// rate limiter — ApiAuthMiddleware resolves api_account_id the same way
+// AuthenticateApiKey does, before the limiter callback fires.
+Route::middleware(['auth.apisecret', 'throttle:external-api'])->prefix('v1/whatsapp')->group(function () {
+    Route::post('/groups/create', [V1GroupController::class, 'create']);
+    Route::post('/messages/send', [UnifiedMessageController::class, 'send']);
 });
 
 Route::middleware('auth:sanctum')->group(function () {
@@ -247,6 +264,11 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::get('/api-keys', [ApiKeyController::class, 'index']);
             Route::post('/api-keys', [ApiKeyController::class, 'store']);
             Route::delete('/api-keys/{id}', [ApiKeyController::class, 'destroy']);
+            // Developer API Platform for WhatsApp Group Creation & Unified
+            // Messaging -- backfills/rotates an existing key's dual-factor
+            // secret without touching its key_hash (see
+            // ApiKeyController::regenerateSecret()'s own docblock).
+            Route::post('/api-keys/{id}/regenerate-secret', [ApiKeyController::class, 'regenerateSecret']);
 
             Route::get('/webhooks', [WebhookSubscriptionController::class, 'index']);
             Route::post('/webhooks', [WebhookSubscriptionController::class, 'store']);
@@ -467,6 +489,28 @@ Route::middleware('auth:sanctum')->group(function () {
             // new one.
             Route::get('/message-templates', [MessageTemplateController::class, 'available']);
             Route::post('/send-template', [MessageTemplateController::class, 'send']);
+            // Tiered Template Approval Workflow for 3-Tier Hierarchy --
+            // the entry point rules 1/2 assume exists: a plain Client
+            // Admin/User submitting a template REQUEST for their own
+            // account (never Super Admin or Agent -- those author
+            // directly via the pre-existing /api/message-templates
+            // store() below, gated by manage-templates). Same
+            // send-messages tier as every other route in this /alerts
+            // group -- content-authoring-adjacent, not a new privilege.
+            // Status is decided server-side by TemplateService
+            // ::resolveCreationStatus() purely from the caller's OWN
+            // account.agent_id -- never client-supplied.
+            Route::post('/message-templates/request', [MessageTemplateController::class, 'submitRequest']);
+            // GET /api/alerts/message-templates/mine -- every template on
+            // the caller's own account regardless of status, so a plain
+            // Client Admin/User (who can never reach the permission:
+            // manage-templates index() below) can see what they've
+            // requested and its current review status. Registered BEFORE
+            // GET /message-templates/{id}-style routes would ever be
+            // added here to avoid an ambiguous /mine vs /{id} match (this
+            // group has no such {id} route today, but this ordering
+            // guards against one being added later without noticing).
+            Route::get('/message-templates/mine', [MessageTemplateController::class, 'myTemplates']);
         });
 
         // Group Messaging Phase 2: Contact Group Management APIs. Same
@@ -493,6 +537,21 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::middleware(['permission:send-messages', 'module.guard:contact_groups'])->prefix('groups')->group(function () {
             Route::get('/', [ContactGroupController::class, 'index']);
             Route::post('/create', [ContactGroupController::class, 'store']);
+            // [New, "select an existing group"]: lists the tenant's REAL
+            // WhatsApp groups (via Baileys' groupFetchAllParticipating(),
+            // through NativeWhatsAppGroupService) that are not yet
+            // imported as a ContactGroup, so the frontend can offer
+            // "pick an existing group" alongside "+ Create Group".
+            // Registered as a literal path, not '/{id}', so it can never
+            // collide with the DELETE/{id} route below.
+            Route::get('/available-native', [ContactGroupController::class, 'availableNativeGroups']);
+            // [New, "select an existing group"]: adopts one of the
+            // groups listed above as a ContactGroup row, importing its
+            // real current member list. See
+            // NativeGroupCreationService::importExisting()'s docblock
+            // for why this never dispatches CreateNativeWhatsAppGroupJob
+            // the way /create's native_wa_group path does.
+            Route::post('/import-native', [ContactGroupController::class, 'importNative']);
             Route::post('/add-contacts', [ContactGroupController::class, 'addContacts']);
             Route::delete('/{id}', [ContactGroupController::class, 'destroy']);
             // [New, disclosed]: previously there was NO session-authenticated
@@ -618,6 +677,42 @@ Route::middleware('auth:sanctum')->group(function () {
         // AdminUserController's docblock for why permission alone isn't
         // a strict enough guarantee here).
         Route::post('/users/{id}/change-password', [AdminUserController::class, 'changePassword']);
+
+        // BUILD: Fully Dynamic Categorized Route Master & Nested
+        // Permission Matrix UI. /permissions-tree is read by BOTH Super
+        // Admin and Agent callers (both hold manage-accounts, the gate
+        // on this whole group) to render CreateAccountModal.tsx's
+        // dynamic "Module & Feature Access" checklist —
+        // RouteMasterController::tree() does the Agent-vs-Super-Admin
+        // filtering internally. /route-categories and /system-routes
+        // (RouteMasterPage.tsx's CRUD surface) are additionally
+        // self-guarded to Super-Admin-only inside the controller — see
+        // its docblock for why that isn't a second route-level
+        // permission tier. Deliberately NOT placed under /api/v1/ as
+        // originally specified — see RouteMasterController's docblock
+        // for the disclosed naming correction.
+        Route::get('/permissions-tree', [RouteMasterController::class, 'tree']);
+
+        Route::get('/route-categories', [RouteMasterController::class, 'categories']);
+        Route::post('/route-categories', [RouteMasterController::class, 'storeCategory']);
+        Route::put('/route-categories/{id}', [RouteMasterController::class, 'updateCategory']);
+        Route::delete('/route-categories/{id}', [RouteMasterController::class, 'destroyCategory']);
+
+        Route::get('/system-routes', [RouteMasterController::class, 'routes']);
+        Route::post('/system-routes', [RouteMasterController::class, 'storeRoute']);
+        Route::put('/system-routes/{id}', [RouteMasterController::class, 'updateRoute']);
+        Route::delete('/system-routes/{id}', [RouteMasterController::class, 'destroyRoute']);
+    });
+
+    // IMPLEMENT: Dynamic Route Master with Super-Admin Bypass & Global
+    // Audit Tracking — requirement 4's "Super-Admin Audit Trail UI".
+    // Deliberately its OWN permission tier (view-activity-logs), not
+    // manage-accounts — an Agent holds manage-accounts too, but this
+    // platform-wide CRUD activity trail is Super-Admin-only per the
+    // literal spec, unlike /admin/accounts above.
+    Route::middleware('permission:view-activity-logs')->prefix('admin')->group(function () {
+        Route::get('/activity-logs', [ActivityLogController::class, 'index']);
+        Route::get('/activity-logs/modules', [ActivityLogController::class, 'modules']);
     });
 
     // Dynamic Templates & Variables System — Super Admin Template
@@ -644,21 +739,38 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::middleware('permission:manage-templates')->post('/admin/templates/{id}/test', [MessageTemplateController::class, 'test']);
 
     // Super Admin WhatsApp Device Integration — device overview across
-    // every tenant. Same permission tier as /admin/accounts (this is
-    // platform account administration, not tenant data) — the actual
-    // link/disconnect/reconnect actions reuse the existing tenant-scoped
-    // /whatsapp/* routes below with ?account_id=, so only the listing
-    // endpoint lives here. See WhatsAppController::adminIndex()'s
-    // docblock for the disclosed "every tenant's device" interpretation.
-    Route::middleware('permission:manage-accounts')->get('/admin/whatsapp/devices', [WhatsAppController::class, 'adminIndex']);
+    // every tenant. Deliberately `role:super_admin`, NOT
+    // `permission:manage-accounts` (what this route used until the
+    // WhatsApp production-readiness audit caught it) — `adminIndex()`
+    // returns EVERY tenant's device status/company name completely
+    // unscoped (no agent_id filter at all, unlike AccountController's
+    // callerAgentScopeId() pattern), and manage-accounts is ALSO held by
+    // Agent (RolePermissionSeeder, added in the later 3-Tier Hierarchy
+    // phase for a different reason — managing its own Sub-Client
+    // accounts). Sharing manage-accounts here let any Agent see every
+    // OTHER Agent's/direct client's WhatsApp connection status too — a
+    // real cross-tenant information-disclosure gap this route's own
+    // original docblock never anticipated. The actual link/disconnect/
+    // reconnect actions reuse the existing tenant-scoped /whatsapp/*
+    // routes below with ?account_id=, so only the listing endpoint lives
+    // here. See WhatsAppController::adminIndex()'s docblock for the
+    // disclosed "every tenant's device" interpretation.
+    Route::middleware('role:super_admin')->get('/admin/whatsapp/devices', [WhatsAppController::class, 'adminIndex']);
 
     // Super Admin WhatsApp Device Integration — the Super Admin's OWN
     // scannable WhatsApp test device (Account::platformDevice()), used by
     // MessageTemplateController::test() to fire test-sends for ANY
-    // template. Same permission tier as the listing route above; see
+    // template. Deliberately `role:super_admin`, same fix and same
+    // reasoning as the listing route above — and doubly so here: letting
+    // Agent reach this at all would mean an Agent could start-session or
+    // LOG OUT the one shared device every tenant's template approval
+    // depends on, exactly the "cross-tenant abuse surface" that
+    // MessageTemplateController::test()'s own docblock already explicitly
+    // excludes Agent from via a DIFFERENT path (the test-fire endpoint) —
+    // this self-device group was the gap that same exclusion missed. See
     // WhatsAppController::selfDeviceStatus()'s docblock for why these
     // don't reuse the generic per-tenant /whatsapp/* routes below.
-    Route::middleware('permission:manage-accounts')->prefix('admin/whatsapp/self-device')->group(function () {
+    Route::middleware('role:super_admin')->prefix('admin/whatsapp/self-device')->group(function () {
         Route::get('/', [WhatsAppController::class, 'selfDeviceStatus']);
         Route::post('/start-session', [WhatsAppController::class, 'selfDeviceStartSession']);
         Route::post('/logout', [WhatsAppController::class, 'selfDeviceLogout']);
@@ -682,11 +794,19 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/mail-settings/test', [MailSettingsController::class, 'sendTest']);
     });
 
-    // Quota Exhaustion Request Workflow — Super Admin review/approval.
-    // Same manage-billing-settings tier as /admin/billing above (this IS
-    // billing administration: approval mutates a tenant's subscription
-    // quota and generates an invoice).
-    Route::middleware('permission:manage-billing-settings')->prefix('admin/quota-requests')->group(function () {
+    // Quota Exhaustion Request Workflow — Super Admin AND Agent
+    // review/approval (Agent-Routed Quota Top-Up Requests). Gated on
+    // manage-accounts, not manage-billing-settings, on purpose: an Agent
+    // already holds manage-accounts (same tier as /admin/accounts) but
+    // must never reach true platform settings (gateway/mail credentials
+    // above), which stay manage-billing-settings-only. Super Admin holds
+    // both permissions via PERMISSIONS, so this is a pure widening, not a
+    // narrowing, of who can reach this group. QuotaRequestController
+    // itself scopes an Agent caller to only its OWN Sub-Clients'
+    // requests (index()) and refuses to approve any other tenant's
+    // (approve()) — a directly-onboarded Admin (Account::agent_id ===
+    // null) is only ever reachable by Super Admin.
+    Route::middleware('permission:manage-accounts')->prefix('admin/quota-requests')->group(function () {
         Route::get('/', [QuotaRequestController::class, 'index']);
         Route::post('/{id}/approve', [QuotaRequestController::class, 'approve']);
     });

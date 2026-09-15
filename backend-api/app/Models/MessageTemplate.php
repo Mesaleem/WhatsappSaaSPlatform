@@ -6,10 +6,29 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Validation\Rule;
+use App\Traits\LogsActivity;
 
 class MessageTemplate extends Model
 {
-    public const STATUSES = ['pending', 'approved', 'rejected'];
+    use LogsActivity;
+
+    /** IMPLEMENT: Dynamic Route Master with Super-Admin Bypass & Global Audit Tracking — module label shown in the Activity Logs UI. */
+    protected string $auditModuleName = 'Template Manager';
+    /**
+     * Tiered Template Approval Workflow for 3-Tier Hierarchy -- three
+     * intermediate review states inserted between "just created" and
+     * the pre-existing terminal 'pending' (Super-Admin testing gate).
+     * See TemplateService's docblock for the full routing design and
+     * the migration that widened this column's DB-level constraint.
+     */
+    public const STATUSES = [
+        'pending',
+        'pending_agent_review',
+        'pending_admin_review',
+        'pending_meta_approval',
+        'approved',
+        'rejected',
+    ];
 
     /** Group Messaging Step 1 — matches the lowercase convention STATUSES above already uses on this same table. */
     public const HEADER_TYPES = ['text', 'image', 'document'];
@@ -32,9 +51,20 @@ class MessageTemplate extends Model
         // any controller (MessageTemplateController::reject() is unchanged).
         'header_type',
         'rejection_reason',
+        // Media Templates (QR/Baileys-only) — see requiresHeaderMedia()
+        // below and TemplateMessageDispatcher for how this is actually
+        // used at send time.
+        'header_media_url',
     ];
 
-    protected $with = ['account:id,company_name'];
+    /**
+     * agent_id/account_type added by the Tiered Template Approval
+     * Workflow feature -- TemplateService and MessageTemplateController's
+     * Agent-ownership scoping both read $template->account->agent_id, so
+     * this eager-load's column restriction must include it or that check
+     * silently sees null on every row.
+     */
+    protected $with = ['account:id,company_name,agent_id,account_type'];
 
     protected function casts(): array
     {
@@ -74,6 +104,21 @@ class MessageTemplate extends Model
                     $q->orWhere('account_id', $accountId);
                 }
             });
+    }
+
+    /**
+     * Media Templates (QR/Baileys-only) — true when this template is
+     * configured to carry an image or document header AND actually has a
+     * media URL set. Deliberately checks BOTH: header_type alone (e.g. a
+     * template switched back to 'text' without clearing an old
+     * header_media_url) must not cause a media send. Used by
+     * TemplateMessageDispatcher to decide whether to build a media
+     * payload for BaileysDriver or send plain text — see that class for
+     * why this only ever applies to the 'qr' engine.
+     */
+    public function requiresHeaderMedia(): bool
+    {
+        return in_array($this->header_type, ['image', 'document'], true) && filled($this->header_media_url);
     }
 
     /**

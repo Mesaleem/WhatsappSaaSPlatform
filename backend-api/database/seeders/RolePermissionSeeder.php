@@ -104,6 +104,15 @@ class RolePermissionSeeder extends Seeder
         // checkbox is still storable, matching the spec's literal
         // checklist.
         'social_ads.delete_rules',
+        // IMPLEMENT: Dynamic Route Master with Super-Admin Bypass &
+        // Global Audit Tracking — requirement 4's "Super-Admin Audit
+        // Trail UI". Deliberately its own permission, separate from the
+        // existing 'view-audit-logs' (login-attempt history, visible to
+        // admin/user/agent too) — granted ONLY to super_admin here (via
+        // 'super_admin' => self::PERMISSIONS below); no other role's
+        // array in DEFAULT_ROLES lists it, matching this feature's
+        // literal "Super-Admin Audit Trail UI" scope.
+        'view-activity-logs',
     ];
 
     /**
@@ -166,6 +175,20 @@ class RolePermissionSeeder extends Seeder
         // permission platform-wide by role name.
         'agent' => [
             'manage-accounts',
+            // Tiered Template Approval Workflow for 3-Tier Hierarchy —
+            // lets an Agent reach the SAME /api/message-templates* routes
+            // Super Admin uses (index/store/update/approve/reject), which
+            // sit outside tenant.isolation exactly like /api/admin/accounts
+            // above. MessageTemplateController enforces the actual
+            // Agent-vs-Agent ownership scoping itself (mirroring
+            // AccountController::callerAgentScopeId()), and explicitly
+            // excludes an Agent from destroy() and the Super-Admin-only
+            // /admin/templates/{id}/test endpoint (which fires through
+            // Account::platformDevice(), the SUPER ADMIN's own WhatsApp
+            // connection — an Agent must never be able to spend sends on
+            // that device). See TemplateService's docblock for the full
+            // approval-routing design.
+            'manage-templates',
         ],
         // Social Media Marketing & Meta Ads Automation Expansion (Phase 1).
         // Deliberately restricted to ONLY these four permissions — this

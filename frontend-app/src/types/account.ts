@@ -294,6 +294,16 @@ export interface UpdateAccountPayload {
   /** Super Admin Client Provisioning refactor — editable post-creation too (see AccountController::update()'s docblock). */
   max_users_limit?: number | null;
   module_assignment?: ModuleAssignment;
+  /**
+   * 3-Tier Hierarchy & Agent-Client Scope Engine — Existing-Account
+   * Conversion. Super-Admin-only (AccountController::update() silently
+   * drops both for any other caller). Converting to 'agent' always
+   * clears agent_id server-side, regardless of what's sent here;
+   * converting an 'agent' back to 'client' is refused (422) while it
+   * still has its own Sub-Clients.
+   */
+  account_type?: AccountType;
+  agent_id?: number | null;
 }
 
 /** PATCH /api/admin/accounts/{id}/permissions */

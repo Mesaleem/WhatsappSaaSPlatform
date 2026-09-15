@@ -3,6 +3,8 @@ import { Link } from 'react-router-dom';
 import { AlertTriangle, CheckCircle2, Code2, Copy, Loader2, Send, Sparkles, Users, XCircle } from 'lucide-react';
 import { useAuth } from '../../core/context/AuthContext';
 import { useTenant } from '../../core/context/TenantContext';
+import MyTemplatesModal from '../../components/templates/MyTemplatesModal';
+import RequestTemplateModal from '../../components/templates/RequestTemplateModal';
 import contactGroupsService from '../../services/contactGroupsService';
 import templateService from '../../services/templateService';
 import whatsappService from '../../services/whatsappService';
@@ -138,12 +140,21 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
   const [selectedGroupIds, setSelectedGroupIds] = useState<number[]>([]);
 
   const [recipientPhone, setRecipientPhone] = useState('');
+  const [mediaUrl, setMediaUrl] = useState('');
   const [variables, setVariables] = useState<Record<string, string>>({});
   const [copied, setCopied] = useState(false);
 
   const [isSending, setIsSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const [sendSuccess, setSendSuccess] = useState<string | null>(null);
+
+  // Tiered Template Approval Workflow — "Request a Template" self-service
+  // path (see RequestTemplateModal's own docblock for why this page is
+  // the right home: every caller who reaches Send Alert at all lacks
+  // manage-templates, so there is no separate gate needed here).
+  const [showRequestTemplate, setShowRequestTemplate] = useState(false);
+  const [showMyTemplates, setShowMyTemplates] = useState(false);
+  const [requestSuccess, setRequestSuccess] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -164,6 +175,23 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
       cancelled = true;
     };
   }, []);
+
+  // A newly-submitted request starts pending, not approved, so it never
+  // changes what available() returns — this just re-confirms nothing
+  // approved slipped in already and clears any stale load error, rather
+  // than silently leaving a request-submitted screen that still shows
+  // the pre-request empty state or a now-outdated error.
+  const handleTemplateRequested = (message: string) => {
+    setShowRequestTemplate(false);
+    setRequestSuccess(message);
+    setIsLoadingTemplates(true);
+    setLoadError(null);
+    templateService
+      .available()
+      .then((list) => setTemplates(list))
+      .catch((err) => setLoadError(extractErrorMessage(err, 'Failed to load templates.')))
+      .finally(() => setIsLoadingTemplates(false));
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -245,8 +273,12 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
       template_id: selectedTemplate.id,
       recipient_phone: recipientPhone || '919876543210',
       variables: sampleVariables,
+      // Optional — omit this key entirely to send text-only. If present
+      // but unreachable/invalid, the server falls back to text automatically
+      // rather than failing the send (see MediaUrl handling below).
+      media_url: mediaUrl.trim() || 'https://example.com/invoice.pdf',
     };
-  }, [selectedTemplate, recipientType, recipientPhone, selectedGroupIds, sampleVariables]);
+  }, [selectedTemplate, recipientType, recipientPhone, selectedGroupIds, sampleVariables, mediaUrl]);
 
   const handleCopyPayload = async () => {
     if (!samplePayload) return;
@@ -343,9 +375,14 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
           template_id: selectedTemplate.id,
           recipient_phone: recipientPhone.trim(),
           variables,
+          // Omit the key entirely when blank rather than sending an empty
+          // string — the backend only overrides the template's own media
+          // when this key is present at all.
+          ...(mediaUrl.trim() ? { media_url: mediaUrl.trim() } : {}),
         });
         setSendSuccess('Message sent.');
         setRecipientPhone('');
+        setMediaUrl('');
         setVariables(Object.fromEntries(selectedTemplate.variables_schema.map((f) => [f.key, ''])));
       }
     } catch (err) {
@@ -375,9 +412,33 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
 
   if (templates.length === 0) {
     return (
-      <div className="flex flex-col items-center gap-2 rounded-lg border border-dashed border-slate-300 py-10 text-center text-sm text-slate-500">
+      <div className="flex flex-col items-center gap-3 rounded-lg border border-dashed border-slate-300 py-10 text-center text-sm text-slate-500">
         <Sparkles className="h-6 w-6 text-slate-300" />
-        No approved templates yet. Ask your Super Admin to build and approve one in Template Manager.
+        {requestSuccess ? (
+          <p className="max-w-sm text-emerald-600">{requestSuccess}</p>
+        ) : (
+          <p className="max-w-sm">No approved templates yet. Request one and it'll show up here once approved.</p>
+        )}
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => setShowRequestTemplate(true)}
+            className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700"
+          >
+            Request a Template
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowMyTemplates(true)}
+            className="text-sm font-medium text-indigo-600 hover:text-indigo-700"
+          >
+            View My Templates
+          </button>
+        </div>
+        {showRequestTemplate && (
+          <RequestTemplateModal onClose={() => setShowRequestTemplate(false)} onSubmitted={handleTemplateRequested} />
+        )}
+        {showMyTemplates && <MyTemplatesModal onClose={() => setShowMyTemplates(false)} />}
       </div>
     );
   }
@@ -386,7 +447,30 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
     <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
       <form onSubmit={(e) => void handleSubmit(e)} className="space-y-4">
         <div>
-          <label className="text-sm font-medium text-slate-700">Template <span className="text-red-500">*</span></label>
+          <div className="flex items-center justify-between">
+            <label className="text-sm font-medium text-slate-700">Template <span className="text-red-500">*</span></label>
+            {/* Persistent entry point — the empty-state CTA above only
+                ever renders with zero approved templates, so an Admin/User
+                who already has one (the common case, thanks to Strict
+                1-Template-Per-Client) had no way to request a different
+                or additional one. This link stays available regardless. */}
+            <span className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => setShowMyTemplates(true)}
+                className="text-xs font-medium text-indigo-600 hover:text-indigo-700"
+              >
+                My Templates
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowRequestTemplate(true)}
+                className="text-xs font-medium text-indigo-600 hover:text-indigo-700"
+              >
+                + Request a Template
+              </button>
+            </span>
+          </div>
           <select
             value={templateId}
             onChange={(e) => handleSelectTemplate(e.target.value === '' ? '' : Number(e.target.value))}
@@ -400,6 +484,11 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
               </option>
             ))}
           </select>
+          {requestSuccess && <p className="mt-1.5 text-xs text-emerald-600">{requestSuccess}</p>}
+          {showRequestTemplate && (
+            <RequestTemplateModal onClose={() => setShowRequestTemplate(false)} onSubmitted={handleTemplateRequested} />
+          )}
+          {showMyTemplates && <MyTemplatesModal onClose={() => setShowMyTemplates(false)} />}
         </div>
 
         <div>
@@ -433,15 +522,32 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
         </div>
 
         {recipientType === 'individual' ? (
-          <div>
-            <label className="text-sm font-medium text-slate-700">Recipient Phone <span className="text-red-500">*</span></label>
-            <input
-              type="text"
-              value={recipientPhone}
-              onChange={(e) => setRecipientPhone(e.target.value)}
-              placeholder="919876543210"
-              className={inputClass}
-            />
+          <div className="space-y-4">
+            <div>
+              <label className="text-sm font-medium text-slate-700">Recipient Phone <span className="text-red-500">*</span></label>
+              <input
+                type="text"
+                value={recipientPhone}
+                onChange={(e) => setRecipientPhone(e.target.value)}
+                placeholder="919876543210"
+                className={inputClass}
+              />
+            </div>
+            <div>
+              <label className="text-sm font-medium text-slate-700">
+                Media URL
+                <span className="ml-1 text-xs font-normal text-slate-400">
+                  (optional — sends the template as an image/document; falls back to text if left blank or unreachable)
+                </span>
+              </label>
+              <input
+                type="text"
+                value={mediaUrl}
+                onChange={(e) => setMediaUrl(e.target.value)}
+                placeholder="https://example.com/invoice.pdf"
+                className={inputClass}
+              />
+            </div>
           </div>
         ) : (
           <div>
@@ -637,6 +743,14 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
                     {field.key} — {field.required ? 'required' : 'optional'} ({field.type})
                   </span>
                 ))}
+                {recipientType === 'individual' && (
+                  <span
+                    title="string"
+                    className="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-500"
+                  >
+                    media_url — optional (string)
+                  </span>
+                )}
               </div>
             </div>
           </>

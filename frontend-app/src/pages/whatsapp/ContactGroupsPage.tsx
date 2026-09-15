@@ -18,10 +18,11 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../../core/context/AuthContext';
 import contactGroupsService from '../../services/contactGroupsService';
-import type { ContactGroup, ContactGroupContactInput, ContactGroupType } from '../../types/contactGroup';
+import type { AvailableNativeGroup, ContactGroup, ContactGroupContactInput, ContactGroupType } from '../../types/contactGroup';
 import type { ApiErrorResponse } from '../../types/auth';
 import { PageHeader, PageShell } from '../../components/common/PageShell';
 import { Card, TableCard, inputClass } from '../../components/common/Card';
+import ConfirmModal from '../../components/common/ConfirmModal';
 
 /** Same pattern as MessageLogsPage.tsx's extractMessage() — surfaces the backend's real error (e.g. GROUP_MODULE_DISABLED's exact copy) instead of a fixed generic string. */
 function extractMessage(err: unknown, fallback: string): string {
@@ -56,6 +57,14 @@ export default function ContactGroupsPage() {
 
   const [showCreate, setShowCreate] = useState(false);
   const [showImport, setShowImport] = useState(false);
+
+  // Replaces the browser-native confirm() popup for Delete/Recreate with
+  // a modal styled like every other dialog in this app -- see
+  // ConfirmModal's own docblock. Only one of these two actions can be
+  // pending confirmation at once, so a single slot (rather than two
+  // separate ContactGroup|null states) is enough.
+  const [pendingConfirm, setPendingConfirm] = useState<{ kind: 'delete' | 'recreate'; group: ContactGroup } | null>(null);
+  const [isConfirming, setIsConfirming] = useState(false);
 
   const load = useCallback(async () => {
     if (!moduleEnabled) {
@@ -94,37 +103,40 @@ export default function ContactGroupsPage() {
     return () => clearInterval(timer);
   }, [groups, load]);
 
-  const handleDelete = async (group: ContactGroup) => {
+  const handleDelete = (group: ContactGroup) => {
     if (group.is_default) return;
-    const confirmMessage =
-      group.group_type === 'native_wa_group'
-        ? `Delete "${group.name}"? This removes it from this app only — the real WhatsApp group on your phone is NOT affected.`
-        : `Delete "${group.name}"? This cannot be undone.`;
-    if (!confirm(confirmMessage)) return;
-    try {
-      await contactGroupsService.remove(group.id);
-      void load();
-    } catch (err) {
-      setError(extractMessage(err, 'Failed to delete this group.'));
-    }
+    setPendingConfirm({ kind: 'delete', group });
   };
 
   /**
    * [Disclosed]: this ALWAYS creates a brand-new WhatsApp group — it can
    * never confirm the old one is actually gone (see
-   * ContactGroupController::recreate()'s docblock). The confirm() prompt
-   * below exists specifically to surface that duplicate-group risk
+   * ContactGroupController::recreate()'s docblock). The confirmation
+   * modal exists specifically to surface that duplicate-group risk
    * before the user commits to it, since a "Sync failed" badge can come
    * from a transient send error, not only an actual deletion.
    */
-  const handleRecreate = async (group: ContactGroup) => {
-    const confirmMessage = `Recreate "${group.name}"? This creates a brand-new WhatsApp group with the same members. If the old group still exists on WhatsApp, it will NOT be deleted — you may end up with two groups.`;
-    if (!confirm(confirmMessage)) return;
+  const handleRecreate = (group: ContactGroup) => {
+    setPendingConfirm({ kind: 'recreate', group });
+  };
+
+  const handleConfirmed = async () => {
+    if (!pendingConfirm) return;
+    const { kind, group } = pendingConfirm;
+    setIsConfirming(true);
     try {
-      await contactGroupsService.recreate(group.id);
+      if (kind === 'delete') {
+        await contactGroupsService.remove(group.id);
+      } else {
+        await contactGroupsService.recreate(group.id);
+      }
+      setPendingConfirm(null);
       void load();
     } catch (err) {
-      setError(extractMessage(err, 'Failed to recreate this group.'));
+      setError(extractMessage(err, kind === 'delete' ? 'Failed to delete this group.' : 'Failed to recreate this group.'));
+      setPendingConfirm(null);
+    } finally {
+      setIsConfirming(false);
     }
   };
 
@@ -221,14 +233,14 @@ export default function ContactGroupsPage() {
                       </td>
                       <td className="px-4 py-3">
                         {group.group_type === 'native_wa_group' ? (
-                          <NativeGroupCell group={group} onRecreate={() => void handleRecreate(group)} />
+                          <NativeGroupCell group={group} onRecreate={() => handleRecreate(group)} />
                         ) : (
                           <span className="text-xs text-slate-400">—</span>
                         )}
                       </td>
                       <td className="px-4 py-3 text-right">
                         <button
-                          onClick={() => void handleDelete(group)}
+                          onClick={() => handleDelete(group)}
                           disabled={group.is_default}
                           title={group.is_default ? 'The default group cannot be deleted.' : 'Delete group'}
                           className="rounded-lg p-1.5 text-slate-400 hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-slate-400"
@@ -263,6 +275,35 @@ export default function ContactGroupsPage() {
             setShowImport(false);
             void load();
           }}
+        />
+      )}
+
+      {pendingConfirm && (
+        <ConfirmModal
+          title={pendingConfirm.kind === 'delete' ? 'Delete contact group' : 'Recreate WhatsApp group'}
+          message={
+            pendingConfirm.kind === 'delete' ? (
+              pendingConfirm.group.group_type === 'native_wa_group' ? (
+                <>
+                  Delete "{pendingConfirm.group.name}"? This removes it from this app only — the real WhatsApp group
+                  on your phone is <strong>NOT</strong> affected.
+                </>
+              ) : (
+                <>Delete "{pendingConfirm.group.name}"? This cannot be undone.</>
+              )
+            ) : (
+              <>
+                Recreate "{pendingConfirm.group.name}"? This creates a brand-new WhatsApp group with the same
+                members. If the old group still exists on WhatsApp, it will <strong>NOT</strong> be deleted — you may
+                end up with two groups.
+              </>
+            )
+          }
+          confirmLabel={pendingConfirm.kind === 'delete' ? 'Delete' : 'Recreate'}
+          variant={pendingConfirm.kind === 'delete' ? 'danger' : 'default'}
+          isLoading={isConfirming}
+          onConfirm={() => void handleConfirmed()}
+          onCancel={() => setPendingConfirm(null)}
         />
       )}
     </PageShell>
@@ -374,8 +415,51 @@ function CreateGroupModal({ onClose, onCreated }: { onClose: () => void; onCreat
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // "Select an existing group" extension: only meaningful once
+  // groupType === 'native_wa_group' — a plain internal_segment list has
+  // no "already exists on WhatsApp" counterpart to pick from.
+  const [nativeSource, setNativeSource] = useState<'new' | 'existing'>('new');
+  const [availableGroups, setAvailableGroups] = useState<AvailableNativeGroup[]>([]);
+  const [isLoadingAvailable, setIsLoadingAvailable] = useState(false);
+  const [availableError, setAvailableError] = useState<string | null>(null);
+  const [selectedJid, setSelectedJid] = useState('');
+
+  const loadAvailableGroups = useCallback(async () => {
+    setIsLoadingAvailable(true);
+    setAvailableError(null);
+    try {
+      const data = await contactGroupsService.availableNative();
+      setAvailableGroups(data);
+    } catch (err) {
+      setAvailableError(extractMessage(err, 'Could not list your existing WhatsApp groups.'));
+    } finally {
+      setIsLoadingAvailable(false);
+    }
+  }, []);
+
+  const isExistingMode = groupType === 'native_wa_group' && nativeSource === 'existing';
+
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
+
+    if (isExistingMode) {
+      if (!selectedJid) {
+        setError('Pick one of your existing WhatsApp groups to import.');
+        return;
+      }
+      setIsSaving(true);
+      setError(null);
+      try {
+        await contactGroupsService.importNative({ group_jid: selectedJid, name: name.trim() || undefined });
+        onCreated();
+      } catch (err) {
+        setError(extractMessage(err, 'Could not import this WhatsApp group.'));
+      } finally {
+        setIsSaving(false);
+      }
+      return;
+    }
+
     if (!name.trim()) {
       setError('Group name is required.');
       return;
@@ -416,7 +500,10 @@ function CreateGroupModal({ onClose, onCreated }: { onClose: () => void; onCreat
         <form onSubmit={(e) => void handleSubmit(e)} className="mt-4 space-y-4">
           <div>
             <label className="text-sm font-medium text-slate-700">
-              Name <span className="text-red-500">*</span>
+              Name {!isExistingMode && <span className="text-red-500">*</span>}
+              {isExistingMode && (
+                <span className="text-xs font-normal text-slate-400"> (optional — defaults to the WhatsApp group's own name)</span>
+              )}
             </label>
             <input
               value={name}
@@ -463,19 +550,105 @@ function CreateGroupModal({ onClose, onCreated }: { onClose: () => void; onCreat
                 Requires an active WhatsApp connection on the QR (Baileys) engine. The official Meta Cloud API cannot
                 create or message WhatsApp groups.
               </p>
-              <div>
-                <label className="text-sm font-medium text-slate-700">
-                  Starting members <span className="text-red-500">*</span>{' '}
-                  <span className="text-xs font-normal text-slate-400">(one per line: phone number, optional name)</span>
-                </label>
-                <textarea
-                  value={rawContacts}
-                  onChange={(e) => setRawContacts(e.target.value)}
-                  rows={6}
-                  placeholder={'919876543210, Vendor 1\n+91 91234 56789, Vendor 2'}
-                  className={`${inputClass} font-mono`}
-                />
+
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                <button
+                  type="button"
+                  onClick={() => setNativeSource('new')}
+                  className={`rounded-lg border px-3 py-2 text-left text-sm ${
+                    nativeSource === 'new'
+                      ? 'border-indigo-500 bg-indigo-50 text-indigo-700'
+                      : 'border-slate-300 text-slate-700 hover:bg-slate-50'
+                  }`}
+                >
+                  <div className="font-medium">Create New Group</div>
+                  <div className="text-xs text-slate-500">Make a brand-new WhatsApp group from scratch.</div>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setNativeSource('existing');
+                    setSelectedJid('');
+                    // Fetched from this click (the event that causes the
+                    // mode change), not a useEffect keyed on nativeSource
+                    // -- avoids a synchronous setState-in-effect chain for
+                    // what's really a direct response to a user action.
+                    void loadAvailableGroups();
+                  }}
+                  className={`rounded-lg border px-3 py-2 text-left text-sm ${
+                    nativeSource === 'existing'
+                      ? 'border-indigo-500 bg-indigo-50 text-indigo-700'
+                      : 'border-slate-300 text-slate-700 hover:bg-slate-50'
+                  }`}
+                >
+                  <div className="font-medium">Select Existing Group</div>
+                  <div className="text-xs text-slate-500">Already have this group on WhatsApp? Import it instead.</div>
+                </button>
               </div>
+
+              {nativeSource === 'new' ? (
+                <div>
+                  <label className="text-sm font-medium text-slate-700">
+                    Starting members <span className="text-red-500">*</span>{' '}
+                    <span className="text-xs font-normal text-slate-400">(one per line: phone number, optional name)</span>
+                  </label>
+                  <textarea
+                    value={rawContacts}
+                    onChange={(e) => setRawContacts(e.target.value)}
+                    rows={6}
+                    placeholder={'919876543210, Vendor 1\n+91 91234 56789, Vendor 2'}
+                    className={`${inputClass} font-mono`}
+                  />
+                </div>
+              ) : (
+                <div>
+                  <div className="flex items-center justify-between">
+                    <label className="text-sm font-medium text-slate-700">
+                      Your WhatsApp groups <span className="text-red-500">*</span>
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => void loadAvailableGroups()}
+                      disabled={isLoadingAvailable}
+                      className="flex items-center gap-1 text-xs font-medium text-indigo-600 hover:text-indigo-700 disabled:opacity-50"
+                    >
+                      <RefreshCw className={`h-3 w-3 ${isLoadingAvailable ? 'animate-spin' : ''}`} />
+                      Refresh
+                    </button>
+                  </div>
+
+                  {isLoadingAvailable ? (
+                    <p className="mt-2 flex items-center gap-2 text-sm text-slate-500">
+                      <Loader2 className="h-4 w-4 animate-spin" /> Looking up your WhatsApp groups…
+                    </p>
+                  ) : availableError ? (
+                    <p className="mt-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+                      {availableError}
+                    </p>
+                  ) : availableGroups.length === 0 ? (
+                    <p className="mt-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500">
+                      No importable WhatsApp groups found — either you have none yet, or every group your connected
+                      number belongs to has already been imported here.
+                    </p>
+                  ) : (
+                    <div className="mt-2 max-h-56 space-y-1 overflow-y-auto rounded-lg border border-slate-200 p-1.5">
+                      {availableGroups.map((g) => (
+                        <button
+                          type="button"
+                          key={g.jid}
+                          onClick={() => setSelectedJid(g.jid)}
+                          className={`flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm ${
+                            selectedJid === g.jid ? 'bg-indigo-50 text-indigo-700' : 'text-slate-700 hover:bg-slate-50'
+                          }`}
+                        >
+                          <span className="font-medium">{g.subject}</span>
+                          <span className="text-xs text-slate-400">{g.participants_count} members</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
             </>
           )}
 
@@ -491,11 +664,11 @@ function CreateGroupModal({ onClose, onCreated }: { onClose: () => void; onCreat
             </button>
             <button
               type="submit"
-              disabled={isSaving}
+              disabled={isSaving || (isExistingMode && (isLoadingAvailable || availableGroups.length === 0))}
               className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:opacity-60"
             >
               {isSaving && <Loader2 className="h-4 w-4 animate-spin" />}
-              Create Group
+              {isExistingMode ? 'Import Group' : 'Create Group'}
             </button>
           </div>
         </form>

@@ -7,6 +7,8 @@ import LoginPage from './pages/auth/LoginPage';
 import DashboardPage from './pages/DashboardPage';
 import AccountsPage from './pages/admin/AccountsPage';
 import TemplateManagerPage from './pages/admin/TemplateManagerPage';
+import RouteMasterPage from './pages/admin/RouteMasterPage';
+import ActivityLogsPage from './pages/admin/ActivityLogsPage';
 import WhatsAppSetupPage from './pages/settings/WhatsAppSetupPage';
 import SendAlertPage from './pages/alerts/SendAlertPage';
 import AnalyticsPage from './pages/analytics/AnalyticsPage';
@@ -97,6 +99,39 @@ export default function App() {
                 </ProtectedRoute>
               }
             />
+            {/* BUILD: Fully Dynamic Categorized Route Master & Nested
+                Permission Matrix UI. role="super_admin" (not
+                permission="manage-accounts") deliberately: manage-accounts
+                is ALSO held by every Agent, but this CRUD console must be
+                Super-Admin-only — role bypasses for a real Super Admin
+                and otherwise requires the exact role name, which no
+                Agent holds, so this is effectively "Super Admin only"
+                without adding a strictRole-shaped one-off. */}
+            <Route
+              path="/admin/route-master"
+              element={
+                <ProtectedRoute role="super_admin">
+                  <RouteMasterPage />
+                </ProtectedRoute>
+              }
+            />
+            {/* IMPLEMENT: Dynamic Route Master with Super-Admin Bypass &
+                Global Audit Tracking — requirement 4. permission=
+                "view-activity-logs" (a NEW permission only super_admin
+                holds — see RolePermissionSeeder), not role="super_admin":
+                this stays reachable by any future role someone
+                deliberately grants that permission to, consistent with
+                how every other permission-gated route in this file
+                already works, while still being Super-Admin-only today
+                by construction (no other DEFAULT_ROLES entry lists it). */}
+            <Route
+              path="/admin/audit-logs"
+              element={
+                <ProtectedRoute permission="view-activity-logs">
+                  <ActivityLogsPage />
+                </ProtectedRoute>
+              }
+            />
             <Route
               path="/alerts/send"
               element={
@@ -154,15 +189,29 @@ export default function App() {
             <Route
               path="/admin/quota-requests"
               element={
-                <ProtectedRoute permission="manage-billing-settings">
+                // Agent-Routed Quota Top-Up Requests — manage-accounts,
+                // not manage-billing-settings, so an Agent (who already
+                // holds manage-accounts) can reach its own Sub-Clients'
+                // requests here; QuotaRequestController scopes the data.
+                <ProtectedRoute permission="manage-accounts">
                   <QuotaRequestsPage />
                 </ProtectedRoute>
               }
             />
+            {/* WhatsApp production-readiness audit fix: was
+                permission="manage-accounts", which Agent also holds (for
+                its own Sub-Client management) — that let an Agent open
+                this page directly by URL even though the sidebar already
+                hides it (superAdminOnly). strictRole matches this route's
+                real backend gate now (role:super_admin on
+                /admin/whatsapp/devices and /admin/whatsapp/self-device/*
+                — see routes/api.php), and — unlike `permission`/`role` —
+                does not bypass for any caller who isn't ACTUALLY Super
+                Admin. */}
             <Route
               path="/admin/device-settings"
               element={
-                <ProtectedRoute permission="manage-accounts">
+                <ProtectedRoute strictRole="super_admin">
                   <AdminDeviceSettingsPage />
                 </ProtectedRoute>
               }

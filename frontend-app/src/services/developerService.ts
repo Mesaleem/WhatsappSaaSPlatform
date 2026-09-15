@@ -4,6 +4,7 @@ import type {
   ApiKeysResponse,
   CreateApiKeyPayload,
   CreateApiKeyResponse,
+  RegenerateApiKeySecretResponse,
   CreateWebhookPayload,
   CreateWebhookResponse,
   WebhookDelivery,
@@ -32,6 +33,18 @@ const developerService = {
 
   revokeApiKey(id: number) {
     return axiosInstance.delete<{ message: string; api_key: ApiKey }>(`/developer/api-keys/${id}`).then((res) => res.data);
+  },
+
+  /**
+   * Developer API Platform for WhatsApp Group Creation & Unified
+   * Messaging — backfills/rotates a key's dual-factor secret without
+   * touching the key itself (see ApiKeyController::regenerateSecret()'s
+   * docblock).
+   */
+  regenerateApiKeySecret(id: number) {
+    return axiosInstance
+      .post<RegenerateApiKeySecretResponse>(`/developer/api-keys/${id}/regenerate-secret`)
+      .then((res) => res.data);
   },
 
   listWebhooks() {

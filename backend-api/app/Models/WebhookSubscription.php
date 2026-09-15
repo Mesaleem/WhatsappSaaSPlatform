@@ -6,9 +6,14 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use App\Traits\LogsActivity;
 
 class WebhookSubscription extends Model
 {
+    use LogsActivity;
+
+    /** IMPLEMENT: Dynamic Route Master with Super-Admin Bypass & Global Audit Tracking — module label shown in the Activity Logs UI. */
+    protected string $auditModuleName = 'Developer Webhooks';
     /** The three events this module supports, per spec. */
     public const SUPPORTED_EVENTS = ['message.sent', 'message.failed', 'message.delivered'];
 

@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use App\Traits\LogsActivity;
 
 /**
  * Social Media Marketing & Meta Ads Automation Expansion — Phase 1.
@@ -15,6 +16,10 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  */
 class SocialAccount extends Model
 {
+    use LogsActivity;
+
+    /** IMPLEMENT: Dynamic Route Master with Super-Admin Bypass & Global Audit Tracking — module label shown in the Activity Logs UI. */
+    protected string $auditModuleName = 'Social Accounts';
     public const HEALTH_CONNECTED = 'connected';
     public const HEALTH_TOKEN_EXPIRED = 'token_expired';
     public const HEALTH_REAUTH_REQUIRED = 'reauth_required';

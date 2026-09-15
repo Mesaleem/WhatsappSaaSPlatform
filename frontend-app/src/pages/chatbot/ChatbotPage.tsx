@@ -17,6 +17,7 @@ import { ClearFiltersButton, SearchInput } from '../../components/common/DataTab
 import { useAuth } from '../../core/context/AuthContext';
 import { useTenant } from '../../core/context/TenantContext';
 import { extractErrorMessage as extractMessage } from '../../utils/apiError';
+import ConfirmModal from '../../components/common/ConfirmModal';
 import {
   MATCH_TYPES,
   MEDIA_TYPES,
@@ -582,14 +583,24 @@ function RulesTab() {
     }
   };
 
-  const handleDelete = async (rule: ChatbotRule) => {
-    if (!confirm(`Delete rule "${rule.name}"? This cannot be undone (past execution logs are kept).`)) return;
+  const [pendingDelete, setPendingDelete] = useState<ChatbotRule | null>(null);
+
+  const handleDelete = (rule: ChatbotRule) => {
+    setPendingDelete(rule);
+  };
+
+  const confirmDelete = async () => {
+    if (!pendingDelete) return;
+    const rule = pendingDelete;
     setBusyId(rule.id);
     try {
       await chatbotService.deleteRule(rule.id);
       await load();
+      setPendingDelete(null);
     } catch (err) {
       setError(extractMessage(err, 'Could not delete this rule.'));
+      setPendingDelete(null);
+    } finally {
       setBusyId(null);
     }
   };
@@ -680,7 +691,7 @@ function RulesTab() {
                           Edit
                         </button>
                         <button
-                          onClick={() => void handleDelete(rule)}
+                          onClick={() => handleDelete(rule)}
                           disabled={busyId === rule.id}
                           className="inline-flex items-center gap-1 text-xs font-medium text-red-600 hover:text-red-700 disabled:opacity-60"
                         >
@@ -721,6 +732,18 @@ function RulesTab() {
             setEditing(null);
             void load();
           }}
+        />
+      )}
+
+      {pendingDelete && (
+        <ConfirmModal
+          title="Delete chatbot rule"
+          message={`Delete rule "${pendingDelete.name}"? This cannot be undone (past execution logs are kept).`}
+          confirmLabel="Delete"
+          variant="danger"
+          isLoading={busyId === pendingDelete.id}
+          onConfirm={() => void confirmDelete()}
+          onCancel={() => setPendingDelete(null)}
         />
       )}
     </div>

@@ -27,12 +27,25 @@ function readStoredAccountId(): number | null {
 }
 
 interface TenantContextValue {
-  /** Every registered client account. Populated for Super Admin only. */
+  /**
+   * Every account the caller may switch into: every tenant for Super
+   * Admin, or just the caller's own Sub-Clients for an Agent (see
+   * `canSwitchClients`). Empty for a plain Client Admin/User/Social
+   * Marketer.
+   */
   accounts: Account[];
   isLoadingAccounts: boolean;
-  /** null = "All Clients (Global View)". Always null for a non-Super-Admin. */
+  /**
+   * True for Super Admin, and for an Agent (Account.account_type ===
+   * 'agent') — the two caller types TenantIsolationMiddleware allows to
+   * override the tenant via ?account_id= (Super Admin unrestricted, an
+   * Agent scoped to its own Sub-Client tree). False for everyone else,
+   * who always act on their own single account.
+   */
+  canSwitchClients: boolean;
+  /** null = "All Clients (Global View)" for Super Admin, or "acting as my own Agent account" for an Agent. Always null for anyone else. */
   selectedAccountId: number | null;
-  /** The full Account record for selectedAccountId, or null in global view. */
+  /** The full Account record for selectedAccountId, or null in global/own-account view. */
   selectedAccount: Account | null;
   selectAccount: (id: number | null) => void;
   refreshAccounts: () => Promise<void>;
@@ -50,8 +63,14 @@ const TenantContext = createContext<TenantContextValue | undefined>(undefined);
  * render the switcher/labels.
  */
 export function TenantProvider({ children }: { children: ReactNode }) {
-  const { isAuthenticated, isSuperAdmin } = useAuth();
+  const { isAuthenticated, isSuperAdmin, user } = useAuth();
   const superAdmin = isAuthenticated && isSuperAdmin();
+  // Agent Client-Switcher: an Agent (never Super Admin) whose OWN account
+  // is of type 'agent' may act as any of its own Sub-Clients, the same
+  // mechanism Super Admin already has, scoped by TenantIsolationMiddleware
+  // to accounts whose agent_id matches the Agent's own account id.
+  const isAgentCaller = isAuthenticated && !superAdmin && user?.account?.account_type === 'agent';
+  const canSwitchClients = superAdmin || isAgentCaller;
 
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [isLoadingAccounts, setIsLoadingAccounts] = useState(false);
@@ -72,12 +91,14 @@ export function TenantProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const refreshAccounts = useCallback(async () => {
-    if (!superAdmin) return;
+    if (!canSwitchClients) return;
     setIsLoadingAccounts(true);
     try {
       // list() is paginated at 15/page by default; the switcher needs
       // every account, so request a high ceiling in one page rather than
-      // adding pagination UI to a header dropdown.
+      // adding pagination UI to a header dropdown. For an Agent caller,
+      // AccountController::index() already scopes this to just their own
+      // Sub-Clients (callerAgentScopeId()) — no separate endpoint needed.
       const res = await accountService.list({ per_page: 100 });
       setAccounts(res.data);
     } catch {
@@ -85,15 +106,15 @@ export function TenantProvider({ children }: { children: ReactNode }) {
     } finally {
       setIsLoadingAccounts(false);
     }
-  }, [superAdmin]);
+  }, [canSwitchClients]);
 
   useEffect(() => {
-    if (superAdmin) {
+    if (canSwitchClients) {
       void refreshAccounts();
     } else {
       setAccounts([]);
     }
-  }, [superAdmin, refreshAccounts]);
+  }, [canSwitchClients, refreshAccounts]);
 
   // A selection restored from localStorage (or one whose account was since
   // deleted) can point at an account the freshly-loaded list no longer
@@ -106,7 +127,7 @@ export function TenantProvider({ children }: { children: ReactNode }) {
     }
   }, [accounts, isLoadingAccounts, selectedAccountId, selectAccount]);
 
-  const effectiveSelectedAccountId = superAdmin ? selectedAccountId : null;
+  const effectiveSelectedAccountId = canSwitchClients ? selectedAccountId : null;
 
   useEffect(() => {
     setSelectedAccountId(effectiveSelectedAccountId);
@@ -121,12 +142,13 @@ export function TenantProvider({ children }: { children: ReactNode }) {
     () => ({
       accounts,
       isLoadingAccounts,
+      canSwitchClients,
       selectedAccountId: effectiveSelectedAccountId,
       selectedAccount,
       selectAccount,
       refreshAccounts,
     }),
-    [accounts, isLoadingAccounts, effectiveSelectedAccountId, selectedAccount, selectAccount, refreshAccounts],
+    [accounts, isLoadingAccounts, canSwitchClients, effectiveSelectedAccountId, selectedAccount, selectAccount, refreshAccounts],
   );
 
   return <TenantContext.Provider value={value}>{children}</TenantContext.Provider>;

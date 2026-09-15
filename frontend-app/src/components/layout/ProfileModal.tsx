@@ -7,6 +7,7 @@ import templateService from '../../services/templateService';
 import type { ClientApiKey } from '../../types/templates';
 import { indigo, activeGradient, cardShadow, ROLE_BADGE_CLASS, roleLabel } from '../../theme/signalIndigo';
 import { extractErrorMessage as extractMessage } from '../../utils/apiError';
+import ConfirmModal from '../common/ConfirmModal';
 
 const inputClass =
   'mt-1.5 w-full rounded-lg border border-[#EAE8F7] px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-[#4F46E5] focus:ring-2 focus:ring-[#4F46E5]/20';
@@ -23,6 +24,7 @@ export default function ProfileModal({ onClose }: { onClose: () => void }) {
   const [success, setSuccess] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
+  const [showRegenerateConfirm, setShowRegenerateConfirm] = useState(false);
 
   // Client API Key — Developer Portal credential for this tenant account. Super Admin has no
   // tenant account and is excluded; a tenant user needs manage-developer-settings, matching the
@@ -59,12 +61,11 @@ export default function ProfileModal({ onClose }: { onClose: () => void }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canManageApiKey]);
 
-  const handleRegenerateKey = async () => {
-    const confirmMessage = apiKey
-      ? 'Regenerate your Client API Key? The current key will stop working immediately for any integration using it.'
-      : 'Generate a Client API Key for this account?';
-    if (!confirm(confirmMessage)) return;
+  const handleRegenerateKey = () => {
+    setShowRegenerateConfirm(true);
+  };
 
+  const confirmRegenerateKey = async () => {
     setKeyError(null);
     setIsRegenerating(true);
     try {
@@ -72,8 +73,10 @@ export default function ProfileModal({ onClose }: { onClose: () => void }) {
       setApiKey(result.data);
       setRevealedPlainKey(result.plain_text_key);
       setShowKey(true);
+      setShowRegenerateConfirm(false);
     } catch (err) {
       setKeyError(extractMessage(err, 'Could not generate a new API key.'));
+      setShowRegenerateConfirm(false);
     } finally {
       setIsRegenerating(false);
     }
@@ -132,6 +135,7 @@ export default function ProfileModal({ onClose }: { onClose: () => void }) {
   };
 
   return (
+    <>
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm"
       onClick={onClose}
@@ -352,5 +356,22 @@ export default function ProfileModal({ onClose }: { onClose: () => void }) {
         </form>
       </div>
     </div>
+
+    {showRegenerateConfirm && (
+      <ConfirmModal
+        title={apiKey ? 'Regenerate API key' : 'Generate API key'}
+        message={
+          apiKey
+            ? 'Regenerate your Client API Key? The current key will stop working immediately for any integration using it.'
+            : 'Generate a Client API Key for this account?'
+        }
+        confirmLabel={apiKey ? 'Regenerate' : 'Generate'}
+        variant={apiKey ? 'danger' : 'default'}
+        isLoading={isRegenerating}
+        onConfirm={() => void confirmRegenerateKey()}
+        onCancel={() => setShowRegenerateConfirm(false)}
+      />
+    )}
+    </>
   );
 }

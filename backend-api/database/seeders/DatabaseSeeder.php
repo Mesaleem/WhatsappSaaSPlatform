@@ -16,6 +16,12 @@ class DatabaseSeeder extends Seeder
     {
         $this->call(RolePermissionSeeder::class);
 
+        // BUILD: Fully Dynamic Categorized Route Master & Nested
+        // Permission Matrix UI — one-time backfill of route_categories/
+        // system_routes from the existing hardcoded module constants. See
+        // RouteMasterSeeder's docblock for why this is safe to re-run.
+        $this->call(RouteMasterSeeder::class);
+
         // Platform-level Super Admin — no account_id, global system access.
         $superAdmin = User::firstOrCreate(
             ['email' => 'superadmin@wa-saas.local'],

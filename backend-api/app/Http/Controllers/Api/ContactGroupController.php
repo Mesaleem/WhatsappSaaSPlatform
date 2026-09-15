@@ -10,10 +10,11 @@ use App\Models\Account;
 use App\Models\ContactGroup;
 use App\Models\ContactGroupMember;
 use App\Services\Groups\GroupMessageDispatcher;
+use App\Services\Groups\NativeGroupCreationService;
+use App\Services\Groups\NativeWhatsAppGroupService;
 use App\Support\PhoneNumberNormalizer;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 
 /**
@@ -138,41 +139,158 @@ class ContactGroupController extends Controller
             ], 422);
         }
 
-        $group = DB::transaction(function () use ($account, $data) {
-            $group = ContactGroup::create([
-                'account_id' => $account->id,
-                'name' => $data['name'],
-                'is_default' => false,
-                'group_type' => ContactGroup::GROUP_TYPE_NATIVE,
-                'sync_status' => ContactGroup::SYNC_STATUS_PENDING,
-            ]);
-
-            $now = now();
-            $rows = collect($data['contacts'])
-                ->map(fn (array $c) => [
-                    'group_id' => $group->id,
-                    'phone_number' => PhoneNumberNormalizer::normalize($c['phone_number']),
-                    'name' => $c['name'] ?? null,
-                    'created_at' => $now,
-                    'updated_at' => $now,
-                ])
-                ->all();
-
-            ContactGroupMember::upsert($rows, ['group_id', 'phone_number'], ['name', 'updated_at']);
-
-            return $group;
-        });
-
-        // Dispatched AFTER the transaction commits — same
-        // queue-after-commit ordering every other job in this codebase
-        // already follows (ProcessGroupDispatchJob, DispatchWebhookJob):
-        // a worker can never pick this up before the pending row it acts
-        // on is durably saved.
-        CreateNativeWhatsAppGroupJob::dispatch($group->id);
+        // Developer API Platform for WhatsApp Group Creation & Unified
+        // Messaging — extracted to NativeGroupCreationService so this
+        // exact transaction + upsert + queue-after-commit logic is
+        // shared, unchanged, with the new external
+        // POST /api/v1/whatsapp/groups/create endpoint
+        // (Api\V1\GroupController) rather than duplicated. Behavior is
+        // identical to before this extraction.
+        $group = NativeGroupCreationService::create($account, $data['name'], $data['contacts']);
 
         return response()->json([
             'success' => true,
-            'data' => $group->fresh()->loadCount('members'),
+            'data' => $group,
+        ], 201);
+    }
+
+    /**
+     * GET /api/groups/available-native -- "select an existing group"
+     * extension. Lists every REAL WhatsApp group the tenant's connected
+     * number already belongs to, MINUS the ones already imported as a
+     * ContactGroup (matched by wa_group_jid) -- so a group only ever
+     * shows up here until it's been picked once via importNative()
+     * below. Same two preconditions storeNativeGroup() enforces (qr
+     * engine, connected session) and the same error_code contract, since
+     * the frontend already knows how to render those two cases for the
+     * "Create Group" modal's Native WhatsApp Group option.
+     */
+    public function availableNativeGroups(Request $request): JsonResponse
+    {
+        $account = $this->requireAccount($request);
+
+        $engineType = $account->currentSubscription?->engine_type;
+
+        if ($engineType !== 'qr') {
+            return response()->json([
+                'success' => false,
+                'error_code' => 'NATIVE_GROUP_REQUIRES_QR_ENGINE',
+                'message' => 'Native WhatsApp Groups require the QR (Baileys) engine. The official Meta Cloud API does not support WhatsApp group messaging.',
+            ], 422);
+        }
+
+        if ($account->whatsAppSession?->status !== 'connected') {
+            return response()->json([
+                'success' => false,
+                'error_code' => 'WHATSAPP_NOT_CONNECTED',
+                'message' => 'Connect your WhatsApp device first -- a live session is required to list your existing WhatsApp groups.',
+            ], 422);
+        }
+
+        $result = (new NativeWhatsAppGroupService)->listGroups($account->id);
+
+        if (! ($result['success'] ?? false)) {
+            return response()->json([
+                'success' => false,
+                'message' => $result['error'] ?? 'Could not list your WhatsApp groups.',
+            ], 422);
+        }
+
+        $alreadyImported = ContactGroup::query()
+            ->where('account_id', $account->id)
+            ->where('group_type', ContactGroup::GROUP_TYPE_NATIVE)
+            ->whereNotNull('wa_group_jid')
+            ->pluck('wa_group_jid')
+            ->all();
+
+        $available = collect($result['groups'])
+            ->reject(fn (array $g) => in_array($g['jid'] ?? null, $alreadyImported, true))
+            ->values();
+
+        return response()->json([
+            'success' => true,
+            'data' => $available,
+        ]);
+    }
+
+    /**
+     * POST /api/groups/import-native -- { "group_jid": "...", "name"?: "..." }.
+     * "Select an existing group" extension: adopts an already-live
+     * WhatsApp group (one returned by availableNativeGroups() above) as
+     * a ContactGroup row, pulling in its real current member list --
+     * see NativeGroupCreationService::importExisting()'s docblock for
+     * why this never dispatches CreateNativeWhatsAppGroupJob the way
+     * storeNativeGroup() does.
+     *
+     * group_jid is NOT separately whitelisted against
+     * availableNativeGroups()'s output here: NativeWhatsAppGroupService::
+     * groupMetadata() below reaches qr-engine-service, which resolves
+     * the group through THIS account's own Baileys session
+     * (session.sock.groupMetadata(jid)) -- Baileys itself rejects a jid
+     * the connected number has no relationship to, so a tenant can never
+     * import another tenant's group by guessing/incrementing a jid; the
+     * qr-engine-service call failing IS the authorization check.
+     */
+    public function importNative(Request $request): JsonResponse
+    {
+        $account = $this->requireAccount($request);
+
+        $data = $request->validate([
+            'group_jid' => ['required', 'string', 'max:255'],
+            'name' => ['sometimes', 'nullable', 'string', 'max:255'],
+        ]);
+
+        $engineType = $account->currentSubscription?->engine_type;
+
+        if ($engineType !== 'qr') {
+            return response()->json([
+                'success' => false,
+                'error_code' => 'NATIVE_GROUP_REQUIRES_QR_ENGINE',
+                'message' => 'Native WhatsApp Groups require the QR (Baileys) engine. The official Meta Cloud API does not support WhatsApp group messaging.',
+            ], 422);
+        }
+
+        if ($account->whatsAppSession?->status !== 'connected') {
+            return response()->json([
+                'success' => false,
+                'error_code' => 'WHATSAPP_NOT_CONNECTED',
+                'message' => 'Connect your WhatsApp device first -- a live session is required to import an existing WhatsApp group.',
+            ], 422);
+        }
+
+        $alreadyImported = ContactGroup::query()
+            ->where('account_id', $account->id)
+            ->where('wa_group_jid', $data['group_jid'])
+            ->exists();
+
+        if ($alreadyImported) {
+            return response()->json([
+                'success' => false,
+                'message' => 'This WhatsApp group has already been imported.',
+            ], 422);
+        }
+
+        $metadata = (new NativeWhatsAppGroupService)->groupMetadata($account->id, $data['group_jid']);
+
+        if (! ($metadata['success'] ?? false)) {
+            return response()->json([
+                'success' => false,
+                'message' => $metadata['error'] ?? 'Could not fetch this WhatsApp group\'s details.',
+            ], 422);
+        }
+
+        $name = $data['name'] ?? $metadata['subject'] ?? 'Imported WhatsApp Group';
+
+        $group = NativeGroupCreationService::importExisting(
+            $account,
+            $metadata['jid'],
+            $name,
+            $metadata['participants'] ?? [],
+        );
+
+        return response()->json([
+            'success' => true,
+            'data' => $group,
         ], 201);
     }
 

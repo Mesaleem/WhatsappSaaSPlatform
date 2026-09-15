@@ -6,6 +6,7 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use App\Traits\LogsActivity;
 
 /**
  * Module 5 — No-Code WhatsApp Journey Builder. See the creating
@@ -13,6 +14,10 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  */
 class WhatsAppFlow extends Model
 {
+    use LogsActivity;
+
+    /** IMPLEMENT: Dynamic Route Master with Super-Admin Bypass & Global Audit Tracking — module label shown in the Activity Logs UI. */
+    protected string $auditModuleName = 'WhatsApp Flows';
     public const TRIGGER_TYPES = ['keyword', 'ctwa_referral', 'default'];
 
     public const NODE_TYPES = ['trigger', 'message', 'question', 'condition', 'save_lead'];

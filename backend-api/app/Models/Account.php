@@ -9,9 +9,14 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Support\Facades\Cache;
+use App\Traits\LogsActivity;
 
 class Account extends Model
 {
+    use LogsActivity;
+
+    /** IMPLEMENT: Dynamic Route Master with Super-Admin Bypass & Global Audit Tracking — module label shown in the Activity Logs UI. */
+    protected string $auditModuleName = 'Account Management';
     use HasFactory;
 
     /**
@@ -417,7 +422,20 @@ class Account extends Model
      */
     public function effectiveModules(): array
     {
+        // BUILD: Fully Dynamic Categorized Route Master & Nested
+        // Permission Matrix UI — dynamic, DB-driven kill switch layered
+        // on top of the existing allowed_modules hierarchy below (see
+        // SystemRoute::activePermissionKeys()'s docblock). null means
+        // "route master not seeded yet / no restriction", so this is a
+        // pure no-op for every environment before this feature's seeder
+        // runs — zero regression for the existing intersect logic that
+        // follows.
+        $activeKeys = SystemRoute::activePermissionKeys();
+
         $own = $this->allowed_modules ?? self::MODULES;
+        if ($activeKeys !== null) {
+            $own = array_values(array_intersect($own, $activeKeys));
+        }
 
         if ($this->agent_id === null) {
             return array_values($own);
@@ -437,6 +455,9 @@ class Account extends Model
         }
 
         $agentOwnModules = $agentAccount->allowed_modules ?? self::MODULES;
+        if ($activeKeys !== null) {
+            $agentOwnModules = array_values(array_intersect($agentOwnModules, $activeKeys));
+        }
 
         return array_values(array_intersect($own, $agentOwnModules));
     }

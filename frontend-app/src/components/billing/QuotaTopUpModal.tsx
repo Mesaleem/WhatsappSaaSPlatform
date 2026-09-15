@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { AxiosError } from 'axios';
 import { Loader2, XCircle, Zap } from 'lucide-react';
+import { useAuth } from '../../core/context/AuthContext';
 import quotaRequestService from '../../services/quotaRequestService';
 import type { ApiErrorResponse } from '../../types/auth';
 
@@ -24,6 +25,13 @@ export default function QuotaTopUpModal({
   onClose: () => void;
   onSubmitted: (message: string) => void;
 }) {
+  // Agent-Routed Quota Top-Up Requests — mirrors the backend's own
+  // routing (QuotaRequestController::store()): an Admin under an Agent
+  // (account.agent_id set) has their request reviewed by that Agent, not
+  // the Super Admin; a directly-onboarded Admin's still goes to Super
+  // Admin, since no Agent can ever see or approve it.
+  const { user } = useAuth();
+  const reviewerLabel = user?.account?.agent_id != null ? 'Your Agent' : 'Your Super Admin';
   const [requestedExtraMessages, setRequestedExtraMessages] = useState('');
   const [reason, setReason] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -65,7 +73,7 @@ export default function QuotaTopUpModal({
           </button>
         </div>
         <p className="mt-1 text-sm text-slate-500">
-          Your Super Admin will review this request and, once approved, generate an invoice for the extra messages.
+          {reviewerLabel} will review this request and, once approved, generate an invoice for the extra messages.
         </p>
 
         <div className="mt-4 space-y-4">

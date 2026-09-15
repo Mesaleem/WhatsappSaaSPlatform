@@ -109,6 +109,54 @@ class NativeWhatsAppGroupService
         return ['success' => true];
     }
 
+    /**
+     * "Select an existing group" extension — every real WhatsApp group
+     * the connected account is CURRENTLY a participant of. Read-only,
+     * no local ContactGroup rows are touched here; ContactGroupController::
+     * availableNativeGroups() is the caller, which filters out groups
+     * already imported (matched by wa_group_jid) before returning the
+     * list to the frontend.
+     *
+     * @return array{success: bool, groups?: list<array{jid: string, subject: string, participants_count: int}>, error?: string}
+     */
+    public function listGroups(int $accountId): array
+    {
+        $result = $this->get('/api/group/list', ['account_id' => $accountId]);
+
+        if (! ($result['success'] ?? false)) {
+            return ['success' => false, 'error' => $result['error'] ?? 'The QR engine rejected the group-list request.'];
+        }
+
+        return ['success' => true, 'groups' => $result['groups'] ?? []];
+    }
+
+    /**
+     * "Select an existing group" extension — full metadata (including
+     * the current participant JIDs) for ONE group, fetched right after
+     * the user picks it from listGroups()'s summary. Called by
+     * ContactGroupController::importNative() to populate the new
+     * ContactGroup's members from the real group instead of starting at
+     * 0 — see that method for how the returned JIDs are converted back
+     * into this app's normalized phone-digit form.
+     *
+     * @return array{success: bool, jid?: string, subject?: string, participants?: list<array{jid: string, is_admin: bool}>, error?: string}
+     */
+    public function groupMetadata(int $accountId, string $groupJid): array
+    {
+        $result = $this->get('/api/group/metadata', ['account_id' => $accountId, 'group_jid' => $groupJid]);
+
+        if (! ($result['success'] ?? false)) {
+            return ['success' => false, 'error' => $result['error'] ?? 'The QR engine rejected the group-metadata request.'];
+        }
+
+        return [
+            'success' => true,
+            'jid' => $result['jid'] ?? $groupJid,
+            'subject' => $result['subject'] ?? '',
+            'participants' => $result['participants'] ?? [],
+        ];
+    }
+
     /** @return list<string> */
     private function toJids(array $phones): array
     {
@@ -148,6 +196,53 @@ class NativeWhatsAppGroupService
             Log::warning('NativeWhatsAppGroupService: request failed.', [
                 'path' => $path,
                 'account_id' => $payload['account_id'] ?? null,
+                'status_code' => $response->status(),
+                'response' => $body,
+            ]);
+
+            return ['success' => false, 'error' => $body['error'] ?? $body['message'] ?? 'The QR engine rejected the request.'];
+        }
+
+        return $body;
+    }
+
+    /**
+     * GET counterpart to post() above — same auth header, timeout, and
+     * "trust the JSON success flag, never let a transport exception
+     * escape" contract, used by the two read-only "select an existing
+     * group" endpoints (listGroups()/groupMetadata()) added alongside
+     * this method. Query params (account_id, group_jid) instead of a
+     * JSON body since these are GET requests on the qr-engine-service
+     * side (see server.js's /api/group/list and /api/group/metadata).
+     *
+     * @return array<string, mixed>
+     */
+    private function get(string $path, array $query): array
+    {
+        $baseUrl = rtrim((string) config('services.qr_engine.url'), '/');
+        $secret = config('services.qr_engine.internal_secret');
+
+        try {
+            $response = Http::withHeaders(['X-Internal-Secret' => $secret])
+                ->timeout(15)
+                ->get("{$baseUrl}{$path}", $query);
+        } catch (Throwable $e) {
+            Log::error('NativeWhatsAppGroupService: qr-engine-service unreachable.', [
+                'path' => $path,
+                'account_id' => $query['account_id'] ?? null,
+                'exception' => $e->getMessage(),
+            ]);
+
+            return ['success' => false, 'error' => 'qr-engine-service is unreachable: '.$e->getMessage()];
+        }
+
+        $body = $response->json() ?? [];
+        $succeeded = $response->successful() && ($body['success'] ?? false) === true;
+
+        if (! $succeeded) {
+            Log::warning('NativeWhatsAppGroupService: request failed.', [
+                'path' => $path,
+                'account_id' => $query['account_id'] ?? null,
                 'status_code' => $response->status(),
                 'response' => $body,
             ]);

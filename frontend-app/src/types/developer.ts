@@ -10,6 +10,15 @@ export interface ApiKey {
   name: string;
   /** e.g. "wasaas_live_a1b2c3d4..." — a non-sensitive slice for identification only; the full key is never stored or returned again. */
   key_prefix: string;
+  /**
+   * Developer API Platform for WhatsApp Group Creation & Unified
+   * Messaging — dual-factor secret's prefix, same non-sensitive-slice
+   * convention as key_prefix. Null for a key that has never had a
+   * secret provisioned (every key created before this feature; see
+   * ApiKeyController::regenerateSecret()'s docblock) — used here only
+   * to decide whether to show "Generate Secret" or "Regenerate Secret".
+   */
+  secret_prefix: string | null;
   last_used_at: string | null;
   expires_at: string | null;
   /** Non-null once revoked — the key row is kept (audit trail), just deactivated. */
@@ -42,6 +51,22 @@ export interface CreateApiKeyResponse {
   message: string;
   /** Shown exactly ONCE — never retrievable again after this response. */
   plain_text_key: string;
+  /**
+   * Developer API Platform for WhatsApp Group Creation & Unified
+   * Messaging — the dual-factor secret, issued alongside every new key.
+   * Shown exactly ONCE, same one-time-reveal contract as plain_text_key.
+   */
+  plain_text_secret: string;
+  api_key: ApiKey;
+}
+
+/**
+ * Developer API Platform for WhatsApp Group Creation & Unified
+ * Messaging — POST /api/developer/api-keys/{id}/regenerate-secret response.
+ */
+export interface RegenerateApiKeySecretResponse {
+  message: string;
+  plain_text_secret: string;
   api_key: ApiKey;
 }
 

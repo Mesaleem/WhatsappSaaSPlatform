@@ -12,6 +12,7 @@ import { useTenant } from '../../core/context/TenantContext';
 import { ClearFiltersButton, Pagination, SearchInput, StatusFilterSelect } from '../../components/common/DataTableControls';
 import { TableSkeletonRows } from '../../components/common/Skeleton';
 import { extractErrorMessage as extractMessage } from '../../utils/apiError';
+import ConfirmModal from '../../components/common/ConfirmModal';
 
 /**
  * Corrected Unified Client & Admin User Creation — Auto-Generate option
@@ -54,26 +55,28 @@ function formatDate(value: string): string {
 
 /**
  * User-to-Client Mapping & Form Upgrade — every user is now explicitly
- * linked to a Client Account on creation. A Super Admin (global scope)
- * gets a real, mandatory dropdown; a tenant Admin (account scope) gets a
- * read-only display of their own account, since they can only ever add
- * to it anyway (server-side account_id is never accepted from the
- * client either way — see TeamController::store()'s docblock).
+ * linked to a Client Account on creation. A caller who can pick an
+ * account — Super Admin (every tenant) or an Agent (its own Sub-Clients
+ * only, via the Agent Client-Switcher) — gets a real, mandatory
+ * dropdown; a plain tenant Admin/User/Social Marketer (account scope)
+ * gets a read-only display of their own account, since they can only
+ * ever add to it anyway (server-side account_id is never accepted from
+ * the client either way — see TeamController::store()'s docblock).
  */
 function ClientField({
-  isSuperAdminCaller,
+  canPickAccount,
   accounts,
   value,
   onChange,
   fixedLabel,
 }: {
-  isSuperAdminCaller: boolean;
+  canPickAccount: boolean;
   accounts: Account[];
   value: number | '';
   onChange: (id: number | '') => void;
   fixedLabel: string;
 }) {
-  if (!isSuperAdminCaller) {
+  if (!canPickAccount) {
     return (
       <div>
         <label className="text-sm font-medium text-slate-700">Client</label>
@@ -142,7 +145,7 @@ function RoleCheckboxList({
 function InviteUserModal({
   roles,
   accounts,
-  isSuperAdminCaller,
+  canPickAccount,
   fixedAccountLabel,
   defaultAccountId,
   onClose,
@@ -150,7 +153,7 @@ function InviteUserModal({
 }: {
   roles: AssignableRole[];
   accounts: Account[];
-  isSuperAdminCaller: boolean;
+  canPickAccount: boolean;
   fixedAccountLabel: string;
   defaultAccountId: number | '';
   onClose: () => void;
@@ -172,7 +175,7 @@ function InviteUserModal({
       setError('Full name, email, password and at least one role are required.');
       return;
     }
-    if (isSuperAdminCaller && accountId === '') {
+    if (canPickAccount && accountId === '') {
       setError('Select a client to map this user to.');
       return;
     }
@@ -190,7 +193,7 @@ function InviteUserModal({
       role_names: selectedRoles,
     };
     try {
-      await teamService.inviteUser(payload, isSuperAdminCaller ? (accountId as number) : undefined);
+      await teamService.inviteUser(payload, canPickAccount ? (accountId as number) : undefined);
       onInvited();
     } catch (err) {
       setError(extractMessage(err, 'Could not add this team member.'));
@@ -211,7 +214,7 @@ function InviteUserModal({
 
         <form onSubmit={(e) => void handleSubmit(e)} className="mt-4 space-y-4">
           <ClientField
-            isSuperAdminCaller={isSuperAdminCaller}
+            canPickAccount={canPickAccount}
             accounts={accounts}
             value={accountId}
             onChange={setAccountId}
@@ -548,7 +551,7 @@ export default function UsersPage() {
   // interceptor attaches it), but load() must depend on it so switching
   // the Header's client selector re-fetches this page for the newly
   // selected tenant instead of continuing to show stale data.
-  const { selectedAccountId } = useTenant();
+  const { selectedAccountId, selectedAccount, canSwitchClients } = useTenant();
   const superAdmin = isSuperAdmin();
   const [users, setUsers] = useState<TeamUser[]>([]);
   const [scope, setScope] = useState<TeamUsersScope>('account');
@@ -610,24 +613,27 @@ export default function UsersPage() {
     void load();
   }, [load, selectedAccountId]);
 
-  // User-to-Client Mapping — Super Admin needs the full client list for
-  // the Invite modal's mandatory dropdown and the "Filter by Client"
-  // control, independent of whichever client (if any) is selected in
-  // the header right now.
+  // User-to-Client Mapping — a caller who can pick an account (Super
+  // Admin: every tenant; Agent: its own Sub-Clients only, via the Agent
+  // Client-Switcher — accountService.list() is already scoped
+  // server-side by AccountController::index()'s callerAgentScopeId())
+  // needs the full list for the Invite modal's mandatory dropdown and
+  // the "Filter by Client" control, independent of whichever client (if
+  // any) is selected in the header right now.
   useEffect(() => {
-    if (!superAdmin) return;
+    if (!canSwitchClients) return;
     accountService
       .list({ per_page: 1000 })
       .then((res) => setAccounts(res.data))
       .catch(() => {
         // Non-fatal — the Invite modal's dropdown/filter simply render empty; the rest of the page still works.
       });
-  }, [superAdmin]);
+  }, [canSwitchClients]);
 
   const handleToggle = async (u: TeamUser) => {
     setBusyId(u.id);
     try {
-      await teamService.toggleUser(u.id, superAdmin ? u.account_id : undefined);
+      await teamService.toggleUser(u.id, canSwitchClients ? u.account_id : undefined);
       await load();
     } catch (err) {
       setError(extractMessage(err, 'Could not update this team member.'));
@@ -636,14 +642,24 @@ export default function UsersPage() {
     }
   };
 
-  const handleRemove = async (u: TeamUser) => {
-    if (!confirm(`Remove ${u.name} from the team? This cannot be undone.`)) return;
+  const [pendingRemove, setPendingRemove] = useState<TeamUser | null>(null);
+
+  const handleRemove = (u: TeamUser) => {
+    setPendingRemove(u);
+  };
+
+  const confirmRemove = async () => {
+    if (!pendingRemove) return;
+    const u = pendingRemove;
     setBusyId(u.id);
     try {
-      await teamService.removeUser(u.id, superAdmin ? u.account_id : undefined);
+      await teamService.removeUser(u.id, canSwitchClients ? u.account_id : undefined);
       await load();
+      setPendingRemove(null);
     } catch (err) {
       setError(extractMessage(err, 'Could not remove this team member.'));
+      setPendingRemove(null);
+    } finally {
       setBusyId(null);
     }
   };
@@ -897,7 +913,7 @@ export default function UsersPage() {
                                 the caller's own row. */}
                             {!superAdmin && !isSelf && (
                               <button
-                                onClick={() => void handleRemove(u)}
+                                onClick={() => handleRemove(u)}
                                 disabled={busyId === u.id}
                                 className="inline-flex items-center gap-1 text-xs font-medium text-red-600 hover:text-red-700 disabled:opacity-40"
                               >
@@ -936,9 +952,9 @@ export default function UsersPage() {
         <InviteUserModal
           roles={roles}
           accounts={accounts}
-          isSuperAdminCaller={superAdmin}
-          fixedAccountLabel={ownAccount?.company_name ?? 'Your account'}
-          defaultAccountId={superAdmin ? (selectedAccountId ?? '') : ''}
+          canPickAccount={canSwitchClients}
+          fixedAccountLabel={selectedAccount?.company_name ?? ownAccount?.company_name ?? 'Your account'}
+          defaultAccountId={canSwitchClients ? (selectedAccountId ?? '') : ''}
           onClose={() => setShowInvite(false)}
           onInvited={() => {
             setShowInvite(false);
@@ -965,6 +981,18 @@ export default function UsersPage() {
           targetUser={resetPasswordUser}
           onClose={() => setResetPasswordUser(null)}
           onDone={() => setResetPasswordUser(null)}
+        />
+      )}
+
+      {pendingRemove && (
+        <ConfirmModal
+          title="Remove team member"
+          message={`Remove ${pendingRemove.name} from the team? This cannot be undone.`}
+          confirmLabel="Remove"
+          variant="danger"
+          isLoading={busyId === pendingRemove.id}
+          onConfirm={() => void confirmRemove()}
+          onCancel={() => setPendingRemove(null)}
         />
       )}
     </div>

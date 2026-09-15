@@ -18,6 +18,7 @@ import {
 import { useAuth } from '../../core/context/AuthContext';
 import accountService from '../../services/accountService';
 import developerService from '../../services/developerService';
+import ConfirmModal from '../../components/common/ConfirmModal';
 import type { Account } from '../../types/account';
 import {
   WEBHOOK_EVENTS,
@@ -119,6 +120,7 @@ function CreateApiKeyModal({
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [revealedKey, setRevealedKey] = useState<string | null>(null);
+  const [revealedSecret, setRevealedSecret] = useState<string | null>(null);
 
   useEffect(() => {
     if (isSuperAdmin) {
@@ -147,6 +149,7 @@ function CreateApiKeyModal({
         isSuperAdmin ? (accountId as number) : undefined,
       );
       setRevealedKey(result.plain_text_key);
+      setRevealedSecret(result.plain_text_secret);
       onCreated(result.api_key);
     } catch (err) {
       setError(extractMessage(err, 'Could not create this API key.'));
@@ -170,6 +173,8 @@ function CreateApiKeyModal({
         {revealedKey ? (
           <div className="mt-4 space-y-4">
             <OneTimeSecretReveal label="API key" value={revealedKey} />
+            {/* Developer API Platform for WhatsApp Group Creation & Unified Messaging — the dual-factor secret, needed alongside the key for the new POST /api/v1/whatsapp/* endpoints. */}
+            {revealedSecret && <OneTimeSecretReveal label="API secret" value={revealedSecret} />}
             <div className="flex justify-end">
               <button
                 onClick={onClose}
@@ -273,6 +278,12 @@ function ApiKeysTab() {
   const [error, setError] = useState<string | null>(null);
   const [showCreate, setShowCreate] = useState(false);
   const [revokingId, setRevokingId] = useState<number | null>(null);
+  // Developer API Platform for WhatsApp Group Creation & Unified
+  // Messaging — one-time reveal for a (re)generated secret, kept
+  // separate from CreateApiKeyModal's own reveal state since this fires
+  // from an existing row's action, not the create form.
+  const [regeneratingSecretId, setRegeneratingSecretId] = useState<number | null>(null);
+  const [revealedSecretFor, setRevealedSecretFor] = useState<{ keyId: number; secret: string } | null>(null);
 
   const load = useCallback(async () => {
     setIsLoading(true);
@@ -292,17 +303,63 @@ function ApiKeysTab() {
     void load();
   }, [load]);
 
-  const handleRevoke = async (key: ApiKey) => {
-    if (!confirm(`Revoke "${key.name}"? Any integration using it will stop working immediately.`)) return;
+  const [pendingRevoke, setPendingRevoke] = useState<ApiKey | null>(null);
+
+  const handleRevoke = (key: ApiKey) => {
+    setPendingRevoke(key);
+  };
+
+  const confirmRevoke = async () => {
+    if (!pendingRevoke) return;
+    const key = pendingRevoke;
     setRevokingId(key.id);
     try {
       await developerService.revokeApiKey(key.id);
       await load();
+      setPendingRevoke(null);
     } catch (err) {
       setError(extractMessage(err, 'Could not revoke this key.'));
+      setPendingRevoke(null);
     } finally {
       setRevokingId(null);
     }
+  };
+
+  /**
+   * Developer API Platform for WhatsApp Group Creation & Unified
+   * Messaging — issues (or rotates) this key's dual-factor secret,
+   * needed to call the new POST /api/v1/whatsapp/* endpoints. Leaves
+   * the key itself untouched (see ApiKeyController::regenerateSecret()'s
+   * docblock) — every existing integration keeps working through this.
+   */
+  const [pendingRegenerateSecret, setPendingRegenerateSecret] = useState<ApiKey | null>(null);
+
+  const handleRegenerateSecret = (key: ApiKey) => {
+    if (!key.secret_prefix) {
+      void doRegenerateSecret(key);
+      return;
+    }
+    setPendingRegenerateSecret(key);
+  };
+
+  const doRegenerateSecret = async (key: ApiKey) => {
+    setRegeneratingSecretId(key.id);
+    try {
+      const result = await developerService.regenerateApiKeySecret(key.id);
+      setRevealedSecretFor({ keyId: key.id, secret: result.plain_text_secret });
+      await load();
+      setPendingRegenerateSecret(null);
+    } catch (err) {
+      setError(extractMessage(err, 'Could not generate a secret for this key.'));
+      setPendingRegenerateSecret(null);
+    } finally {
+      setRegeneratingSecretId(null);
+    }
+  };
+
+  const confirmRegenerateSecret = () => {
+    if (!pendingRegenerateSecret) return;
+    void doRegenerateSecret(pendingRegenerateSecret);
   };
 
   const filteredKeys = keys.filter((key) => {
@@ -404,6 +461,7 @@ function ApiKeysTab() {
               <th className="px-6 py-3">Name</th>
               {scope === 'global' && <th className="px-6 py-3">Client</th>}
               <th className="px-6 py-3">Key</th>
+              <th className="px-6 py-3">Secret</th>
               <th className="px-6 py-3">Status</th>
               <th className="px-6 py-3">Last Used</th>
               <th className="px-6 py-3">Expires</th>
@@ -412,7 +470,7 @@ function ApiKeysTab() {
           </thead>
           <tbody className="divide-y divide-slate-100">
             {isLoading ? (
-              <TableSkeletonRows columns={scope === 'global' ? 7 : 6} />
+              <TableSkeletonRows columns={scope === 'global' ? 8 : 7} />
             ) : pagedKeys.length > 0 ? (
               pagedKeys.map((key) => {
                 const status = apiKeyStatus(key);
@@ -423,6 +481,9 @@ function ApiKeysTab() {
                       <td className="px-6 py-3 text-slate-600">{key.account?.company_name ?? '—'}</td>
                     )}
                     <td className="px-6 py-3 font-mono text-xs text-slate-500">{key.key_prefix}…</td>
+                    <td className="px-6 py-3 font-mono text-xs text-slate-500">
+                      {key.secret_prefix ? `${key.secret_prefix}…` : <span className="italic text-slate-400">Not set</span>}
+                    </td>
                     <td className="px-6 py-3">
                       <span className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium ${status.cls}`}>
                         {status.label}
@@ -432,18 +493,33 @@ function ApiKeysTab() {
                     <td className="px-6 py-3 text-slate-700">{key.expires_at ? formatDateTime(key.expires_at) : 'Never'}</td>
                     <td className="px-6 py-3 text-right">
                       {!key.revoked_at && (
-                        <button
-                          onClick={() => void handleRevoke(key)}
-                          disabled={revokingId === key.id}
-                          className="inline-flex items-center gap-1 text-xs font-medium text-red-600 hover:text-red-700 disabled:opacity-60"
-                        >
-                          {revokingId === key.id ? (
-                            <Loader2 className="h-3 w-3 animate-spin" />
-                          ) : (
-                            <Trash2 className="h-3 w-3" />
-                          )}
-                          Revoke
-                        </button>
+                        <div className="flex items-center justify-end gap-3">
+                          {/* Developer API Platform for WhatsApp Group Creation & Unified Messaging — a pre-existing key (secret_prefix null) needs this before it can call the new dual-factor endpoints. */}
+                          <button
+                            onClick={() => handleRegenerateSecret(key)}
+                            disabled={regeneratingSecretId === key.id}
+                            className="inline-flex items-center gap-1 text-xs font-medium text-indigo-600 hover:text-indigo-700 disabled:opacity-60"
+                          >
+                            {regeneratingSecretId === key.id ? (
+                              <Loader2 className="h-3 w-3 animate-spin" />
+                            ) : (
+                              <KeyRound className="h-3 w-3" />
+                            )}
+                            {key.secret_prefix ? 'Regenerate Secret' : 'Generate Secret'}
+                          </button>
+                          <button
+                            onClick={() => handleRevoke(key)}
+                            disabled={revokingId === key.id}
+                            className="inline-flex items-center gap-1 text-xs font-medium text-red-600 hover:text-red-700 disabled:opacity-60"
+                          >
+                            {revokingId === key.id ? (
+                              <Loader2 className="h-3 w-3 animate-spin" />
+                            ) : (
+                              <Trash2 className="h-3 w-3" />
+                            )}
+                            Revoke
+                          </button>
+                        </div>
                       )}
                     </td>
                   </tr>
@@ -451,7 +527,7 @@ function ApiKeysTab() {
               })
             ) : (
               <tr>
-                <td colSpan={scope === 'global' ? 7 : 6} className="px-6 py-6 text-center text-slate-400">
+                <td colSpan={scope === 'global' ? 8 : 7} className="px-6 py-6 text-center text-slate-400">
                   {keys.length === 0 ? 'No API keys yet.' : 'No API keys match the current filters.'}
                 </td>
               </tr>
@@ -478,6 +554,55 @@ function ApiKeysTab() {
             void load();
           }}
           onCreated={() => void load()}
+        />
+      )}
+
+      {/* Developer API Platform for WhatsApp Group Creation & Unified Messaging — one-time reveal after Generate/Regenerate Secret. */}
+      {revealedSecretFor && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4">
+          <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-xl">
+            <div className="flex items-center justify-between">
+              <h3 className="text-base font-semibold text-slate-900">API secret generated</h3>
+              <button onClick={() => setRevealedSecretFor(null)} className="text-slate-400 hover:text-slate-600">
+                <XCircle className="h-5 w-5" />
+              </button>
+            </div>
+            <div className="mt-4 space-y-4">
+              <OneTimeSecretReveal label="API secret" value={revealedSecretFor.secret} />
+              <div className="flex justify-end">
+                <button
+                  onClick={() => setRevealedSecretFor(null)}
+                  className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700"
+                >
+                  Done
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {pendingRevoke && (
+        <ConfirmModal
+          title="Revoke API key"
+          message={`Revoke "${pendingRevoke.name}"? Any integration using it will stop working immediately.`}
+          confirmLabel="Revoke"
+          variant="danger"
+          isLoading={revokingId === pendingRevoke.id}
+          onConfirm={() => void confirmRevoke()}
+          onCancel={() => setPendingRevoke(null)}
+        />
+      )}
+
+      {pendingRegenerateSecret && (
+        <ConfirmModal
+          title="Regenerate secret"
+          message={`Regenerate the secret for "${pendingRegenerateSecret.name}"? Any integration using the current secret will stop authenticating.`}
+          confirmLabel="Regenerate"
+          variant="danger"
+          isLoading={regeneratingSecretId === pendingRegenerateSecret.id}
+          onConfirm={confirmRegenerateSecret}
+          onCancel={() => setPendingRegenerateSecret(null)}
         />
       )}
     </div>
@@ -744,18 +869,26 @@ function WebhookRow({
     }
   };
 
-  const handleDelete = async () => {
-    if (!confirm('Delete this webhook subscription? This cannot be undone.')) return;
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+
+  const handleDelete = () => {
+    setShowDeleteConfirm(true);
+  };
+
+  const confirmDeleteWebhook = async () => {
     setIsDeleting(true);
     try {
       await developerService.deleteWebhook(webhook.id);
       onChanged();
+      setShowDeleteConfirm(false);
     } catch {
       setIsDeleting(false);
+      setShowDeleteConfirm(false);
     }
   };
 
   return (
+    <>
     <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
       <div className="flex flex-wrap items-center justify-between gap-3 p-4">
         <div className="min-w-0 flex-1">
@@ -797,7 +930,7 @@ function WebhookRow({
             Logs
           </button>
           <button
-            onClick={() => void handleDelete()}
+            onClick={handleDelete}
             disabled={isDeleting}
             className="flex items-center gap-1 rounded-lg border border-red-200 px-3 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50 disabled:opacity-60"
           >
@@ -852,6 +985,19 @@ function WebhookRow({
         </div>
       )}
     </div>
+
+    {showDeleteConfirm && (
+      <ConfirmModal
+        title="Delete webhook"
+        message="Delete this webhook subscription? This cannot be undone."
+        confirmLabel="Delete"
+        variant="danger"
+        isLoading={isDeleting}
+        onConfirm={() => void confirmDeleteWebhook()}
+        onCancel={() => setShowDeleteConfirm(false)}
+      />
+    )}
+    </>
   );
 }
 

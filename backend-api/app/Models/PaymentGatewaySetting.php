@@ -5,9 +5,14 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;
+use App\Traits\LogsActivity;
 
 class PaymentGatewaySetting extends Model
 {
+    use LogsActivity;
+
+    /** IMPLEMENT: Dynamic Route Master with Super-Admin Bypass & Global Audit Tracking — module label shown in the Activity Logs UI. */
+    protected string $auditModuleName = 'Payment Gateway Settings';
     private const ENABLED_CACHE_KEY = 'payment_gateway_setting:enabled_gateways';
 
     /**

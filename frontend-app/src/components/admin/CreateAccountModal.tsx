@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import {
   AlertCircle,
   Building2,
@@ -9,19 +9,17 @@ import {
   ImageIcon,
   IndianRupee,
   Loader2,
-  MessageSquare,
   QrCode,
   RefreshCw,
-  Share2,
   ShieldCheck,
   UserPlus,
   X,
 } from 'lucide-react';
 import accountService from '../../services/accountService';
+import ModulePermissionMatrix from './ModulePermissionMatrix';
 import { useAuth } from '../../core/context/AuthContext';
 import {
   ACCOUNT_MODULES,
-  ACCOUNT_MODULE_LABELS,
   CORE_COMMON_MODULES,
   MODULE_ASSIGNMENTS,
   MODULE_ASSIGNMENT_LABELS,
@@ -106,16 +104,20 @@ export default function CreateAccountModal({ account, onClose, onSaved }: Create
   const [maxUsersLimit, setMaxUsersLimit] = useState(
     account?.max_users_limit != null ? String(account.max_users_limit) : '',
   );
-  // 3-Tier Hierarchy & Agent-Client Scope Engine (Phase 3 UI) — Super
-  // Admin, create mode only (see the JSX below and this modal's summary
-  // disclosure: AccountController::update() has no path to change
-  // account_type/agent_id post-creation, so editing an existing account
-  // never shows these two fields). 'client' is the correct create-mode
-  // default: it is this table's own pre-Phase-1 default and everything
-  // this modal creates today should keep behaving exactly as before
-  // unless a Super Admin deliberately picks 'agent'.
-  const [accountType, setAccountType] = useState<'agent' | 'client'>('client');
-  const [parentAgentId, setParentAgentId] = useState<string>('');
+  // 3-Tier Hierarchy & Agent-Client Scope Engine (Phase 3 UI, widened by
+  // Existing-Account Conversion) — Super Admin only, both modes now:
+  // create seeds 'client' (this table's own pre-Phase-1 default, so
+  // everything this modal creates keeps behaving exactly as before
+  // unless a Super Admin deliberately picks 'agent'); edit seeds the
+  // account's own current_type/agent_id so the selector reflects reality
+  // and only submits a change when the Super Admin actually picks a
+  // different value (see handleSubmit below).
+  const [accountType, setAccountType] = useState<'agent' | 'client'>(
+    isEditMode ? (account?.account_type === 'agent' ? 'agent' : 'client') : 'client',
+  );
+  const [parentAgentId, setParentAgentId] = useState<string>(
+    isEditMode && account?.agent_id != null ? String(account.agent_id) : '',
+  );
   const [agents, setAgents] = useState<Account[]>([]);
   // Section 2 — Primary Client Admin Credentials (create mode only).
   const [adminName, setAdminName] = useState('');
@@ -158,7 +160,11 @@ export default function CreateAccountModal({ account, onClose, onSaved }: Create
   const [modulesSaved, setModulesSaved] = useState(false);
 
   useEffect(() => {
-    if (isEditMode || !superAdmin) return;
+    // Existing-Account Conversion widened this to edit mode too — the
+    // "Parent Agent" dropdown now also renders there (a Client being
+    // reassigned, or shown while it's currently an Agent, though the
+    // dropdown itself only applies to the 'client' branch below).
+    if (!superAdmin) return;
     let cancelled = false;
     accountService
       .listAgents()
@@ -167,12 +173,12 @@ export default function CreateAccountModal({ account, onClose, onSaved }: Create
       })
       .catch(() => {
         // Non-critical: the "Parent Agent" dropdown just stays empty
-        // (Super Admin can still create a direct/platform client).
+        // (Super Admin can still create/keep a direct/platform client).
       });
     return () => {
       cancelled = true;
     };
-  }, [isEditMode, superAdmin]);
+  }, [superAdmin]);
 
   const validate = (): string | null => {
     if (!companyName.trim()) return 'Company name is required.';
@@ -219,6 +225,20 @@ export default function CreateAccountModal({ account, onClose, onSaved }: Create
           brand_accent_color: brandAccentColor.trim() || null,
           max_users_limit: maxUsersLimit.trim() ? Number(maxUsersLimit) : null,
           module_assignment: moduleAssignment,
+          // Existing-Account Conversion — Super Admin only (the fields
+          // are simply absent from the rendered form otherwise, so
+          // accountType/parentAgentId stay at their seeded initial
+          // values below and this is a same-value, effectively-no-op
+          // send). account_type === 'agent' always drops agent_id;
+          // AccountController::update() force-clears it server-side
+          // regardless, but sending null here too keeps the payload
+          // honest about what's actually about to happen.
+          ...(superAdmin
+            ? {
+                account_type: accountType,
+                agent_id: accountType === 'client' && parentAgentId ? Number(parentAgentId) : null,
+              }
+            : {}),
         };
         const subscriptionPayload: UpdateSubscriptionPayload = {
           engine_type: engineType,
@@ -309,10 +329,11 @@ export default function CreateAccountModal({ account, onClose, onSaved }: Create
 
   /**
    * Master Category checkbox for a suite (WhatsApp / Social). The
-   * master's own checked/indeterminate state is DERIVED in SuiteSection
-   * below (checked = every child enabled, indeterminate = some-but-not-
-   * all) rather than stored separately, so it can never drift out of
-   * sync with the individual rows — per spec: "Unchecking any child
+   * master's own checked/indeterminate state is DERIVED in
+   * ModulePermissionMatrix.tsx's CategoryBox (checked = every child
+   * enabled, indeterminate = some-but-not-all) rather than stored
+   * separately, so it can never drift out of sync with the individual
+   * rows — per spec: "Unchecking any child
    * route sets the Master Header to unchecked/indeterminate state."
    * This handler only ever adds/removes the specific slugs in
    * `suiteModules`, exactly like toggleModule does for one slug — every
@@ -441,19 +462,57 @@ export default function CreateAccountModal({ account, onClose, onSaved }: Create
                   <option value="expired">Expired</option>
                 </select>
               </Field>
-              {/* 3-Tier Hierarchy & Agent-Client Scope Engine (Phase 3
-                  UI) — Super Admin, create mode only: AccountController
-                  ::update() has no path to change either field after
-                  creation, so an edit-mode modal never shows them. */}
-              {superAdmin && !isEditMode && (
+              {/* 3-Tier Hierarchy & Agent-Client Scope Engine — Existing-
+                  Account Conversion widened this from create-mode-only to
+                  both modes: AccountController::update() now accepts
+                  account_type/agent_id too (Super-Admin-only, same as
+                  create). */}
+              {superAdmin && (
                 <>
-                  <Field label="Account Type" hint="Agent (Reseller) or a direct Client.">
+                  <Field
+                    label="Account Type"
+                    hint={
+                      isEditMode
+                        ? accountType === 'agent'
+                          ? "Demoting back to Client is refused while this account still has its own Sub-Clients — reassign or remove them first."
+                          : "Promoting to Agent (Reseller) also grants this account's owner the Agent role and detaches it from any parent agent, so it becomes a top-level Reseller."
+                        : "Agent (Reseller) or a direct Client. Switching to Agent auto-applies the WhatsApp Plan module preset below (still fully editable) so a new Agent isn't left with only the 4 bare Core Common modules and unable to use or delegate WhatsApp features to its own Sub-Clients."
+                    }
+                  >
                     <select
                       value={accountType}
                       onChange={(e) => {
                         const next = e.target.value as AccountType;
                         setAccountType(next === 'agent' ? 'agent' : 'client');
-                        if (next === 'agent') setParentAgentId('');
+                        if (isEditMode) {
+                          // Existing-Account Conversion — edit mode never
+                          // touches allowedModules here (that stays
+                          // whatever it already was; the Reseller Default
+                          // Module Preset below is create-mode only, since
+                          // an existing account already has a real,
+                          // possibly deliberately-customized checklist
+                          // that converting its type shouldn't clobber).
+                          if (next === 'agent') setParentAgentId('');
+                          return;
+                        }
+                        if (next === 'agent') {
+                          setParentAgentId('');
+                          // Reseller Default Module Preset — an Agent
+                          // needs working WhatsApp features itself before
+                          // it can delegate any of them down to a
+                          // Sub-Client (RouteMasterController::tree()'s
+                          // is_agent_assignable filtering intersects
+                          // against THIS account's own effectiveModules()),
+                          // so default a new Agent to Core Common +
+                          // WhatsApp Suite instead of leaving it at the
+                          // Client-only 4-module bare minimum. Local state
+                          // only (commitModules no-ops to setAllowedModules
+                          // in create mode) — Super Admin can still edit
+                          // every checkbox before submitting.
+                          setAllowedModules([...CORE_COMMON_MODULES, ...WHATSAPP_SUITE_MODULES]);
+                        } else {
+                          setAllowedModules([...CORE_COMMON_MODULES]);
+                        }
                       }}
                       className={inputClass}
                     >
@@ -469,11 +528,17 @@ export default function CreateAccountModal({ account, onClose, onSaved }: Create
                         className={inputClass}
                       >
                         <option value="">No parent agent (direct client)</option>
-                        {agents.map((agent) => (
-                          <option key={agent.id} value={agent.id}>
-                            {agent.company_name}
-                          </option>
-                        ))}
+                        {agents
+                          // Existing-Account Conversion — an account being
+                          // demoted from Agent to Client can't be its own
+                          // parent; it may still appear in this fetched
+                          // list (it WAS an Agent when listAgents() ran).
+                          .filter((agent) => !isEditMode || agent.id !== account?.id)
+                          .map((agent) => (
+                            <option key={agent.id} value={agent.id}>
+                              {agent.company_name}
+                            </option>
+                          ))}
                       </select>
                     </Field>
                   )}
@@ -778,74 +843,29 @@ export default function CreateAccountModal({ account, onClose, onSaved }: Create
               {modulesBulkBusy && <Loader2 className="h-4 w-4 animate-spin text-slate-400" />}
             </div>
 
-            {/* Core Common Features (Shared) — pre-checked by default in
-                create mode; no Master checkbox (it's the shared baseline
-                every preset includes, not a suite to enable/disable). */}
-            <div className="mt-4">
-              <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                Core Common Features (Shared)
-              </div>
-              <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
-                {CORE_COMMON_MODULES.map((module) => {
-                  const enabled = isModuleEnabled(module);
-                  const busy = modulesBusy === module;
-                  const locked = !canDelegateModule(module);
-                  return (
-                    <label
-                      key={module}
-                      title={locked ? 'Not enabled on your own agent plan.' : undefined}
-                      className={`flex items-center justify-between gap-3 rounded-lg border px-3 py-2 text-sm transition ${
-                        enabled ? 'border-indigo-200 bg-indigo-50/50' : 'border-slate-200'
-                      } ${locked ? 'opacity-50' : ''}`}
-                    >
-                      <span className={enabled ? 'text-slate-900' : 'text-slate-500'}>
-                        {ACCOUNT_MODULE_LABELS[module]}
-                      </span>
-                      <span className="flex items-center gap-2">
-                        {busy && <Loader2 className="h-3.5 w-3.5 animate-spin text-slate-400" />}
-                        <input
-                          type="checkbox"
-                          checked={enabled}
-                          disabled={busy || locked}
-                          onChange={() => void toggleModule(module)}
-                          className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 disabled:opacity-60 disabled:cursor-not-allowed"
-                        />
-                      </span>
-                    </label>
-                  );
-                })}
-              </div>
-            </div>
-
-            <SuiteSection
-              title="WhatsApp Messaging Suite"
-              icon={MessageSquare}
-              modules={WHATSAPP_SUITE_MODULES}
-              isModuleEnabled={isModuleEnabled}
-              canDelegateModule={canDelegateModule}
-              modulesBusy={modulesBusy}
-              modulesBulkBusy={modulesBulkBusy}
-              onToggleModule={(module) => void toggleModule(module)}
-              onToggleSuite={(enableAll) =>
+            {/* BUILD: Fully Dynamic Categorized Route Master & Nested
+                Permission Matrix UI — replaces the old hardcoded
+                "Core Common Features" block + two <SuiteSection/> calls
+                (WhatsApp/Social) with one dynamic component driven by
+                GET /api/admin/permissions-tree. DISCLOSED UI CHANGE: the
+                former Core Common block had no "Select all" checkbox
+                (it was the shared baseline, not a toggleable suite);
+                every category from the Route Master now gets one,
+                per this feature's explicit spec ("render each group...
+                with header, category icon, and Select All checkbox").
+                See ModulePermissionMatrix.tsx's docblock for the full
+                scope boundary. */}
+            <ModulePermissionMatrix
+              isModuleEnabled={(key) => isModuleEnabled(key as AccountModule)}
+              canDelegateModule={(key) => canDelegateModule(key as AccountModule)}
+              busyKey={modulesBusy}
+              bulkBusy={modulesBulkBusy}
+              onToggleModule={(key) => void toggleModule(key as AccountModule)}
+              onToggleSuite={(routes, enableAll) =>
                 void toggleSuite(
-                  enableAll ? WHATSAPP_SUITE_MODULES.filter(canDelegateModule) : WHATSAPP_SUITE_MODULES,
-                  enableAll,
-                )
-              }
-            />
-
-            <SuiteSection
-              title="Social Media Suite"
-              icon={Share2}
-              modules={SOCIAL_SUITE_MODULES}
-              isModuleEnabled={isModuleEnabled}
-              canDelegateModule={canDelegateModule}
-              modulesBusy={modulesBusy}
-              modulesBulkBusy={modulesBulkBusy}
-              onToggleModule={(module) => void toggleModule(module)}
-              onToggleSuite={(enableAll) =>
-                void toggleSuite(
-                  enableAll ? SOCIAL_SUITE_MODULES.filter(canDelegateModule) : SOCIAL_SUITE_MODULES,
+                  (enableAll ? routes.filter((route) => canDelegateModule(route.permission_key as AccountModule)) : routes).map(
+                    (route) => route.permission_key as AccountModule,
+                  ),
                   enableAll,
                 )
               }
@@ -934,128 +954,3 @@ function EngineOption({
   );
 }
 
-/**
- * A checkbox that can render a true tri-state "indeterminate" visual.
- * React has no `indeterminate` prop on <input type="checkbox">, so it's
- * set imperatively via a ref (the only way the DOM exposes it). Used by
- * SuiteSection for the two Master Category checkboxes.
- */
-function IndeterminateCheckbox({
-  checked,
-  indeterminate,
-  disabled,
-  onChange,
-  className,
-}: {
-  checked: boolean;
-  indeterminate: boolean;
-  disabled?: boolean;
-  onChange: () => void;
-  className?: string;
-}) {
-  const ref = useRef<HTMLInputElement>(null);
-  useEffect(() => {
-    if (ref.current) ref.current.indeterminate = indeterminate;
-  }, [indeterminate]);
-  return (
-    <input ref={ref} type="checkbox" checked={checked} disabled={disabled} onChange={onChange} className={className} />
-  );
-}
-
-/**
- * One suite block (WhatsApp Messaging / Social Media) inside "Module &
- * Feature Access": a Master Category checkbox in the header plus every
- * child route as its own row. The master's checked/indeterminate state
- * is DERIVED from the children on every render (never stored on its
- * own), so it can never drift out of sync with them — per spec:
- * "Unchecking any child route sets the Master Header to
- * unchecked/indeterminate state."
- */
-function SuiteSection({
-  title,
-  icon: Icon,
-  modules,
-  isModuleEnabled,
-  canDelegateModule,
-  modulesBusy,
-  modulesBulkBusy,
-  onToggleModule,
-  onToggleSuite,
-}: {
-  title: string;
-  icon: typeof ShieldCheck;
-  modules: AccountModule[];
-  isModuleEnabled: (module: AccountModule) => boolean;
-  /**
-   * Requirement 2 — Agent Module Delegation UI Matrix. Always true for
-   * Super Admin (see CreateAccountModal's canDelegateModule); narrows
-   * to the viewer's own effective_modules only for a real Agent viewer.
-   */
-  canDelegateModule: (module: AccountModule) => boolean;
-  modulesBusy: AccountModule | null;
-  modulesBulkBusy: boolean;
-  onToggleModule: (module: AccountModule) => void;
-  onToggleSuite: (enableAll: boolean) => void;
-}) {
-  // The "Select all" master checkbox's checked/indeterminate state is
-  // derived against the DELEGABLE subset (falling back to every module
-  // in this suite only if the viewer can delegate none of them) so it
-  // can still read as fully checked once an Agent viewer has granted
-  // everything they themselves have — rather than being permanently
-  // stuck indeterminate because of modules they could never grant in
-  // the first place.
-  const delegableModules = modules.filter(canDelegateModule);
-  const relevantModules = delegableModules.length > 0 ? delegableModules : modules;
-  const enabledCount = relevantModules.filter((module) => isModuleEnabled(module)).length;
-  const allEnabled = enabledCount === relevantModules.length;
-  const someEnabled = enabledCount > 0 && !allEnabled;
-
-  return (
-    <div className="mt-4 rounded-lg border border-slate-200 p-3">
-      <div className="flex items-center justify-between gap-3">
-        <span className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-slate-700">
-          <Icon className="h-3.5 w-3.5 text-indigo-600" />
-          {title}
-        </span>
-        <label className="flex items-center gap-1.5 text-[11px] font-medium normal-case tracking-normal text-slate-500">
-          Select all
-          <IndeterminateCheckbox
-            checked={allEnabled}
-            indeterminate={someEnabled}
-            disabled={modulesBulkBusy}
-            onChange={() => onToggleSuite(!allEnabled)}
-            className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 disabled:opacity-60"
-          />
-        </label>
-      </div>
-      <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
-        {modules.map((module) => {
-          const enabled = isModuleEnabled(module);
-          const busy = modulesBusy === module;
-          const locked = !canDelegateModule(module);
-          return (
-            <label
-              key={module}
-              title={locked ? 'Not enabled on your own agent plan.' : undefined}
-              className={`flex items-center justify-between gap-3 rounded-lg border px-3 py-2 text-sm transition ${
-                enabled ? 'border-indigo-200 bg-indigo-50/50' : 'border-slate-200'
-              } ${locked ? 'opacity-50' : ''}`}
-            >
-              <span className={enabled ? 'text-slate-900' : 'text-slate-500'}>{ACCOUNT_MODULE_LABELS[module]}</span>
-              <span className="flex items-center gap-2">
-                {busy && <Loader2 className="h-3.5 w-3.5 animate-spin text-slate-400" />}
-                <input
-                  type="checkbox"
-                  checked={enabled}
-                  disabled={busy || locked}
-                  onChange={() => onToggleModule(module)}
-                  className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 disabled:opacity-60 disabled:cursor-not-allowed"
-                />
-              </span>
-            </label>
-          );
-        })}
-      </div>
-    </div>
-  );
-}

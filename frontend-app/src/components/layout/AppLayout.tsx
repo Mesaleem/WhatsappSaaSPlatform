@@ -10,9 +10,11 @@ import {
   Code2,
   Contact,
   CreditCard,
+  Activity,
   History,
   Inbox,
   LayoutDashboard,
+  Layers,
   Megaphone,
   MessageSquare,
   QrCode,
@@ -186,12 +188,37 @@ const NAV_ITEMS: NavItem[] = [
   { label: 'Social Reports', to: '/social/reports', icon: FileBarChart, tint: NAV_TINTS.social, permission: 'view-social-analytics', requiresModule: 'reports' },
   { label: 'Manage Clients', to: '/admin/accounts', icon: Building2, tint: NAV_TINTS.accounts, superAdminOnly: true },
   { label: 'My Clients', to: '/admin/accounts', icon: Building2, tint: NAV_TINTS.accounts, agentOnly: true },
-  // Dynamic Templates & Variables System — Super Admin Template Designer & Approval Panel.
-  { label: 'Template Manager', to: '/admin/templates', icon: Sparkles, tint: NAV_TINTS.accounts, superAdminOnly: true },
+  // Dynamic Templates & Variables System — Template Designer & Approval
+  // Panel. Tiered Template Approval Workflow for 3-Tier Hierarchy widened
+  // this from Super-Admin-only to also an Agent (Reseller) reviewing
+  // their own Sub-Clients' submissions -- `permission` (not
+  // `superAdminOnly`, which would hide it from every non-Super-Admin
+  // unconditionally) is the correct gate here: Super Admin bypasses the
+  // permission check as usual, and 'manage-templates' is now seeded onto
+  // the 'agent' role too (RolePermissionSeeder) -- so visibility here
+  // stays in lockstep with the backend's own Super-Admin-or-Agent gate
+  // (MessageTemplateController) without a second flag to keep in sync.
+  { label: 'Template Manager', to: '/admin/templates', icon: Sparkles, tint: NAV_TINTS.accounts, permission: 'manage-templates' },
   { label: 'Admin Gateway Settings', to: '/admin/billing/gateway-settings', icon: Settings, tint: NAV_TINTS.gateway, superAdminOnly: true },
+  // BUILD: Fully Dynamic Categorized Route Master & Nested Permission
+  // Matrix UI — Super-Admin-only, same tier as the other platform-admin
+  // nav items above/below it.
+  { label: 'Route Master', to: '/admin/route-master', icon: Layers, tint: NAV_TINTS.gateway, superAdminOnly: true },
+  // IMPLEMENT: Dynamic Route Master with Super-Admin Bypass & Global
+  // Audit Tracking — requirement 4. Labeled 'Activity Logs' (not 'Audit
+  // Logs', which already exists below for login history) so the two
+  // distinct audit surfaces are never confused in the sidebar.
+  { label: 'Activity Logs', to: '/admin/audit-logs', icon: Activity, tint: NAV_TINTS.gateway, superAdminOnly: true },
   // Quota Exhaustion Request Workflow & Custom Invoice Generation —
-  // Super Admin review/approval queue for Client Admin top-up requests.
-  { label: 'Quota Top-Up Requests', to: '/admin/quota-requests', icon: Zap, tint: NAV_TINTS.billing, superAdminOnly: true },
+  // Agent-Routed Quota Top-Up Requests widened this from Super-Admin-only
+  // to also an Agent reviewing its own Sub-Clients' requests. permission
+  // (not superAdminOnly, which would hide it from every non-Super-Admin
+  // unconditionally) is the correct gate here, same precedent as
+  // Template Manager above: Super Admin bypasses the permission check as
+  // usual, and manage-accounts is what an Agent already holds — this
+  // stays in lockstep with the backend's own Super-Admin-or-owning-Agent
+  // gate (QuotaRequestController) without a second flag to keep in sync.
+  { label: 'Quota Top-Up Requests', to: '/admin/quota-requests', icon: Zap, tint: NAV_TINTS.billing, permission: 'manage-accounts' },
   // Social Media Marketing & Meta Ads Automation Expansion (Phase 2).
   { label: 'Social Gateway Settings', to: '/admin/social-settings', icon: Settings, tint: NAV_TINTS.social, superAdminOnly: true },
   // Super Admin WhatsApp Device Integration — link/view/disconnect/reconnect any client's device from one screen.

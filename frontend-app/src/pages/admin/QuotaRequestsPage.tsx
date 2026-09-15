@@ -6,7 +6,7 @@ import type { ApiErrorResponse } from '../../types/auth';
 import type { QuotaRequest, QuotaRequestStatus } from '../../types/quotaRequest';
 import { PageHeader, PageShell } from '../../components/common/PageShell';
 import { TableCard } from '../../components/common/Card';
-import { Pagination, StatusFilterSelect } from '../../components/common/DataTableControls';
+import { ClearFiltersButton, Pagination, StatusFilterSelect } from '../../components/common/DataTableControls';
 import { TableSkeletonRows } from '../../components/common/Skeleton';
 
 function extractMessage(err: unknown, fallback: string): string {
@@ -122,6 +122,7 @@ export default function QuotaRequestsPage() {
           options={STATUS_OPTIONS.filter((o) => o.value !== 'all').map((o) => ({ value: o.value, label: o.label }))}
           allLabel="All statuses"
         />
+        <ClearFiltersButton active={status !== 'all'} onClear={() => setStatus('all')} />
       </div>
 
       {successMessage && (

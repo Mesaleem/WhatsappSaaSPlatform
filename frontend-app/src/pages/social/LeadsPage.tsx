@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
-import { AlertCircle, Building2, Camera, CheckCircle2, Loader2, MessageSquare, Search, X, XCircle } from 'lucide-react';
+import { AlertCircle, Building2, Camera, CheckCircle2, Loader2, MessageSquare, X, XCircle } from 'lucide-react';
 import { useAuth } from '../../core/context/AuthContext';
 import { useTenant } from '../../core/context/TenantContext';
 import leadsService from '../../services/leadsService';
 import { TableCard } from '../../components/common/Card';
+import { ClearFiltersButton, Pagination, SearchInput } from '../../components/common/DataTableControls';
 import { extractErrorMessage } from '../../utils/apiError';
 import { indigo } from '../../theme/signalIndigo';
 import type { Lead, LeadDetail, LeadPlatform } from '../../types/leads';
@@ -136,6 +137,8 @@ export default function LeadsPage() {
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
   const [lastPage, setLastPage] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [perPage, setPerPage] = useState(15);
   const [detailId, setDetailId] = useState<number | null>(null);
 
   const loadLeads = useCallback(() => {
@@ -148,14 +151,15 @@ export default function LeadsPage() {
     setIsLoading(true);
     setPageError(null);
     leadsService
-      .list({ page, search: search.trim() || undefined })
+      .list({ page, per_page: perPage, search: search.trim() || undefined })
       .then((res) => {
         setLeads(res.data);
         setLastPage(res.last_page);
+        setTotal(res.total);
       })
       .catch((err: unknown) => setPageError(extractErrorMessage(err, 'Failed to load leads.')))
       .finally(() => setIsLoading(false));
-  }, [noTenantSelected, page, search]);
+  }, [noTenantSelected, page, perPage, search]);
 
   useEffect(() => {
     loadLeads();
@@ -186,17 +190,9 @@ export default function LeadsPage() {
           </div>
         ) : (
           <>
-            <div className="mb-4 flex items-center gap-2">
-              <div className="relative w-full max-w-xs">
-                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2" style={{ color: indigo.muted }} />
-                <input
-                  type="text"
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Search name, phone, email…"
-                  className="w-full rounded-lg border border-slate-300 py-2 pl-9 pr-3 text-sm text-slate-900 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
-                />
-              </div>
+            <div className="mb-4 flex flex-wrap items-center gap-3">
+              <SearchInput value={search} onChange={setSearch} placeholder="Search name, phone, email…" />
+              <ClearFiltersButton active={search !== ''} onClear={() => setSearch('')} />
             </div>
 
             {pageError && (
@@ -268,29 +264,17 @@ export default function LeadsPage() {
               </table>
             </TableCard>
 
-            {lastPage > 1 && (
-              <div className="mt-4 flex items-center justify-center gap-3 text-sm">
-                <button
-                  type="button"
-                  onClick={() => setPage((p) => Math.max(1, p - 1))}
-                  disabled={page <= 1}
-                  className="rounded-lg border border-slate-300 px-3 py-1.5 font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-40"
-                >
-                  Previous
-                </button>
-                <span style={{ color: indigo.muted }}>
-                  Page {page} of {lastPage}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setPage((p) => Math.min(lastPage, p + 1))}
-                  disabled={page >= lastPage}
-                  className="rounded-lg border border-slate-300 px-3 py-1.5 font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-40"
-                >
-                  Next
-                </button>
-              </div>
-            )}
+            <Pagination
+              page={page}
+              lastPage={lastPage}
+              total={total}
+              perPage={perPage}
+              onPageChange={setPage}
+              onPerPageChange={(pp) => {
+                setPerPage(pp);
+                setPage(1);
+              }}
+            />
           </>
         )}
       </div>

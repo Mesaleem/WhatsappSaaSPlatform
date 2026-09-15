@@ -4,7 +4,7 @@ import crypto from 'node:crypto';
 import express from 'express';
 import cors from 'cors';
 import { Server as SocketIOServer } from 'socket.io';
-import { startSession, logoutSession, getStatus, getQr, sendMessage, createGroup, addGroupParticipants } from './services/sessionManager.js';
+import { startSession, logoutSession, getStatus, getQr, sendMessage, createGroup, addGroupParticipants, listGroups, getGroupMetadata } from './services/sessionManager.js';
 import { verifyAccountAccess } from './services/backendClient.js';
 
 /**
@@ -244,15 +244,35 @@ app.post('/api/qr/logout', requireInternalSecret, async (req, res) => {
  * "Session disconnected" case when no connected session exists for
  * account_id.
  */
+// Developer API Platform for WhatsApp Group Creation & Unified
+// Messaging -- optional media_type/media_url/caption/filename fields,
+// forwarded verbatim by backend-api's BaileysDriver (which spreads its
+// $metaData param straight into this POST body -- see that class and
+// App\Support\WhatsAppMediaPayloadBuilder on the backend-api side).
+// `message` remains required for a plain text send, but is now OPTIONAL
+// when a media_type/media_url pair is present (a media message's
+// caption is carried separately, in `caption`, matching Meta's own
+// convention of caption-is-part-of-the-media-object rather than a
+// separate text body).
 app.post('/api/message/send', requireInternalSecret, async (req, res) => {
-  const { account_id: accountId, to, message } = req.body ?? {};
-  if (!accountId || !to || !message) {
-    return res.status(422).json({ success: false, error: 'account_id, to, and message are required.' });
+  const { account_id: accountId, to, message, media_type: mediaType, media_url: mediaUrl, caption, filename } = req.body ?? {};
+  const media = mediaType && mediaUrl ? { type: mediaType, url: mediaUrl, caption, filename } : null;
+
+  if (!accountId || !to || (!message && !media)) {
+    return res.status(422).json({ success: false, error: 'account_id, to, and either message or media_type+media_url are required.' });
   }
 
   try {
-    const result = await sendMessage(accountId, to, message);
-    res.status(result.success ? 200 : 422).json(result);
+    const result = await sendMessage(accountId, to, message, media);
+    // A bad/unreachable media_url is the caller's fault, not a session or
+    // Baileys problem -- surfaced as 400 (Bad Request) instead of the
+    // generic 422 used for every other failure (e.g. 'Session
+    // disconnected'). backend-api's BaileysDriver only branches on the
+    // JSON 'success' flag, never the HTTP status class, so this is purely
+    // a clearer contract for direct callers of this endpoint -- it does
+    // not change how backend-api itself behaves on failure.
+    const status = result.success ? 200 : result.code === 'MEDIA_UNREACHABLE' ? 400 : 422;
+    res.status(status).json(result);
   } catch (err) {
     console.error(`[server] send-message failed for account_id=${accountId}:`, err);
     res.status(500).json({ success: false, error: 'Internal error while sending the message.' });
@@ -303,6 +323,60 @@ app.post('/api/group/add-participants', requireInternalSecret, async (req, res) 
   } catch (err) {
     console.error(`[server] group-add-participants failed for account_id=${accountId}:`, err);
     res.status(500).json({ success: false, error: 'Internal error while adding participants to the WhatsApp group.' });
+  }
+});
+
+/**
+ * GET /api/group/list — Native WhatsApp Group Re-Architecture, "select
+ * an existing group" extension, called by backend-api's
+ * NativeWhatsAppGroupService::listGroups(). Query: ?account_id=X.
+ * Read-only: lists every real WhatsApp group the connected account is
+ * CURRENTLY a participant of (via Baileys' groupFetchAllParticipating()),
+ * so backend-api can offer a picker instead of only ever creating brand
+ * new groups. Response: { success: true, groups: [{ jid, subject,
+ * participants_count }] } on success, or { success: false, error }
+ * (HTTP 422) otherwise — same shape convention as the other /api/group/*
+ * routes.
+ */
+app.get('/api/group/list', requireInternalSecret, async (req, res) => {
+  const accountId = req.query.account_id;
+  if (!accountId) {
+    return res.status(422).json({ success: false, error: 'account_id is required.' });
+  }
+
+  try {
+    const result = await listGroups(accountId);
+    res.status(result.success ? 200 : 422).json(result);
+  } catch (err) {
+    console.error(`[server] group-list failed for account_id=${accountId}:`, err);
+    res.status(500).json({ success: false, error: 'Internal error while listing WhatsApp groups.' });
+  }
+});
+
+/**
+ * GET /api/group/metadata — Native WhatsApp Group Re-Architecture,
+ * "select an existing group" extension. Query: ?account_id=X&group_jid=Y.
+ * Read-only: full Baileys metadata (including the current participant
+ * list) for ONE group, fetched right after the user picks it from
+ * /api/group/list's summary — so backend-api's import step can populate
+ * the new ContactGroup's members from the real group instead of starting
+ * at 0. Response: { success: true, jid, subject, participants: [{ jid,
+ * is_admin }] } on success, or { success: false, error } (HTTP 422)
+ * otherwise.
+ */
+app.get('/api/group/metadata', requireInternalSecret, async (req, res) => {
+  const accountId = req.query.account_id;
+  const groupJid = req.query.group_jid;
+  if (!accountId || !groupJid) {
+    return res.status(422).json({ success: false, error: 'account_id and group_jid are required.' });
+  }
+
+  try {
+    const result = await getGroupMetadata(accountId, groupJid);
+    res.status(result.success ? 200 : 422).json(result);
+  } catch (err) {
+    console.error(`[server] group-metadata failed for account_id=${accountId} group_jid=${groupJid}:`, err);
+    res.status(500).json({ success: false, error: 'Internal error while fetching this group\'s details.' });
   }
 });
 

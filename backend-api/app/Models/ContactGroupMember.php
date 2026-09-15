@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use App\Traits\LogsActivity;
 
 /**
  * Group Messaging — Step 1. A single phone number inside one
@@ -13,6 +14,10 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  */
 class ContactGroupMember extends Model
 {
+    use LogsActivity;
+
+    /** IMPLEMENT: Dynamic Route Master with Super-Admin Bypass & Global Audit Tracking — module label shown in the Activity Logs UI. */
+    protected string $auditModuleName = 'Contact Groups';
     protected $fillable = [
         'group_id',
         'phone_number',

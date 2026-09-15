@@ -79,6 +79,16 @@ class SendTemplateMessageRequest extends FormRequest
             'template_id' => ['required', 'integer'],
             'recipient_phone' => ['required', 'string', 'max:20'],
             'variables' => ['sometimes', 'array'],
+            // Media Templates (send-time override, QR/Baileys-only) --
+            // ONE optional key, deliberately with no separate media_type
+            // field: TemplateMessageDispatcher::resolveMediaMetaData()
+            // infers image vs document from the URL's extension. NOT
+            // validated as a strict URL here on purpose -- an
+            // unparseable value is simply treated as "no media" and the
+            // template still sends as plain text (see that method's own
+            // docblock), rather than 422-rejecting the whole send over a
+            // bad attachment link.
+            'media_url' => ['sometimes', 'nullable', 'string', 'max:2048'],
             ...MessageTemplate::variableValidationRules($this->targetSchema()),
         ];
     }
