@@ -4,7 +4,8 @@ namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Controllers\Controller;
 use App\Http\Requests\SendMessageRequest;
-use App\Http\Requests\SendTemplateMessageRequest;
+use App\Http\Requests\SendTemplateByCodeRequest;
+use App\Models\MessageTemplate;
 use App\Services\Groups\GroupMessageDispatcher;
 use App\Services\Templates\TemplateMessageDispatcher;
 use Illuminate\Http\JsonResponse;
@@ -20,8 +21,19 @@ use Illuminate\Http\JsonResponse;
  */
 class TemplateMessageController extends Controller
 {
-    /** POST /api/v1/messages/send-template */
-    public function send(SendTemplateMessageRequest $request): JsonResponse
+    /**
+     * POST /api/v1/messages/send-template
+     *
+     * Developer API: unique `template_code` -- identifies the template
+     * by its human-readable template_code instead of the raw DB
+     * `template_id`, scoped strictly to this API key's own account_id
+     * (or a global/null-account_id system template). A template_code
+     * that doesn't resolve under that scope -- wrong code, or a real
+     * code that belongs to a different tenant -- gets the exact same
+     * generic 404 either way, so this response can never be used to
+     * enumerate another tenant's template codes.
+     */
+    public function send(SendTemplateByCodeRequest $request): JsonResponse
     {
         $accountId = $request->attributes->get('api_account_id');
         abort_if(! $accountId, 401, 'Unauthenticated.');
@@ -29,9 +41,21 @@ class TemplateMessageController extends Controller
         $apiKey = $request->attributes->get('api_key');
         $data = $request->validated();
 
+        $template = MessageTemplate::query()
+            ->where('template_code', $data['template_code'])
+            ->where(function ($query) use ($accountId) {
+                $query->where('account_id', $accountId)
+                    ->orWhereNull('account_id');
+            })
+            ->first();
+
+        if (! $template) {
+            return response()->json(['status' => false, 'message' => 'Invalid template_code for this account'], 404);
+        }
+
         $result = TemplateMessageDispatcher::dispatch(
             (int) $accountId,
-            $data['template_id'],
+            $template->id,
             $data['recipient_phone'],
             $data['variables'] ?? [],
             source: 'api',

@@ -2,7 +2,9 @@ import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react
 import { Link } from 'react-router-dom';
 import {
   AlertTriangle,
+  Check,
   CheckCircle2,
+  Copy,
   ListChecks,
   Loader2,
   Pencil,
@@ -63,6 +65,24 @@ function defaultLabel(key: string): string {
 
 function defaultVariableField(key: string): TemplateVariableSchemaField {
   return { key, label: defaultLabel(key), type: 'string', required: true };
+}
+
+/**
+ * Client-side mirror of the backend's MessageTemplate::generateTemplateCode()
+ * slug shape (UPPER_SNAKE_CASE) -- used only to show a live "suggested
+ * code" hint as the Super Admin/Agent types a title; the backend is the
+ * actual source of truth (it also disambiguates collisions), so this
+ * never needs to match byte-for-byte, only closely enough to be a
+ * useful preview of what auto-generation will produce if the Template
+ * Code field is left blank.
+ */
+function slugifyTitle(title: string): string {
+  return title
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
 }
 
 /**
@@ -133,6 +153,8 @@ function TemplateModal({
   onSaved: () => void;
 }) {
   const [title, setTitle] = useState(template?.title ?? '');
+  /** Developer API: unique, human-readable lookup key -- see SaveMessageTemplatePayload.template_code. */
+  const [templateCode, setTemplateCode] = useState(template?.template_code ?? '');
   const [industryType, setIndustryType] = useState(template?.industry_type ?? '');
   const [templateBody, setTemplateBody] = useState(template?.template_body ?? '');
   const [headerType, setHeaderType] = useState<TemplateHeaderType>(template?.header_type ?? 'text');
@@ -145,6 +167,8 @@ function TemplateModal({
   const [error, setError] = useState<string | null>(null);
 
   const variables = useMemo(() => extractVariables(templateBody), [templateBody]);
+  /** Live preview of what generateTemplateCode() will derive server-side if Template Code is left blank. */
+  const suggestedCode = useMemo(() => slugifyTitle(title), [title]);
 
   // Variable Configurator Panel — keeps variablesSchema in lockstep with the
   // {{tokens}} actually present in template_body: a newly-typed {{token}}
@@ -188,6 +212,7 @@ function TemplateModal({
     try {
       const payload: SaveMessageTemplatePayload = {
         title: title.trim(),
+        template_code: templateCode.trim() ? templateCode.trim().toUpperCase() : null,
         industry_type: industryType.trim() || null,
         template_body: templateBody,
         account_id: accountId === '' ? null : accountId,
@@ -238,6 +263,34 @@ function TemplateModal({
                 placeholder="e.g. Healthcare, Banking"
                 className={inputClass}
               />
+            </div>
+          </div>
+
+          <div>
+            <label className="text-sm font-medium text-slate-700">
+              Template Code
+              <span className="ml-1 text-xs font-normal text-slate-400">
+                (optional — the Developer API's lookup key for this template; auto-generated from the title if left
+                blank)
+              </span>
+            </label>
+            <div className="mt-1 flex gap-2">
+              <input
+                value={templateCode}
+                onChange={(e) => setTemplateCode(e.target.value.toUpperCase())}
+                placeholder={suggestedCode || 'e.g. PAYMENT_RECEIPT_V1'}
+                className={`${inputClass} font-mono uppercase tracking-wide`}
+              />
+              {suggestedCode && templateCode !== suggestedCode && (
+                <button
+                  type="button"
+                  onClick={() => setTemplateCode(suggestedCode)}
+                  title={`Use "${suggestedCode}"`}
+                  className="flex-shrink-0 whitespace-nowrap rounded-lg border border-slate-300 px-3 py-2 text-xs font-medium text-slate-600 hover:bg-slate-50"
+                >
+                  Use suggestion
+                </button>
+              )}
             </div>
           </div>
 
@@ -633,6 +686,20 @@ export default function TemplateManagerPage() {
   const [busyId, setBusyId] = useState<number | null>(null);
   // Strict 1-Template-Per-Client & Testing Gate — "Send Template" test action.
   const [testModalTemplate, setTestModalTemplate] = useState<MessageTemplate | null>(null);
+  // Developer API: unique `template_code` -- One-Click Copy button on the
+  // datatable. copiedId briefly holds the row whose code was just
+  // copied, purely to swap that one row's icon to a checkmark; auto-
+  // clears itself so a stale "copied" state never lingers.
+  const [copiedId, setCopiedId] = useState<number | null>(null);
+
+  const handleCopyCode = useCallback((t: MessageTemplate) => {
+    if (!t.template_code) return;
+    navigator.clipboard?.writeText(t.template_code).catch(() => {
+      /* Clipboard API can reject (e.g. insecure context/permissions) -- silently no-op, nothing else to fall back to here. */
+    });
+    setCopiedId(t.id);
+    window.setTimeout(() => setCopiedId((prev) => (prev === t.id ? null : prev)), 1500);
+  }, []);
 
   const load = useCallback(async () => {
     setIsLoading(true);
@@ -770,6 +837,7 @@ export default function TemplateManagerPage() {
           <thead className="bg-slate-50">
             <tr className="text-left text-xs font-medium uppercase tracking-wide text-slate-500">
               <th className="px-4 py-3">Title</th>
+              <th className="px-4 py-3">Template Code</th>
               <th className="px-4 py-3">Industry</th>
               <th className="px-4 py-3">Assigned To</th>
               <th className="px-4 py-3">Variables</th>
@@ -779,11 +847,30 @@ export default function TemplateManagerPage() {
           </thead>
           <tbody className="divide-y divide-slate-100">
             {isLoading ? (
-              <TableSkeletonRows columns={6} />
+              <TableSkeletonRows columns={7} />
             ) : paged.length > 0 ? (
               paged.map((t) => (
                 <tr key={t.id}>
                   <td className="px-4 py-3 font-medium text-slate-900">{t.title}</td>
+                  <td className="px-4 py-3">
+                    {t.template_code ? (
+                      <button
+                        type="button"
+                        onClick={() => handleCopyCode(t)}
+                        title="Copy template_code"
+                        className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 font-mono text-[11px] text-slate-700 hover:bg-slate-200"
+                      >
+                        {t.template_code}
+                        {copiedId === t.id ? (
+                          <Check className="h-3 w-3 text-emerald-600" />
+                        ) : (
+                          <Copy className="h-3 w-3 text-slate-400" />
+                        )}
+                      </button>
+                    ) : (
+                      <span className="text-slate-400">—</span>
+                    )}
+                  </td>
                   <td className="px-4 py-3 text-slate-600">{t.industry_type ?? '—'}</td>
                   <td className="px-4 py-3 text-slate-600">{t.account?.company_name ?? 'Global (every client)'}</td>
                   <td className="px-4 py-3">
@@ -939,7 +1026,7 @@ export default function TemplateManagerPage() {
               ))
             ) : (
               <tr>
-                <td colSpan={6} className="px-4 py-10 text-center text-slate-400">
+                <td colSpan={7} className="px-4 py-10 text-center text-slate-400">
                   {templates.length === 0 ? 'No templates yet.' : 'No templates match the current filters.'}
                 </td>
               </tr>

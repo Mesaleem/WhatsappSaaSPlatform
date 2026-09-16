@@ -6,6 +6,7 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Validation\Rule;
+use Illuminate\Support\Str;
 use App\Traits\LogsActivity;
 
 class MessageTemplate extends Model
@@ -38,6 +39,11 @@ class MessageTemplate extends Model
 
     protected $fillable = [
         'account_id',
+        // Developer API -- human-readable, globally-unique lookup key for
+        // POST /api/v1/messages/send-template (see the
+        // add_template_code_to_message_templates_table migration and
+        // generateTemplateCode() below).
+        'template_code',
         'industry_type',
         'title',
         'template_body',
@@ -209,5 +215,50 @@ class MessageTemplate extends Model
         }
 
         return $rules;
+    }
+
+    /**
+     * Developer API -- auto-suggest/auto-generate a unique,
+     * human-readable template_code from a title. Produces the same
+     * UPPER_SNAKE_CASE slug shape the
+     * add_template_code_to_message_templates_table migration backfills
+     * existing rows with, so a template created going forward through
+     * MessageTemplateController::store()/update()/submitRequest() can
+     * never drift into a different slug convention than that one-time
+     * backfill used. Falls back to TMP_{n} when the title produces an
+     * empty slug, and disambiguates any collision (including against
+     * the TMP_ fallback) with a numeric suffix.
+     *
+     * $ignoreId excludes a row from the uniqueness check -- pass the
+     * template's own id when regenerating a code for an existing
+     * template (update()'s "clear the code, re-derive from the current
+     * title" path), same as Rule::unique(...)->ignore($id) does for the
+     * client-supplied case.
+     */
+    public static function generateTemplateCode(string $title, ?int $ignoreId = null): string
+    {
+        $base = strtoupper((string) Str::of($title)
+            ->ascii()
+            ->replaceMatches('/[^A-Za-z0-9]+/', '_')
+            ->trim('_'));
+
+        if ($base === '') {
+            $base = 'TMP_'.(((int) static::max('id')) + 1);
+        }
+
+        $code = $base;
+        $suffix = 2;
+
+        while (
+            static::query()
+                ->where('template_code', $code)
+                ->when($ignoreId, fn ($q) => $q->where('id', '!=', $ignoreId))
+                ->exists()
+        ) {
+            $code = $base.'_'.$suffix;
+            $suffix++;
+        }
+
+        return $code;
     }
 }

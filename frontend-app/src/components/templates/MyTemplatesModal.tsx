@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { AlertCircle, FileText, Loader2, XCircle } from 'lucide-react';
+import { AlertCircle, Check, Copy, FileText, Loader2, XCircle } from 'lucide-react';
 import templateService from '../../services/templateService';
 import type { MessageTemplateStatus, MyTemplateSummary } from '../../types/templates';
 import { extractErrorMessage } from '../../utils/apiError';
@@ -39,6 +39,21 @@ function formatDate(value: string): string {
 export default function MyTemplatesModal({ onClose }: { onClose: () => void }) {
   const [templates, setTemplates] = useState<MyTemplateSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Developer API: unique `template_code` -- One-Click Copy button, same
+  // briefly-swap-to-a-checkmark pattern as TemplateManagerPage.tsx's
+  // handleCopyCode() (kept as its own local copy rather than a shared
+  // export, matching this file's own existing per-page convention for
+  // small presentational helpers -- see its own STATUS_LABEL docblock).
+  const [copiedId, setCopiedId] = useState<number | null>(null);
+
+  const handleCopyCode = (t: MyTemplateSummary) => {
+    if (!t.template_code) return;
+    navigator.clipboard?.writeText(t.template_code).catch(() => {
+      /* Clipboard API can reject (e.g. insecure context/permissions) -- silently no-op. */
+    });
+    setCopiedId(t.id);
+    window.setTimeout(() => setCopiedId((prev) => (prev === t.id ? null : prev)), 1500);
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -98,6 +113,21 @@ export default function MyTemplatesModal({ onClose }: { onClose: () => void }) {
                   <div className="flex items-start justify-between gap-3">
                     <div>
                       <p className="text-sm font-medium text-slate-900">{t.title}</p>
+                      {t.template_code && (
+                        <button
+                          type="button"
+                          onClick={() => handleCopyCode(t)}
+                          title="Copy template_code"
+                          className="mt-1 inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 font-mono text-[11px] text-slate-700 hover:bg-slate-200"
+                        >
+                          {t.template_code}
+                          {copiedId === t.id ? (
+                            <Check className="h-3 w-3 text-emerald-600" />
+                          ) : (
+                            <Copy className="h-3 w-3 text-slate-400" />
+                          )}
+                        </button>
+                      )}
                       {t.industry_type && <p className="mt-0.5 text-xs text-slate-500">{t.industry_type}</p>}
                     </div>
                     <span

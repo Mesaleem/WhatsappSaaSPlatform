@@ -205,6 +205,14 @@ class MessageTemplateController extends Controller
             'account_id' => $account->id,
             'status' => $status,
             'created_by' => $request->user()->id,
+            // Developer API: unique `template_code` -- a self-submitted
+            // request never asks the client for a code (they don't pick
+            // the eventual API identifier), so one is auto-generated
+            // from the title here, same as store()'s "left blank" path.
+            // Without this, an approved-without-edit self-service
+            // template would have no template_code at all and could
+            // never be reached by /v1/messages/send-template.
+            'template_code' => MessageTemplate::generateTemplateCode($data['title']),
         ]);
 
         $this->templateService->notifyPendingReview($template->fresh());
@@ -229,7 +237,7 @@ class MessageTemplateController extends Controller
         $templates = MessageTemplate::query()
             ->where('account_id', $account->id)
             ->orderByDesc('id')
-            ->get(['id', 'title', 'industry_type', 'status', 'rejection_reason', 'created_at']);
+            ->get(['id', 'title', 'industry_type', 'status', 'rejection_reason', 'created_at', 'template_code']);
 
         return response()->json(['data' => $templates]);
     }
@@ -352,6 +360,8 @@ class MessageTemplateController extends Controller
      */
     public function store(Request $request): JsonResponse
     {
+        $this->normalizeTemplateCode($request);
+
         $data = $request->validate([
             'title' => ['required', 'string', 'max:255'],
             'industry_type' => ['nullable', 'string', 'max:100'],
@@ -365,6 +375,14 @@ class MessageTemplateController extends Controller
             // (header_type defaults to 'text' at the DB level).
             'header_type' => ['sometimes', 'string', Rule::in(MessageTemplate::HEADER_TYPES)],
             'header_media_url' => ['sometimes', 'nullable', 'string', 'max:2048', 'url'],
+            // Developer API: unique `template_code` -- optional here;
+            // the Template creation form auto-suggests a slugified code
+            // from the title, but a caller may leave it blank and let
+            // generateTemplateCode() below derive one. normalizeTemplateCode()
+            // above has already upper-cased/trimmed whatever was sent so
+            // this format rule and the uniqueness check both see the
+            // same value the row will actually be saved with.
+            'template_code' => ['nullable', 'string', 'max:100', 'regex:/^[A-Z0-9_]+$/', Rule::unique('message_templates', 'template_code')],
             ...$this->variablesSchemaRules(),
         ]);
 
@@ -391,6 +409,10 @@ class MessageTemplateController extends Controller
         $status = $targetAccount
             ? $this->templateService->resolveCreationStatus($user, $targetAccount)
             : 'pending'; // global -- Super Admin only, per the Agent guard above.
+
+        if (empty($data['template_code'])) {
+            $data['template_code'] = MessageTemplate::generateTemplateCode($data['title']);
+        }
 
         $template = MessageTemplate::create([
             ...$data,
@@ -426,6 +448,8 @@ class MessageTemplateController extends Controller
             $this->assertAgentOwnsTemplate($agentAccount, $template);
         }
 
+        $this->normalizeTemplateCode($request);
+
         $data = $request->validate([
             'title' => ['sometimes', 'string', 'max:255'],
             'industry_type' => ['sometimes', 'nullable', 'string', 'max:100'],
@@ -435,8 +459,20 @@ class MessageTemplateController extends Controller
             // store() above.
             'header_type' => ['sometimes', 'string', Rule::in(MessageTemplate::HEADER_TYPES)],
             'header_media_url' => ['sometimes', 'nullable', 'string', 'max:2048', 'url'],
+            // Developer API: unique `template_code` -- same format rule
+            // as store(), ignoring this template's own row so re-saving
+            // its existing code doesn't 422 against itself.
+            'template_code' => ['sometimes', 'nullable', 'string', 'max:100', 'regex:/^[A-Z0-9_]+$/', Rule::unique('message_templates', 'template_code')->ignore($template->id)],
             ...$this->variablesSchemaRules(prefix: 'sometimes'),
         ]);
+
+        // Clearing the code (explicitly sent blank) re-derives one from
+        // the template's title rather than leaving it null -- an
+        // approved template with no template_code could never be
+        // reached by the Developer API again.
+        if (array_key_exists('template_code', $data) && empty($data['template_code'])) {
+            $data['template_code'] = MessageTemplate::generateTemplateCode($data['title'] ?? $template->title, ignoreId: $template->id);
+        }
 
         // Switching a template back to 'text' drops any previously-set
         // media URL rather than leaving it stale -- MessageTemplate::
@@ -602,6 +638,30 @@ class MessageTemplateController extends Controller
             $template->account_id === $agentAccount->id || $template->account?->agent_id === $agentAccount->id,
             404
         );
+    }
+
+    /**
+     * Developer API: unique `template_code` -- upper-cases and trims
+     * whatever the caller sent (if anything) BEFORE validate() runs, so
+     * the format regex and the uniqueness check both see the exact
+     * value the row will be saved with, and a client that types
+     * "payment_receipt_v1" gets the same, predictable
+     * PAYMENT_RECEIPT_V1 a Super Admin typing it in upper-case would.
+     * Leaves the field alone (including leaving it absent) when it
+     * isn't present at all, so 'sometimes'/'nullable' in the rules
+     * below still behave exactly as an ordinary omitted field would.
+     */
+    private function normalizeTemplateCode(Request $request): void
+    {
+        if (! $request->has('template_code')) {
+            return;
+        }
+
+        $code = $request->input('template_code');
+
+        $request->merge([
+            'template_code' => is_string($code) ? strtoupper(trim($code)) : $code,
+        ]);
     }
 
     /**

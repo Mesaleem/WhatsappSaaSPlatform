@@ -45,6 +45,8 @@ export interface TemplateVariableSchemaField {
 
 export interface MessageTemplate {
   id: number;
+  /** Developer API: unique, human-readable lookup key for POST /api/v1/messages/send-template (e.g. PAYMENT_RECEIPT_V1). Null only on a row from before this feature existed and not yet resaved -- see the backend migration's backfill. */
+  template_code: string | null;
   account_id: number | null;
   account: { id: number; company_name: string } | null;
   industry_type: string | null;
@@ -81,6 +83,8 @@ export interface AvailableTemplate {
 
 export interface SaveMessageTemplatePayload {
   title: string;
+  /** Developer API: unique, human-readable lookup key. Omit or send empty/null to auto-generate one from `title`. */
+  template_code?: string | null;
   industry_type?: string | null;
   template_body: string;
   account_id?: number | null;
@@ -117,6 +121,8 @@ export interface SubmitTemplateRequestPayload {
 export interface MyTemplateSummary {
   id: number;
   title: string;
+  /** Developer API: unique, human-readable lookup key -- see MessageTemplate.template_code. */
+  template_code: string | null;
   industry_type: string | null;
   status: MessageTemplateStatus;
   rejection_reason: string | null;
