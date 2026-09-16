@@ -107,7 +107,17 @@ class DirectMessageDispatcher
             });
         }
 
-        $log = MessageDispatchLog::record($accountId, $source, $normalizedPhone, success: true, apiKeyId: $apiKeyId, referenceType: $messageType, messagePreview: $preview, gatewayMessageId: $result['message_id'] ?? null);
+        // [Bug fix, disclosed]: same has_media/media_url root cause as
+        // TemplateMessageDispatcher::dispatch() -- see MessageDispatchLog::
+        // record()'s own docblock. $messageType is only ever 'text' or
+        // 'media' here (see this method's own param docblock), so
+        // "not text" is an exact, not approximate, has-attachment check.
+        // $content['url'] is the caller-supplied media URL itself (see
+        // this method's own @param docblock) -- used directly rather
+        // than digging it back out of $metaData, whose shape differs
+        // per engine (qr: top-level media_url; meta: nested under
+        // {type: {link: ...}}) — see WhatsAppMediaPayloadBuilder::build().
+        $log = MessageDispatchLog::record($accountId, $source, $normalizedPhone, success: true, apiKeyId: $apiKeyId, referenceType: $messageType, messagePreview: $preview, gatewayMessageId: $result['message_id'] ?? null, hasMedia: $messageType !== 'text', mediaUrl: $messageType !== 'text' ? ($content['url'] ?? null) : null);
 
         return ['status' => 'sent', 'dispatch_log_id' => $log->id];
     }

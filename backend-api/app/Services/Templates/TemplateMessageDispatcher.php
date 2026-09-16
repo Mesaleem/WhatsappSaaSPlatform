@@ -143,9 +143,17 @@ class TemplateMessageDispatcher
             return ['status' => 'failed', 'message' => $e->getMessage()];
         }
 
+        // [Bug fix, disclosed]: resolved once and reused below for the
+        // success MessageDispatchLog::record() call's $hasMedia flag --
+        // previously this dispatcher built media metadata and actually
+        // sent the attachment, but never told the audit log a file was
+        // attached, so Message Logs' "Media Attachment" column read "No"
+        // even for a real Media Template send (see record()'s own
+        // docblock for the full root cause).
+        $mediaMetaData = self::resolveMediaMetaData($template, $account, $mediaUrl);
         $metaData = [
             'template_id' => $template->id,
-            ...self::resolveMediaMetaData($template, $account, $mediaUrl),
+            ...$mediaMetaData,
         ];
 
         $result = $driver->sendMessage($normalizedPhone, $renderedMessage, $metaData);
@@ -196,7 +204,7 @@ class TemplateMessageDispatcher
         // (the new /v1/send-message individual-recipient path) is the
         // first caller that actually reads it, to return it as this
         // endpoint's own dispatch_id.
-        $log = MessageDispatchLog::record($accountId, $source, $normalizedPhone, success: true, apiKeyId: $apiKeyId, referenceType: 'template', referenceId: $template->id, templateName: $template->title, messagePreview: $renderedMessage, gatewayMessageId: $result['message_id'] ?? null);
+        $log = MessageDispatchLog::record($accountId, $source, $normalizedPhone, success: true, apiKeyId: $apiKeyId, referenceType: 'template', referenceId: $template->id, templateName: $template->title, messagePreview: $renderedMessage, gatewayMessageId: $result['message_id'] ?? null, hasMedia: array_key_exists('media_url', $mediaMetaData), mediaUrl: $mediaMetaData['media_url'] ?? null);
 
         return ['status' => 'sent', 'rendered_message' => $renderedMessage, 'dispatch_log_id' => $log->id];
     }

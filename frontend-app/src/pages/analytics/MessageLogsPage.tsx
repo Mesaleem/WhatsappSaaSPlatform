@@ -75,9 +75,10 @@ function formatDateTime(value: string | null): string {
  * MessageLogController/`/alerts/logs` and is left untouched — see
  * MessageDispatchLogController's own docblock).
  *
- * The "Media Attachment" column will read "No" for every row today — see
- * MessageDispatchLog.has_media's docblock in types/messageLog.ts for why
- * (no dispatch pathway in this codebase can attach media yet).
+ * The "Media Attachment" column now reflects a real send-time flag --
+ * see MessageDispatchLog.has_media's docblock in types/messageLog.ts for
+ * the fix and its one remaining known gap (async Group Messaging media
+ * dispatches).
  */
 export default function MessageLogsPage() {
   const [logs, setLogs] = useState<MessageDispatchLog[]>([]);

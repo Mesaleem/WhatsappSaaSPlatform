@@ -45,13 +45,21 @@ export interface MessageDispatchLog {
   status: MessageDispatchStatus;
   error_reason: string | null;
   /**
-   * [Disclosed]: always false today — no dispatch pathway in this codebase
-   * attaches media to an outbound send yet (WhatsAppDriverInterface::
-   * sendMessage has no media parameter). This column exists so the
-   * column/badge is ready the moment that capability is built, without a
-   * second migration.
+   * [Bug fix, disclosed]: true when this send actually attached media --
+   * a Media Template (image/document header, QR/Baileys engine), a
+   * 'media' messageType on the unified Send API, or a 'media'-type
+   * chatbot auto-reply. Previously always false regardless of what was
+   * actually sent (see the backend's MessageDispatchLog::record()
+   * docblock for the root cause) -- this comment used to say no
+   * pathway could attach media at all, which had gone stale once Media
+   * Templates shipped a real media-sending path. Still always false for
+   * a queued/async Group Messaging 'media' dispatch (GroupDirectMessageDispatcher/
+   * ProcessGroupDirectMessageJob) -- that path's two-phase queued/resolved
+   * row was not part of this fix.
    */
   has_media: boolean;
+  /** [Bug fix, disclosed]: the actual file URL a media send attached -- null for a text-only send, and for a historical row from before this column existed. */
+  media_url: string | null;
   reference_type: string | null;
   reference_id: number | null;
   /** [New feature, disclosed]: written only by TemplateMessageDispatcher — null for web_ui/api payment alerts, chatbot and journey sends. */

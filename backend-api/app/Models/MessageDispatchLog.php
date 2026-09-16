@@ -22,6 +22,10 @@ class MessageDispatchLog extends Model
         'status',
         'error_reason',
         'has_media',
+        // [Bug fix, disclosed]: the actual file URL a media send
+        // attached -- see record()'s own docblock and the migration
+        // adding this column.
+        'media_url',
         'reference_type',
         'reference_id',
         'sent_at',
@@ -109,6 +113,25 @@ class MessageDispatchLog extends Model
      * truncated to PREVIEW_MAX_LENGTH here, centrally, so a caller never
      * has to remember to truncate its own outgoing text before passing
      * it in.
+     *
+     * [Bug fix, disclosed]: $hasMedia used to be hardcoded `false` here
+     * for every caller, unconditionally — so the Message Logs "Media
+     * Attachment" column read "No" even for a Media Template send that
+     * actually attached an image/PDF (confirmed: the WhatsApp message
+     * and the Baileys/QR send both carried the file; only this audit
+     * row was wrong). That hardcoding predates Media Templates
+     * (QR/Baileys-only) and was simply never revisited once that
+     * feature added a real media-sending path. Now a trailing optional
+     * param, default `false` — every pre-existing call site (payment
+     * alerts, journey, and every failure branch here) is unaffected;
+     * only TemplateMessageDispatcher::dispatch(), DirectMessageDispatcher::
+     * dispatch() (its 'media' messageType), and ChatbotEngineService's
+     * 'media'-type auto-reply pass `true`, and only on their actual
+     * successful-send call. Still NOT wired up for the async Group
+     * Messaging media path (GroupDirectMessageDispatcher's queued row /
+     * resolveGroupDispatch() below) -- disclosed, not fixed here, since
+     * that path resolves the row in a later job rather than at the same
+     * call site that knows whether media was attached.
      */
     public static function record(
         int $accountId,
@@ -122,6 +145,14 @@ class MessageDispatchLog extends Model
         ?string $templateName = null,
         ?string $messagePreview = null,
         ?string $gatewayMessageId = null,
+        bool $hasMedia = false,
+        // [Bug fix, disclosed]: the media URL itself, alongside the
+        // $hasMedia flag -- kept as a SEPARATE trailing param (not
+        // folded into $hasMedia) so a caller can still pass
+        // hasMedia: true with mediaUrl: null for a source that only
+        // ever confirms "media was attached" without the underlying
+        // URL, though every current caller supplies both together.
+        ?string $mediaUrl = null,
     ): self {
         return self::create([
             'account_id' => $accountId,
@@ -130,7 +161,8 @@ class MessageDispatchLog extends Model
             'recipient_phone' => $recipientPhone,
             'status' => $success ? 'sent' : 'failed',
             'error_reason' => $errorReason,
-            'has_media' => false,
+            'has_media' => $hasMedia,
+            'media_url' => $mediaUrl,
             'reference_type' => $referenceType,
             'reference_id' => $referenceId,
             'sent_at' => $success ? now() : null,

@@ -150,7 +150,16 @@ class ChatbotEngineService
             $locked?->refreshStatus();
         });
 
-        MessageDispatchLog::record($accountId, 'chatbot', $senderPhone, success: true, referenceType: 'chatbot_rule', referenceId: $rule->id, messagePreview: $replyText, gatewayMessageId: $result['message_id'] ?? null);
+        // [Bug fix, disclosed]: same has_media/media_url root cause as
+        // TemplateMessageDispatcher/DirectMessageDispatcher -- see
+        // MessageDispatchLog::record()'s own docblock. A 'media'-type
+        // chatbot rule (buildMediaReply() above) actually attaches a
+        // file; previously this was never reflected in the log. The
+        // URL lives in the rule's own response_payload (see this
+        // class's docblock for that shape), not in $driverMetaData --
+        // buildMediaReply() re-shapes it into Meta's own {type,
+        // <type>:{link,...}} contract before this point.
+        MessageDispatchLog::record($accountId, 'chatbot', $senderPhone, success: true, referenceType: 'chatbot_rule', referenceId: $rule->id, messagePreview: $replyText, gatewayMessageId: $result['message_id'] ?? null, hasMedia: $rule->response_type === 'media', mediaUrl: $rule->response_type === 'media' ? ($rule->response_payload['url'] ?? null) : null);
 
         return $this->log($accountId, $rule->id, $senderPhone, $incomingMessage, $replyText, 'replied');
     }
