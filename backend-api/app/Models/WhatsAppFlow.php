@@ -16,6 +16,23 @@ class WhatsAppFlow extends Model
 {
     use LogsActivity;
 
+    /**
+     * Journey Builder Table Name Fix (2026-09-16) — [Bugfix, disclosed,
+     * root cause]: this model never declared $table, so Eloquent derived
+     * one from the class name via Str::snake(Str::pluralStudly('WhatsAppFlow')),
+     * which yields 'whats_app_flows' (a word boundary is inserted before
+     * every capital, so "Whats"+"App"+"Flow(s)" -> "whats_app_flows").
+     * The creating migration (2026_09_11_200000_create_whatsapp_flows_table.php)
+     * explicitly names the table 'whatsapp_flows' (no separating
+     * underscore), so every query this model ran (JourneyBuilderPage's
+     * list/create/update/delete, WhatsAppJourneyEngine's trigger lookup)
+     * hit a table that never existed: "Base table or view not found:
+     * 1146 Table 'whats_app_flows' doesn't exist". Declaring $table
+     * explicitly points Eloquent at the table the migration actually
+     * created — no schema change, no migration needed.
+     */
+    protected $table = 'whatsapp_flows';
+
     /** IMPLEMENT: Dynamic Route Master with Super-Admin Bypass & Global Audit Tracking — module label shown in the Activity Logs UI. */
     protected string $auditModuleName = 'WhatsApp Flows';
     public const TRIGGER_TYPES = ['keyword', 'ctwa_referral', 'default'];

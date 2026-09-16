@@ -235,8 +235,41 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::middleware(['tenant.isolation', 'subscription.guard'])->group(function () {
         Route::middleware('permission:manage-roles')->group(function () {
             Route::get('/roles', [RoleController::class, 'index']);
-            Route::post('/roles', [RoleController::class, 'store']);
-            Route::put('/roles/{id}', [RoleController::class, 'update']);
+
+            // P0 Security Fix (2026-09-16) — [Bugfix, disclosed, root
+            // cause]: Spatie roles are GLOBAL (config/permission.php has
+            // no 'teams' scoping), but 'manage-roles' is a normal
+            // permission that RolePermissionSeeder also grants to the
+            // 'admin' role (Client Admin's own account-management
+            // permission set) — not just 'super_admin'. Since
+            // RoleController::store()/update() call $role->syncPermissions()
+            // directly on Role rows shared platform-wide, any Client
+            // Admin holding 'admin' could previously rename or
+            // re-permission GLOBAL roles like 'admin'/'user' themselves
+            // (every tenant's Admin/User roles at once), a cross-tenant
+            // privilege-escalation path — permission:manage-roles alone
+            // was never a sufficient gate for a global mutation, only for
+            // a per-tenant one. `role:super_admin` is this codebase's own
+            // existing, established mechanism for exactly this class of
+            // platform-global-only endpoint (already used identically for
+            // GET /admin/whatsapp/devices and the /admin/whatsapp/self-device/*
+            // group below) — reused here rather than inventing a new
+            // authorization path. Layered ON TOP of the existing
+            // permission:manage-roles gate above (not replacing it) so
+            // both must pass; Super Admin already holds 'manage-roles'
+            // (RolePermissionSeeder's PERMISSIONS constant) AND is exempt
+            // from every permission/role check anyway via
+            // AuthServiceProvider's Gate::before() bypass, so this is a
+            // pure narrowing for every other role with zero behavior
+            // change for Super Admin. GET /roles (read-only, listing
+            // roles+permissions) is deliberately left on
+            // permission:manage-roles alone — the audit finding and this
+            // fix's scope are about MUTATING global role definitions, not
+            // about who can view them.
+            Route::middleware('role:super_admin')->group(function () {
+                Route::post('/roles', [RoleController::class, 'store']);
+                Route::put('/roles/{id}', [RoleController::class, 'update']);
+            });
         });
 
         // Module 4: WhatsApp (QR engine) session management — bridges to

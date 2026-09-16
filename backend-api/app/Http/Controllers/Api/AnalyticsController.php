@@ -37,6 +37,20 @@ class AnalyticsController extends Controller
     public function summary(Request $request): JsonResponse
     {
         $account = $this->resolveAccount($request);
+
+        // Module 3 Fix (2026-09-16) - Hierarchical Analytics Rollup.
+        // $accountIds is the single source of truth every query below
+        // now filters by: null means true cross-tenant global (Super
+        // Admin, nothing selected), a 1-element array is the existing
+        // single-account behavior (byte-identical to before this task),
+        // and a 2+/0-element array is a new Agent-wide rollup. See
+        // resolveHierarchicalScope()'s own docblock below $account's
+        // returned here.
+        $hierarchicalScope = $this->resolveHierarchicalScope($request, $account);
+        $account = $hierarchicalScope['account'];
+        $accountIds = $hierarchicalScope['accountIds'];
+        $scopeLabel = $hierarchicalScope['scope'];
+
         $subscription = $account?->currentSubscription;
 
         abort_if($account && ! $subscription, 404, 'This account has no subscription yet.');
@@ -75,32 +89,45 @@ class AnalyticsController extends Controller
         $recipientTypeAvailable = $dispatchLogsAvailable && Schema::hasColumn('message_dispatch_logs', 'recipient_type');
         $resolutionCountsAvailable = $recipientTypeAvailable && Schema::hasColumn('message_dispatch_logs', 'success_count');
 
-        $costQuery = $account ? PaymentAlert::forAccount($account->id) : PaymentAlert::query();
+        $costQuery = $accountIds !== null ? PaymentAlert::whereIn('account_id', $accountIds) : PaymentAlert::query();
         $totalCost = (float) $costQuery
             ->whereBetween('created_at', [$from, $to])
             ->where('status', 'sent')
             ->sum('cost_deducted');
 
         if ($dispatchLogsAvailable) {
-            $agg = ($account ? MessageDispatchLog::forAccount($account->id) : MessageDispatchLog::query())
-                ->whereBetween('created_at', [$from, $to])
-                ->selectRaw(
-                    "SUM(CASE WHEN status = 'sent' THEN 1 ELSE 0 END) as total_sent, ".
-                    "SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as total_failed"
-                )
-                ->first();
+            // Group Messaging Undercount Fix (P0, 2026-09-16) — the
+            // row-counting aggregate that used to live here undercounted
+            // every group send, since one message_dispatch_logs row can
+            // represent an entire batch (see
+            // MessageDispatchLog::resolveGroupDispatch()'s docblock).
+            // resolveRecipientAwareTotals() is the single shared
+            // recipient_type-aware aggregation this file now uses
+            // everywhere a "how many messages were sent/failed" figure
+            // is computed, so this can never again disagree with
+            // recipient_breakdown / today_breakdown / daily_by_recipient_type
+            // below, which already used the correct logic.
+            $totals = $this->resolveRecipientAwareTotals(
+                $accountIds !== null ? MessageDispatchLog::whereIn('account_id', $accountIds) : MessageDispatchLog::query(),
+                $from,
+                $to,
+                $recipientTypeAvailable,
+                $resolutionCountsAvailable
+            );
+            $totalSent = $totals['sent'];
+            $totalFailed = $totals['failed'];
         } else {
-            $agg = ($account ? PaymentAlert::forAccount($account->id) : PaymentAlert::query())
+            $agg = ($accountIds !== null ? PaymentAlert::whereIn('account_id', $accountIds) : PaymentAlert::query())
                 ->whereBetween('created_at', [$from, $to])
                 ->selectRaw(
                     "SUM(CASE WHEN status = 'sent' THEN 1 ELSE 0 END) as total_sent, ".
                     "SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as total_failed"
                 )
                 ->first();
+            $totalSent = (int) $agg->total_sent;
+            $totalFailed = (int) $agg->total_failed;
         }
 
-        $totalSent = (int) $agg->total_sent;
-        $totalFailed = (int) $agg->total_failed;
         $attempted = $totalSent + $totalFailed;
         $deliveredRate = $attempted > 0 ? round(($totalSent / $attempted) * 100, 2) : 0.0;
 
@@ -134,16 +161,30 @@ class AnalyticsController extends Controller
         // no per-account timezone concept exists in this schema), kept
         // independent of the period-scoped $agg above since the two can
         // legitimately disagree (e.g. a 30-day period average vs. today).
-        $todayQuery = $dispatchLogsAvailable
-            ? ($account ? MessageDispatchLog::forAccount($account->id) : MessageDispatchLog::query())
-            : ($account ? PaymentAlert::forAccount($account->id) : PaymentAlert::query());
-        $todayAgg = $todayQuery
-            ->whereDate('created_at', now()->toDateString())
-            ->selectRaw(
-                "SUM(CASE WHEN status = 'sent' THEN 1 ELSE 0 END) as total_sent, ".
-                "SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as total_failed"
-            )
-            ->first();
+        // Group Messaging Undercount Fix (P0, 2026-09-16) — same
+        // recipient-aware correction as the period-scoped total above,
+        // re-windowed to just today.
+        if ($dispatchLogsAvailable) {
+            $todayTotals = $this->resolveRecipientAwareTotals(
+                $accountIds !== null ? MessageDispatchLog::whereIn('account_id', $accountIds) : MessageDispatchLog::query(),
+                now()->startOfDay(),
+                now()->endOfDay(),
+                $recipientTypeAvailable,
+                $resolutionCountsAvailable
+            );
+            $todaySent = $todayTotals['sent'];
+            $todayFailed = $todayTotals['failed'];
+        } else {
+            $todayAgg = ($accountIds !== null ? PaymentAlert::whereIn('account_id', $accountIds) : PaymentAlert::query())
+                ->whereDate('created_at', now()->toDateString())
+                ->selectRaw(
+                    "SUM(CASE WHEN status = 'sent' THEN 1 ELSE 0 END) as total_sent, ".
+                    "SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as total_failed"
+                )
+                ->first();
+            $todaySent = (int) $todayAgg->total_sent;
+            $todayFailed = (int) $todayAgg->total_failed;
+        }
 
         // Dashboard & Analytics Fix Round 2 — "Today's Group & Individual
         // Sent/Failed Breakdown". Reuses recipientTypeBreakdown() a
@@ -158,19 +199,73 @@ class AnalyticsController extends Controller
         // today_breakdown, using exactly those four literal names
         // (rather than re-shortening them to 'individual_sent' etc,
         // which would silently drop half of what was asked for).
+        // Module 2 Fix (2026-09-16) - API-level Group module protection.
+        // Mirrors the existing hasModule('contact_groups') UI gate in
+        // AuthContext, enforced here too so a direct API call (bypassing
+        // the frontend) cannot read group-specific figures for an account
+        // whose Group Messaging add-on is disabled. Global/no-account
+        // scope (Super Admin, no client selected) is treated as
+        // module-enabled - consistent with every other field in this
+        // method that already renders a true platform-wide aggregate for
+        // $account === null (recipient_breakdown, active_contact_groups).
+        // Module 4 Fix (2026-09-16, verification only, no behavior
+        // change) - $account here is ALWAYS the value resolveHierarchicalScope()
+        // returned above (the selected Client when ?client_id= was
+        // supplied, unrestricted for Super Admin), never the calling
+        // Super Admin's own account (Super Admin has none) and never a
+        // substituted Agent account. hasModuleEnabled() itself only ever
+        // reads $this (effectiveModules(), Account.php) - it takes no
+        // user/caller argument at all - so this is structurally
+        // incapable of evaluating anyone's context but the resolved
+        // $account's own. effectiveModules() DOES additionally cap a
+        // Sub-Client's own allowed_modules against its real parent
+        // Agent's allowed_modules (see that method's docblock,
+        // "Absolute Super Admin Control") - that is the CLIENT's own
+        // actual entitlement chain (a Sub-Client can never exceed what
+        // its own Agent grants it), not the calling Agent's or Super
+        // Admin's unrelated context, so it is not the bug this audit
+        // was checking for.
+        $groupModuleEnabled = $account ? $account->hasModuleEnabled('contact_groups') : true;
+
         $todayBreakdown = null;
         if ($recipientTypeAvailable) {
-            $todayRange = $this->recipientTypeBreakdown($account, now()->startOfDay(), now()->endOfDay(), $resolutionCountsAvailable);
+            $todayRange = $this->recipientTypeBreakdown($account, now()->startOfDay(), now()->endOfDay(), $resolutionCountsAvailable, $accountIds);
             $todayBreakdown = [
                 'today_individual_sent' => $todayRange['individual']['sent'],
                 'today_individual_failed' => $todayRange['individual']['failed'],
-                'today_group_sent' => $todayRange['group']['sent'],
-                'today_group_failed' => $todayRange['group']['failed'],
+                // Module 2 Fix - null (not the real figure) when Group
+                // Messaging is disabled for this account.
+                'today_group_sent' => $groupModuleEnabled ? $todayRange['group']['sent'] : null,
+                'today_group_failed' => $groupModuleEnabled ? $todayRange['group']['failed'] : null,
             ];
         }
 
+        // Module 2 Fix - same suppression applied to the period-scoped
+        // recipient breakdown before it reaches the response below.
+        $recipientBreakdown = $recipientTypeAvailable
+            ? $this->recipientTypeBreakdown($account, $from, $to, $resolutionCountsAvailable, $accountIds)
+            : null;
+        if ($recipientBreakdown && ! $groupModuleEnabled) {
+            $recipientBreakdown['group'] = null;
+        }
+
+        // Module 2 Fix - same suppression applied to the live group count.
+        $activeContactGroups = null;
+        if ($groupModuleEnabled && Schema::hasTable('contact_groups')) {
+            // Module 3 Fix (2026-09-16) - $accountIds !== null covers
+            // both the pre-existing single-account case AND the new
+            // Agent rollup case (whereIn over every id in the rollup);
+            // only a genuinely unscoped Super Admin request still gets
+            // the true platform-wide count.
+            $activeContactGroups = $accountIds !== null
+                ? ContactGroup::whereIn('account_id', $accountIds)->count()
+                : ContactGroup::count();
+        }
+
         return response()->json([
-            'scope' => $account ? 'account' : 'global',
+            // Module 3 Fix (2026-09-16) - $scopeLabel is 'account',
+            // 'agent_rollup', or 'global' - see resolveHierarchicalScope().
+            'scope' => $scopeLabel,
             'period' => ['from' => $from->toDateString(), 'to' => $to->toDateString()],
             'total_alerts_attempted' => $attempted,
             'total_sent' => $totalSent,
@@ -178,28 +273,133 @@ class AnalyticsController extends Controller
             'delivered_rate' => $deliveredRate,
             'total_cost_incurred' => number_format($totalCost, 4, '.', ''),
             'quota' => $quota,
-            'total_sent_today' => (int) $todayAgg->total_sent,
-            'total_failed_today' => (int) $todayAgg->total_failed,
+            'total_sent_today' => $todaySent,
+            'total_failed_today' => $todayFailed,
             // Dashboard & Analytics Fix Round 2. null under the same
             // self-healing condition as `recipient_breakdown` below.
             'today_breakdown' => $todayBreakdown,
             // [New feature, disclosed]: empty until message_dispatch_logs
             // exists — see sourceDistribution()'s docblock.
-            'source_distribution' => $dispatchLogsAvailable ? $this->sourceDistribution($account, $from, $to) : [],
-            // Group Messaging Phase 5 — null exactly when
+            'source_distribution' => $dispatchLogsAvailable ? $this->sourceDistribution($account, $from, $to, $accountIds) : [],
+            // Group Messaging Phase 5 - null exactly when
             // $recipientTypeAvailable is false (see setup above), same
             // "absent, not fabricated" convention 'quota' above already
             // uses for a field that isn't meaningful/available yet.
-            'recipient_breakdown' => $recipientTypeAvailable ? $this->recipientTypeBreakdown($account, $from, $to, $resolutionCountsAvailable) : null,
-            // null for the global scope (Super Admin, no client selected)
-            // — Active Contact Groups is a per-tenant concept, same
-            // reasoning as 'quota' above. Also null if the contact_groups
-            // table itself hasn't been migrated yet (Group Messaging
-            // Step 1 — still pending its own authorization).
-            'active_contact_groups' => ($account && Schema::hasTable('contact_groups'))
-                ? ContactGroup::where('account_id', $account->id)->count()
-                : null,
+            // Module 2 Fix (2026-09-16) - also null (its 'group' key,
+            // specifically) when Group Messaging is disabled for this
+            // account; see $groupModuleEnabled/$recipientBreakdown above.
+            'recipient_breakdown' => $recipientBreakdown,
+            // Super Admin Dashboard Group KPI Fix (2026-09-16) - per-tenant
+            // count when an account is selected, exactly as before; a
+            // REAL platform-wide count across every tenant when scope is
+            // global ($account === null), instead of the previous hard
+            // null. This mirrors recipient_breakdown/today_breakdown
+            // immediately above, which already compute a true global
+            // aggregate for the same $account === null case - this field
+            // was the one inconsistent holdout. Still null when the
+            // contact_groups table itself hasn't been migrated yet (Group
+            // Messaging Step 1 - still pending its own authorization), and
+            // now also null when Group Messaging is disabled for this
+            // account (Module 2 Fix, 2026-09-16 - see $groupModuleEnabled).
+            'active_contact_groups' => $activeContactGroups,
         ]);
+    }
+
+    /**
+     * Module 3 Fix (2026-09-16) - Hierarchical Analytics Rollup. Layers
+     * ?client_id= and ?agent_id= support on top of the existing
+     * ?account_id= tenant-switch TenantIsolationMiddleware/
+     * ResolvesTenantAccount::resolveAccount() already enforce, WITHOUT
+     * touching either (both are shared by controllers other than this
+     * one, so they are outside this task's Scope Lock: AnalyticsController
+     * .php ONLY).
+     *
+     * - ?agent_id=Y (Super Admin only - enforced via the is_super_admin
+     *   request attribute TenantIsolationMiddleware already sets, same
+     *   source globalSummary() below already trusts): an aggregate
+     *   rollup across every Client account owned by Agent Y. Reuses
+     *   Account::scopeAgentsOnly()/scopeOwnedByAgent() - the exact same
+     *   scopes AccountController's own existing Super-Admin ?agent_id=
+     *   filter already uses - rather than inventing a second convention
+     *   for the same relationship. Returns account=null (no single
+     *   subscription/quota exists for an aggregate, same "absent, not
+     *   fabricated" precedent 'quota' below already follows) and
+     *   accountIds=that Agent's full Client-id list (possibly empty, if
+     *   the Agent has no Clients yet - deliberately NOT treated as "no
+     *   filter" - the accountIds !== null checks throughout this file).
+     * - ?client_id=X: isolates to exactly that one Client account. Super
+     *   Admin: unrestricted, same as the existing ?account_id= override.
+     *   Any other caller (an Agent, or a plain Client/User) must own X
+     *   (X.agent_id === the caller's own account_id, read from the
+     *   agent_scope_id request attribute TenantIsolationMiddleware
+     *   already computes for every tenant.isolation-wrapped request -
+     *   the exact same attribute AccountController::callerAgentScopeId()
+     *   re-derives for the identical purpose) or this aborts 403 - the
+     *   Tenant Isolation Guard this task requires, covering both "another
+     *   Agent's client" and "an independent direct/platform client"
+     *   (agent_id null there never equals a non-null caller scope id).
+     *   403 (not the 404 TenantIsolationMiddleware/AccountController use
+     *   for the analogous cross-tenant case) is used deliberately here:
+     *   it is what this task explicitly specifies, and it matches THIS
+     *   file's own existing precedent for a role/scope authorization
+     *   failure (see globalSummary()'s abort_unless(..., 403, ...) below).
+     * - Neither param: unchanged - returns whatever resolveAccount()
+     *   already resolved, byte-for-byte as before this task (existing
+     *   ?account_id=/default-tenant behavior).
+     *
+     * @return array{account: ?Account, accountIds: ?array<int>, scope: string}
+     */
+    private function resolveHierarchicalScope(Request $request, ?Account $account): array
+    {
+        $isSuperAdmin = (bool) $request->attributes->get('is_super_admin');
+        $callerAgentScopeId = $request->attributes->get('agent_scope_id');
+
+        if ($request->filled('agent_id')) {
+            abort_unless($isSuperAdmin, 403, 'Only a Super Admin may roll up analytics by agent_id.');
+
+            $agentId = (int) $request->query('agent_id');
+            $agentAccount = Account::agentsOnly()->find($agentId);
+
+            abort_if(! $agentAccount, 404, 'The selected Agent account was not found.');
+
+            // Deliberately NOT wrapped in Account::findCached() (unlike
+            // the single-account lookups below) - this list needs to be
+            // fresh on every call so a just-added/removed Sub-Client is
+            // reflected immediately, and it is never looked up by id.
+            $accountIds = Account::ownedByAgent($agentId)->pluck('id')->all();
+
+            return ['account' => null, 'accountIds' => $accountIds, 'scope' => 'agent_rollup'];
+        }
+
+        if ($request->filled('client_id')) {
+            $clientId = (int) $request->query('client_id');
+            $clientAccount = Account::findCached($clientId);
+
+            abort_if(! $clientAccount, 404, 'The selected client account was not found.');
+
+            if (! $isSuperAdmin) {
+                // Tenant Isolation Guard: an Agent may only target a
+                // client_id that is one of ITS OWN Sub-Clients. A plain
+                // Client/User caller has $callerAgentScopeId === null
+                // (it is only ever set for an Agent - see
+                // TenantIsolationMiddleware), so this also correctly
+                // rejects a non-Agent caller trying to use client_id at
+                // all, not just an Agent targeting someone else's client.
+                abort_if(
+                    $callerAgentScopeId === null || $clientAccount->agent_id !== $callerAgentScopeId,
+                    403,
+                    'You are not authorized to view analytics for this client account.'
+                );
+            }
+
+            return ['account' => $clientAccount, 'accountIds' => [$clientAccount->id], 'scope' => 'account'];
+        }
+
+        return [
+            'account' => $account,
+            'accountIds' => $account ? [$account->id] : null,
+            'scope' => $account ? 'account' : 'global',
+        ];
     }
 
     /**
@@ -220,6 +420,14 @@ class AnalyticsController extends Controller
     public function charts(Request $request): JsonResponse
     {
         $account = $this->resolveAccount($request);
+
+        // Module 3 Fix (2026-09-16) - see summary()'s identical comment
+        // above resolveHierarchicalScope().
+        $hierarchicalScope = $this->resolveHierarchicalScope($request, $account);
+        $account = $hierarchicalScope['account'];
+        $accountIds = $hierarchicalScope['accountIds'];
+        $scopeLabel = $hierarchicalScope['scope'];
+
         $subscription = $account?->currentSubscription;
 
         $data = $request->validate([
@@ -273,44 +481,127 @@ class AnalyticsController extends Controller
         // each is checked separately from $dispatchLogsAvailable.
         $recipientTypeAvailable = $dispatchLogsAvailable && Schema::hasColumn('message_dispatch_logs', 'recipient_type');
         $resolutionCountsAvailable = $recipientTypeAvailable && Schema::hasColumn('message_dispatch_logs', 'success_count');
-        $cacheKey = 'analytics_charts_'.($account?->id ?? 'global').'_'.md5(json_encode($data)).'_'.($dispatchLogsAvailable ? 'v2' : 'v1').($recipientTypeAvailable ? 'rt' : '');
+        // Module 3 Fix (2026-09-16) - the cache key must distinguish
+        // "true global" (null), "one account" (unchanged from before this
+        // task - the same numeric id string, so existing warm caches for
+        // ordinary requests are unaffected), and "Agent rollup" (2+ or 0
+        // ids) from each other. Before this fix, an Agent rollup would
+        // have collapsed to $account?->id ?? 'global' === 'global' since
+        // $account is null for a rollup - silently colliding with, and
+        // potentially SERVING, the true platform-wide global cache entry
+        // (or another Agent's rollup) to whichever request populated the
+        // key first. Caught and fixed here as part of adding the rollup
+        // itself, not a separate/optional cleanup.
+        $scopeKeyPart = 'global';
+        if ($accountIds !== null) {
+            $scopeKeyPart = count($accountIds) === 1
+                ? (string) $accountIds[0]
+                : 'agentrollup_'.md5(implode(',', $accountIds));
+        }
+        $cacheKey = 'analytics_charts_'.$scopeKeyPart.'_'.md5(json_encode($data)).'_'.($dispatchLogsAvailable ? 'v2' : 'v1').($recipientTypeAvailable ? 'rt' : '');
 
-        return response()->json(Cache::remember($cacheKey, 60, function () use ($account, $subscription, $from, $to, $dispatchLogsAvailable, $recipientTypeAvailable, $resolutionCountsAvailable) {
+        return response()->json(Cache::remember($cacheKey, 60, function () use ($account, $accountIds, $scopeLabel, $subscription, $from, $to, $dispatchLogsAvailable, $recipientTypeAvailable, $resolutionCountsAvailable) {
             $query = $dispatchLogsAvailable
-                ? ($account ? MessageDispatchLog::forAccount($account->id) : MessageDispatchLog::query())
-                : ($account ? PaymentAlert::forAccount($account->id) : PaymentAlert::query());
+                ? ($accountIds !== null ? MessageDispatchLog::whereIn('account_id', $accountIds) : MessageDispatchLog::query())
+                : ($accountIds !== null ? PaymentAlert::whereIn('account_id', $accountIds) : PaymentAlert::query());
 
-            $rows = $query
-                ->whereBetween('created_at', [$from, $to])
-                ->selectRaw(
-                    "DATE(created_at) as bucket_date, ".
-                    "SUM(CASE WHEN status = 'sent' THEN 1 ELSE 0 END) as sent, ".
-                    "SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed"
-                )
-                ->groupBy('bucket_date')
-                ->orderBy('bucket_date')
-                ->get()
-                ->keyBy('bucket_date');
+            // Group Messaging Undercount Fix (P0, 2026-09-16) — computed
+            // BEFORE `$daily` below (moved up from its original position
+            // near the end of this closure) so the primary daily series
+            // can be derived from it directly instead of re-querying with
+            // the old row-counting aggregate. See
+            // resolveRecipientAwareTotals()'s docblock for why a group
+            // batch row can no longer be counted as "1 message" here.
+            $dailyByRecipientType = $recipientTypeAvailable
+                ? $this->dailyRecipientTypeSeries($account, $from, $to, $resolutionCountsAvailable, $accountIds)
+                : null;
 
-            $daily = [];
-            $attemptedTotal = 0;
-            $cursor = $from->copy()->startOfDay();
-            $end = $to->copy()->startOfDay();
+            if ($dailyByRecipientType) {
+                // Derived by summing the already-correct individual+group
+                // per-day figures rather than a second, row-counting
+                // query — guarantees `daily` and `daily_by_recipient_type`
+                // can never disagree (both arrays inside
+                // $dailyByRecipientType are gap-filled over the same
+                // $from..$to range in the same order, so they align
+                // index-for-index).
+                $daily = [];
+                $attemptedTotal = 0;
 
-            while ($cursor->lte($end)) {
-                $key = $cursor->toDateString();
-                $row = $rows->get($key);
-                $sent = $row ? (int) $row->sent : 0;
-                $failed = $row ? (int) $row->failed : 0;
+                foreach ($dailyByRecipientType['individual'] as $index => $individualDay) {
+                    $groupDay = $dailyByRecipientType['group'][$index];
+                    $sent = $individualDay['sent'] + $groupDay['sent'];
+                    $failed = $individualDay['failed'] + $groupDay['failed'];
 
-                $daily[] = ['date' => $key, 'sent' => $sent, 'failed' => $failed];
-                $attemptedTotal += $sent + $failed;
-                $cursor->addDay();
+                    $daily[] = ['date' => $individualDay['date'], 'sent' => $sent, 'failed' => $failed];
+                    $attemptedTotal += $sent + $failed;
+                }
+            } else {
+                // Fallback for a deployment without recipient_type yet
+                // (or the payment_alerts-only path, which has no group
+                // concept at all) — unchanged row-counting behavior.
+                $rows = $query
+                    ->whereBetween('created_at', [$from, $to])
+                    ->selectRaw(
+                        "DATE(created_at) as bucket_date, ".
+                        "SUM(CASE WHEN status = 'sent' THEN 1 ELSE 0 END) as sent, ".
+                        "SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed"
+                    )
+                    ->groupBy('bucket_date')
+                    ->orderBy('bucket_date')
+                    ->get()
+                    ->keyBy('bucket_date');
+
+                $daily = [];
+                $attemptedTotal = 0;
+                $cursor = $from->copy()->startOfDay();
+                $end = $to->copy()->startOfDay();
+
+                while ($cursor->lte($end)) {
+                    $key = $cursor->toDateString();
+                    $row = $rows->get($key);
+                    $sent = $row ? (int) $row->sent : 0;
+                    $failed = $row ? (int) $row->failed : 0;
+
+                    $daily[] = ['date' => $key, 'sent' => $sent, 'failed' => $failed];
+                    $attemptedTotal += $sent + $failed;
+                    $cursor->addDay();
+                }
             }
 
-            $engineBreakdown = $account
-                ? ($subscription ? [['engine_type' => $subscription->engine_type, 'count' => $attemptedTotal]] : [])
-                : $this->globalEngineBreakdown($from, $to);
+            // Module 2 Fix (2026-09-16) - API-level Group module
+            // protection, mirrored from summary() above. $daily itself
+            // (the combined individual+group total) is left untouched -
+            // it is an overall figure, not a group-specific one - but the
+            // per-recipient-type breakdown below is suppressed when this
+            // account's Group Messaging add-on is disabled, so a direct
+            // API call cannot read group-specific series either.
+            // Module 4 Fix (2026-09-16, verification only, no behavior
+            // change) - see summary()'s identical comment above: $account
+            // is always the resolveHierarchicalScope() result captured
+            // by this closure's use() clause, i.e. the selected Client
+            // for ?client_id=, never the caller's own context.
+            $groupModuleEnabled = $account ? $account->hasModuleEnabled('contact_groups') : true;
+            if ($dailyByRecipientType && ! $groupModuleEnabled) {
+                $dailyByRecipientType['group'] = null;
+            }
+
+            // Module 3 Fix (2026-09-16) - an Agent rollup ($account is
+            // null, $accountIds is a real list) must NOT fall through to
+            // $this->globalEngineBreakdown() - that computes a TRUE
+            // platform-wide figure across every tenant, which would leak
+            // far more than the requesting Agent's own Sub-Clients into a
+            // response labelled 'agent_rollup'. There is no single
+            // engine_type concept across multiple aggregated accounts
+            // (each Sub-Client can be on a different engine), so this
+            // follows the same "absent, not fabricated" convention
+            // 'quota' already uses above rather than guessing one.
+            if ($account) {
+                $engineBreakdown = $subscription ? [['engine_type' => $subscription->engine_type, 'count' => $attemptedTotal]] : [];
+            } elseif ($accountIds !== null) {
+                $engineBreakdown = [];
+            } else {
+                $engineBreakdown = $this->globalEngineBreakdown($from, $to);
+            }
 
             // Super Admin Dashboard Overhaul — ECG/Heartbeat chart's revenue
             // series. Platform revenue has no per-tenant equivalent (same
@@ -322,21 +613,22 @@ class AnalyticsController extends Controller
             // `invoices` migration has actually been run (disclosed in the
             // audit report) — degrades to an all-zero series rather than a
             // 500 if it hasn't.
-            $dailyRevenue = $account ? null : $this->globalDailyRevenue($from, $to);
+            // Module 3 Fix (2026-09-16) - same true-platform-data leak
+            // this method's $engineBreakdown above was just guarded
+            // against: an Agent rollup must not receive platform-wide
+            // revenue either.
+            $dailyRevenue = $accountIds !== null ? null : $this->globalDailyRevenue($from, $to);
 
             // Group Messaging Phase 5 — "Individual vs Group" toggle on
-            // the Message Pulse chart. null exactly when
-            // $recipientTypeAvailable is false, same convention as
-            // $dailyRevenue above; the pre-existing `daily` field is
-            // completely unchanged (still every recipient_type
-            // combined), so RevenuePulseChart and any other existing
-            // consumer of `daily` is unaffected.
-            $dailyByRecipientType = $recipientTypeAvailable
-                ? $this->dailyRecipientTypeSeries($account, $from, $to, $resolutionCountsAvailable)
-                : null;
-
+            // the Message Pulse chart. $dailyByRecipientType itself is
+            // computed earlier in this closure now (Group Messaging
+            // Undercount Fix, 2026-09-16) — see the comment there. null
+            // exactly when $recipientTypeAvailable is false, same
+            // convention as $dailyRevenue above.
             return [
-                'scope' => $account ? 'account' : 'global',
+                // Module 3 Fix (2026-09-16) - see summary()'s identical
+                // $scopeLabel comment above.
+                'scope' => $scopeLabel,
                 'range' => ['from' => $from->toDateString(), 'to' => $to->toDateString()],
                 'daily' => $daily,
                 'engine_breakdown' => $engineBreakdown,
@@ -428,6 +720,79 @@ class AnalyticsController extends Controller
     }
 
     /**
+     * Group Messaging Undercount Fix (P0, 2026-09-16) — single shared
+     * recipient_type-aware "how many messages were sent/failed" helper.
+     * Reused by every primary KPI/chart aggregate in this controller
+     * (summary()'s period + today totals, charts()'s primary daily
+     * series, computeGlobalSummary()'s platform-wide + today totals) so
+     * none of them can ever again disagree with recipient_breakdown /
+     * today_breakdown / daily_by_recipient_type below, which already
+     * used this exact sent/failed definition.
+     *
+     * Individual rows: one row = one attempted send, counted by status
+     * (unchanged from this file's original, pre-Group-Messaging
+     * behavior).
+     *
+     * Group rows: one row = an entire batch (see
+     * MessageDispatchLog::resolveGroupDispatch()'s docblock for why), so
+     * counting rows would report "1" regardless of recipient count —
+     * this sums success_count/failure_count instead, exactly like
+     * recipientTypeBreakdown() below. Falls back to counting rows for
+     * group data too when $resolutionCountsAvailable is false (the
+     * success_count/failure_count migration hasn't run yet) — same
+     * disclosed, self-healing approximation as recipientTypeBreakdown().
+     *
+     * $from/$to are both nullable together: pass null/null for an
+     * all-time aggregate (computeGlobalSummary()'s platform-wide total,
+     * which has no date range of its own), or a real Carbon pair to
+     * scope by period exactly like every other date-ranged query in this
+     * file.
+     *
+     * @return array{sent: int, failed: int}
+     */
+    private function resolveRecipientAwareTotals($baseQuery, ?Carbon $from, ?Carbon $to, bool $recipientTypeAvailable, bool $resolutionCountsAvailable): array
+    {
+        $scoped = clone $baseQuery;
+
+        if ($from && $to) {
+            $scoped->whereBetween('created_at', [$from, $to]);
+        }
+
+        if (! $recipientTypeAvailable) {
+            $agg = (clone $scoped)
+                ->selectRaw(
+                    "SUM(CASE WHEN status = 'sent' THEN 1 ELSE 0 END) as sent, ".
+                    "SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed"
+                )
+                ->first();
+
+            return ['sent' => (int) $agg->sent, 'failed' => (int) $agg->failed];
+        }
+
+        $individual = (clone $scoped)
+            ->where('recipient_type', 'individual')
+            ->selectRaw(
+                "SUM(CASE WHEN status = 'sent' THEN 1 ELSE 0 END) as sent, ".
+                "SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed"
+            )
+            ->first();
+
+        $groupSelect = $resolutionCountsAvailable
+            ? "SUM(COALESCE(success_count, 0)) as sent, SUM(COALESCE(failure_count, 0)) as failed"
+            : "SUM(CASE WHEN status = 'sent' THEN 1 ELSE 0 END) as sent, SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed";
+
+        $group = (clone $scoped)
+            ->where('recipient_type', 'group')
+            ->selectRaw($groupSelect)
+            ->first();
+
+        return [
+            'sent' => (int) $individual->sent + (int) $group->sent,
+            'failed' => (int) $individual->failed + (int) $group->failed,
+        ];
+    }
+
+    /**
      * Group Messaging Phase 5 — Dashboard Analytics Upgrade. Splits the
      * summary()-level total_sent/total_failed figures by recipient_type.
      *
@@ -449,9 +814,15 @@ class AnalyticsController extends Controller
      *   group: array{sent: int, failed: int, queued_batches: int, recipient_count: int},
      * }
      */
-    private function recipientTypeBreakdown(?Account $account, Carbon $from, Carbon $to, bool $resolutionCountsAvailable): array
+    private function recipientTypeBreakdown(?Account $account, Carbon $from, Carbon $to, bool $resolutionCountsAvailable, ?array $accountIds = null): array
     {
-        $base = $account ? MessageDispatchLog::forAccount($account->id) : MessageDispatchLog::query();
+        // Module 3 Fix (2026-09-16) - $accountIds, when passed, takes
+        // priority over $account (which is null for an Agent rollup,
+        // where there is no single Account to key off) but is otherwise
+        // just [$account->id] - see resolveHierarchicalScope().
+        $base = $accountIds !== null
+            ? MessageDispatchLog::whereIn('account_id', $accountIds)
+            : ($account ? MessageDispatchLog::forAccount($account->id) : MessageDispatchLog::query());
 
         $individual = (clone $base)
             ->where('recipient_type', 'individual')
@@ -497,9 +868,13 @@ class AnalyticsController extends Controller
      *   group: list<array{date: string, sent: int, failed: int}>,
      * }
      */
-    private function dailyRecipientTypeSeries(?Account $account, Carbon $from, Carbon $to, bool $resolutionCountsAvailable): array
+    private function dailyRecipientTypeSeries(?Account $account, Carbon $from, Carbon $to, bool $resolutionCountsAvailable, ?array $accountIds = null): array
     {
-        $base = $account ? MessageDispatchLog::forAccount($account->id) : MessageDispatchLog::query();
+        // Module 3 Fix (2026-09-16) - see recipientTypeBreakdown()'s
+        // identical comment above.
+        $base = $accountIds !== null
+            ? MessageDispatchLog::whereIn('account_id', $accountIds)
+            : ($account ? MessageDispatchLog::forAccount($account->id) : MessageDispatchLog::query());
 
         $individualRows = (clone $base)
             ->where('recipient_type', 'individual')
@@ -557,9 +932,11 @@ class AnalyticsController extends Controller
      *
      * @return list<array{source: string, count: int, percent: float}>
      */
-    private function sourceDistribution(?Account $account, Carbon $from, Carbon $to): array
+    private function sourceDistribution(?Account $account, Carbon $from, Carbon $to, ?array $accountIds = null): array
     {
-        $counts = ($account ? MessageDispatchLog::forAccount($account->id) : MessageDispatchLog::query())
+        // Module 3 Fix (2026-09-16) - see recipientTypeBreakdown()'s
+        // identical comment above.
+        $counts = ($accountIds !== null ? MessageDispatchLog::whereIn('account_id', $accountIds) : MessageDispatchLog::query())
             ->whereBetween('created_at', [$from, $to])
             ->selectRaw('source, count(*) as count')
             ->groupBy('source')
@@ -654,18 +1031,34 @@ class AnalyticsController extends Controller
         // summary()/charts() above — see summary()'s docblock for the
         // full reasoning.
         $dispatchLogsAvailable = Schema::hasTable('message_dispatch_logs');
-        $agg = $dispatchLogsAvailable
-            ? MessageDispatchLog::selectRaw(
-                "SUM(CASE WHEN status = 'sent' THEN 1 ELSE 0 END) as total_sent, ".
-                "SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as total_failed"
-            )->first()
-            : PaymentAlert::selectRaw(
+        // Group Messaging Undercount Fix (P0, 2026-09-16) — same two
+        // independent guards summary()/charts() already compute, added
+        // here so the platform-wide KPI can use the same
+        // resolveRecipientAwareTotals() aggregation instead of the
+        // row-counting SUM(CASE...) that used to live here (undercounted
+        // every group batch platform-wide, not just per-tenant).
+        $recipientTypeAvailable = $dispatchLogsAvailable && Schema::hasColumn('message_dispatch_logs', 'recipient_type');
+        $resolutionCountsAvailable = $recipientTypeAvailable && Schema::hasColumn('message_dispatch_logs', 'success_count');
+
+        if ($dispatchLogsAvailable) {
+            $totals = $this->resolveRecipientAwareTotals(
+                MessageDispatchLog::query(),
+                null,
+                null,
+                $recipientTypeAvailable,
+                $resolutionCountsAvailable
+            );
+            $totalSent = $totals['sent'];
+            $totalFailed = $totals['failed'];
+        } else {
+            $agg = PaymentAlert::selectRaw(
                 "SUM(CASE WHEN status = 'sent' THEN 1 ELSE 0 END) as total_sent, ".
                 "SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as total_failed"
             )->first();
+            $totalSent = (int) $agg->total_sent;
+            $totalFailed = (int) $agg->total_failed;
+        }
 
-        $totalSent = (int) $agg->total_sent;
-        $totalFailed = (int) $agg->total_failed;
         $attempted = $totalSent + $totalFailed;
         $globalSuccessRate = $attempted > 0 ? round(($totalSent / $attempted) * 100, 2) : 0.0;
 
@@ -676,13 +1069,29 @@ class AnalyticsController extends Controller
         // timezone, matching every other today()/now() call in this
         // controller — there is no per-account timezone concept in this
         // schema to do better than that).
-        $todayAgg = ($dispatchLogsAvailable ? MessageDispatchLog::query() : PaymentAlert::query())
-            ->whereDate('created_at', now()->toDateString())
-            ->selectRaw(
-                "SUM(CASE WHEN status = 'sent' THEN 1 ELSE 0 END) as total_sent, ".
-                "SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as total_failed"
-            )
-            ->first();
+        // Group Messaging Undercount Fix (P0, 2026-09-16) — same
+        // recipient-aware correction as the all-time total above.
+        if ($dispatchLogsAvailable) {
+            $todayTotals = $this->resolveRecipientAwareTotals(
+                MessageDispatchLog::query(),
+                now()->startOfDay(),
+                now()->endOfDay(),
+                $recipientTypeAvailable,
+                $resolutionCountsAvailable
+            );
+            $todaySent = $todayTotals['sent'];
+            $todayFailed = $todayTotals['failed'];
+        } else {
+            $todayAgg = PaymentAlert::query()
+                ->whereDate('created_at', now()->toDateString())
+                ->selectRaw(
+                    "SUM(CASE WHEN status = 'sent' THEN 1 ELSE 0 END) as total_sent, ".
+                    "SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as total_failed"
+                )
+                ->first();
+            $todaySent = (int) $todayAgg->total_sent;
+            $todayFailed = (int) $todayAgg->total_failed;
+        }
 
         // Mirrors AccountController::expiringSoon()'s exact window/status
         // rule (active subscriptions expiring within the next 7 days) —
@@ -762,8 +1171,8 @@ class AnalyticsController extends Controller
             'total_messages_failed' => $totalFailed,
             'global_success_rate' => $globalSuccessRate,
             'active_whatsapp_engines' => $activeEngines,
-            'total_messages_sent_today' => (int) $todayAgg->total_sent,
-            'total_messages_failed_today' => (int) $todayAgg->total_failed,
+            'total_messages_sent_today' => $todaySent,
+            'total_messages_failed_today' => $todayFailed,
             'expiring_in_7_days_count' => $expiringIn7Days,
             'total_platform_revenue' => number_format($totalPlatformRevenue, 2, '.', ''),
             'current_month_revenue' => number_format($currentMonthRevenue, 2, '.', ''),

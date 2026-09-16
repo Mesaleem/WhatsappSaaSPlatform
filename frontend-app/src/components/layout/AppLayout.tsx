@@ -231,6 +231,30 @@ const NAV_ITEMS: NavItem[] = [
   { label: 'Notifications', to: '/notifications', icon: Megaphone, tint: NAV_TINTS.chatbot, permission: 'manage-notifications', requiresModule: 'notifications' },
 ];
 
+/**
+ * Sidebar Dual-Highlight Fix (2026-09-16) — [Bugfix, disclosed, root
+ * cause]: react-router's <NavLink> without `end` treats ANY pathname
+ * that starts with its own `to` as active, including a deeper nested
+ * route. 'Chatbot Rules' (`/chatbot`) and 'Journey Builder'
+ * (`/chatbot/journeys`) are the one pair in NAV_ITEMS where this
+ * actually collides — visiting Journey Builder made BOTH items light up,
+ * since `/chatbot/journeys` starts with `/chatbot`. `resolvePageTitle`
+ * below already avoids this exact trap via "longest matching prefix
+ * wins"; the sidebar's `end` prop had no equivalent, so this gives it
+ * one: true whenever some OTHER nav item is itself a deeper path under
+ * this one (`other.to` starts with `${to}/`), which forces an exact-path
+ * match for a route that would otherwise swallow its own child route's
+ * highlight. Computed once here (NAV_ITEMS is a fixed module-level
+ * constant, not per-render state) rather than inline in the JSX below.
+ * No other pair in NAV_ITEMS is nested today, so this is a no-op change
+ * in behavior for every item except Chatbot Rules; it also self-heals
+ * for any future nav item added under an existing one, instead of
+ * needing another one-off `to === '/chatbot'` special case.
+ */
+function hasNestedSibling(to: string): boolean {
+  return NAV_ITEMS.some((other) => other.to !== to && other.to.startsWith(`${to}/`));
+}
+
 function isNavItemVisible(
   item: NavItem,
   opts: {
@@ -340,7 +364,7 @@ export default function AppLayout() {
             <NavLink
               key={`${item.to}::${item.label}`}
               to={item.to}
-              end={item.to === '/'}
+              end={item.to === '/' || hasNestedSibling(item.to)}
               className={({ isActive }) =>
                 `flex items-center gap-3 rounded-xl px-2.5 py-2 text-sm font-medium transition ${
                   isActive ? 'font-semibold text-white' : 'hover:bg-[#FAFAFF]'

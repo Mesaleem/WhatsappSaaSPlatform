@@ -12,6 +12,19 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  */
 class WhatsAppFlowSession extends Model
 {
+    /**
+     * Journey Builder Table Name Fix (2026-09-16) — same root cause as
+     * WhatsAppFlow::$table above: Eloquent's default derivation of
+     * 'WhatsAppFlowSession' -> 'whats_app_flow_sessions' does not match
+     * the creating migration's actual table name, 'whatsapp_flow_sessions'
+     * (2026_09_11_200001_create_whatsapp_flow_sessions_table.php). Fixed
+     * for consistency and to pre-empt the identical "table doesn't
+     * exist" error the moment a journey session is created/looked up
+     * (WhatsAppJourneyEngine::findActive()) — no schema change, no
+     * migration needed.
+     */
+    protected $table = 'whatsapp_flow_sessions';
+
     public const STATUS_ACTIVE = 'active';
 
     public const STATUS_COMPLETED = 'completed';

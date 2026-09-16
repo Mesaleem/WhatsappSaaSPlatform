@@ -1,10 +1,9 @@
 import { Fragment, useCallback, useEffect, useState } from 'react';
-import { Activity, AlertCircle, ChevronDown, ChevronRight } from 'lucide-react';
+import { AlertCircle, ChevronDown, ChevronRight } from 'lucide-react';
 import activityLogService from '../../services/activityLogService';
 import accountService from '../../services/accountService';
 import type { ActivityActionType, ActivityLog, ActivityLogFilters } from '../../types/activityLog';
 import type { Account } from '../../types/account';
-import { PageHeader, PageShell } from '../../components/common/PageShell';
 import { TableCard } from '../../components/common/Card';
 import { ClearFiltersButton, Pagination, StatusFilterSelect } from '../../components/common/DataTableControls';
 import { TableSkeletonRows } from '../../components/common/Skeleton';
@@ -130,12 +129,14 @@ export default function ActivityLogsPage() {
   };
 
   return (
-    <PageShell maxWidthClassName="max-w-7xl">
-      <PageHeader
-        icon={Activity}
-        title="Activity Logs"
-        subtitle="Every Create/Edit/Delete/Toggle action performed by Agents and Clients across the platform."
-      />
+    <div className="p-6">
+      <div className="w-full space-y-6">
+        <div>
+          <h1 className="text-xl font-semibold text-slate-900">Activity Logs</h1>
+          <p className="mt-1 text-sm text-slate-500">
+            Every Create/Edit/Delete/Toggle action performed by Agents and Clients across the platform.
+          </p>
+        </div>
 
       <div className="flex flex-wrap items-center gap-2">
         <select
@@ -304,6 +305,7 @@ export default function ActivityLogsPage() {
         </table>
         <Pagination page={page} lastPage={lastPage} total={total} perPage={perPage} onPageChange={setPage} onPerPageChange={setPerPage} />
       </TableCard>
-    </PageShell>
+      </div>
+    </div>
   );
 }

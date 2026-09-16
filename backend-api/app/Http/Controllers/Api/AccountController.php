@@ -345,6 +345,26 @@ class AccountController extends Controller
             $data['agent_id'] = $data['agent_id'] ?? null;
         }
 
+        // Module 5 Fix (2026-09-16) - closes a gap this audit found: the
+        // Rule::exists('accounts','id')->where('account_type','agent')
+        // rule above only validates that agent_id POINTS AT a real
+        // Agent - it never stopped a Super Admin from ALSO submitting
+        // account_type=agent for the account being created, which would
+        // create an Agent nested under another Agent. That directly
+        // contradicts this method's own documented invariant a few lines
+        // up ("Agents do not create other Agents in this phase") and
+        // update()'s own promotion-branch comment below ("An Agent is
+        // always top-level, directly under Super Admin - never itself a
+        // Sub-Client of another Agent"). The Agent-caller and
+        // non-Super-Admin branches above can never hit this (both force
+        // account_type='client' unconditionally), so this only ever
+        // fires for a Super Admin explicitly submitting both fields.
+        abort_if(
+            $data['account_type'] === 'agent' && $data['agent_id'] !== null,
+            422,
+            'An Agent account cannot itself be assigned to a parent Agent.'
+        );
+
         // Hierarchical Module Delegation Engine (Phase 2) — an Agent can
         // never grant its new Sub-Client a module it doesn't itself hold.
         // No-op (returns $data['allowed_modules'] unchanged) for every
@@ -423,8 +443,13 @@ class AccountController extends Controller
             return $account;
         });
 
+        // Module 5 Fix (2026-09-16) - index()/show() already eager-load
+        // the agent relation; this create response didn't, so a Super
+        // Admin creating a client under an Agent had to issue a
+        // follow-up GET just to see which Agent it landed under. Same
+        // field list as index()/show() for consistency.
         return response()->json(
-            $account->load(['currentSubscription', 'owner:id,name,email,account_id']),
+            $account->load(['currentSubscription', 'owner:id,name,email,account_id', 'agent:id,company_name,account_type']),
             201
         );
     }
@@ -497,6 +522,24 @@ class AccountController extends Controller
         $isConvertingType = array_key_exists('account_type', $data) && $data['account_type'] !== $account->account_type;
         $newType = $data['account_type'] ?? $account->account_type;
 
+        // Module 5 Fix (2026-09-16) - closes the same gap as store()'s
+        // identical new guard above, for the one path store()'s
+        // equivalent can't cover: an account that is ALREADY an Agent
+        // (so $isConvertingType is false - account_type isn't changing)
+        // having its agent_id explicitly set to a real value. Left
+        // strictly narrower than the promotion branch just below on
+        // purpose: promoting a Client TO Agent silently clears a stray
+        // agent_id (the request's real intent was "make this an Agent",
+        // not "nest it"), but explicitly setting agent_id on an account
+        // that is already an Agent is deliberate input a silent
+        // override would just discard without explanation - rejecting
+        // it outright is the more honest response.
+        abort_if(
+            $newType === 'agent' && ! $isConvertingType && array_key_exists('agent_id', $data) && $data['agent_id'] !== null,
+            422,
+            'An Agent account cannot itself be assigned to a parent Agent.'
+        );
+
         if ($isConvertingType) {
             if ($newType === 'agent') {
                 // Promoting an existing Client to Agent (Reseller). An
@@ -550,7 +593,11 @@ class AccountController extends Controller
             }
         });
 
-        return response()->json($account->fresh()->load(['currentSubscription', 'owner:id,name,email,account_id']));
+        // Module 5 Fix (2026-09-16) - same consistency fix as store()'s
+        // response above - this endpoint is exactly where agent_id can
+        // change, so the response should show the resulting agent
+        // relationship without a follow-up GET.
+        return response()->json($account->fresh()->load(['currentSubscription', 'owner:id,name,email,account_id', 'agent:id,company_name,account_type']));
     }
 
     /**

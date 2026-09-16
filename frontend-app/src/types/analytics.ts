@@ -51,7 +51,12 @@ export interface AnalyticsSummary {
    * AnalyticsController::summary()'s docblock).
    */
   recipient_breakdown: RecipientTypeBreakdown | null;
-  /** null when scope === 'global' (per-tenant concept, same as `quota`), or when contact_groups isn't migrated yet. */
+  /**
+   * Super Admin Dashboard Group KPI Fix (2026-09-16) — per-tenant count
+   * when scope === 'account'; a REAL platform-wide count across every
+   * tenant when scope === 'global' (same convention recipient_breakdown
+   * above already uses). null only when contact_groups isn't migrated yet.
+   */
   active_contact_groups: number | null;
   /**
    * Dashboard & Analytics Fix Round 2 — "Today's Group & Individual

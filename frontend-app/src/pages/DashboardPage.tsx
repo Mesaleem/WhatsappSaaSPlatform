@@ -5,6 +5,8 @@ import {
   Area,
   AreaChart,
   CartesianGrid,
+  ComposedChart,
+  Line,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -144,13 +146,9 @@ function StatCard({
  */
 function DailyPulseChart() {
   const { selectedAccountId } = useTenant();
+  const { hasModule } = useAuth();
   const [charts, setCharts] = useState<AnalyticsChartsResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  // Group Messaging Phase 5 — Individual vs Group dataset toggle. Local
-  // view-only state, not persisted: the toggle only renders at all once
-  // `daily_by_recipient_type` is actually present (see below), so there
-  // is nothing to restore before that data exists anyway.
-  const [view, setView] = useState<'all' | 'individual' | 'group'>('all');
 
   const load = useCallback(async () => {
     setIsLoading(true);
@@ -168,56 +166,63 @@ function DailyPulseChart() {
     void load();
   }, [load, selectedAccountId]);
 
-  // [Disclosed]: `daily` (every recipient_type combined) stays the
-  // default series and is completely unchanged from before. The toggle
-  // itself only renders when `daily_by_recipient_type` is non-null —
-  // i.e. the backend's recipient_type/success_count columns are
-  // actually migrated (self-healing, same as every other new field on
-  // this response) — rather than gating on the viewer's own
-  // hasModule('contact_groups'), since this chart is also rendered on
-  // the Super Admin platform-wide dashboard where no single tenant's
-  // module flags apply.
+  // Message Pulse Clarity Fix (2026-09-16) — the previous "all / individual
+  // / group" toggle showed one ambiguous Sent/Failed pair at a time,
+  // leaving it unclear whether a line meant individual or group traffic.
+  // Now all four series render together with explicit labels, sourced
+  // directly from the already-correct, recipient-aware
+  // `daily_by_recipient_type` (no new calculation — see
+  // AnalyticsController::dailyRecipientTypeSeries()). Gated on
+  // hasModule('contact_groups') so an account without the Group
+  // Messaging module never sees group-derived series, matching the same
+  // gate the KPI cards above already use; Super Admin's own
+  // hasModule() always returns true (see AuthContext), so the four-series
+  // view renders unconditionally on the platform-wide dashboard too. When
+  // either condition fails, this falls back to exactly the original
+  // combined Sent/Failed area chart — zero visual change for those cases.
   const byRecipientType = charts?.daily_by_recipient_type ?? null;
-  const series =
-    view === 'individual' && byRecipientType
-      ? byRecipientType.individual
-      : view === 'group' && byRecipientType
-        ? byRecipientType.group
-        : charts?.daily ?? [];
-  const data = series.map((d) => ({ date: d.date.slice(5), Sent: d.sent, Failed: d.failed }));
+  const canShowRecipientSeries = Boolean(byRecipientType) && hasModule('contact_groups');
+
+  const recipientData = canShowRecipientSeries
+    ? byRecipientType!.individual.map((individualDay, index) => {
+        const groupDay = byRecipientType!.group[index];
+        return {
+          date: individualDay.date.slice(5),
+          'Individual Sent': individualDay.sent,
+          'Individual Failed': individualDay.failed,
+          'Group Sent': groupDay.sent,
+          'Group Failed': groupDay.failed,
+        };
+      })
+    : [];
+  const combinedData = (charts?.daily ?? []).map((d) => ({ date: d.date.slice(5), Sent: d.sent, Failed: d.failed }));
 
   return (
     <div className="rounded-2xl border bg-white p-5" style={{ borderColor: indigo.border, boxShadow: cardShadow }}>
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="font-display text-sm font-bold" style={{ color: indigo.ink }}>
-          Message Pulse — Last 7 Days
-        </p>
-        {byRecipientType && (
-          <div className="flex items-center gap-1 rounded-lg border p-0.5 text-xs" style={{ borderColor: indigo.border }}>
-            {(['all', 'individual', 'group'] as const).map((v) => (
-              <button
-                key={v}
-                type="button"
-                onClick={() => setView(v)}
-                className={`rounded-md px-2.5 py-1 font-medium capitalize transition ${
-                  view === v ? 'text-white' : 'hover:bg-slate-50'
-                }`}
-                style={view === v ? { background: '#4F46E5' } : { color: indigo.muted }}
-              >
-                {v}
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
+      <p className="font-display text-sm font-bold" style={{ color: indigo.ink }}>
+        Message Pulse — Last 7 Days
+      </p>
       <div className="mt-3 h-56">
         {isLoading ? (
           <div className="flex h-full items-center justify-center">
             <Loader2 className="h-5 w-5 animate-spin" style={{ color: indigo.muted }} />
           </div>
+        ) : canShowRecipientSeries ? (
+          <ResponsiveContainer width="100%" height="100%">
+            <ComposedChart data={recipientData}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
+              <XAxis dataKey="date" tick={{ fontSize: 11, fill: '#94a3b8' }} axisLine={false} tickLine={false} />
+              <YAxis allowDecimals={false} tick={{ fontSize: 11, fill: '#94a3b8' }} axisLine={false} tickLine={false} width={28} />
+              <Tooltip />
+              <Line type="monotone" dataKey="Individual Sent" stroke="#4F46E5" strokeWidth={2.5} dot={false} />
+              <Line type="monotone" dataKey="Individual Failed" stroke="#ef4444" strokeWidth={2} dot={false} />
+              <Line type="monotone" dataKey="Group Sent" stroke="#7C3AED" strokeWidth={2.5} strokeDasharray="6 4" dot={false} />
+              <Line type="monotone" dataKey="Group Failed" stroke="#F97316" strokeWidth={2} strokeDasharray="6 4" dot={false} />
+            </ComposedChart>
+          </ResponsiveContainer>
         ) : (
           <ResponsiveContainer width="100%" height="100%">
-            <AreaChart data={data}>
+            <AreaChart data={combinedData}>
               <defs>
                 <linearGradient id="pulseSent" x1="0" y1="0" x2="0" y2="1">
                   <stop offset="5%" stopColor="#4F46E5" stopOpacity={0.35} />
@@ -238,6 +243,22 @@ function DailyPulseChart() {
           </ResponsiveContainer>
         )}
       </div>
+      {canShowRecipientSeries && (
+        <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs" style={{ color: indigo.muted }}>
+          <span className="flex items-center gap-1.5">
+            <span className="h-0.5 w-4 rounded-full" style={{ background: '#4F46E5' }} /> Individual Sent
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span className="h-0.5 w-4 rounded-full" style={{ background: '#ef4444' }} /> Individual Failed
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span className="h-0.5 w-4 rounded-full border-t-2 border-dashed" style={{ borderColor: '#7C3AED' }} /> Group Sent
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span className="h-0.5 w-4 rounded-full border-t-2 border-dashed" style={{ borderColor: '#F97316' }} /> Group Failed
+          </span>
+        </div>
+      )}
     </div>
   );
 }
@@ -1038,7 +1059,7 @@ function TenantDashboard({ impersonatedAccountName }: { impersonatedAccountName?
 const FAILED_TINT: Tint = { bg: '#FDECEC', fg: '#DC2626' };
 
 function SuperAdminDashboard() {
-  const { user } = useAuth();
+  const { user, hasModule } = useAuth();
   const navigate = useNavigate();
 
   const [summary, setSummary] = useState<GlobalAnalyticsSummary | null>(null);
@@ -1062,6 +1083,35 @@ function SuperAdminDashboard() {
   useEffect(() => {
     void loadSummary();
   }, [loadSummary]);
+
+  // Super Admin Dashboard Group KPI Fix (2026-09-16) — computeGlobalSummary()
+  // (backing `summary`/getGlobalSummary() above) has no group-messaging
+  // fields at all. The correct, already-existing recipient-aware group
+  // figures live on GET /api/analytics/summary instead (via
+  // recipient_breakdown/today_breakdown/active_contact_groups) — calling
+  // it with no ?account_id= resolves to the same global ($account === null)
+  // scope Super Admin's platform view already uses elsewhere. Fetched
+  // independently from `summary` above so one failing doesn't block the
+  // other, matching this file's existing per-section fetch convention
+  // (see DailyPulseChart/RevenuePulseChart).
+  const [groupSummary, setGroupSummary] = useState<AnalyticsSummary | null>(null);
+  const [isLoadingGroups, setIsLoadingGroups] = useState(true);
+
+  const loadGroupSummary = useCallback(async () => {
+    setIsLoadingGroups(true);
+    try {
+      const data = await analyticsService.getSummary();
+      setGroupSummary(data);
+    } catch {
+      setGroupSummary(null);
+    } finally {
+      setIsLoadingGroups(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadGroupSummary();
+  }, [loadGroupSummary]);
 
   return (
     <div className="p-6">
@@ -1190,6 +1240,63 @@ function SuperAdminDashboard() {
             onClick={() => navigate('/analytics')}
           />
         </div>
+
+        {/*
+          Super Admin Dashboard Group KPI Fix (2026-09-16) — same
+          hasModule('contact_groups') gate TenantDashboard's own group
+          cards already use (Super Admin always passes, per
+          AuthContext.hasModule()'s own rule, so this renders
+          unconditionally for a real Super Admin — the gate is kept for
+          consistency with the rest of this codebase's module-gating
+          convention rather than because it can ever be false here).
+          Sourced from groupSummary (GET /api/analytics/summary, global
+          scope) — see the fetch above for why this is a separate call
+          from `summary`.
+        */}
+        {hasModule('contact_groups') && (
+          <div>
+            <h3 className="mb-3 font-display text-sm font-bold" style={{ color: indigo.ink }}>
+              Group Messaging
+            </h3>
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+              <StatCard
+                label="Total Groups Added"
+                value={isLoadingGroups ? '…' : String(groupSummary?.active_contact_groups ?? 0)}
+                sub="Platform-wide"
+                icon={Contact}
+                tint={NAV_TINTS.analytics}
+              />
+              <StatCard
+                label="Total Group Messages"
+                value={isLoadingGroups ? '…' : String(groupSummary?.recipient_breakdown?.group.sent ?? 0)}
+                sub="Across the platform · last 30 days"
+                icon={Users}
+                tint={NAV_TINTS.whatsapp}
+              />
+              <StatCard
+                label="Total Failed Group Messages"
+                value={isLoadingGroups ? '…' : String(groupSummary?.recipient_breakdown?.group.failed ?? 0)}
+                sub="Last 30 days"
+                icon={XCircle}
+                tint={FAILED_TINT}
+              />
+              <StatCard
+                label="Today's Group Messages"
+                value={isLoadingGroups ? '…' : String(groupSummary?.today_breakdown?.today_group_sent ?? 0)}
+                sub="Since midnight, server time"
+                icon={Users}
+                tint={NAV_TINTS.whatsapp}
+              />
+              <StatCard
+                label="Today's Failed Group Messages"
+                value={isLoadingGroups ? '…' : String(groupSummary?.today_breakdown?.today_group_failed ?? 0)}
+                sub="Since midnight, server time"
+                icon={XCircle}
+                tint={FAILED_TINT}
+              />
+            </div>
+          </div>
+        )}
 
         <DailyPulseChart />
 
