@@ -40,6 +40,22 @@ function formatRate(rate: string | null): string {
   return `₹${Number(rate).toFixed(2)}/msg`;
 }
 
+/**
+ * Wallet Visibility, disclosed: this page (shown to Super Admin as
+ * "Manage Clients" and to an Agent as "My Clients" — see AppLayout's
+ * two nav items pointing at this same route) is where an admin most
+ * directly asks "how much of what this client paid is left" and, until
+ * now, had no answer beyond raw message counts. Same
+ * used_messages * rate_per_message / (total - used) * rate_per_message
+ * formula already used in ClientBillingSummaryTable.tsx and
+ * BillingPage.tsx's own Current Plan Status card — one formula, applied
+ * everywhere a per_message subscription's usage is shown, so the three
+ * never disagree.
+ */
+function formatMoneyNum(amount: number): string {
+  return `₹${amount.toFixed(2)}`;
+}
+
 const STATUS_OPTIONS: { value: AccountStatus; label: string }[] = [
   { value: 'active', label: 'Active' },
   { value: 'suspended', label: 'Suspended' },
@@ -332,7 +348,7 @@ export default function AccountsPage() {
                       ) : sub.billing_model === 'unlimited' ? (
                         <span className="text-xs text-slate-500">Unlimited</span>
                       ) : (
-                        <div className="w-32">
+                        <div className="w-40">
                           <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
                             <div
                               className={`h-full rounded-full ${
@@ -344,6 +360,16 @@ export default function AccountsPage() {
                           <div className="mt-1 text-xs text-slate-500">
                             {used.toLocaleString()} / {allocated?.toLocaleString() ?? '—'}
                           </div>
+                          {sub.billing_model === 'per_message' && sub.rate_per_message !== null && (
+                            <div className="mt-1 space-y-0.5 text-xs text-slate-400">
+                              <div>Spent: {formatMoneyNum(used * Number(sub.rate_per_message))}</div>
+                              {allocated !== null && (
+                                <div>
+                                  Balance: {formatMoneyNum(Math.max(allocated - used, 0) * Number(sub.rate_per_message))}
+                                </div>
+                              )}
+                            </div>
+                          )}
                           {sub.status !== 'active' && (
                             <div className="text-xs font-medium capitalize text-red-600">{sub.status}</div>
                           )}

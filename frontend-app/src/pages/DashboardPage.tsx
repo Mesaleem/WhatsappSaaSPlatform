@@ -475,6 +475,29 @@ function SubscriptionHealthCard({
           </div>
         )}
 
+        {/* Wallet Visibility, disclosed: this is the Client Admin's OWN
+            view of the same Spent/Balance breakdown Super Admin/Agent see
+            in Manage Clients and Client Billing Summary — same formula
+            (used_messages * rate_per_message / (total - used) * rate),
+            computed from this card's own `subscription` prop rather than
+            a separate request. Only rendered for 'per_message' (the only
+            model with a real rate_per_message). */}
+        {subscription.billing_model === 'per_message' && subscription.rate_per_message !== null && (
+          <div className="mt-2 flex flex-wrap gap-x-4 gap-y-0.5 text-xs" style={{ color: indigo.muted }}>
+            <span>Spent: {formatINR(subscription.used_messages * Number(subscription.rate_per_message))}</span>
+            {subscription.total_allocated_messages !== null && (
+              <span>
+                Balance:{' '}
+                {formatINR(
+                  Math.max(subscription.total_allocated_messages - subscription.used_messages, 0) *
+                    Number(subscription.rate_per_message),
+                )}
+              </span>
+            )}
+            <span>Rate: {formatINR(subscription.rate_per_message)}/msg</span>
+          </div>
+        )}
+
         {canRequestTopUp && (
           <button
             onClick={(e) => {

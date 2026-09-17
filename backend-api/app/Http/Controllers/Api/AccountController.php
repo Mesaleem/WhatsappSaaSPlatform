@@ -288,7 +288,15 @@ class AccountController extends Controller
             'engine_type' => ['required', Rule::in(self::ENGINE_TYPES)],
             'billing_model' => ['required', Rule::in(self::BILLING_MODELS)],
             'rate_per_message' => ['required_if:billing_model,per_message', 'nullable', 'numeric', 'min:0'],
-            'total_allocated_messages' => ['required_if:billing_model,flat_quota,per_message', 'nullable', 'integer', 'min:1'],
+            // Per-Message Wallet Auto-Calc, disclosed: no longer required
+            // (or even honored — see the create-time assignment below) for
+            // 'per_message'. That billing model's quota is now ALWAYS
+            // server-computed as floor(price_paid / rate_per_message), so
+            // the admin-typed pair (price paid, rate) can never disagree
+            // with the message count actually granted, the way it could
+            // before this fix (e.g. ₹100 paid at ₹0.15/msg allocating only
+            // 100 messages — worth ₹15 — instead of the 666 actually paid for).
+            'total_allocated_messages' => ['required_if:billing_model,flat_quota', 'nullable', 'integer', 'min:1'],
             'price_paid' => ['required', 'numeric', 'min:0'],
             'payment_mode' => ['required', Rule::in(self::PAYMENT_MODES)],
             'starts_at' => ['required', 'date'],
@@ -430,8 +438,24 @@ class AccountController extends Controller
                 'billing_model' => $data['billing_model'],
                 'rate_per_message' => $data['billing_model'] === 'per_message'
                     ? $data['rate_per_message'] : null,
-                'total_allocated_messages' => $data['billing_model'] === 'unlimited'
-                    ? null : ($data['total_allocated_messages'] ?? null),
+                // Per-Message Wallet Auto-Calc, disclosed: for
+                // 'per_message', total_allocated_messages is ALWAYS
+                // floor(price_paid / rate_per_message) — never the raw
+                // client-submitted value (locked server-side, not just in
+                // the admin form, so a direct API call can't recreate the
+                // price/rate/quota mismatch this fix closes). Rounds DOWN:
+                // the client is never granted more messages than what was
+                // actually paid for; any fractional remainder (e.g. the
+                // ₹0.005 left over from ₹100 ÷ ₹0.15) is not redeemable,
+                // matching flat_quota/unlimited's own "exact, no
+                // rounding-in-the-client's-favor" precedent.
+                'total_allocated_messages' => match ($data['billing_model']) {
+                    'unlimited' => null,
+                    'per_message' => $data['rate_per_message'] > 0
+                        ? (int) floor($data['price_paid'] / $data['rate_per_message'])
+                        : 0,
+                    default => $data['total_allocated_messages'] ?? null,
+                },
                 'used_messages' => 0,
                 'price_paid' => $data['price_paid'],
                 'payment_mode' => $data['payment_mode'],
@@ -647,6 +671,19 @@ class AccountController extends Controller
             $data['rate_per_message'] = null;
         } elseif ($billingModel === 'flat_quota') {
             $data['rate_per_message'] = null;
+        } elseif ($billingModel === 'per_message') {
+            // Per-Message Wallet Auto-Calc, disclosed: same server-owned
+            // floor(price_paid / rate_per_message) as store() above,
+            // overriding whatever total_allocated_messages the caller
+            // sent (or omitted) — this is a PATCH-style endpoint, so
+            // "effective" rate/price fall back to the subscription's
+            // current values when this request doesn't touch that field,
+            // mirroring the rate_per_message-required check just above.
+            $effectiveRate = (float) ($data['rate_per_message'] ?? $subscription->rate_per_message);
+            $effectivePrice = (float) ($data['price_paid'] ?? $subscription->price_paid);
+            $data['total_allocated_messages'] = $effectiveRate > 0
+                ? (int) floor($effectivePrice / $effectiveRate)
+                : 0;
         }
 
         $subscription->fill($data);

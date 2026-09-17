@@ -138,6 +138,27 @@ export default function CreateAccountModal({ account, onClose, onSaved }: Create
   const [startsAt, setStartsAt] = useState(toDateInputValue(sub?.starts_at) || toDateInputValue(new Date().toISOString()));
   const [expiresAt, setExpiresAt] = useState(toDateInputValue(sub?.expires_at));
 
+  // Per-Message Wallet Auto-Calc, disclosed: Total Allocated Messages is
+  // no longer something an admin types for 'per_message' — it's always
+  // floor(Price Paid / Rate), recalculated live as either input changes,
+  // and the field itself renders read-only below (see the JSX further
+  // down) so the two numbers can never disagree the way they could
+  // before this fix. Rounds DOWN, same rationale as the backend's
+  // identical computation in AccountController::store()/
+  // updateSubscription(): the client is never granted more messages than
+  // what was actually paid for. Does nothing for 'flat_quota' (no rate to
+  // derive from — stays manually entered) or 'unlimited' (no quota at all).
+  useEffect(() => {
+    if (billingModel !== 'per_message') return;
+    const price = Number(pricePaid);
+    const rate = Number(ratePerMessage);
+    if (!pricePaid || !ratePerMessage || !Number.isFinite(price) || !Number.isFinite(rate) || rate <= 0) {
+      setTotalAllocated('');
+      return;
+    }
+    setTotalAllocated(String(Math.floor(price / rate)));
+  }, [billingModel, pricePaid, ratePerMessage]);
+
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
@@ -196,10 +217,18 @@ export default function CreateAccountModal({ account, onClose, onSaved }: Create
     if (billingModel === 'per_message' && (!ratePerMessage || Number(ratePerMessage) <= 0)) {
       return 'Enter a per-message rate greater than 0.';
     }
-    if (billingModel !== 'unlimited' && (!totalAllocated || Number(totalAllocated) <= 0)) {
-      return 'Enter the total allocated messages.';
-    }
     if (pricePaid === '' || Number(pricePaid) < 0) return 'Enter a valid price paid.';
+    if (billingModel !== 'unlimited' && (!totalAllocated || Number(totalAllocated) <= 0)) {
+      // Per-Message Wallet Auto-Calc, disclosed: for per_message this can
+      // only be empty/0 because Price Paid and/or Rate aren't valid yet
+      // (the field itself is no longer hand-typed — see the useEffect
+      // above) — checked AFTER the Price Paid check right above so that
+      // case surfaces the actually-missing input instead of a generic
+      // "enter the total" message pointing at a field the admin can't edit.
+      return billingModel === 'per_message'
+        ? 'Enter a valid Price Paid and Custom Rate so the message quota can be calculated.'
+        : 'Enter the total allocated messages.';
+    }
     if (!startsAt || !expiresAt) return 'Starts At and Expires At are both required.';
     if (new Date(expiresAt) <= new Date(startsAt)) return 'Expires At must be after Starts At.';
     return null;
@@ -730,7 +759,7 @@ export default function CreateAccountModal({ account, onClose, onSaved }: Create
                 </Field>
               )}
 
-              {billingModel !== 'unlimited' && (
+              {billingModel === 'flat_quota' && (
                 <Field label="Total Allocated Messages" required>
                   <input
                     type="number"
@@ -739,6 +768,26 @@ export default function CreateAccountModal({ account, onClose, onSaved }: Create
                     onChange={(e) => setTotalAllocated(e.target.value)}
                     className={inputClass}
                     placeholder="5000"
+                  />
+                </Field>
+              )}
+
+              {billingModel === 'per_message' && (
+                <Field
+                  label="Total Allocated Messages"
+                  required
+                  hint={
+                    ratePerMessage && pricePaid && Number(ratePerMessage) > 0
+                      ? `Auto-calculated: ₹${pricePaid} ÷ ₹${ratePerMessage}/msg, rounded down.`
+                      : 'Auto-calculated from Price Paid ÷ Custom Rate once both are set.'
+                  }
+                >
+                  <input
+                    type="number"
+                    value={totalAllocated}
+                    readOnly
+                    disabled
+                    className={`${inputClass} cursor-not-allowed bg-slate-50 text-slate-500`}
                   />
                 </Field>
               )}
