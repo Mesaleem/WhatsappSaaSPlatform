@@ -565,7 +565,17 @@ function ChartsSection({ range, resolvedRange }: { range: ChartRange; resolvedRa
   const canShowRecipientSeries = Boolean(byRecipientType?.individual) && Boolean(byRecipientType?.group) && hasModule('contact_groups');
   const recipientChartData = canShowRecipientSeries
     ? byRecipientType!.individual.map((individualDay, index) => {
-        const groupDay = byRecipientType!.group[index];
+        // TS2531 fix, disclosed: canShowRecipientSeries already guarantees
+        // byRecipientType.group is non-null at runtime (that's the whole
+        // point of checking Boolean(byRecipientType?.group) above), but
+        // the compiler can't carry that boolean-flag narrowing through a
+        // member-expression access inside this .map() callback — hence
+        // TS2531 "Object is possibly null" on `byRecipientType!.group[index]`
+        // despite the `!` already asserting byRecipientType itself.
+        // Capturing .group in its own const the ternary's condition
+        // already makes safe, with a `?? []` fallback that's a type-level
+        // safety net only (never hit at runtime here), resolves it.
+        const groupDay = (byRecipientType!.group ?? [])[index];
         return {
           date: individualDay.date.slice(5),
           'Individual Sent': individualDay.sent,
