@@ -86,9 +86,16 @@ export default function QuotaRequestsPage() {
     setError(null);
     setSuccessMessage(null);
     try {
-      await quotaRequestService.approve(request.id);
-      // Exact text required by the spec.
-      setSuccessMessage('Extra quota added to your account. Invoice generated under Billing & Plans.');
+      const result = await quotaRequestService.approve(request.id);
+      // Exact text required by the spec, for the original flat_quota
+      // shape this page was built for; a per_message wallet top-up uses
+      // the backend's own message instead ('Top-up approved. Balance
+      // added and invoice generated.' — see QuotaRequestController::approve()).
+      setSuccessMessage(
+        request.requested_topup_amount !== null
+          ? result.message
+          : 'Extra quota added to your account. Invoice generated under Billing & Plans.',
+      );
       void load(page);
     } catch (err) {
       setError(extractMessage(err, 'Could not approve this request. Please try again.'));
@@ -102,7 +109,7 @@ export default function QuotaRequestsPage() {
       <PageHeader
         icon={Zap}
         title="Quota Top-Up Requests"
-        subtitle="Review and approve Client Admin requests for extra message quota. Approving credits the tenant's subscription and generates an invoice."
+        subtitle="Review and approve Client Admin requests for extra message quota or wallet top-ups. Approving credits the tenant's subscription and generates an invoice."
         actions={
           <button
             onClick={() => void load(page)}
@@ -144,7 +151,7 @@ export default function QuotaRequestsPage() {
             <tr className="text-left text-xs font-medium uppercase tracking-wide text-slate-500">
               <th className="px-4 py-3">Client</th>
               <th className="px-4 py-3">Requested By</th>
-              <th className="px-4 py-3">Extra Messages</th>
+              <th className="px-4 py-3">Requested</th>
               <th className="px-4 py-3">Reason</th>
               <th className="px-4 py-3">Status</th>
               <th className="px-4 py-3">Submitted</th>
@@ -168,7 +175,11 @@ export default function QuotaRequestsPage() {
                     <div className="font-medium text-slate-900">{request.requestedBy?.name ?? '—'}</div>
                     <div className="text-xs text-slate-500">{request.requestedBy?.email}</div>
                   </td>
-                  <td className="px-4 py-3 font-mono text-slate-700">{request.requested_extra_messages.toLocaleString()}</td>
+                  <td className="px-4 py-3 font-mono text-slate-700">
+                    {request.requested_topup_amount !== null
+                      ? `₹${Number(request.requested_topup_amount).toFixed(2)}`
+                      : (request.requested_extra_messages ?? 0).toLocaleString()}
+                  </td>
                   <td className="px-4 py-3 max-w-xs truncate text-slate-600" title={request.reason ?? undefined}>
                     {request.reason ?? '—'}
                   </td>

@@ -84,7 +84,7 @@ class GroupMessageDispatcher
         }
 
         if (! $account->hasActiveSubscription()) {
-            return ['status' => 'quota_exhausted', 'message' => 'This account has no active subscription, or its message quota is exhausted.'];
+            return ['status' => 'quota_exhausted', 'message' => $account->quotaExhaustedMessage()];
         }
 
         $group = ContactGroup::where('account_id', $accountId)->find($groupId);

@@ -391,6 +391,48 @@ class Account extends Model
     }
 
     /**
+     * User-facing text for every 'quota_exhausted' send failure
+     * (DirectMessageDispatcher, TemplateMessageDispatcher,
+     * GroupMessageDispatcher, GroupDirectMessageDispatcher,
+     * ExternalAlertController) — called only once hasActiveSubscription()
+     * has already returned false. Stays the original generic wording for
+     * every case except one: a 'per_message' subscription that is
+     * SPECIFICALLY quota-exhausted (not administratively suspended, not
+     * expired by date, not simply absent) gets a wallet-balance-specific
+     * message instead, since "message quota is exhausted" is a confusing
+     * way to describe "the rupee balance can no longer cover one more
+     * message at the current rate" to a per_message admin who thinks in
+     * rupees, not a message-count cap they never set directly (it's the
+     * server-computed floor(price_paid / rate) — see AccountController).
+     * Routes the caller to whichever party can act on it, mirroring
+     * QuotaRequestController's own Agent-vs-Super-Admin routing exactly.
+     */
+    public function quotaExhaustedMessage(): string
+    {
+        $subscription = $this->currentSubscription;
+
+        if (
+            $subscription
+            && $subscription->billing_model === 'per_message'
+            && $subscription->rate_per_message !== null
+            && $subscription->computeStatus() === 'exhausted'
+        ) {
+            $rate = (float) $subscription->rate_per_message;
+            $balance = max((float) $subscription->price_paid - ($rate * $subscription->used_messages), 0);
+            $reviewer = $this->agent_id !== null ? 'your Agent' : 'your Super Admin';
+
+            return sprintf(
+                'Insufficient balance: ₹%s remaining, ₹%s needed per message. Add funds or contact %s to top up.',
+                number_format($balance, 2),
+                number_format($rate, 2),
+                $reviewer
+            );
+        }
+
+        return 'This account has no active subscription, or its message quota is exhausted.';
+    }
+
+    /**
      * 3-Tier Hierarchy & Agent-Client Scope Engine (Phase 2) — Hierarchical
      * Module Delegation Engine. The full set of modules this account can
      * ACTUALLY use right now, after applying the live hierarchy cap: an

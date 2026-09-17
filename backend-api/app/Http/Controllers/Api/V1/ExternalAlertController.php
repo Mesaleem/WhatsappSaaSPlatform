@@ -42,7 +42,7 @@ class ExternalAlertController extends Controller
         // between this check and the queue worker actually processing it).
         if (! $account->hasActiveSubscription()) {
             return response()->json([
-                'message' => 'This account has no active subscription, or its message quota is exhausted.',
+                'message' => $account->quotaExhaustedMessage(),
             ], 403);
         }
 

@@ -362,12 +362,17 @@ export default function AccountsPage() {
                           </div>
                           {sub.billing_model === 'per_message' && sub.rate_per_message !== null && (
                             <div className="mt-1 space-y-0.5 text-xs text-slate-400">
+                              {/* Amount-based, not message-count-based: Balance =
+                                  price_paid - spent, so it always reconciles exactly
+                                  against what was paid. total_allocated_messages is
+                                  floor(price_paid / rate) for send-gating only, and
+                                  deriving Balance from that quota instead would leak
+                                  its floor-rounding remainder into a rupee figure the
+                                  admin reads as the literal wallet balance. */}
                               <div>Spent: {formatMoneyNum(used * Number(sub.rate_per_message))}</div>
-                              {allocated !== null && (
-                                <div>
-                                  Balance: {formatMoneyNum(Math.max(allocated - used, 0) * Number(sub.rate_per_message))}
-                                </div>
-                              )}
+                              <div>
+                                Balance: {formatMoneyNum(Math.max(Number(sub.price_paid) - used * Number(sub.rate_per_message), 0))}
+                              </div>
                             </div>
                           )}
                           {sub.status !== 'active' && (

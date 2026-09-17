@@ -218,14 +218,17 @@ class BillingController extends Controller
             // are paid as a flat price_paid regardless of usage, so
             // "amount used" has no per-message meaning for them and stays
             // null rather than a misleading 0 or price_paid). Balance is
-            // computed from the plan's own quota × rate (not price_paid
-            // minus spent) since a per_message plan's price_paid is only
-            // ever an initial top-up amount, not a running wallet ledger
-            // this schema tracks separately.
+            // price_paid minus amount used, NOT the plan's message quota
+            // × rate: total_allocated_messages is floor(price_paid /
+            // rate_per_message) (see AccountController), kept only to
+            // gate sending at a whole-message boundary — deriving the
+            // rupee Balance from that floored quota instead would leak
+            // its rounding remainder into a figure the admin reads as
+            // the account's literal remaining wallet value.
             $rate = $isPerMessage ? $sub->rate_per_message : null;
             $amountUsed = $rate !== null ? round((float) $rate * $sub->used_messages, 2) : null;
-            $amountRemaining = ($rate !== null && $sub->total_allocated_messages !== null)
-                ? round((float) $rate * max($sub->total_allocated_messages - $sub->used_messages, 0), 2)
+            $amountRemaining = $amountUsed !== null
+                ? round(max((float) $sub->price_paid - $amountUsed, 0), 2)
                 : null;
 
             return [

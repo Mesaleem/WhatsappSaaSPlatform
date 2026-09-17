@@ -52,7 +52,7 @@ class DirectMessageDispatcher
         if (! $account->hasActiveSubscription()) {
             MessageDispatchLog::record($accountId, $source, $recipientPhone, success: false, errorReason: 'No active subscription or quota exhausted.', apiKeyId: $apiKeyId, referenceType: $messageType);
 
-            return ['status' => 'quota_exhausted', 'message' => 'This account has no active subscription, or its message quota is exhausted.'];
+            return ['status' => 'quota_exhausted', 'message' => $account->quotaExhaustedMessage()];
         }
 
         if (PaymentAlertDispatcher::isWhatsAppDisconnected($account)) {

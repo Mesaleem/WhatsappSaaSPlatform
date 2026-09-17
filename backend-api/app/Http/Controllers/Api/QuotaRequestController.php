@@ -99,38 +99,58 @@ class QuotaRequestController extends Controller
         abort_if(! $subscription, 422, 'This account has no subscription to top up.');
 
         // Conditional Quota Top-Up — server-side mirror of the frontend's
-        // plan-type gate: only a flat_quota subscription has a finite
-        // total_allocated_messages to increment. 'unlimited' has nothing
-        // to top up; 'per_message' has no cap to hit in the first place.
-        if ($subscription->billing_model !== 'flat_quota') {
+        // plan-type gate. 'flat_quota' has a finite total_allocated_messages
+        // to increment directly; 'per_message' has no directly-toppable
+        // cap (its total_allocated_messages is a server-computed
+        // floor(price_paid / rate_per_message) — see AccountController)
+        // but DOES have a real rupee wallet that can run low, so it gets
+        // its own money-based request shape below. 'unlimited' has
+        // nothing to ever top up.
+        if (! in_array($subscription->billing_model, ['flat_quota', 'per_message'], true)) {
             return response()->json([
-                'message' => 'Extra quota requests are only available for Flat Quota plans.',
+                'message' => 'Top-up requests are only available for Flat Quota or Per Message plans.',
             ], 422);
         }
 
-        $data = $request->validate([
-            'requested_extra_messages' => ['required', 'integer', 'min:1', 'max:1000000'],
-            'reason' => ['nullable', 'string', 'max:2000'],
-        ]);
+        if ($subscription->billing_model === 'per_message') {
+            $data = $request->validate([
+                'requested_topup_amount' => ['required', 'numeric', 'min:1', 'max:1000000'],
+                'reason' => ['nullable', 'string', 'max:2000'],
+            ]);
 
-        $quotaRequest = QuotaRequest::create([
-            'account_id' => $account->id,
-            'requested_by' => $request->user()->id,
-            'requested_extra_messages' => $data['requested_extra_messages'],
-            'reason' => $data['reason'] ?? null,
-            'status' => 'pending',
-        ]);
+            $quotaRequest = QuotaRequest::create([
+                'account_id' => $account->id,
+                'requested_by' => $request->user()->id,
+                'requested_topup_amount' => $data['requested_topup_amount'],
+                'reason' => $data['reason'] ?? null,
+                'status' => 'pending',
+            ]);
+        } else {
+            $data = $request->validate([
+                'requested_extra_messages' => ['required', 'integer', 'min:1', 'max:1000000'],
+                'reason' => ['nullable', 'string', 'max:2000'],
+            ]);
+
+            $quotaRequest = QuotaRequest::create([
+                'account_id' => $account->id,
+                'requested_by' => $request->user()->id,
+                'requested_extra_messages' => $data['requested_extra_messages'],
+                'reason' => $data['reason'] ?? null,
+                'status' => 'pending',
+            ]);
+        }
 
         // Agent-Routed Quota Top-Up Requests — mirrors the routing
         // index()/approve() below actually enforce: an Admin under an
         // Agent (agent_id set) is told their Agent will review it; a
         // directly-onboarded Admin (agent_id null, created straight by
         // Super Admin) is told the Super Admin will, since no Agent can
-        // ever see or approve that request.
+        // ever see or approve that request. Same routing for both
+        // request shapes.
         $reviewerLabel = $account->agent_id !== null ? 'Your Agent' : 'The Super Admin';
 
         return response()->json([
-            'message' => "Quota top-up request submitted. {$reviewerLabel} will review it shortly.",
+            'message' => "Top-up request submitted. {$reviewerLabel} will review it shortly.",
             'data' => $quotaRequest,
         ], 201);
     }
@@ -195,6 +215,46 @@ class QuotaRequestController extends Controller
         abort_if($agentScopeId !== null && $account->agent_id !== $agentScopeId, 404);
 
         $subscription = $account->currentSubscription;
+
+        if ($quotaRequest->isWalletTopUp()) {
+            [$freshSubscription, $invoice] = $this->approveWalletTopUp($quotaRequest, $account, $subscription, $request);
+        } else {
+            [$freshSubscription, $invoice] = $this->approveExtraMessages($quotaRequest, $account, $subscription, $agentScopeId, $request);
+        }
+
+        return response()->json([
+            'message' => $quotaRequest->isWalletTopUp()
+                ? 'Top-up approved. Balance added and invoice generated.'
+                : 'Quota request approved. Extra quota added and invoice generated.',
+            'data' => [
+                'quota_request' => $quotaRequest->fresh(['account:id,company_name', 'requestedBy:id,name,email']),
+                'subscription' => $freshSubscription,
+                'invoice' => $invoice,
+            ],
+        ]);
+    }
+
+    /**
+     * flat_quota branch of approve() — unchanged from the original
+     * single-shape implementation, just extracted so approve() can
+     * dispatch to either this or approveWalletTopUp() below.
+     *
+     * Agent-Routed Quota Top-Up Requests: an Agent caller may only
+     * approve a request belonging to its OWN Sub-Client — enforced here,
+     * not just by index()'s list-scoping, since this endpoint is
+     * addressed directly by {id} and must not trust that the caller only
+     * ever got the id from their own scoped list. Mirrors
+     * AccountController::assertCallerCanAccessAccount()'s 404 (not 403)
+     * non-disclosure precedent for "exists but isn't yours". An Agent's
+     * approval additionally draws from the SAME agent quota pool
+     * AccountController::updateQuota() already enforces — it cannot
+     * approve a top-up that would push its Sub-Clients' combined
+     * allocation past its own subscription's total_allocated_messages.
+     *
+     * @return array{0: \App\Models\Subscription, 1: \App\Models\Invoice}
+     */
+    private function approveExtraMessages(QuotaRequest $quotaRequest, Account $account, ?\App\Models\Subscription $subscription, ?int $agentScopeId, Request $request): array
+    {
         abort_if(
             ! $subscription || $subscription->total_allocated_messages === null,
             422,
@@ -207,29 +267,13 @@ class QuotaRequestController extends Controller
             $this->quotaService->assertWithinPool($agentAccount, $newTotal, $account->id);
         }
 
-        [$freshSubscription, $invoice] = DB::transaction(function () use ($quotaRequest, $account, $subscription, $request) {
+        return DB::transaction(function () use ($quotaRequest, $account, $subscription, $request) {
             $subscription->increment('total_allocated_messages', $quotaRequest->requested_extra_messages);
 
             $amount = round($quotaRequest->requested_extra_messages * self::RATE_PER_EXTRA_MESSAGE, 2);
             $tax = round($amount * self::TAX_RATE, 2);
             $total = round($amount + $tax, 2);
-
-            // GATEWAY PLACEHOLDER (disclosed): this invoice has no real
-            // gateway transaction behind it — it is generated directly by
-            // Super Admin approval, not a checkout. payment_gateway is
-            // NOT NULL on this table, so this picks whichever gateway is
-            // actually enabled/configured (same lookup
-            // PaymentGatewayController::plans() uses), falling back to
-            // 'razorpay' as a literal placeholder if none is configured
-            // yet. See this refactor's audit report: the "Pay Invoice"
-            // action this invoice gets on BillingPage downloads its PDF —
-            // it does not launch a gateway checkout, since that would
-            // require generalizing PaymentGatewayController's plan-key-
-            // only createOrder() to accept an arbitrary existing invoice,
-            // a separate, payment-critical change out of this task's scope.
-            $gateway = PaymentGatewaySetting::enabledGatewaysCached()
-                ->first(fn (PaymentGatewaySetting $s) => $s->isFullyConfigured())
-                ?->gateway ?? 'razorpay';
+            $gateway = $this->resolveGateway();
 
             $invoice = Invoice::create([
                 'account_id' => $account->id,
@@ -241,14 +285,6 @@ class QuotaRequestController extends Controller
                 'total_amount' => $total,
                 'currency' => 'INR',
                 'payment_gateway' => $gateway,
-                // STATUS CORRECTION (disclosed): the spec says 'unpaid' /
-                // 'pending_payment' — this table's actual status enum
-                // (the invoices migration, InvoiceCreditService,
-                // PaymentGatewayController) is 'pending' | 'paid' |
-                // 'failed'. Using 'pending' keeps this row consistent
-                // with every other invoice in the table and with
-                // BillingPage's existing status badge, rather than
-                // introducing a third, incompatible status value.
                 'status' => 'pending',
             ]);
 
@@ -261,15 +297,97 @@ class QuotaRequestController extends Controller
 
             return [$subscription->fresh(), $invoice];
         });
+    }
 
-        return response()->json([
-            'message' => 'Quota request approved. Extra quota added and invoice generated.',
-            'data' => [
-                'quota_request' => $quotaRequest->fresh(['account:id,company_name', 'requestedBy:id,name,email']),
-                'subscription' => $freshSubscription,
-                'invoice' => $invoice,
-            ],
-        ]);
+    /**
+     * per_message branch of approve() — Per-Message Wallet Top-Up
+     * Requests. Unlike approveExtraMessages() above, the requested
+     * amount IS money already (not a message count needing a
+     * placeholder per-message rate), so it's charged verbatim: the
+     * invoice amount equals requested_topup_amount, plus tax. Credits
+     * the wallet by increasing price_paid (the same field
+     * AccountController::updateSubscription() treats as the running,
+     * cumulative amount paid into this subscription) and recomputes
+     * total_allocated_messages with the identical
+     * floor(price_paid / rate_per_message) formula AccountController
+     * uses, so the send-gating cap stays in lockstep with the new
+     * balance immediately, with no separate reconciliation step.
+     *
+     * No agent-pool ceiling check here (unlike approveExtraMessages()):
+     * this schema has no equivalent "Agent's own rupee pool" concept for
+     * per_message Sub-Clients — assertWithinPool() is specific to a
+     * shared message-count pool drawn from the Agent's own
+     * total_allocated_messages, which doesn't apply to money. An Agent
+     * can still only approve for its own Sub-Client, enforced by
+     * approve()'s existing agentScopeId check above.
+     *
+     * @return array{0: \App\Models\Subscription, 1: \App\Models\Invoice}
+     */
+    private function approveWalletTopUp(QuotaRequest $quotaRequest, Account $account, ?\App\Models\Subscription $subscription, Request $request): array
+    {
+        abort_if(
+            ! $subscription || $subscription->billing_model !== 'per_message' || $subscription->rate_per_message === null,
+            422,
+            'This account no longer has a Per Message subscription to top up.'
+        );
+
+        return DB::transaction(function () use ($quotaRequest, $account, $subscription, $request) {
+            $rate = (float) $subscription->rate_per_message;
+            $amount = round((float) $quotaRequest->requested_topup_amount, 2);
+            $newPricePaid = round((float) $subscription->price_paid + $amount, 2);
+
+            $subscription->price_paid = $newPricePaid;
+            $subscription->total_allocated_messages = $rate > 0 ? (int) floor($newPricePaid / $rate) : $subscription->total_allocated_messages;
+            $subscription->save();
+
+            $tax = round($amount * self::TAX_RATE, 2);
+            $total = round($amount + $tax, 2);
+            $gateway = $this->resolveGateway();
+
+            $invoice = Invoice::create([
+                'account_id' => $account->id,
+                'invoice_number' => $this->generateInvoiceNumber($account->id),
+                'plan_key' => 'quota_topup',
+                'plan_label' => "Wallet Top-Up (₹{$amount})",
+                'amount' => $amount,
+                'tax_amount' => $tax,
+                'total_amount' => $total,
+                'currency' => 'INR',
+                'payment_gateway' => $gateway,
+                'status' => 'pending',
+            ]);
+
+            $quotaRequest->forceFill([
+                'status' => 'approved',
+                'reviewed_by' => $request->user()->id,
+                'reviewed_at' => now(),
+                'invoice_id' => $invoice->id,
+            ])->save();
+
+            return [$subscription->fresh(), $invoice];
+        });
+    }
+
+    /**
+     * GATEWAY PLACEHOLDER (disclosed): shared by both approve branches.
+     * Neither invoice has a real gateway transaction behind it — each is
+     * generated directly by approval, not a checkout. payment_gateway is
+     * NOT NULL on this table, so this picks whichever gateway is
+     * actually enabled/configured (same lookup
+     * PaymentGatewayController::plans() uses), falling back to
+     * 'razorpay' as a literal placeholder if none is configured yet. See
+     * this refactor's audit report: the "Pay Invoice" action this
+     * invoice gets on BillingPage downloads its PDF — it does not launch
+     * a gateway checkout, since that would require generalizing
+     * PaymentGatewayController's plan-key-only createOrder() to accept
+     * an arbitrary existing invoice, a separate, payment-critical change
+     * out of this task's scope.
+     */
+    private function resolveGateway(): string
+    {
+        return PaymentGatewaySetting::enabledGatewaysCached()
+            ->first(fn (PaymentGatewaySetting $s) => $s->isFullyConfigured())
+            ?->gateway ?? 'razorpay';
     }
 
     /** Same format as PaymentGatewayController::generateInvoiceNumber() — kept consistent across both invoice-creating code paths. */

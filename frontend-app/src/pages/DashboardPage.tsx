@@ -424,11 +424,18 @@ function SubscriptionHealthCard({
   const barColor = percent >= 90 ? '#DC2626' : percent >= 70 ? '#D97706' : '#0E9F6E';
 
   // Conditional Quota Top-Up Button — server-mirrored gate (see
-  // QuotaRequestController::store()): only a flat_quota plan has a
-  // finite total_allocated_messages to run out of and top up.
-  // 'unlimited' has no cap; 'per_message' has no cap to hit either.
-  // Shown at 90%+ usage (spec: "reaches 90% or 100%").
-  const canRequestTopUp = subscription.billing_model === 'flat_quota' && quotaPercentUsed !== null && quotaPercentUsed >= 90;
+  // QuotaRequestController::store()): flat_quota (a finite
+  // total_allocated_messages to run out of) and per_message (a rupee
+  // wallet that can run low) both qualify; 'unlimited' never does.
+  // quotaPercentUsed is used/total_allocated_messages for BOTH models —
+  // for per_message that's used_messages / floor(price_paid / rate),
+  // which tracks wallet-percent-used closely enough that no separate
+  // rupee-based percentage is needed just to gate this button. Shown at
+  // 90%+ usage (spec: "reaches 90% or 100%").
+  const canRequestTopUp =
+    (subscription.billing_model === 'flat_quota' || subscription.billing_model === 'per_message') &&
+    quotaPercentUsed !== null &&
+    quotaPercentUsed >= 90;
 
   const handleSubmitted = (message: string) => {
     setIsModalOpen(false);
@@ -487,23 +494,28 @@ function SubscriptionHealthCard({
 
         {/* Wallet Visibility, disclosed: this is the Client Admin's OWN
             view of the same Spent/Balance breakdown Super Admin/Agent see
-            in Manage Clients and Client Billing Summary — same formula
-            (used_messages * rate_per_message / (total - used) * rate),
-            computed from this card's own `subscription` prop rather than
-            a separate request. Only rendered for 'per_message' (the only
-            model with a real rate_per_message). */}
+            in Manage Clients and Client Billing Summary. Balance is
+            amount-based (price_paid - spent), not derived from the
+            message-count quota (total_allocated_messages is
+            floor(price_paid / rate), kept for send-gating only) — deriving
+            Balance from that quota instead loses the floor-rounding
+            remainder from the rupee figure the admin reads as their
+            actual wallet balance. Computed from this card's own
+            `subscription` prop rather than a separate request. Only
+            rendered for 'per_message' (the only model with a real
+            rate_per_message). */}
         {subscription.billing_model === 'per_message' && subscription.rate_per_message !== null && (
           <div className="mt-2 flex flex-wrap gap-x-4 gap-y-0.5 text-xs" style={{ color: indigo.muted }}>
             <span>Spent: {formatINR(subscription.used_messages * Number(subscription.rate_per_message))}</span>
-            {subscription.total_allocated_messages !== null && (
-              <span>
-                Balance:{' '}
-                {formatINR(
-                  Math.max(subscription.total_allocated_messages - subscription.used_messages, 0) *
-                    Number(subscription.rate_per_message),
-                )}
-              </span>
-            )}
+            <span>
+              Balance:{' '}
+              {formatINR(
+                Math.max(
+                  Number(subscription.price_paid) - subscription.used_messages * Number(subscription.rate_per_message),
+                  0,
+                ),
+              )}
+            </span>
             <span>Rate: {formatINR(subscription.rate_per_message)}/msg</span>
           </div>
         )}
@@ -522,13 +534,17 @@ function SubscriptionHealthCard({
             style={{ background: barColor }}
           >
             <Zap className="h-3.5 w-3.5" />
-            Request Extra Quota
+            {subscription.billing_model === 'per_message' ? 'Add Funds' : 'Request Extra Quota'}
           </button>
         )}
       </Link>
 
       {isModalOpen && (
-        <QuotaTopUpModal onClose={() => setIsModalOpen(false)} onSubmitted={handleSubmitted} />
+        <QuotaTopUpModal
+          billingModel={subscription.billing_model === 'per_message' ? 'per_message' : 'flat_quota'}
+          onClose={() => setIsModalOpen(false)}
+          onSubmitted={handleSubmitted}
+        />
       )}
 
       {toast && (

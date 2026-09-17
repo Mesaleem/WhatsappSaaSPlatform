@@ -26,7 +26,10 @@ export interface QuotaRequest {
   id: number;
   account_id: number;
   requested_by: number;
-  requested_extra_messages: number;
+  /** Set for a flat_quota request; null for a per_message wallet top-up (see requested_topup_amount instead). */
+  requested_extra_messages: number | null;
+  /** Set for a per_message wallet top-up (a rupee amount); null for a flat_quota request. Exactly one of the two is ever non-null on a row. */
+  requested_topup_amount: number | null;
   reason: string | null;
   status: QuotaRequestStatus;
   reviewed_by: number | null;
@@ -46,11 +49,15 @@ export interface QuotaRequest {
   requestedBy?: QuotaRequestUserSummary;
 }
 
-/** POST /api/quota-requests/store */
-export interface CreateQuotaRequestPayload {
-  requested_extra_messages: number;
-  reason?: string;
-}
+/**
+ * POST /api/quota-requests/store — exactly one of the two amount fields
+ * is sent, matching the target subscription's billing_model
+ * (QuotaRequestController::store() rejects a request carrying the wrong
+ * one for that account's plan).
+ */
+export type CreateQuotaRequestPayload =
+  | { requested_extra_messages: number; reason?: string }
+  | { requested_topup_amount: number; reason?: string };
 
 export interface CreateQuotaRequestResponse {
   message: string;

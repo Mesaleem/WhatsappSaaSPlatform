@@ -16,6 +16,7 @@ class QuotaRequest extends Model
         'account_id',
         'requested_by',
         'requested_extra_messages',
+        'requested_topup_amount',
         'reason',
         'status',
         'reviewed_by',
@@ -27,8 +28,19 @@ class QuotaRequest extends Model
     {
         return [
             'requested_extra_messages' => 'integer',
+            // Per-Message Wallet Top-Up Requests: exactly one of this
+            // and requested_extra_messages is ever non-null on a given
+            // row (see this column's migration) -- null for a flat_quota
+            // request, set for a per_message request.
+            'requested_topup_amount' => 'decimal:2',
             'reviewed_at' => 'datetime',
         ];
+    }
+
+    /** True for a 'per_message' wallet top-up request; false for a flat_quota extra-messages request. */
+    public function isWalletTopUp(): bool
+    {
+        return $this->requested_topup_amount !== null;
     }
 
     public function account(): BelongsTo

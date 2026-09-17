@@ -75,7 +75,7 @@ class TemplateMessageDispatcher
         if (! $account->hasActiveSubscription()) {
             MessageDispatchLog::record($accountId, $source, $recipientPhone, success: false, errorReason: 'No active subscription or quota exhausted.', apiKeyId: $apiKeyId, referenceType: 'template', referenceId: $templateId);
 
-            return ['status' => 'quota_exhausted', 'message' => 'This account has no active subscription, or its message quota is exhausted.'];
+            return ['status' => 'quota_exhausted', 'message' => $account->quotaExhaustedMessage()];
         }
 
         $template = MessageTemplate::query()->approvedFor($account->id)->find($templateId);

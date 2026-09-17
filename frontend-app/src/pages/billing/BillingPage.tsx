@@ -308,7 +308,12 @@ export default function BillingPage() {
   const isPerMessage: boolean = subscription?.billing_model === ('per_message' satisfies BillingModel);
   const rate = isPerMessage && subscription?.rate_per_message != null ? Number(subscription.rate_per_message) : null;
   const amountSpent = rate !== null ? subscription!.used_messages * rate : null;
-  const amountRemaining = rate !== null && remaining !== null ? remaining * rate : null;
+  // Amount-based, not message-count-based: Balance = price_paid - spent.
+  // total_allocated_messages is floor(price_paid / rate) for send-gating
+  // only; deriving Balance from that quota instead (remaining * rate)
+  // loses the floor-rounding remainder from the rupee figure shown here.
+  const amountRemaining =
+    rate !== null && amountSpent !== null ? Math.max(Number(subscription!.price_paid) - amountSpent, 0) : null;
 
   return (
     <div className="p-6">
@@ -398,16 +403,19 @@ export default function BillingPage() {
                 </div>
               )}
               {/* Conditional Quota Top-Up Button — server-mirrored gate,
-                  same as SubscriptionHealthCard on the dashboard: only a
-                  flat_quota plan at 90%+ usage can request a top-up. */}
-              {subscription.billing_model === 'flat_quota' && quotaPercent !== null && quotaPercent >= 90 && (
+                  same as SubscriptionHealthCard on the dashboard:
+                  flat_quota (message cap) and per_message (rupee wallet)
+                  both qualify at 90%+ usage; 'unlimited' never does. */}
+              {(subscription.billing_model === 'flat_quota' || subscription.billing_model === 'per_message') &&
+                quotaPercent !== null &&
+                quotaPercent >= 90 && (
                 <div className="col-span-2 sm:col-span-4">
                   <button
                     onClick={() => setIsQuotaModalOpen(true)}
                     className="flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-indigo-700"
                   >
                     <Zap className="h-3.5 w-3.5" />
-                    Request Extra Quota
+                    {isPerMessage ? 'Add Funds' : 'Request Extra Quota'}
                   </button>
                 </div>
               )}
@@ -606,6 +614,7 @@ export default function BillingPage() {
 
       {isQuotaModalOpen && (
         <QuotaTopUpModal
+          billingModel={subscription?.billing_model === 'per_message' ? 'per_message' : 'flat_quota'}
           onClose={() => setIsQuotaModalOpen(false)}
           onSubmitted={(message) => {
             setIsQuotaModalOpen(false);
