@@ -4,11 +4,14 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Concerns\ResolvesTenantAccount;
 use App\Http\Controllers\Controller;
+use App\Http\Requests\SendBulkTemplateMessageRequest;
 use App\Http\Requests\SendTemplateMessageRequest;
 use App\Models\Account;
 use App\Models\MessageTemplate;
 use App\Models\User;
 use App\Services\PaymentAlerts\PaymentAlertDispatcher;
+use App\Services\Templates\BulkMessageCooldown;
+use App\Services\Templates\BulkMessageDispatcher;
 use App\Services\Templates\TemplateMessageDispatcher;
 use App\Services\Templates\TemplateService;
 use App\Services\WhatsApp\WhatsAppEngineFactory;
@@ -111,6 +114,11 @@ class MessageTemplateController extends Controller
         return response()->json([
             'data' => $templates->map(fn (MessageTemplate $t) => [
                 'id' => $t->id,
+                // Developer API: exposed so the Send Alert page's own
+                // Developer API Documentation box can show a real,
+                // copyable template_code in its sample JSON payload for
+                // POST /api/v1/send-message and /api/v1/messages/send-template.
+                'template_code' => $t->template_code,
                 'title' => $t->title,
                 'industry_type' => $t->industry_type,
                 'template_body' => $t->template_body,
@@ -150,6 +158,103 @@ class MessageTemplateController extends Controller
             'quota_exhausted' => response()->json(['message' => $result['message']], 403),
             default => response()->json(['message' => $result['message'] ?? 'Could not send this message.'], 422),
         };
+    }
+
+    /**
+     * POST /api/alerts/send-template-bulk -- Anti-Spam Bulk Dispatch. The
+     * Send Alert page's Individual tab calls this ONCE for a whole
+     * comma-separated/CSV-loaded batch (`recipient_phones`: string[]),
+     * instead of the old client-side loop that fired one /send-template
+     * call per number in parallel (a burst of near-simultaneous sends is
+     * exactly the fixed-cadence pattern anti-ban jitter exists to avoid).
+     *
+     * All batching/delay math (strictly 10 recipients per batch, a
+     * randomized 60-120s pause between batches, a randomized 2-4s
+     * per-message jitter within a batch) lives in
+     * BulkMessageDispatcher::dispatch(), not here -- this method only
+     * resolves the account/template and maps that dispatcher's result
+     * onto this endpoint's JSON response. It never sends anything
+     * itself and returns as soon as the jobs are written, without
+     * waiting for any of them to run (see SendWhatsAppTemplateJob's own
+     * docblock for why, and where per-recipient outcomes end up).
+     *
+     * Upfront template existence/approval check so a missing/unapproved
+     * template_id fails this one request with a single 404 instead of
+     * silently queuing N jobs that would each independently fail the
+     * exact same way.
+     */
+    public function sendBulk(SendBulkTemplateMessageRequest $request): JsonResponse
+    {
+        $account = $this->requireAccount($request, 'Select a client/tenant account to send from (pass ?account_id=).');
+
+        // Strict Bulk Messaging Limit & Tier-Based Cooldown -- checked
+        // BEFORE anything else, so an account mid-cooldown is rejected
+        // regardless of what else this request contains (a missing
+        // template, say, would otherwise return a 404 that makes it
+        // look like retrying with a different template_id might work).
+        $cooldownRemaining = BulkMessageCooldown::remainingSeconds($account->id);
+
+        if ($cooldownRemaining > 0) {
+            return response()->json([
+                'success' => false,
+                'error_code' => 'BULK_COOLDOWN_ACTIVE',
+                'message' => 'Bulk dispatch is on cooldown. Next bulk dispatch available in '.BulkMessageCooldown::formatRemaining($cooldownRemaining).'.',
+                'cooldown_remaining_seconds' => $cooldownRemaining,
+            ], 429);
+        }
+
+        $data = $request->validated();
+
+        $template = MessageTemplate::query()->approvedFor($account->id)->find($data['template_id']);
+
+        if (! $template) {
+            return response()->json(['message' => 'This template does not exist, is not approved, or is not available to this account.'], 404);
+        }
+
+        $result = BulkMessageDispatcher::dispatch(
+            $account->id,
+            $template->id,
+            $data['recipient_phones'],
+            $data['variables'] ?? [],
+            $data['media_url'] ?? null,
+        );
+
+        // Only a dispatch that actually used the full 150-recipient cap
+        // starts the cooldown -- a smaller bulk send (e.g. 20 numbers)
+        // does not. See BulkMessageCooldown's own docblock for why this
+        // account's contact_groups module flag (not a "permission" of
+        // that literal name -- there isn't one) decides the 4h-vs-6h
+        // duration.
+        if ($result['queued_count'] >= BulkMessageCooldown::MAX_RECIPIENTS_PER_BATCH) {
+            BulkMessageCooldown::lock($account);
+        }
+
+        return response()->json([
+            'message' => "{$result['queued_count']} message(s) queued with anti-spam delay protection.",
+            'queued_count' => $result['queued_count'],
+            'batch_count' => $result['batch_count'],
+            'estimated_duration_seconds' => $result['estimated_duration_seconds'],
+        ]);
+    }
+
+    /**
+     * GET /api/alerts/bulk-cooldown-status -- lets the Send Alert page
+     * show its cooldown countdown banner (and know whether to show the
+     * "hits the 6-hour cooldown" Upgrade Plan CTA) BEFORE the user ever
+     * attempts a send, not only after a blocked attempt. Read-only,
+     * side-effect-free -- never itself starts or extends a cooldown
+     * (only a completed 150-recipient sendBulk() dispatch does that).
+     */
+    public function bulkCooldownStatus(Request $request): JsonResponse
+    {
+        $account = $this->requireAccount($request, 'Select a client/tenant account first (pass ?account_id=).');
+
+        $remaining = BulkMessageCooldown::remainingSeconds($account->id);
+
+        return response()->json([
+            'on_cooldown' => $remaining > 0,
+            'cooldown_remaining_seconds' => $remaining,
+        ]);
     }
 
     /**

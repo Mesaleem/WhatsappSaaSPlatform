@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent } from 'react';
 import { Link } from 'react-router-dom';
-import { AlertTriangle, CheckCircle2, Code2, Copy, Loader2, Send, Sparkles, Users, XCircle } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Code2, Copy, Download, Loader2, Send, ShieldCheck, Sparkles, Upload, Users, XCircle } from 'lucide-react';
 import { useAuth } from '../../core/context/AuthContext';
 import { useTenant } from '../../core/context/TenantContext';
 import MyTemplatesModal from '../../components/templates/MyTemplatesModal';
@@ -10,7 +10,7 @@ import templateService from '../../services/templateService';
 import whatsappService from '../../services/whatsappService';
 import type { ContactGroup } from '../../types/contactGroup';
 import type { AvailableTemplate } from '../../types/templates';
-import { extractErrorMessage } from '../../utils/apiError';
+import { extractCooldownRemainingSeconds, extractErrorMessage } from '../../utils/apiError';
 
 /**
  * Client-side mirror of the backend's TemplateRenderer::render(), as
@@ -34,6 +34,79 @@ const inputClass =
   'mt-1.5 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100';
 
 /**
+ * Bulk Individual Recipients — Send Alert widening. Splits the
+ * Recipient Phone field's comma-separated string into individual
+ * numbers: trims whitespace, drops empty entries, keeps only
+ * plausible-looking phone strings (digits only, 7-15 of them — the
+ * server's PhoneNumberNormalizer does the real normalization; this is
+ * just enough client-side filtering that an obviously malformed entry
+ * never reaches the dispatch loop below), and dedupes while preserving
+ * first-seen order.
+ */
+function parseRecipientPhones(raw: string): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const part of raw.split(',')) {
+    const phone = part.trim();
+    if (!phone || !/^\d{7,15}$/.test(phone)) continue;
+    if (seen.has(phone)) continue;
+    seen.add(phone);
+    result.push(phone);
+  }
+  return result;
+}
+
+/**
+ * Strict Bulk Messaging Limit — must match the backend's own
+ * BulkMessageCooldown::MAX_RECIPIENTS_PER_BATCH exactly; kept as a
+ * separate constant here (not fetched) since it's a fixed business
+ * rule, not per-account config, and this lets the >150 warning render
+ * instantly as the user types/pastes rather than after a round trip.
+ */
+const MAX_BULK_RECIPIENTS = 150;
+
+/**
+ * "3h 45m" / "3h" / "45m" style remaining-time text — mirrors the
+ * backend's BulkMessageCooldown::formatRemaining() exactly, so the
+ * live client-side countdown (ticked locally, see the cooldown
+ * useEffect below) never reads differently from a fresh server value.
+ */
+function formatCooldownRemaining(seconds: number): string {
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  if (hours > 0 && minutes > 0) return `${hours}h ${minutes}m`;
+  if (hours > 0) return `${hours}h`;
+  return `${Math.max(1, minutes)}m`;
+}
+
+/**
+ * CSV Auto-Fill — reads a single "numbers" column out of an uploaded
+ * CSV. If the first row looks like a header (any cell case-insensitively
+ * matching phone/phone_number/number/mobile/recipient_phone), that
+ * column is used and the header row is skipped; otherwise every row's
+ * first column is used, so a plain single-column export with no header
+ * still works. Runs the result through parseRecipientPhones() for the
+ * same filtering/dedup rules a typed list gets, so both entry paths feed
+ * the form identically.
+ */
+function parsePhoneColumnFromCsv(text: string): string[] {
+  const lines = text
+    .split(/\r\n|\n|\r/)
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0);
+  if (lines.length === 0) return [];
+
+  const rows = lines.map((line) => line.split(',').map((cell) => cell.trim()));
+  const headerNames = ['phone', 'phone_number', 'number', 'mobile', 'recipient_phone'];
+  const headerIndex = rows[0].findIndex((cell) => headerNames.includes(cell.toLowerCase()));
+
+  const dataRows = headerIndex !== -1 ? rows.slice(1) : rows;
+  const columnIndex = headerIndex !== -1 ? headerIndex : 0;
+
+  return parseRecipientPhones(dataRows.map((row) => row[columnIndex] ?? '').join(','));
+}
+
+/**
  * Client Admin UI & Single Alert Removal: the legacy manual/static Single
  * Alert form AND the CSV Bulk Upload option are both gone — the Approved
  * Template Form (TemplateMessageTab below) is now the ONLY alert
@@ -43,6 +116,15 @@ const inputClass =
  * "Send Alert" itself is also hidden from Super Admin's sidebar
  * (AppLayout's hiddenForSuperAdmin), so this page is effectively
  * Client-Admin-only now.
+ *
+ * Bulk Individual Recipients — this is NOT a revival of the old, removed
+ * CSV Bulk Upload flow above (that was a raw/manual alert path with no
+ * template or dispatch loop). The Individual tab's Recipient Phone field
+ * now accepts a comma-separated list (typed, or auto-filled from an
+ * uploaded CSV's phone column) and the SAME Approved Template Form
+ * dispatches one internal /alerts/send-template call per number,
+ * client-side (see parseRecipientPhones()/handleSubmit() below) — the
+ * form, the endpoint, and its validation are all unchanged.
  */
 export default function SendAlertPage() {
   const { isReadOnly } = useAuth();
@@ -120,6 +202,13 @@ export default function SendAlertPage() {
  * call this same send would look like from outside the platform.
  */
 function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnly: boolean }) {
+  // Strict Bulk Messaging Limit & Tier-Based Cooldown -- "group_messaging_permission"
+  // maps to this app's existing contact_groups module flag (see the
+  // backend BulkMessageCooldown class's own docblock for why there's
+  // no separate permission by that literal name).
+  const { hasModule } = useAuth();
+  const hasGroupMessagingPermission = hasModule('contact_groups');
+
   const [templates, setTemplates] = useState<AvailableTemplate[]>([]);
   const [isLoadingTemplates, setIsLoadingTemplates] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -140,6 +229,8 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
   const [selectedGroupIds, setSelectedGroupIds] = useState<number[]>([]);
 
   const [recipientPhone, setRecipientPhone] = useState('');
+  const [csvError, setCsvError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [mediaUrl, setMediaUrl] = useState('');
   const [variables, setVariables] = useState<Record<string, string>>({});
   const [copied, setCopied] = useState(false);
@@ -147,6 +238,48 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
   const [isSending, setIsSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const [sendSuccess, setSendSuccess] = useState<string | null>(null);
+  // Anti-Spam Bulk Dispatch -- true only right after a >1-recipient
+  // send successfully enqueues (see handleSubmit's bulk branch below);
+  // drives the small persistent badge next to the ordinary sendSuccess
+  // banner, distinct from it because "queued" (this) and "sent" (the
+  // single-recipient/group paths) are different claims.
+  const [bulkQueued, setBulkQueued] = useState(false);
+
+  // Strict Bulk Messaging Limit & Tier-Based Cooldown -- null while
+  // still loading (never blocks the button on its own; the backend's
+  // own 429 guard in sendBulk() is the real safety net, same UX-only
+  // philosophy as this page's WhatsApp-disconnect check).
+  const [cooldownRemainingSeconds, setCooldownRemainingSeconds] = useState<number | null>(null);
+  const isOnCooldown = (cooldownRemainingSeconds ?? 0) > 0;
+
+  useEffect(() => {
+    let cancelled = false;
+    templateService
+      .getBulkCooldownStatus()
+      .then((res) => {
+        if (!cancelled) setCooldownRemainingSeconds(res.on_cooldown ? res.cooldown_remaining_seconds : 0);
+      })
+      .catch(() => {
+        if (!cancelled) setCooldownRemainingSeconds(0);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Live countdown -- ticks the locally-held value down once a second
+  // so the banner's "Xh Ym" text updates without re-polling the
+  // backend every second. Depends only on the boolean (not the exact
+  // number) so this effect starts exactly one interval per cooldown
+  // period instead of restarting on every tick.
+  useEffect(() => {
+    if (!isOnCooldown) return;
+    const interval = setInterval(() => {
+      setCooldownRemainingSeconds((prev) => (prev && prev > 1 ? prev - 1 : 0));
+    }, 1000);
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOnCooldown]);
 
   // Tiered Template Approval Workflow — "Request a Template" self-service
   // path (see RequestTemplateModal's own docblock for why this page is
@@ -234,6 +367,48 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
     setVariables(Object.fromEntries(tpl.variables_schema.map((f) => [f.key, ''])));
   };
 
+  const recipientPhones = useMemo(() => parseRecipientPhones(recipientPhone), [recipientPhone]);
+  const exceedsMaxRecipients = recipientPhones.length > MAX_BULK_RECIPIENTS;
+
+  const handleCsvUpload = (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = ''; // allow re-uploading the same file name back-to-back
+    if (!file) return;
+    setCsvError(null);
+    const reader = new FileReader();
+    reader.onload = () => {
+      const numbers = parsePhoneColumnFromCsv(String(reader.result ?? ''));
+      if (numbers.length === 0) {
+        setCsvError('No valid phone numbers found in this CSV.');
+        return;
+      }
+      setRecipientPhone(numbers.join(', '));
+    };
+    reader.onerror = () => setCsvError('Could not read this file.');
+    reader.readAsText(file);
+  };
+
+  /**
+   * Sample CSV Download — a minimal, one-column template
+   * (`phone` header + three example rows) matching exactly the column
+   * name parsePhoneColumnFromCsv() looks for, so a file downloaded here
+   * and immediately re-uploaded via "Upload CSV" round-trips cleanly.
+   * Built client-side (Blob + a throwaway <a download>) -- no network
+   * call, no new dependency.
+   */
+  const handleDownloadSampleCsv = () => {
+    const csvContent = 'phone\n919876543210\n919876543211\n919876543212\n';
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'sample_contacts.csv';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
   const previewText = selectedTemplate ? renderTemplatePreview(selectedTemplate.template_body, variables) : '';
 
   const sampleVariables = useMemo(() => {
@@ -257,28 +432,42 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
       // Group Messaging widening: mirrors POST /api/v1/send-message
       // (recipient_type: "group") — the only external endpoint that can
       // trigger a group send; distinct from the individual endpoint's
-      // payload below. Shows one representative group_id (the first
-      // selected, or a placeholder when none is selected yet) — sending
-      // to several groups from outside the platform means calling this
-      // endpoint once per group_id, exactly as this screen itself does
-      // internally (see handleSubmit's group branch).
+      // payload below. Shows one representative group_code (the first
+      // selected group's code, or a placeholder when none is selected
+      // yet) — sending to several groups from outside the platform means
+      // calling this endpoint once per group_code. Docs-only: this
+      // screen's own internal send (handleSubmit's group branch, below)
+      // still calls the separate internal /api/groups/{id}/send-template
+      // endpoint by numeric id, unchanged and unaffected by this
+      // external contract.
+      const selectedGroup = groups.find((g) => g.id === selectedGroupIds[0]);
       return {
-        template_id: selectedTemplate.id,
+        template_code: selectedTemplate.template_code ?? '<template_code>',
         recipient_type: 'group',
-        group_id: selectedGroupIds[0] ?? '<group_id>',
+        group_code: selectedGroup?.group_code ?? '<group_code>',
         variables: sampleVariables,
       };
     }
     return {
-      template_id: selectedTemplate.id,
-      recipient_phone: recipientPhone || '919876543210',
+      template_code: selectedTemplate.template_code ?? '<template_code>',
+      // Bulk/Comma-Separated Numbers: mirrors exactly what's actually
+      // typed/loaded above -- one number shows as a plain string
+      // (unchanged), several show as the same comma-separated format the
+      // Recipient Phone field itself accepts, so the sample always
+      // matches this screen's own input verbatim. The subtitle just
+      // below (recipientPhones.length > 1 case) states the real
+      // mechanism -- this screen still calls the endpoint once per
+      // number -- so the aggregate preview here is never presented
+      // without that clarification alongside it.
+      recipient_phone:
+        recipientPhones.length > 1 ? recipientPhones.join(', ') : recipientPhones[0] || '919876543210',
       variables: sampleVariables,
       // Optional — omit this key entirely to send text-only. If present
       // but unreachable/invalid, the server falls back to text automatically
       // rather than failing the send (see MediaUrl handling below).
       media_url: mediaUrl.trim() || 'https://example.com/invoice.pdf',
     };
-  }, [selectedTemplate, recipientType, recipientPhone, selectedGroupIds, sampleVariables, mediaUrl]);
+  }, [selectedTemplate, recipientType, recipientPhones, selectedGroupIds, groups, sampleVariables, mediaUrl]);
 
   const handleCopyPayload = async () => {
     if (!samplePayload) return;
@@ -295,13 +484,32 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
     e.preventDefault();
     setSendError(null);
     setSendSuccess(null);
+    setBulkQueued(false);
 
     if (!selectedTemplate) {
       setSendError('Select a template first.');
       return;
     }
-    if (recipientType === 'individual' && !recipientPhone.trim()) {
-      setSendError('Recipient phone is required.');
+    if (recipientType === 'individual' && recipientPhones.length === 0) {
+      setSendError('Enter at least one valid recipient phone number.');
+      return;
+    }
+    // Strict Bulk Messaging Limit -- blocked client-side before a round
+    // trip; the backend's own max:150 rule (SendBulkTemplateMessageRequest)
+    // is the real enforcement, this is purely so the user sees the exact
+    // warning immediately, not after a 422.
+    if (recipientType === 'individual' && exceedsMaxRecipients) {
+      setSendError(
+        `Maximum ${MAX_BULK_RECIPIENTS} contacts allowed per batch. For larger lists, create a Group or upgrade your plan.`,
+      );
+      return;
+    }
+    // Tier-Based Cooldown -- same client-side-first philosophy; the
+    // backend's own 429 in sendBulk() is the real enforcement.
+    if (recipientType === 'individual' && recipientPhones.length > 1 && isOnCooldown) {
+      setSendError(
+        `Bulk dispatch is on cooldown. Next bulk dispatch available in ${formatCooldownRemaining(cooldownRemainingSeconds ?? 0)}.`,
+      );
       return;
     }
     if (recipientType === 'group' && selectedGroupIds.length === 0) {
@@ -342,7 +550,9 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
       if (recipientType === 'group') {
         // One call per selected group — GroupMessageDispatcher (and the
         // external /v1/send-message endpoint it also backs) only ever
-        // accepts one group_id per request; there is no batch-send
+        // accepts one group per request (group_code in the external
+        // payload; GroupMessageDispatcher's own internal parameter is
+        // still the resolved integer group id) — there is no batch-send
         // endpoint. Promise.allSettled so one group failing (e.g. a
         // native group still mid-sync) doesn't stop the others sending.
         const results = await Promise.allSettled(
@@ -370,22 +580,68 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
           setSendSuccess(`Queued for ${succeeded} of ${results.length} group(s). Failed: ${failedNames}.`);
           setSelectedGroupIds(failures.map((f) => f.groupId));
         }
-      } else {
-        await templateService.sendTemplateMessage({
+      } else if (recipientPhones.length > 1) {
+        // Anti-Spam Bulk Dispatch — ONE call enqueues all N recipients as
+        // individually rate-limited, randomly-delayed background jobs
+        // (see MessageTemplateController::sendBulk()'s docblock) instead
+        // of firing N /alerts/send-template calls from here in parallel
+        // with no pacing at all — exactly the mechanical, fixed-cadence
+        // burst anti-ban jitter exists to avoid. There is nothing to
+        // await per-recipient any more: the backend returns as soon as
+        // the jobs are written, well before any of them actually send, so
+        // success here means "queued", not "delivered" — per-recipient
+        // delivery still lands on the existing Message Logs page as each
+        // job eventually runs.
+        const response = await templateService.sendBulkTemplateMessage({
           template_id: selectedTemplate.id,
-          recipient_phone: recipientPhone.trim(),
+          recipient_phones: recipientPhones,
           variables,
           // Omit the key entirely when blank rather than sending an empty
           // string — the backend only overrides the template's own media
           // when this key is present at all.
           ...(mediaUrl.trim() ? { media_url: mediaUrl.trim() } : {}),
         });
-        setSendSuccess('Message sent.');
+        setBulkQueued(true);
+        setSendSuccess(response.message);
+        // Strict Bulk Messaging Limit & Tier-Based Cooldown -- a dispatch
+        // that used the full 150-recipient cap starts a cooldown on the
+        // backend (BulkMessageCooldown::lock(), inside sendBulk()); this
+        // mirrors that same 4h/6h decision client-side so the countdown
+        // banner appears immediately, without waiting for the next
+        // getBulkCooldownStatus() poll.
+        if (recipientPhones.length >= MAX_BULK_RECIPIENTS) {
+          const cooldownHours = hasGroupMessagingPermission ? 4 : 6;
+          setCooldownRemainingSeconds(cooldownHours * 3600);
+        }
+        setRecipientPhone('');
+        setMediaUrl('');
+        setVariables(Object.fromEntries(selectedTemplate.variables_schema.map((f) => [f.key, ''])));
+      } else {
+        // Exactly one recipient — unchanged from before this feature: a
+        // single synchronous call with immediate send-or-fail feedback.
+        // Anti-spam pacing only matters once there's more than one
+        // message to space out.
+        await templateService.sendTemplateMessage({
+          template_id: selectedTemplate.id,
+          recipient_phone: recipientPhones[0],
+          variables,
+          ...(mediaUrl.trim() ? { media_url: mediaUrl.trim() } : {}),
+        });
+        setSendSuccess('Sent to 1 recipient.');
         setRecipientPhone('');
         setMediaUrl('');
         setVariables(Object.fromEntries(selectedTemplate.variables_schema.map((f) => [f.key, ''])));
       }
     } catch (err) {
+      // Strict Bulk Messaging Limit & Tier-Based Cooldown -- a 429 from
+      // sendBulk() (cooldown started/extended by ANOTHER tab, or the
+      // client-side guard above having a stale value) carries the real
+      // remaining time; use it to correct this page's own countdown
+      // rather than leaving it out of sync until the next poll.
+      const cooldownSeconds = extractCooldownRemainingSeconds(err);
+      if (typeof cooldownSeconds === 'number') {
+        setCooldownRemainingSeconds(cooldownSeconds);
+      }
       setSendError(extractErrorMessage(err, 'Could not send this message.'));
     } finally {
       setIsSending(false);
@@ -523,15 +779,82 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
 
         {recipientType === 'individual' ? (
           <div className="space-y-4">
+            {(isOnCooldown || !hasGroupMessagingPermission) && (
+              <div className="space-y-2">
+                {isOnCooldown && (
+                  <div className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                    <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+                    Next bulk dispatch available in {formatCooldownRemaining(cooldownRemainingSeconds ?? 0)}.
+                  </div>
+                )}
+                {!hasGroupMessagingPermission && (
+                  <div className="flex items-center gap-2 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs font-medium text-indigo-700">
+                    <Sparkles className="h-3.5 w-3.5 flex-shrink-0" />
+                    Upgrade to reduce cooldown to 4 hours &amp; unlock Native WhatsApp Group Messaging.
+                  </div>
+                )}
+              </div>
+            )}
             <div>
-              <label className="text-sm font-medium text-slate-700">Recipient Phone <span className="text-red-500">*</span></label>
-              <input
-                type="text"
+              <div className="flex items-center justify-between gap-2">
+                <label className="text-sm font-medium text-slate-700">
+                  Recipient Phone(s) <span className="text-red-500">*</span>
+                </label>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleDownloadSampleCsv}
+                    className="flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50"
+                    title="Download a sample CSV with the expected 'phone' column"
+                  >
+                    <Download className="h-3 w-3" />
+                    Download Sample CSV
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    className="flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50"
+                  >
+                    <Upload className="h-3 w-3" />
+                    Upload CSV
+                  </button>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".csv,text/csv"
+                    onChange={handleCsvUpload}
+                    className="hidden"
+                  />
+                </div>
+              </div>
+              <textarea
+                rows={2}
                 value={recipientPhone}
                 onChange={(e) => setRecipientPhone(e.target.value)}
-                placeholder="919876543210"
+                placeholder="919876543210, 919876543211, 919876543212"
                 className={inputClass}
               />
+              <div className="mt-1 flex flex-wrap items-center gap-2">
+                {recipientPhones.length > 0 && (
+                  <span
+                    className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ring-inset ${
+                      exceedsMaxRecipients
+                        ? 'bg-red-50 text-red-700 ring-red-600/20'
+                        : 'bg-emerald-50 text-emerald-700 ring-emerald-600/20'
+                    }`}
+                  >
+                    {recipientPhones.length} Recipient Number{recipientPhones.length === 1 ? '' : 's'} Loaded
+                  </span>
+                )}
+                {csvError && <span className="text-xs text-red-600">{csvError}</span>}
+              </div>
+              {exceedsMaxRecipients && (
+                <div className="mt-2 flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-medium text-red-700">
+                  <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0" />
+                  Maximum {MAX_BULK_RECIPIENTS} contacts allowed per batch. For larger lists, create a Group or
+                  upgrade your plan.
+                </div>
+              )}
             </div>
             <div>
               <label className="text-sm font-medium text-slate-700">
@@ -661,6 +984,12 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
             {sendSuccess}
           </div>
         )}
+        {bulkQueued && (
+          <div className="flex items-center gap-1.5 rounded-lg bg-indigo-50 px-3 py-1.5 text-xs font-medium text-indigo-700 ring-1 ring-inset ring-indigo-600/20">
+            <ShieldCheck className="h-3.5 w-3.5 flex-shrink-0" />
+            Bulk messages queued with anti-spam delay protection.
+          </div>
+        )}
 
         <button
           type="submit"
@@ -669,14 +998,20 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
             isSending ||
             disabled ||
             readOnly ||
-            (recipientType === 'group' && groups.length === 0)
+            (recipientType === 'group' && groups.length === 0) ||
+            (recipientType === 'individual' && exceedsMaxRecipients) ||
+            (recipientType === 'individual' && recipientPhones.length > 1 && isOnCooldown)
           }
           title={
             readOnly
               ? 'Action disabled: Subscription expired.'
               : disabled
                 ? 'WhatsApp is disconnected — reconnect it in WhatsApp Setup to send alerts.'
-                : undefined
+                : recipientType === 'individual' && exceedsMaxRecipients
+                  ? `Maximum ${MAX_BULK_RECIPIENTS} contacts allowed per batch.`
+                  : recipientType === 'individual' && recipientPhones.length > 1 && isOnCooldown
+                    ? `Bulk dispatch is on cooldown. Try again in ${formatCooldownRemaining(cooldownRemainingSeconds ?? 0)}.`
+                    : undefined
           }
           className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:opacity-60"
         >
@@ -700,7 +1035,18 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
                 {recipientType === 'group' ? 'POST /api/v1/send-message' : 'POST /api/v1/messages/send-template'}
               </p>
               {recipientType === 'group' && (
-                <p className="mt-1 text-xs text-slate-500">Sending to multiple groups? Call this endpoint once per group_id.</p>
+                <p className="mt-1 text-xs text-slate-500">Sending to multiple groups? Call this endpoint once per group_code.</p>
+              )}
+              {recipientType === 'individual' && recipientPhones.length > 1 && (
+                <>
+                  <p className="mt-1 text-xs text-slate-500">
+                    Sending to multiple recipients? Call this endpoint once per recipient_phone -- this screen just
+                    queued {recipientPhones.length} calls for you above.
+                  </p>
+                  <p className="mt-1 text-xs text-slate-500">
+                    Messages are sent in batches of 10 with a 1-2 minute anti-spam pause between batches.
+                  </p>
+                </>
               )}
             </div>
             <div>

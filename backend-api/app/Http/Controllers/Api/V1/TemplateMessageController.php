@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api\V1;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\SendMessageRequest;
 use App\Http\Requests\SendTemplateByCodeRequest;
+use App\Models\ContactGroup;
 use App\Models\MessageTemplate;
 use App\Services\Groups\GroupMessageDispatcher;
 use App\Services\Templates\TemplateMessageDispatcher;
@@ -83,6 +84,19 @@ class TemplateMessageController extends Controller
      * ProcessGroupDispatchJob path. This one action owns only request
      * parsing and result-to-HTTP-response mapping; every actual business
      * rule lives in one of those two dispatchers.
+     *
+     * [Refactor, disclosed]: identifies the template by `template_code`
+     * and, for a group send, the group by `group_code` -- the same
+     * human-readable-identifier convention send() above already
+     * established for templates, now extended to ContactGroup via
+     * generateGroupCode()/the add_group_code_to_contact_groups_table
+     * migration. Resolved ONCE here (shared by both recipient types)
+     * since both already need the template row regardless of
+     * recipient_type; group_code is resolved separately inside
+     * sendToGroup() only, since it's irrelevant to an individual send.
+     * TemplateMessageDispatcher and GroupMessageDispatcher below are
+     * UNCHANGED -- both still take the raw integer id internally; only
+     * this controller's own request parsing changed.
      */
     public function sendMessage(SendMessageRequest $request): JsonResponse
     {
@@ -92,19 +106,31 @@ class TemplateMessageController extends Controller
         $apiKey = $request->attributes->get('api_key');
         $data = $request->validated();
 
+        $template = MessageTemplate::query()
+            ->where('template_code', $data['template_code'])
+            ->where(function ($query) use ($accountId) {
+                $query->where('account_id', $accountId)
+                    ->orWhereNull('account_id');
+            })
+            ->first();
+
+        if (! $template) {
+            return response()->json(['success' => false, 'error_code' => 'TEMPLATE_NOT_APPROVED', 'message' => 'Invalid template_code for this account.'], 404);
+        }
+
         return $data['recipient_type'] === 'group'
-            ? $this->sendToGroup((int) $accountId, $apiKey?->id, $data)
-            : $this->sendToIndividual((int) $accountId, $apiKey?->id, $data);
+            ? $this->sendToGroup((int) $accountId, $apiKey?->id, $template, $data)
+            : $this->sendToIndividual((int) $accountId, $apiKey?->id, $template, $data);
     }
 
     /**
-     * @param array{template_id: int, recipient_phone: string, variables?: array<string, string>, media_url?: string} $data
+     * @param array{recipient_phone: string, variables?: array<string, string>, media_url?: string} $data
      */
-    private function sendToIndividual(int $accountId, ?int $apiKeyId, array $data): JsonResponse
+    private function sendToIndividual(int $accountId, ?int $apiKeyId, MessageTemplate $template, array $data): JsonResponse
     {
         $result = TemplateMessageDispatcher::dispatch(
             $accountId,
-            $data['template_id'],
+            $template->id,
             $data['recipient_phone'],
             $data['variables'] ?? [],
             source: 'api',
@@ -141,14 +167,22 @@ class TemplateMessageController extends Controller
     }
 
     /**
-     * @param array{template_id: int, group_id: int, variables?: array<string, string>} $data
+     * @param array{group_code: string, variables?: array<string, string>} $data
      */
-    private function sendToGroup(int $accountId, ?int $apiKeyId, array $data): JsonResponse
+    private function sendToGroup(int $accountId, ?int $apiKeyId, MessageTemplate $template, array $data): JsonResponse
     {
+        $group = ContactGroup::where('account_id', $accountId)
+            ->where('group_code', $data['group_code'])
+            ->first();
+
+        if (! $group) {
+            return response()->json(['success' => false, 'error_code' => 'NOT_FOUND', 'message' => 'Invalid group_code for this account.'], 404);
+        }
+
         $result = GroupMessageDispatcher::dispatch(
             $accountId,
-            $data['group_id'],
-            $data['template_id'],
+            $group->id,
+            $template->id,
             $data['variables'] ?? [],
             source: 'api',
             apiKeyId: $apiKeyId,

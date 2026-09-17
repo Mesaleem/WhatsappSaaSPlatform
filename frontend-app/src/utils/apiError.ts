@@ -49,3 +49,15 @@ export function extractErrorCode(err: unknown): string | undefined {
   const axiosErr = err as AxiosError<ApiErrorResponse>;
   return axiosErr.response?.data?.error_code;
 }
+
+/**
+ * `cooldown_remaining_seconds` from a 429 BULK_COOLDOWN_ACTIVE response
+ * (Strict Bulk Messaging Limit & Tier-Based Cooldown) — lets a caller
+ * update its own cooldown countdown state immediately from a blocked
+ * send attempt, without waiting for the next status poll. Undefined for
+ * any other error response.
+ */
+export function extractCooldownRemainingSeconds(err: unknown): number | undefined {
+  const axiosErr = err as AxiosError<ApiErrorResponse>;
+  return axiosErr.response?.data?.cooldown_remaining_seconds;
+}

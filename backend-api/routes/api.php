@@ -522,6 +522,16 @@ Route::middleware('auth:sanctum')->group(function () {
             // new one.
             Route::get('/message-templates', [MessageTemplateController::class, 'available']);
             Route::post('/send-template', [MessageTemplateController::class, 'send']);
+            // Anti-Spam Bulk Dispatch -- one call queues N recipients
+            // (recipient_phones: string[]) as individually-delayed,
+            // rate-limited jobs instead of sending them all inline. See
+            // MessageTemplateController::sendBulk()'s own docblock.
+            Route::post('/send-template-bulk', [MessageTemplateController::class, 'sendBulk']);
+            // Strict Bulk Messaging Limit & Tier-Based Cooldown -- lets the
+            // Send Alert page show its cooldown countdown banner up front,
+            // not only after a blocked send attempt. See
+            // MessageTemplateController::bulkCooldownStatus()'s own docblock.
+            Route::get('/bulk-cooldown-status', [MessageTemplateController::class, 'bulkCooldownStatus']);
             // Tiered Template Approval Workflow for 3-Tier Hierarchy --
             // the entry point rules 1/2 assume exists: a plain Client
             // Admin/User submitting a template REQUEST for their own

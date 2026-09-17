@@ -14,6 +14,8 @@ export interface ContactGroup {
   id: number;
   account_id: number;
   name: string;
+  /** Developer API: unique (per-account), human-readable lookup key for POST /api/v1/send-message (recipient_type: "group"). Null only on a row from before this feature existed and not yet resaved -- see ContactGroup::generateGroupCode() and the backend migration's backfill. */
+  group_code: string | null;
   is_default: boolean;
   /** Added via ContactGroupController::index()'s withCount('members'). */
   members_count: number;

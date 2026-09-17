@@ -1,11 +1,14 @@
 import axiosInstance from '../core/api/axiosInstance';
 import type {
   AvailableTemplate,
+  BulkCooldownStatusResponse,
   ClientApiKey,
   MessageTemplate,
   MyTemplateSummary,
   RegenerateClientApiKeyResponse,
   SaveMessageTemplatePayload,
+  SendBulkTemplateMessagePayload,
+  SendBulkTemplateMessageResponse,
   SendTemplateMessagePayload,
   SendTemplateMessageResponse,
   SubmitTemplateRequestPayload,
@@ -92,6 +95,27 @@ const templateService = {
 
   sendTemplateMessage(payload: SendTemplateMessagePayload) {
     return axiosInstance.post<SendTemplateMessageResponse>('/alerts/send-template', payload).then((res) => res.data);
+  },
+
+  /**
+   * POST /api/alerts/send-template-bulk -- Anti-Spam Bulk Dispatch. One
+   * call for the whole multi-recipient batch; the backend queues each
+   * recipient as its own rate-limited, randomly-delayed job instead of
+   * sending them all inline (see that endpoint's own docblock).
+   */
+  sendBulkTemplateMessage(payload: SendBulkTemplateMessagePayload) {
+    return axiosInstance
+      .post<SendBulkTemplateMessageResponse>('/alerts/send-template-bulk', payload)
+      .then((res) => res.data);
+  },
+
+  /**
+   * GET /api/alerts/bulk-cooldown-status -- Strict Bulk Messaging Limit
+   * & Tier-Based Cooldown. Read-only; call on mount so the Send Alert
+   * page's countdown banner/Upgrade CTA can show up front.
+   */
+  getBulkCooldownStatus() {
+    return axiosInstance.get<BulkCooldownStatusResponse>('/alerts/bulk-cooldown-status').then((res) => res.data);
   },
 
   // --- Profile "Client API Key" section ---

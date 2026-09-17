@@ -197,6 +197,7 @@ export default function ContactGroupsPage() {
               <thead className="bg-slate-50">
                 <tr className="text-left text-xs font-medium uppercase tracking-wide text-slate-500">
                   <th className="px-4 py-3">Name</th>
+                  <th className="px-4 py-3">Group Code</th>
                   <th className="px-4 py-3">Members</th>
                   <th className="px-4 py-3">Type</th>
                   <th className="px-4 py-3">WhatsApp Group</th>
@@ -206,13 +207,13 @@ export default function ContactGroupsPage() {
               <tbody className="divide-y divide-slate-100">
                 {isLoading ? (
                   <tr>
-                    <td colSpan={5} className="px-4 py-10 text-center text-slate-400">
+                    <td colSpan={6} className="px-4 py-10 text-center text-slate-400">
                       Loading…
                     </td>
                   </tr>
                 ) : groups.length === 0 ? (
                   <tr>
-                    <td colSpan={5} className="px-4 py-10 text-center text-slate-400">
+                    <td colSpan={6} className="px-4 py-10 text-center text-slate-400">
                       No contact groups yet.
                     </td>
                   </tr>
@@ -226,6 +227,9 @@ export default function ContactGroupsPage() {
                             Default
                           </span>
                         )}
+                      </td>
+                      <td className="px-4 py-3">
+                        <GroupCodeCell group={group} />
                       </td>
                       <td className="px-4 py-3 text-slate-600">{group.members_count}</td>
                       <td className="px-4 py-3">
@@ -338,6 +342,35 @@ function GroupTypeBadge({ type }: { type: ContactGroupType }) {
     <span className="inline-flex items-center rounded-full bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-700 ring-1 ring-inset ring-indigo-600/20">
       Internal Segment
     </span>
+  );
+}
+
+/** Group Code cell — mirrors TemplateManagerPage's template_code copy-pill pattern for the Developer API's group_code identifier. */
+function GroupCodeCell({ group }: { group: ContactGroup }) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = () => {
+    if (!group.group_code) return;
+    void navigator.clipboard.writeText(group.group_code).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+  };
+
+  if (!group.group_code) {
+    return <span className="text-xs text-slate-400">—</span>;
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={handleCopy}
+      title="Copy group_code"
+      className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 font-mono text-[11px] text-slate-700 hover:bg-slate-200"
+    >
+      {group.group_code}
+      {copied ? <Check className="h-3 w-3 text-emerald-600" /> : <Copy className="h-3 w-3 text-slate-400" />}
+    </button>
   );
 }
 

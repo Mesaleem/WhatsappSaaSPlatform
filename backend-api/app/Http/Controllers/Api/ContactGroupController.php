@@ -109,6 +109,7 @@ class ContactGroupController extends Controller
         $group = ContactGroup::create([
             'account_id' => $account->id,
             'name' => $data['name'],
+            'group_code' => ContactGroup::generateGroupCode($account->id, $data['name']),
             'is_default' => false,
             'group_type' => ContactGroup::GROUP_TYPE_INTERNAL,
         ]);

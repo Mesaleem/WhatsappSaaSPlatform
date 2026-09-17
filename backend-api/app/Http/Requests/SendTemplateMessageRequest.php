@@ -44,28 +44,38 @@ class SendTemplateMessageRequest extends FormRequest
     }
 
     /**
-     * Both send-template entry points reach this ONE FormRequest, but
-     * they have different response-envelope contracts: the internal,
-     * Sanctum-authenticated route is just another page in this SPA and
-     * should get Laravel's ordinary {message, errors} validation shape,
-     * like every other form in the app (so the shared frontend
-     * extractErrorMessage() utility handles it with no special case).
-     * The external Developer API
-     * (Api\V1\TemplateMessageController) contractually returns
-     * {"status": false, "message": ...} for every other failure mode
-     * (auth, not-found, quota, disconnected — see AuthenticateApiKey and
-     * that controller) — a 422 that dropped the `status` key would be an
-     * inconsistent envelope for an external integrator checking
-     * response.status. This adds `status: false` unconditionally — a
-     * harmless extra field for the internal caller, the contractually
-     * required one for the external caller — rather than forking the
-     * response shape by route.
+     * [Correction, disclosed]: the docblock this replaced claimed this
+     * class is shared "byte-for-byte" by both the internal Sanctum route
+     * and the external Developer API. That was already inaccurate before
+     * this change -- grep confirms the external POST /v1/messages/
+     * send-template endpoint (Api\V1\TemplateMessageController::send())
+     * type-hints SendTemplateByCodeRequest, a separate class, not this
+     * one. This class's only actual caller is the internal, Sanctum-
+     * authenticated MessageTemplateController::send() (the Send Alert
+     * page's own form submit) -- there is no external-API envelope
+     * contract to stay consistent with here.
+     *
+     * Field-Specific Validation Error Messages -- `message` states the
+     * FIRST failing field concretely (never Laravel's generic "The given
+     * data was invalid."); `errors` still carries every failing field's
+     * message(s) so a caller that wants all of them doesn't have to
+     * parse the message string. `success` (not this class's previous
+     * `status` key -- see the correction above, there is no competing
+     * convention on this route to preserve) matches this app's more
+     * common envelope key (ContactGroupController, Api\V1\GroupController,
+     * TemplateMessageController::sendMessage() all already use
+     * `success`). The frontend's extractErrorMessage()/extractFieldErrors()
+     * (src/utils/apiError.ts) only ever read `.message`/`.errors` --
+     * never `.status`/`.success` -- so this key rename has no visible
+     * effect on the existing Send Alert page.
      */
     protected function failedValidation(Validator $validator): void
     {
+        $firstMessage = $validator->errors()->first() ?: 'The given data was invalid.';
+
         throw new HttpResponseException(response()->json([
-            'status' => false,
-            'message' => $validator->errors()->first() ?: 'The given data was invalid.',
+            'success' => false,
+            'message' => "Validation failed: {$firstMessage}",
             'errors' => $validator->errors(),
         ], 422));
     }
@@ -94,30 +104,53 @@ class SendTemplateMessageRequest extends FormRequest
     }
 
     /**
-     * Friendly, field-labelled messages — "The Payment Amount field is
-     * required." instead of Laravel's default "The variables.amount
-     * field is required.", which leaks the internal payload shape and
-     * means nothing to whoever is filling in the dynamic form.
+     * Dynamic Field Names in Errors -- wildcard keys ("variables.*.
+     * required", not "variables.customer_name.required"). Laravel still
+     * resolves the `:attribute` token per the SPECIFIC failing field
+     * (via attributes() below), not the literal "*", so one entry per
+     * rule type covers every variable the template's schema defines
+     * instead of looping to build one entry per field.
      *
      * @return array<string, string>
      */
     public function messages(): array
     {
-        $messages = [];
+        return [
+            'variables.*.required' => 'The :attribute field is required.',
+            'variables.*.numeric' => 'The :attribute field must be a number.',
+            'variables.*.date' => 'The :attribute field must be a valid date.',
+            'variables.*.string' => 'The :attribute field must be text.',
+            'variables.*.in' => 'The :attribute field must be one of the allowed options.',
+            'variables.*.max' => 'The :attribute field is too long.',
+        ];
+    }
+
+    /**
+     * Attribute Mapping -- maps every payload key to ITS OWN raw name,
+     * so a validation message's `:attribute` token (both the wildcard
+     * ones above and Laravel's own defaults for template_id/
+     * recipient_phone) renders the exact field the caller sent -- e.g.
+     * "template_id", "customer_name" -- never Laravel's default
+     * humanized form (which would turn "template_id" into "template
+     * id", spaces and all) and never the nested "variables.customer_name"
+     * dot-path leaking into the sentence.
+     *
+     * @return array<string, string>
+     */
+    public function attributes(): array
+    {
+        $attributes = [
+            'template_id' => 'template_id',
+            'recipient_phone' => 'recipient_phone',
+            'variables' => 'variables',
+            'media_url' => 'media_url',
+        ];
 
         foreach ($this->targetSchema() as $field) {
-            $attribute = 'variables.'.$field['key'];
-            $label = $field['label'] ?? $field['key'];
-
-            $messages["{$attribute}.required"] = "The \"{$label}\" field is required.";
-            $messages["{$attribute}.numeric"] = "The \"{$label}\" field must be a number.";
-            $messages["{$attribute}.date"] = "The \"{$label}\" field must be a valid date.";
-            $messages["{$attribute}.string"] = "The \"{$label}\" field must be text.";
-            $messages["{$attribute}.in"] = "The \"{$label}\" field must be one of the allowed options.";
-            $messages["{$attribute}.max"] = "The \"{$label}\" field is too long.";
+            $attributes['variables.'.$field['key']] = $field['key'];
         }
 
-        return $messages;
+        return $attributes;
     }
 
     /**

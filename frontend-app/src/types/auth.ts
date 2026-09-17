@@ -71,5 +71,16 @@ export interface AuthState {
 export interface ApiErrorResponse {
   message: string;
   errors?: Record<string, string[]>;
-  error_code?: 'SUBSCRIPTION_EXPIRED' | 'ACCOUNT_SUSPENDED' | 'CLIENT_ACCOUNT_SUSPENDED' | 'UNAUTHENTICATED' | string;
+  error_code?:
+    | 'SUBSCRIPTION_EXPIRED'
+    | 'ACCOUNT_SUSPENDED'
+    | 'CLIENT_ACCOUNT_SUSPENDED'
+    | 'UNAUTHENTICATED'
+    // Strict Bulk Messaging Limit & Tier-Based Cooldown -- the 429
+    // MessageTemplateController::sendBulk() returns while an
+    // account's bulk-dispatch cooldown is still active.
+    | 'BULK_COOLDOWN_ACTIVE'
+    | string;
+  /** Present only alongside error_code === 'BULK_COOLDOWN_ACTIVE'. */
+  cooldown_remaining_seconds?: number;
 }

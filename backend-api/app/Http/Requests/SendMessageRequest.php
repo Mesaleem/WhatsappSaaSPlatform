@@ -14,11 +14,20 @@ use Illuminate\Validation\Rule;
  * reusing SendTemplateMessageRequest: that class's rules() are
  * unconditional (recipient_phone always required), whereas this
  * endpoint's required fields depend on recipient_type — 'individual'
- * needs recipient_phone, 'group' needs group_id instead. The per-variable
+ * needs recipient_phone, 'group' needs group_code instead. The per-variable
  * dynamic-schema rules (targetSchema()/MessageTemplate::variableValidationRules())
  * are copied from that class verbatim, since both endpoints validate a
  * template's `variables` payload against the exact same template schema
  * concept.
+ *
+ * [Refactor, disclosed]: template_id/group_id (raw DB primary keys)
+ * replaced with template_code/group_code (human-readable, string
+ * identifiers) -- the same convention send-template's
+ * SendTemplateByCodeRequest already established for templates, extended
+ * here to groups too. Resolution of both codes into their actual rows
+ * happens in TemplateMessageController::sendMessage(), not here -- this
+ * class only validates shape/presence, exactly as it did for the
+ * integer ids before this change.
  */
 class SendMessageRequest extends FormRequest
 {
@@ -29,12 +38,31 @@ class SendMessageRequest extends FormRequest
         return true;
     }
 
-    /** Same external-API envelope contract as SendTemplateMessageRequest::failedValidation(). */
+    /**
+     * Field-Specific Validation Error Messages -- `message` states the
+     * FIRST failing field concretely; `errors` still carries every
+     * failing field. `success` (not this class's previous `status` key)
+     * -- this endpoint's OWN controller action
+     * (TemplateMessageController::sendMessage()) already returns
+     * `success: false` for every OTHER failure mode on this exact route
+     * (TEMPLATE_NOT_APPROVED, INVALID_VARIABLES, WHATSAPP_DISCONNECTED,
+     * INSUFFICIENT_QUOTA, ...) -- this class's OLD `status` key was
+     * already an inconsistency on THIS SAME endpoint, not a contract
+     * this change is breaking. (The older, separate /v1/messages/
+     * send-template endpoint -- Api\V1\TemplateMessageController::send(),
+     * SendTemplateByCodeRequest -- still uses `status` throughout; that
+     * class is untouched here since it wasn't named in this request and
+     * changing only its validation-failure envelope while its other
+     * branches keep `status` would introduce a NEW inconsistency on
+     * that endpoint instead of fixing one.)
+     */
     protected function failedValidation(Validator $validator): void
     {
+        $firstMessage = $validator->errors()->first() ?: 'The given data was invalid.';
+
         throw new HttpResponseException(response()->json([
-            'status' => false,
-            'message' => $validator->errors()->first() ?: 'The given data was invalid.',
+            'success' => false,
+            'message' => "Validation failed: {$firstMessage}",
             'errors' => $validator->errors(),
         ], 422));
     }
@@ -46,9 +74,9 @@ class SendMessageRequest extends FormRequest
     {
         return [
             'recipient_type' => ['required', Rule::in(['individual', 'group'])],
-            'template_id' => ['required', 'integer'],
+            'template_code' => ['required', 'string', 'max:100'],
             'recipient_phone' => ['required_if:recipient_type,individual', 'string', 'max:20'],
-            'group_id' => ['required_if:recipient_type,group', 'integer'],
+            'group_code' => ['required_if:recipient_type,group', 'string', 'max:100'],
             'variables' => ['sometimes', 'array'],
             // Media Templates (send-time override, QR/Baileys-only,
             // individual recipients only -- see TemplateMessageController::
@@ -60,47 +88,67 @@ class SendMessageRequest extends FormRequest
     }
 
     /**
+     * Dynamic Field Names in Errors -- see SendTemplateMessageRequest::
+     * messages()'s identical wildcard-key rationale.
+     *
      * @return array<string, string>
      */
     public function messages(): array
     {
-        $messages = [
-            'recipient_phone.required_if' => 'The "recipient_phone" field is required when recipient_type is "individual".',
-            'group_id.required_if' => 'The "group_id" field is required when recipient_type is "group".',
+        return [
+            'recipient_phone.required_if' => 'The :attribute field is required when recipient_type is "individual".',
+            'group_code.required_if' => 'The :attribute field is required when recipient_type is "group".',
+            'variables.*.required' => 'The :attribute field is required.',
+            'variables.*.numeric' => 'The :attribute field must be a number.',
+            'variables.*.date' => 'The :attribute field must be a valid date.',
+            'variables.*.string' => 'The :attribute field must be text.',
+            'variables.*.in' => 'The :attribute field must be one of the allowed options.',
+            'variables.*.max' => 'The :attribute field is too long.',
+        ];
+    }
+
+    /**
+     * Attribute Mapping -- see SendTemplateMessageRequest::attributes()'s
+     * identical rationale (map every field to its own raw name, strip
+     * the "variables." dot-path prefix).
+     *
+     * @return array<string, string>
+     */
+    public function attributes(): array
+    {
+        $attributes = [
+            'recipient_type' => 'recipient_type',
+            'template_code' => 'template_code',
+            'recipient_phone' => 'recipient_phone',
+            'group_code' => 'group_code',
+            'variables' => 'variables',
+            'media_url' => 'media_url',
         ];
 
         foreach ($this->targetSchema() as $field) {
-            $attribute = 'variables.'.$field['key'];
-            $label = $field['label'] ?? $field['key'];
-
-            $messages["{$attribute}.required"] = "The \"{$label}\" field is required.";
-            $messages["{$attribute}.numeric"] = "The \"{$label}\" field must be a number.";
-            $messages["{$attribute}.date"] = "The \"{$label}\" field must be a valid date.";
-            $messages["{$attribute}.string"] = "The \"{$label}\" field must be text.";
-            $messages["{$attribute}.in"] = "The \"{$label}\" field must be one of the allowed options.";
-            $messages["{$attribute}.max"] = "The \"{$label}\" field is too long.";
+            $attributes['variables.'.$field['key']] = $field['key'];
         }
 
-        return $messages;
+        return $attributes;
     }
 
     /**
      * Same caching/scope rationale as SendTemplateMessageRequest's own
-     * targetSchema(): [] when template_id is missing/invalid, and the
+     * targetSchema(): [] when template_code is missing/blank, and the
      * business check (does this template exist / is it approved for
-     * this account) is deliberately left to the dispatcher, not here.
+     * this account) is deliberately left to the controller, not here.
      *
      * @return list<array{key: string, label: string, type: string, required: bool, options?: list<string>}>
      */
     private function targetSchema(): array
     {
-        $templateId = $this->input('template_id');
+        $templateCode = $this->input('template_code');
 
-        if (! is_numeric($templateId)) {
+        if (! is_string($templateCode) || $templateCode === '') {
             return [];
         }
 
-        $template = MessageTemplate::find((int) $templateId);
+        $template = MessageTemplate::where('template_code', $templateCode)->first();
 
         return $template?->effectiveVariablesSchema() ?? [];
     }

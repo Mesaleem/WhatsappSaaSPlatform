@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Support\Str;
 use App\Traits\LogsActivity;
 
 /**
@@ -48,6 +49,11 @@ class ContactGroup extends Model
     protected $fillable = [
         'account_id',
         'name',
+        // Developer API: unique (per-account), human-readable lookup key for
+        // POST /api/v1/send-message (recipient_type: "group") -- see the
+        // add_group_code_to_contact_groups_table migration and
+        // generateGroupCode() below.
+        'group_code',
         'is_default',
         'group_type',
         'wa_group_jid',
@@ -85,5 +91,50 @@ class ContactGroup extends Model
         return $this->isNative()
             && $this->sync_status === self::SYNC_STATUS_SYNCED
             && filled($this->wa_group_jid);
+    }
+
+    /**
+     * Developer API -- auto-generate a unique, human-readable group_code
+     * from a group's name, the same UPPER_SNAKE_CASE slug shape
+     * MessageTemplate::generateTemplateCode() uses for template_code.
+     *
+     * Deliberately scoped PER ACCOUNT, not globally unique like
+     * template_code: a ContactGroup always belongs to exactly one tenant
+     * (there is no "global group" concept the way a template can have a
+     * null account_id), so two unrelated tenants both naming a group
+     * "VIP" is normal and must not collide. TemplateMessageController::
+     * sendMessage() resolves group_code scoped to the caller's own
+     * account_id, so per-account uniqueness is already sufficient to
+     * make that lookup unambiguous.
+     *
+     * $ignoreId excludes a row from the uniqueness check -- pass the
+     * group's own id when regenerating a code for an existing group.
+     */
+    public static function generateGroupCode(int $accountId, string $name, ?int $ignoreId = null): string
+    {
+        $base = strtoupper((string) Str::of($name)
+            ->ascii()
+            ->replaceMatches('/[^A-Za-z0-9]+/', '_')
+            ->trim('_'));
+
+        if ($base === '') {
+            $base = 'GRP_'.((int) static::where('account_id', $accountId)->max('id') + 1);
+        }
+
+        $code = $base;
+        $suffix = 2;
+
+        while (
+            static::query()
+                ->where('account_id', $accountId)
+                ->where('group_code', $code)
+                ->when($ignoreId, fn ($q) => $q->where('id', '!=', $ignoreId))
+                ->exists()
+        ) {
+            $code = $base.'_'.$suffix;
+            $suffix++;
+        }
+
+        return $code;
     }
 }

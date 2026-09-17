@@ -72,6 +72,8 @@ export interface MessageTemplate {
 /** GET /api/alerts/message-templates — the trimmed shape a Client Admin's Send Alert dropdown actually needs. */
 export interface AvailableTemplate {
   id: number;
+  /** Developer API: unique, human-readable lookup key for POST /api/v1/send-message and /api/v1/messages/send-template -- see MessageTemplate.template_code. */
+  template_code: string | null;
   title: string;
   industry_type: string | null;
   template_body: string;
@@ -147,6 +149,42 @@ export interface SendTemplateMessagePayload {
 export interface SendTemplateMessageResponse {
   message: string;
   rendered_message: string;
+}
+
+/**
+ * Anti-Spam Bulk Dispatch -- POST /api/alerts/send-template-bulk. One
+ * call replaces the old per-recipient client-side loop for the
+ * Individual tab's multi-recipient case: the backend enqueues one
+ * rate-limited, randomly-delayed background job per phone number and
+ * returns immediately, before any of them have actually sent (see
+ * SendAlertPage.tsx's handleSubmit and the backend
+ * MessageTemplateController::sendBulk() docblock).
+ */
+export interface SendBulkTemplateMessagePayload {
+  template_id: number;
+  recipient_phones: string[];
+  variables: Record<string, string>;
+  /** Same send-time media override contract as SendTemplateMessagePayload.media_url. */
+  media_url?: string;
+}
+
+export interface SendBulkTemplateMessageResponse {
+  message: string;
+  queued_count: number;
+  batch_count: number;
+  /** Wall-clock seconds the anti-spam pacing is expected to take to fully drain this batch. */
+  estimated_duration_seconds: number;
+}
+
+/**
+ * GET /api/alerts/bulk-cooldown-status -- Strict Bulk Messaging Limit
+ * & Tier-Based Cooldown. Lets the Send Alert page show its cooldown
+ * countdown banner as soon as the page loads, not only after a
+ * blocked send attempt.
+ */
+export interface BulkCooldownStatusResponse {
+  on_cooldown: boolean;
+  cooldown_remaining_seconds: number;
 }
 
 /** POST /api/admin/templates/{id}/test — Super Admin test-fire, always through Account::platformDevice(). */

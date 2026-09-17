@@ -20,3 +20,21 @@ Artisan::command('inspire', function () {
 Schedule::command('ads:check-performance-rules')
     ->everyFifteenMinutes()
     ->withoutOverlapping();
+
+// Anti-Spam Bulk Dispatch -- SendWhatsAppTemplateJob is enqueued onto
+// the 'database' connection's 'whatsapp-bulk' queue (never the app's
+// default 'sync' connection -- see that Job's own docblock), so
+// nothing drains it without this. `--stop-when-empty` processes every
+// currently-due job then exits rather than running forever as a
+// daemon -- there is no persistent queue-worker process defined
+// anywhere in this repo (checked before choosing this design), so
+// this scheduled command IS the worker: each minute's tick picks up
+// whatever became due since the last one. --max-time=55 keeps one
+// tick safely inside its own minute, on top of withoutOverlapping()
+// below. This assumes `php artisan schedule:run` is already invoked
+// once a minute by an external cron/deployment process -- the same
+// pre-existing assumption ads:check-performance-rules above already
+// depends on, not a new one introduced here.
+Schedule::command('queue:work database --queue=whatsapp-bulk --stop-when-empty --max-time=55')
+    ->everyMinute()
+    ->withoutOverlapping();
