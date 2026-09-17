@@ -23,7 +23,7 @@ import { TableSkeletonRows } from '../../components/common/Skeleton';
 import { loadRazorpayScript } from '../../utils/loadRazorpayScript';
 import type { ApiErrorResponse } from '../../types/auth';
 import type { PaginatedResponse } from '../../types/account';
-import type { Subscription } from '../../types/subscription';
+import type { BillingModel, Subscription } from '../../types/subscription';
 import type {
   CreateOrderResponse,
   Invoice,
@@ -86,6 +86,14 @@ interface StripeModalState {
 export default function BillingPage() {
   const { user, isSuperAdmin } = useAuth();
   const account = user?.account ?? null;
+  // Wallet Visibility for Agents, disclosed: an Agent (Reseller) keeps its
+  // own self-service checkout/invoice UI below exactly as before — this
+  // only ADDS the same Client Billing Summary table Super Admin sees,
+  // scoped server-side to the Agent's own Sub-Client tree (see
+  // BillingController::clientSummary()'s agent_scope_id branch). Never
+  // true for Super Admin (isSuperAdmin() already returns above it), so
+  // this can't double-render the table for that role.
+  const isAgent = !isSuperAdmin() && account?.account_type === 'agent';
 
   const [subscription, setSubscription] = useState<Subscription | null>(account?.current_subscription ?? null);
   useEffect(() => {
@@ -293,6 +301,14 @@ export default function BillingPage() {
     subscription?.total_allocated_messages != null && subscription.total_allocated_messages > 0
       ? Math.min(Math.round((subscription.used_messages / subscription.total_allocated_messages) * 100), 100)
       : null;
+  // Per Message Wallet Breakdown, disclosed: rate_per_message is only
+  // ever non-null for billing_model 'per_message' (Subscription's own
+  // field contract), so isPerMessage alone is enough to gate every
+  // derived value below without a redundant null check at each call site.
+  const isPerMessage: boolean = subscription?.billing_model === ('per_message' satisfies BillingModel);
+  const rate = isPerMessage && subscription?.rate_per_message != null ? Number(subscription.rate_per_message) : null;
+  const amountSpent = rate !== null ? subscription!.used_messages * rate : null;
+  const amountRemaining = rate !== null && remaining !== null ? remaining * rate : null;
 
   return (
     <div className="p-6">
@@ -305,6 +321,21 @@ export default function BillingPage() {
           <h1 className="mt-2 text-xl font-semibold text-slate-900">Billing & Plans</h1>
           <p className="mt-1 text-sm text-slate-500">Manage your subscription, upgrade plans, and view invoices.</p>
         </div>
+
+        {/* Wallet Visibility for Agents, disclosed: this Agent's OWN plan
+            (Current Plan Status + checkout below) is unchanged — this
+            section is purely additive, showing the same wallet breakdown
+            Super Admin sees, narrowed server-side to this Agent's own
+            Sub-Clients. */}
+        {isAgent && (
+          <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+            <h2 className="text-sm font-semibold text-slate-900">My Clients&rsquo; Billing</h2>
+            <p className="mt-1 text-sm text-slate-500">Plan, usage and wallet balance for every client assigned to you.</p>
+            <div className="mt-4">
+              <ClientBillingSummaryTable />
+            </div>
+          </div>
+        )}
 
         {loadError && (
           <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
@@ -355,6 +386,15 @@ export default function BillingPage() {
                       style={{ width: `${quotaPercent}%` }}
                     />
                   </div>
+                  {isPerMessage && rate !== null && (
+                    <div className="mt-2 grid grid-cols-1 gap-1 text-xs text-slate-500 sm:grid-cols-3">
+                      <div>Used: {subscription.used_messages.toLocaleString()} msgs (₹{amountSpent!.toFixed(2)})</div>
+                      {remaining !== null && (
+                        <div>Remaining: {remaining.toLocaleString()} msgs (₹{amountRemaining!.toFixed(2)})</div>
+                      )}
+                      <div>Rate: ₹{rate.toFixed(2)}/msg</div>
+                    </div>
+                  )}
                 </div>
               )}
               {/* Conditional Quota Top-Up Button — server-mirrored gate,

@@ -18,6 +18,7 @@ import {
 import journeyService from '../../services/journeyService';
 import { ClearFiltersButton, SearchInput } from '../../components/common/DataTableControls';
 import { TableCard, inputClass } from '../../components/common/Card';
+import ConfirmModal from '../../components/common/ConfirmModal';
 import { useTenant } from '../../core/context/TenantContext';
 import { extractErrorMessage } from '../../utils/apiError';
 import { indigo, activeGradient } from '../../theme/signalIndigo';
@@ -1146,12 +1147,22 @@ export default function JourneyBuilderPage() {
     loadFlows();
   }, [loadFlows, selectedAccountId]);
 
+  const [pendingDelete, setPendingDelete] = useState<WhatsAppFlow | null>(null);
+
   const handleDelete = (flow: WhatsAppFlow) => {
-    if (!window.confirm(`Delete "${flow.name}"? This cannot be undone.`)) return;
+    setPendingDelete(flow);
+  };
+
+  const confirmDelete = () => {
+    if (!pendingDelete) return;
+    const flow = pendingDelete;
     setBusyId(flow.id);
     journeyService
       .remove(flow.id)
-      .then(() => loadFlows())
+      .then(() => {
+        setPendingDelete(null);
+        loadFlows();
+      })
       .catch((err: unknown) => setPageError(extractErrorMessage(err, 'Failed to delete this journey.')))
       .finally(() => setBusyId(null));
   };
@@ -1197,6 +1208,17 @@ export default function JourneyBuilderPage() {
         onTest={setTestingFlow}
         busyId={busyId}
       />
+      {pendingDelete && (
+        <ConfirmModal
+          title="Delete journey"
+          message={`Delete "${pendingDelete.name}"? This cannot be undone.`}
+          confirmLabel="Delete"
+          variant="danger"
+          isLoading={busyId === pendingDelete.id}
+          onConfirm={confirmDelete}
+          onCancel={() => setPendingDelete(null)}
+        />
+      )}
     </>
   );
 }

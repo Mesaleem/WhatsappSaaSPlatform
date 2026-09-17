@@ -403,12 +403,12 @@ function SummarySection({ resolvedRange }: { resolvedRange: DateRange }) {
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             <KpiCard
               label="Individual Sent"
-              value={isLoading ? '…' : String(summary?.recipient_breakdown?.individual.sent ?? 0)}
+              value={isLoading ? '…' : String(summary?.recipient_breakdown?.individual?.sent ?? 0)}
               sub="Selected period"
             />
             <KpiCard
               label="Individual Failed"
-              value={isLoading ? '…' : String(summary?.recipient_breakdown?.individual.failed ?? 0)}
+              value={isLoading ? '…' : String(summary?.recipient_breakdown?.individual?.failed ?? 0)}
               sub="Selected period"
             />
             <KpiCard
@@ -417,8 +417,8 @@ function SummarySection({ resolvedRange }: { resolvedRange: DateRange }) {
                 isLoading
                   ? '…'
                   : String(
-                      (summary?.recipient_breakdown?.individual.sent ?? 0) +
-                        (summary?.recipient_breakdown?.individual.failed ?? 0),
+                      (summary?.recipient_breakdown?.individual?.sent ?? 0) +
+                        (summary?.recipient_breakdown?.individual?.failed ?? 0),
                     )
               }
               sub="Sent + Failed, selected period"
@@ -458,12 +458,12 @@ function SummarySection({ resolvedRange }: { resolvedRange: DateRange }) {
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
               <KpiCard
                 label="Group Sent"
-                value={isLoading ? '…' : String(summary?.recipient_breakdown?.group.sent ?? 0)}
+                value={isLoading ? '…' : String(summary?.recipient_breakdown?.group?.sent ?? 0)}
                 sub="Selected period"
               />
               <KpiCard
                 label="Group Failed"
-                value={isLoading ? '…' : String(summary?.recipient_breakdown?.group.failed ?? 0)}
+                value={isLoading ? '…' : String(summary?.recipient_breakdown?.group?.failed ?? 0)}
                 sub="Selected period"
               />
               <KpiCard
@@ -472,8 +472,8 @@ function SummarySection({ resolvedRange }: { resolvedRange: DateRange }) {
                   isLoading
                     ? '…'
                     : String(
-                        (summary?.recipient_breakdown?.group.sent ?? 0) +
-                          (summary?.recipient_breakdown?.group.failed ?? 0),
+                        (summary?.recipient_breakdown?.group?.sent ?? 0) +
+                          (summary?.recipient_breakdown?.group?.failed ?? 0),
                       )
                 }
                 sub="Sent + Failed, selected period"
@@ -561,7 +561,8 @@ function ChartsSection({ range, resolvedRange }: { range: ChartRange; resolvedRa
   // when recipient-type data isn't available or the module isn't
   // entitled — zero visual change for those cases.
   const byRecipientType = charts?.daily_by_recipient_type ?? null;
-  const canShowRecipientSeries = Boolean(byRecipientType) && hasModule('contact_groups');
+  // Group Module Blank-Screen Fix, disclosed: byRecipientType itself can be truthy while its own .group is null (Module 2 Fix suppresses just that key for the RESOLVED account, not the whole object — see the .group?./.individual?. fix above) — checking .group here too is what makes the byRecipientType!.group[index] access below actually safe.
+  const canShowRecipientSeries = Boolean(byRecipientType?.individual) && Boolean(byRecipientType?.group) && hasModule('contact_groups');
   const recipientChartData = canShowRecipientSeries
     ? byRecipientType!.individual.map((individualDay, index) => {
         const groupDay = byRecipientType!.group[index];

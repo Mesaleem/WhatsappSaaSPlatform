@@ -171,9 +171,17 @@ export interface ClientBillingSummaryRow {
   account_id: number;
   company_name: string;
   plan_label: string | null;
+  /** Raw billing model, alongside the derived plan_label — drives the Usage/Wallet rupee breakdown below (per_message only). */
+  billing_model: BillingModel | null;
   amount: string | null;
   used_messages: number | null;
   total_allocated_messages: number | null;
+  /** Decimal-cast string (e.g. "0.1500"), same contract as Subscription.rate_per_message — null except for billing_model 'per_message'. */
+  rate_per_message: string | null;
+  /** used_messages * rate_per_message, rounded to 2dp. Null except for billing_model 'per_message'. */
+  amount_used: number | null;
+  /** (total_allocated_messages - used_messages) * rate_per_message, rounded to 2dp. Null except for billing_model 'per_message' with a set quota. */
+  amount_remaining: number | null;
   payment_status: ClientPaymentStatus;
   renewal_date: string | null;
 }

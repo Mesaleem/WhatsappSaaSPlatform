@@ -1,6 +1,7 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Bold, Italic, Underline, Link as LinkIcon, Code, type LucideIcon } from 'lucide-react';
 import type { NotificationTemplateType } from '../../types/notifications';
+import PromptModal from './PromptModal';
 
 /**
  * Mail Template Manager — dual-mode HTML content editor, zero new
@@ -28,6 +29,9 @@ export default function RichTextEditor({
   onModeChange: (mode: NotificationTemplateType) => void;
 }) {
   const editableRef = useRef<HTMLDivElement>(null);
+  // UI-based dialogs only -- no window.prompt() (see PromptModal's own
+  // docblock). Insert Link opens this instead of the browser-native popup.
+  const [showLinkPrompt, setShowLinkPrompt] = useState(false);
 
   // Sync an externally-set value (e.g. loading a saved template, or
   // switching back from raw_html mode) into the contentEditable div —
@@ -46,6 +50,7 @@ export default function RichTextEditor({
   };
 
   return (
+    <>
     <div className="overflow-hidden rounded-lg border border-slate-300">
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 bg-slate-50 px-2 py-1.5">
         <div className="flex items-center gap-1">
@@ -57,10 +62,7 @@ export default function RichTextEditor({
               <ToolbarButton
                 icon={LinkIcon}
                 label="Insert link"
-                onClick={() => {
-                  const url = window.prompt('Link URL (https://…)');
-                  if (url) exec('createLink', url);
-                }}
+                onClick={() => setShowLinkPrompt(true)}
               />
             </>
           ) : (
@@ -105,6 +107,21 @@ export default function RichTextEditor({
         />
       )}
     </div>
+    {showLinkPrompt && (
+      <PromptModal
+        title="Insert link"
+        label="Link URL"
+        placeholder="https://…"
+        confirmLabel="Insert"
+        required
+        onSubmit={(url) => {
+          setShowLinkPrompt(false);
+          if (url.trim()) exec('createLink', url.trim());
+        }}
+        onCancel={() => setShowLinkPrompt(false)}
+      />
+    )}
+    </>
   );
 }
 

@@ -33,6 +33,7 @@ import { ClearFiltersButton, Pagination, SearchInput, StatusFilterSelect } from 
 import { TableSkeletonRows } from '../../components/common/Skeleton';
 import { extractErrorCode, extractErrorMessage as extractMessage } from '../../utils/apiError';
 import ConfirmModal from '../../components/common/ConfirmModal';
+import PromptModal from '../../components/common/PromptModal';
 
 
 /**
@@ -740,15 +741,29 @@ export default function TemplateManagerPage() {
     }
   };
 
-  const handleReject = async (t: MessageTemplate) => {
+  const [pendingReject, setPendingReject] = useState<MessageTemplate | null>(null);
+
+  const handleReject = (t: MessageTemplate) => {
     // Tiered Template Approval Workflow -- optional reason, surfaced to
     // the submitting account's owner via an in-app notification server-
-    // side. A cancelled prompt (null) still rejects with no reason,
-    // matching this button's pre-existing one-click behavior exactly.
-    const reason = window.prompt('Reason for rejecting this template (optional):', '') ?? undefined;
+    // side. UI-based dialog (PromptModal) rather than window.prompt() --
+    // see that component's own docblock. Cancelling still leaves the
+    // template untouched (no reject call at all), same as a cancelled
+    // native prompt used to result in no reason but STILL rejecting --
+    // see confirmReject() below for the one behavioral fix that came
+    // with this: previously window.prompt()'s null (Cancel) and '' (OK
+    // with nothing typed) were indistinguishable and BOTH rejected with
+    // no reason; a UI Cancel button can now actually cancel the action.
+    setPendingReject(t);
+  };
+
+  const confirmReject = async (reason: string) => {
+    if (!pendingReject) return;
+    const t = pendingReject;
+    setPendingReject(null);
     setBusyId(t.id);
     try {
-      await templateService.reject(t.id, reason || undefined);
+      await templateService.reject(t.id, reason.trim() || undefined);
       await load();
     } catch (err) {
       setError(extractMessage(err, 'Could not reject this template.'));
@@ -1074,6 +1089,18 @@ export default function TemplateManagerPage() {
           isLoading={busyId === pendingDelete.id}
           onConfirm={() => void confirmDelete()}
           onCancel={() => setPendingDelete(null)}
+        />
+      )}
+
+      {pendingReject && (
+        <PromptModal
+          title="Reject template"
+          message={`Reason for rejecting "${pendingReject.title}" (optional):`}
+          placeholder="Optional reason"
+          confirmLabel="Reject"
+          isLoading={busyId === pendingReject.id}
+          onSubmit={(reason) => void confirmReject(reason)}
+          onCancel={() => setPendingReject(null)}
         />
       )}
     </PageShell>

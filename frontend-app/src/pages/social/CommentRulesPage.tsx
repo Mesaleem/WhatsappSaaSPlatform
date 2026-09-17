@@ -4,6 +4,7 @@ import { useAuth } from '../../core/context/AuthContext';
 import { useTenant } from '../../core/context/TenantContext';
 import commentRulesService from '../../services/commentRulesService';
 import { Card, TableCard, inputClass } from '../../components/common/Card';
+import ConfirmModal from '../../components/common/ConfirmModal';
 import { extractErrorMessage } from '../../utils/apiError';
 import { indigo, activeGradient } from '../../theme/signalIndigo';
 import type { CommentAutomationRule, CommentAutomationRulePayload } from '../../types/commentRules';
@@ -234,14 +235,21 @@ export default function CommentRulesPage() {
       .finally(() => setBusyId(null));
   };
 
-  const handleDelete = (rule: CommentAutomationRule) => {
-    if (!window.confirm(`Delete the "${rule.keyword}" rule? This cannot be undone.`)) return;
+  const [pendingDelete, setPendingDelete] = useState<CommentAutomationRule | null>(null);
 
+  const handleDelete = (rule: CommentAutomationRule) => {
+    setPendingDelete(rule);
+  };
+
+  const confirmDelete = () => {
+    if (!pendingDelete) return;
+    const rule = pendingDelete;
     setBusyId(rule.id);
     commentRulesService
       .remove(rule.id)
       .then(() => {
         setRules((prev) => prev.filter((r) => r.id !== rule.id));
+        setPendingDelete(null);
         showToast('Rule deleted.');
       })
       .catch((err: unknown) => showToast(extractErrorMessage(err, 'Failed to delete the rule.')))
@@ -375,6 +383,18 @@ export default function CommentRulesPage() {
           initial={modalRule === 'new' ? null : modalRule}
           onClose={() => setModalRule(null)}
           onSaved={handleSaved}
+        />
+      )}
+
+      {pendingDelete && (
+        <ConfirmModal
+          title="Delete rule"
+          message={`Delete the "${pendingDelete.keyword}" rule? This cannot be undone.`}
+          confirmLabel="Delete"
+          variant="danger"
+          isLoading={busyId === pendingDelete.id}
+          onConfirm={confirmDelete}
+          onCancel={() => setPendingDelete(null)}
         />
       )}
 

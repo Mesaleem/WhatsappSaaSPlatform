@@ -86,7 +86,19 @@ export interface TodayRecipientBreakdown {
  */
 export interface RecipientTypeBreakdown {
   individual: { sent: number; failed: number };
-  group: { sent: number; failed: number; queued_batches: number; recipient_count: number };
+  /**
+   * Group Module Blank-Screen Fix, disclosed: null (not omitted, not a
+   * zeroed object) whenever AnalyticsController's "Module 2 Fix" API-level
+   * Group module protection suppresses it — i.e. the RESOLVED account for
+   * this request doesn't have the contact_groups module enabled. This was
+   * previously typed as always-present, which is why every `.group.sent`-
+   * style read in DashboardPage.tsx/AnalyticsPage.tsx compiled without
+   * error despite being unsafe — see those files' "Group Module
+   * Blank-Screen Fix" comments for the actual crash this caused and the
+   * `?.` guards it required. Always read this as `?.group?.sent ?? 0`,
+   * never `.group.sent`.
+   */
+  group: { sent: number; failed: number; queued_batches: number; recipient_count: number } | null;
 }
 
 export interface DailyVolumePoint {
@@ -136,7 +148,11 @@ export interface AnalyticsChartsResponse {
    */
   daily_by_recipient_type: {
     individual: DailyVolumePoint[];
-    group: DailyVolumePoint[];
+    // Group Module Blank-Screen Fix, disclosed: same independently-null
+    // `group` contract as RecipientTypeBreakdown.group above — this key
+    // can be null even when the parent object (and `.individual`) is
+    // present. See that interface's docblock.
+    group: DailyVolumePoint[] | null;
   } | null;
 }
 

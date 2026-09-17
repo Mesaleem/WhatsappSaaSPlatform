@@ -181,7 +181,8 @@ function DailyPulseChart() {
   // either condition fails, this falls back to exactly the original
   // combined Sent/Failed area chart — zero visual change for those cases.
   const byRecipientType = charts?.daily_by_recipient_type ?? null;
-  const canShowRecipientSeries = Boolean(byRecipientType) && hasModule('contact_groups');
+  // Group Module Blank-Screen Fix, disclosed: byRecipientType itself can be truthy while its own .group is null (Module 2 Fix suppresses just that key for the RESOLVED account, not the whole object — see the .group?./.individual?. fix above) — checking .group here too is what makes the byRecipientType!.group[index] access below actually safe.
+  const canShowRecipientSeries = Boolean(byRecipientType?.individual) && Boolean(byRecipientType?.group) && hasModule('contact_groups');
 
   const recipientData = canShowRecipientSeries
     ? byRecipientType!.individual.map((individualDay, index) => {
@@ -877,8 +878,8 @@ function TenantDashboard({ impersonatedAccountName }: { impersonatedAccountName?
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             <StatCard
               label="Individual Messages"
-              value={isLoadingSummary ? '…' : String(summary?.recipient_breakdown?.individual.sent ?? 0)}
-              sub={isLoadingSummary ? undefined : `${summary?.recipient_breakdown?.individual.failed ?? 0} failed · last 30 days`}
+              value={isLoadingSummary ? '…' : String(summary?.recipient_breakdown?.individual?.sent ?? 0)}
+              sub={isLoadingSummary ? undefined : `${summary?.recipient_breakdown?.individual?.failed ?? 0} failed · last 30 days`}
               icon={Send}
               tint={NAV_TINTS.send}
             />
@@ -886,8 +887,8 @@ function TenantDashboard({ impersonatedAccountName }: { impersonatedAccountName?
               <>
                 <StatCard
                   label="Group Messages"
-                  value={isLoadingSummary ? '…' : String(summary?.recipient_breakdown?.group.sent ?? 0)}
-                  sub={isLoadingSummary ? undefined : `${summary?.recipient_breakdown?.group.failed ?? 0} failed · last 30 days`}
+                  value={isLoadingSummary ? '…' : String(summary?.recipient_breakdown?.group?.sent ?? 0)}
+                  sub={isLoadingSummary ? undefined : `${summary?.recipient_breakdown?.group?.failed ?? 0} failed · last 30 days`}
                   icon={Users}
                   tint={NAV_TINTS.whatsapp}
                 />
@@ -1268,14 +1269,14 @@ function SuperAdminDashboard() {
               />
               <StatCard
                 label="Total Group Messages"
-                value={isLoadingGroups ? '…' : String(groupSummary?.recipient_breakdown?.group.sent ?? 0)}
+                value={isLoadingGroups ? '…' : String(groupSummary?.recipient_breakdown?.group?.sent ?? 0)}
                 sub="Across the platform · last 30 days"
                 icon={Users}
                 tint={NAV_TINTS.whatsapp}
               />
               <StatCard
                 label="Total Failed Group Messages"
-                value={isLoadingGroups ? '…' : String(groupSummary?.recipient_breakdown?.group.failed ?? 0)}
+                value={isLoadingGroups ? '…' : String(groupSummary?.recipient_breakdown?.group?.failed ?? 0)}
                 sub="Last 30 days"
                 icon={XCircle}
                 tint={FAILED_TINT}

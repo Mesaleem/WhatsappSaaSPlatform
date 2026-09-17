@@ -21,6 +21,7 @@ import { Card, TableCard, inputClass } from '../../components/common/Card';
 import { ClearFiltersButton, Pagination, SearchInput, StatusFilterSelect } from '../../components/common/DataTableControls';
 import { TableSkeletonRows } from '../../components/common/Skeleton';
 import RichTextEditor from '../../components/common/RichTextEditor';
+import ConfirmModal from '../../components/common/ConfirmModal';
 
 type Tab = 'compose' | 'templates' | 'history' | 'mail-logs';
 
@@ -392,13 +393,25 @@ function TemplatesTab() {
     void load();
   }, [load]);
 
-  const handleDelete = async (template: NotificationTemplate) => {
-    if (!window.confirm(`Delete the "${template.name}" template? This cannot be undone.`)) return;
+  const [pendingDelete, setPendingDelete] = useState<NotificationTemplate | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+
+  const handleDelete = (template: NotificationTemplate) => {
+    setPendingDelete(template);
+  };
+
+  const confirmDelete = async () => {
+    if (!pendingDelete) return;
+    const template = pendingDelete;
+    setIsDeleting(true);
     try {
       await notificationService.deleteTemplate(template.id);
+      setPendingDelete(null);
       void load();
     } catch (err) {
       setError(errorMessage(err, 'Could not delete this template.'));
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -484,6 +497,18 @@ function TemplatesTab() {
             setEditing(null);
             void load();
           }}
+        />
+      )}
+
+      {pendingDelete && (
+        <ConfirmModal
+          title="Delete template"
+          message={`Delete the "${pendingDelete.name}" template? This cannot be undone.`}
+          confirmLabel="Delete"
+          variant="danger"
+          isLoading={isDeleting}
+          onConfirm={() => void confirmDelete()}
+          onCancel={() => setPendingDelete(null)}
         />
       )}
     </div>
