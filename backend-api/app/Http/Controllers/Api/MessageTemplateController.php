@@ -155,7 +155,7 @@ class MessageTemplateController extends Controller
             'missing_variables' => response()->json(['message' => $result['message'], 'missing' => $result['missing']], 422),
             'not_found' => response()->json(['message' => $result['message']], 404),
             'disconnected' => response()->json(['message' => $result['message'], 'error_code' => 'WHATSAPP_DISCONNECTED'], 422),
-            'quota_exhausted' => response()->json(['message' => $result['message']], 403),
+            'quota_exhausted' => response()->json(['success' => false, 'message' => $result['message']], 402),
             default => response()->json(['message' => $result['message'] ?? 'Could not send this message.'], 422),
         };
     }

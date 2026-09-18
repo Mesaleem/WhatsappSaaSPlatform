@@ -460,7 +460,7 @@ class ContactGroupController extends Controller
             'template_not_approved' => response()->json(['success' => false, 'message' => $result['message']], 422),
             'not_found' => response()->json(['success' => false, 'message' => $result['message']], 404),
             'disconnected' => response()->json(['success' => false, 'message' => $result['message'], 'error_code' => 'WHATSAPP_DISCONNECTED'], 422),
-            'quota_exhausted' => response()->json(['success' => false, 'message' => $result['message']], 403),
+            'quota_exhausted' => response()->json(['success' => false, 'message' => $result['message']], 402),
             'insufficient_quota' => response()->json([
                 'success' => false,
                 'message' => "This group dispatch requires {$result['required']} credits, but your account only has {$result['remaining']} remaining credits.",
