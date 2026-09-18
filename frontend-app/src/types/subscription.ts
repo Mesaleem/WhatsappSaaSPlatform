@@ -28,6 +28,23 @@ export interface Subscription {
   starts_at: string; // ISO 8601
   expires_at: string; // ISO 8601
   status: SubscriptionStatus;
+  /**
+   * Backend-computed (Subscription::spentAmount() accessor, appended to
+   * every Subscription JSON payload) -- `used_messages * rate_per_message`,
+   * rounded to 2dp. A plain JSON number (accessor returns a PHP float via
+   * round(), not a decimal-cast attribute, so unlike price_paid/
+   * rate_per_message this is NOT a string). null unless
+   * billing_model === 'per_message'.
+   */
+  spent_amount: number | null;
+  /**
+   * Backend-computed (Subscription::remainingBalance() accessor) --
+   * `price_paid - spent_amount`, floored at 0. Same string-vs-number note
+   * as spent_amount. Deliberately NOT derived from total_allocated_messages
+   * (see that accessor's docblock) -- always read this directly rather
+   * than recomputing it client-side.
+   */
+  remaining_balance: number | null;
   created_at: string;
   updated_at: string;
 }

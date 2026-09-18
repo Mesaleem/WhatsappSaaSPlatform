@@ -52,7 +52,15 @@ function formatRate(rate: string | null): string {
  * everywhere a per_message subscription's usage is shown, so the three
  * never disagree.
  */
-function formatMoneyNum(amount: number): string {
+function formatMoneyNum(amount: number | null): string {
+  // Defensive null handling (2026-09-18): spent_amount/remaining_balance
+  // are typed number | null since they're null for non-per_message
+  // subscriptions -- the two call sites below are already guarded by
+  // billing_model === 'per_message', so this should never actually see
+  // null, but the type says it can, and a bare `amount.toFixed(2)` on an
+  // unguarded null would throw at render time. Matches
+  // ClientBillingSummaryTable.tsx's own formatMoneyNum() exactly.
+  if (amount === null) return '—';
   return `₹${amount.toFixed(2)}`;
 }
 
@@ -362,36 +370,15 @@ export default function AccountsPage() {
                           </div>
                           {sub.billing_model === 'per_message' && sub.rate_per_message !== null && (
                             <div className="mt-1 space-y-0.5 text-xs text-slate-400">
-                              {/* Amount-based, not message-count-based: Balance =
-                                  price_paid - spent, so it always reconciles exactly
-                                  against what was paid. total_allocated_messages is
-                                  floor(price_paid / rate) for send-gating only, and
-                                  deriving Balance from that quota instead would leak
-                                  its floor-rounding remainder into a rupee figure the
-                                  admin reads as the literal wallet balance.
-
-                                  Explicit named consts (2026-09-18 request) -- derives
-                                  strictly from price_paid, never from
-                                  total_allocated_messages. Field names follow this
-                                  account's actual Subscription shape (sub.price_paid /
-                                  sub.rate_per_message / sub.used_messages) -- there is
-                                  no `custom_rate` field on this type, and a hardcoded
-                                  0.15 fallback would silently mis-price every
-                                  per_message account whose real rate isn't 0.15. */}
-                              {(() => {
-                                const pricePaid = Number(sub.price_paid);
-                                const customRate = Number(sub.rate_per_message);
-                                const usedMessages = used;
-                                const spent = usedMessages * customRate;
-                                const remainingBalance = Math.max(pricePaid - spent, 0);
-
-                                return (
-                                  <>
-                                    <div>Spent: {formatMoneyNum(spent)}</div>
-                                    <div>Balance: {formatMoneyNum(remainingBalance)}</div>
-                                  </>
-                                );
-                              })()}
+                              {/* Backend-computed (Subscription::spentAmount()/
+                                  remainingBalance() accessors, 2026-09-18) -- no
+                                  frontend subtraction here on purpose, so this
+                                  figure can never drift from the API response
+                                  (or lag behind it after a deploy). See those
+                                  accessors for the price_paid-minus-spent
+                                  rationale (never total_allocated_messages × rate). */}
+                              <div>Spent: {formatMoneyNum(sub.spent_amount)}</div>
+                              <div>Balance: {formatMoneyNum(sub.remaining_balance)}</div>
                             </div>
                           )}
                           {sub.status !== 'active' && (

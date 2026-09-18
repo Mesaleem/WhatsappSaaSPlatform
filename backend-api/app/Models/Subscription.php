@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use App\Traits\LogsActivity;
@@ -26,6 +27,19 @@ class Subscription extends Model
         'status',
     ];
 
+    /**
+     * Wallet Balance -- Single Source of Truth (2026-09-18): spent_amount/
+     * remaining_balance used to be computed independently in three places
+     * (AccountsPage.tsx client-side, BillingController::clientSummary(),
+     * Account::quotaExhaustedMessage()) with the same formula. Moving the
+     * canonical calculation here means every JSON response that includes
+     * a Subscription -- GET /api/admin/accounts, /api/admin/accounts/{id},
+     * the /subscription update responses -- carries these two fields
+     * automatically, with no per-endpoint wiring and no risk of a
+     * frontend build/deploy lag ever showing stale-derived numbers again.
+     */
+    protected $appends = ['spent_amount', 'remaining_balance'];
+
     protected function casts(): array
     {
         return [
@@ -41,6 +55,43 @@ class Subscription extends Model
     public function account(): BelongsTo
     {
         return $this->belongsTo(Account::class);
+    }
+
+    /**
+     * Amount consumed so far, rupee-denominated -- meaningful only for
+     * 'per_message' (the only billing model with a real rate_per_message;
+     * flat_quota/unlimited are paid as a flat price_paid regardless of
+     * usage, so "amount spent" has no per-message meaning for them and
+     * stays null rather than a misleading 0). null, not 0, lets callers
+     * (frontend and PHP alike) distinguish "not applicable" from
+     * "nothing spent yet".
+     */
+    protected function spentAmount(): Attribute
+    {
+        return Attribute::make(
+            get: fn () => $this->billing_model === 'per_message' && $this->rate_per_message !== null
+                ? round((float) $this->rate_per_message * $this->used_messages, 2)
+                : null,
+        );
+    }
+
+    /**
+     * price_paid minus spent_amount, floored at 0 -- NOT derived from
+     * total_allocated_messages (floor(price_paid / rate), kept only for
+     * send-gating at a whole-message boundary): deriving the rupee
+     * balance from that floored quota instead would leak its rounding
+     * remainder into a figure read as the account's literal remaining
+     * wallet value. price_paid is treated as the exact, unmodified
+     * starting balance -- this accessor only ever subtracts from it,
+     * never reconstructs or overrides it.
+     */
+    protected function remainingBalance(): Attribute
+    {
+        return Attribute::make(
+            get: fn () => $this->spent_amount !== null
+                ? round(max((float) $this->price_paid - $this->spent_amount, 0), 2)
+                : null,
+        );
     }
 
     /**

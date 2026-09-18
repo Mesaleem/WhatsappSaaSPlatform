@@ -211,25 +211,16 @@ class BillingController extends Controller
             $sub = $a->currentSubscription;
             $isPerMessage = $sub?->billing_model === 'per_message';
 
-            // Wallet breakdown — rupee-denominated view of the same
-            // used_messages/total_allocated_messages quota already shown
-            // above, meaningful only for 'per_message' (the only billing
-            // model with a real rate_per_message — flat_quota/unlimited
-            // are paid as a flat price_paid regardless of usage, so
-            // "amount used" has no per-message meaning for them and stays
-            // null rather than a misleading 0 or price_paid). Balance is
-            // price_paid minus amount used, NOT the plan's message quota
-            // × rate: total_allocated_messages is floor(price_paid /
-            // rate_per_message) (see AccountController), kept only to
-            // gate sending at a whole-message boundary — deriving the
-            // rupee Balance from that floored quota instead would leak
-            // its rounding remainder into a figure the admin reads as
-            // the account's literal remaining wallet value.
+            // Wallet breakdown -- Single Source of Truth (2026-09-18):
+            // now reuses Subscription::spentAmount()/remainingBalance()
+            // (the canonical, single implementation of this formula)
+            // instead of recomputing it here -- same values as before,
+            // just no longer a second, independently-maintained copy of
+            // the price_paid-minus-spent math. See that model for the
+            // full "why not total_allocated_messages × rate" rationale.
             $rate = $isPerMessage ? $sub->rate_per_message : null;
-            $amountUsed = $rate !== null ? round((float) $rate * $sub->used_messages, 2) : null;
-            $amountRemaining = $amountUsed !== null
-                ? round(max((float) $sub->price_paid - $amountUsed, 0), 2)
-                : null;
+            $amountUsed = $sub?->spent_amount;
+            $amountRemaining = $sub?->remaining_balance;
 
             return [
                 'account_id' => $a->id,
