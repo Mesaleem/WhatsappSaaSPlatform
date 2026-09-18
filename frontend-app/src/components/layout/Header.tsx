@@ -41,7 +41,12 @@ function QuotaBadge() {
   const remaining = Math.max(total - used, 0);
   const percentUsed = total > 0 ? Math.min(100, Math.round((used / total) * 100)) : 0;
   const barColor = percentUsed >= 90 ? 'bg-red-500' : percentUsed >= 70 ? 'bg-amber-500' : '';
-  const canRequestTopUp = subscription.billing_model === 'flat_quota' && percentUsed >= 90;
+  // per_message: total/used/percentUsed above are already meaningful
+  // for it too (total_allocated_messages is the server-computed
+  // floor(price_paid / rate) — see AccountController), so this badge's
+  // existing math needs no change, only the gate and modal below.
+  const canRequestTopUp =
+    (subscription.billing_model === 'flat_quota' || subscription.billing_model === 'per_message') && percentUsed >= 90;
 
   return (
     <>
@@ -56,8 +61,8 @@ function QuotaBadge() {
               <button
                 type="button"
                 onClick={() => setIsTopUpOpen(true)}
-                title="Request Extra Quota"
-                aria-label="Request Extra Quota"
+                title={subscription.billing_model === 'per_message' ? 'Add Funds' : 'Request Extra Quota'}
+                aria-label={subscription.billing_model === 'per_message' ? 'Add Funds' : 'Request Extra Quota'}
                 className="flex h-4 w-4 items-center justify-center rounded-full bg-red-500 text-white hover:bg-red-600"
               >
                 <Zap className="h-2.5 w-2.5" />
@@ -76,6 +81,7 @@ function QuotaBadge() {
 
       {isTopUpOpen && (
         <QuotaTopUpModal
+          billingModel={subscription.billing_model === 'per_message' ? 'per_message' : 'flat_quota'}
           onClose={() => setIsTopUpOpen(false)}
           onSubmitted={(message) => {
             setIsTopUpOpen(false);
