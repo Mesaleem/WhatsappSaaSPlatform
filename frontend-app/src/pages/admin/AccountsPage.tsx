@@ -368,11 +368,30 @@ export default function AccountsPage() {
                                   floor(price_paid / rate) for send-gating only, and
                                   deriving Balance from that quota instead would leak
                                   its floor-rounding remainder into a rupee figure the
-                                  admin reads as the literal wallet balance. */}
-                              <div>Spent: {formatMoneyNum(used * Number(sub.rate_per_message))}</div>
-                              <div>
-                                Balance: {formatMoneyNum(Math.max(Number(sub.price_paid) - used * Number(sub.rate_per_message), 0))}
-                              </div>
+                                  admin reads as the literal wallet balance.
+
+                                  Explicit named consts (2026-09-18 request) -- derives
+                                  strictly from price_paid, never from
+                                  total_allocated_messages. Field names follow this
+                                  account's actual Subscription shape (sub.price_paid /
+                                  sub.rate_per_message / sub.used_messages) -- there is
+                                  no `custom_rate` field on this type, and a hardcoded
+                                  0.15 fallback would silently mis-price every
+                                  per_message account whose real rate isn't 0.15. */}
+                              {(() => {
+                                const pricePaid = Number(sub.price_paid);
+                                const customRate = Number(sub.rate_per_message);
+                                const usedMessages = used;
+                                const spent = usedMessages * customRate;
+                                const remainingBalance = Math.max(pricePaid - spent, 0);
+
+                                return (
+                                  <>
+                                    <div>Spent: {formatMoneyNum(spent)}</div>
+                                    <div>Balance: {formatMoneyNum(remainingBalance)}</div>
+                                  </>
+                                );
+                              })()}
                             </div>
                           )}
                           {sub.status !== 'active' && (
