@@ -82,17 +82,33 @@ class RazorpayGatewayDriver implements PaymentGatewayInterface
     /**
      * Razorpay webhook payload shape:
      * { event: "payment.captured", payload: { payment: { entity: { id, order_id, status } } } }
+     *
+     * A refund webhook ('refund.processed') carries BOTH the payment AND
+     * refund sub-objects in the same payload shape (Razorpay's own
+     * documented behavior), so the existing order_id/payment_id
+     * extraction above already works unchanged for a refund event —
+     * only the is_refund/reference detection below is new.
+     * 'refund.created'/'refund.failed' are deliberately NOT treated as
+     * is_refund here: only a settled ('processed') refund should ever
+     * reverse an Agent commission.
      */
     public function parseWebhookEvent(array $payload): array
     {
         $entity = $payload['payload']['payment']['entity'] ?? [];
+        $refundEntity = $payload['payload']['refund']['entity'] ?? [];
         $event = $payload['event'] ?? '';
+
+        $isRefund = $event === 'refund.processed';
 
         return [
             'order_id' => $entity['order_id'] ?? null,
             'payment_id' => $entity['id'] ?? null,
-            'is_success' => in_array($event, ['payment.captured', 'order.paid'], true)
-                || ($entity['status'] ?? null) === 'captured',
+            'is_success' => ! $isRefund && (
+                in_array($event, ['payment.captured', 'order.paid'], true)
+                || ($entity['status'] ?? null) === 'captured'
+            ),
+            'is_refund' => $isRefund,
+            'reference' => $isRefund ? ($refundEntity['id'] ?? null) : null,
         ];
     }
 }

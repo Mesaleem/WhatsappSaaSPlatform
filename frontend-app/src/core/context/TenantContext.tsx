@@ -74,6 +74,10 @@ export function TenantProvider({ children }: { children: ReactNode }) {
 
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [isLoadingAccounts, setIsLoadingAccounts] = useState(false);
+  // True only once a list request has SUCCEEDED. Before that, `accounts`
+  // is just the initial [] (or a failed load's []), which says nothing
+  // about whether a stored selection is still valid.
+  const [hasLoadedAccounts, setHasLoadedAccounts] = useState(false);
   const [selectedAccountId, setSelectedAccountIdState] = useState<number | null>(readStoredAccountId);
 
   const selectAccount = useCallback((id: number | null) => {
@@ -101,6 +105,7 @@ export function TenantProvider({ children }: { children: ReactNode }) {
       // Sub-Clients (callerAgentScopeId()) — no separate endpoint needed.
       const res = await accountService.list({ per_page: 100 });
       setAccounts(res.data);
+      setHasLoadedAccounts(true);
     } catch {
       setAccounts([]);
     } finally {
@@ -120,12 +125,20 @@ export function TenantProvider({ children }: { children: ReactNode }) {
   // deleted) can point at an account the freshly-loaded list no longer
   // contains — drop it rather than keep silently scoping every request to
   // an account_id the middleware will 404 on.
+  //
+  // [Bugfix] Only after a list has actually loaded. This effect used to run
+  // on the first render, before refreshAccounts() had even flagged itself
+  // as loading, with accounts === [] — so every page reload wiped the
+  // stored selection and put a Super Admin back in "All Clients (Global
+  // View)" (e.g. CRM Leads then hid "Add lead"). The server still rejects
+  // an invalid or foreign ?account_id= (TenantIsolationMiddleware), so
+  // keeping the selection until the list arrives exposes nothing.
   useEffect(() => {
-    if (isLoadingAccounts || selectedAccountId === null) return;
+    if (!hasLoadedAccounts || isLoadingAccounts || selectedAccountId === null) return;
     if (!accounts.some((a) => a.id === selectedAccountId)) {
       selectAccount(null);
     }
-  }, [accounts, isLoadingAccounts, selectedAccountId, selectAccount]);
+  }, [accounts, hasLoadedAccounts, isLoadingAccounts, selectedAccountId, selectAccount]);
 
   const effectiveSelectedAccountId = canSwitchClients ? selectedAccountId : null;
 

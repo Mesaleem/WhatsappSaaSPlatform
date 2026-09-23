@@ -9,10 +9,12 @@ use App\Jobs\SyncNativeWhatsAppGroupParticipantsJob;
 use App\Models\Account;
 use App\Models\ContactGroup;
 use App\Models\ContactGroupMember;
+use App\Services\Crm\ContactGroupContactLinker;
 use App\Services\Groups\GroupMessageDispatcher;
 use App\Services\Groups\NativeGroupCreationService;
 use App\Services\Groups\NativeWhatsAppGroupService;
 use App\Support\PhoneNumberNormalizer;
+use App\Services\Access\ProviderCapabilityService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
@@ -124,7 +126,10 @@ class ContactGroupController extends Controller
     {
         $engineType = $account->currentSubscription?->engine_type;
 
-        if ($engineType !== 'qr') {
+        // Phase 5 Task 2 -- provider_capabilities is authoritative for
+        // this rule when it states it; the 'qr' literal now lives only
+        // in ProviderCapabilityService::supportsNativeWhatsAppGroups().
+        if (! app(ProviderCapabilityService::class)->supportsNativeWhatsAppGroups($engineType)) {
             return response()->json([
                 'success' => false,
                 'error_code' => 'NATIVE_GROUP_REQUIRES_QR_ENGINE',
@@ -172,7 +177,10 @@ class ContactGroupController extends Controller
 
         $engineType = $account->currentSubscription?->engine_type;
 
-        if ($engineType !== 'qr') {
+        // Phase 5 Task 2 -- provider_capabilities is authoritative for
+        // this rule when it states it; the 'qr' literal now lives only
+        // in ProviderCapabilityService::supportsNativeWhatsAppGroups().
+        if (! app(ProviderCapabilityService::class)->supportsNativeWhatsAppGroups($engineType)) {
             return response()->json([
                 'success' => false,
                 'error_code' => 'NATIVE_GROUP_REQUIRES_QR_ENGINE',
@@ -243,7 +251,10 @@ class ContactGroupController extends Controller
 
         $engineType = $account->currentSubscription?->engine_type;
 
-        if ($engineType !== 'qr') {
+        // Phase 5 Task 2 -- provider_capabilities is authoritative for
+        // this rule when it states it; the 'qr' literal now lives only
+        // in ProviderCapabilityService::supportsNativeWhatsAppGroups().
+        if (! app(ProviderCapabilityService::class)->supportsNativeWhatsAppGroups($engineType)) {
             return response()->json([
                 'success' => false,
                 'error_code' => 'NATIVE_GROUP_REQUIRES_QR_ENGINE',
@@ -341,6 +352,10 @@ class ContactGroupController extends Controller
         $rows = collect($data['contacts'])
             ->map(fn (array $c) => [
                 'group_id' => $group->id,
+                // Round 2 — contact_group_members.account_id is NOT NULL
+                // and half of the composite (group_id, account_id)
+                // foreign key. Taken from the group, never from input.
+                'account_id' => $group->account_id,
                 'phone_number' => PhoneNumberNormalizer::normalize($c['phone_number']),
                 'name' => $c['name'] ?? null,
                 'created_at' => $now,
@@ -349,6 +364,19 @@ class ContactGroupController extends Controller
             ->all();
 
         ContactGroupMember::upsert($rows, ['group_id', 'phone_number'], ['name', 'updated_at']);
+
+        /*
+         * Phase 6 CRM Hardening (Issue 8) — reconcile the imported rows
+         * to universal CRM Contacts, resolving each one against THIS
+         * group's own account (contact_group_members has no account_id;
+         * ownership is derived from group_id -> contact_groups
+         * .account_id, which is how a caller can never reach another
+         * tenant's contact from here). Runs after the upsert and only
+         * over contact_id IS NULL rows, so re-importing the same list
+         * creates nothing. Quietly: a CRM reconciliation failure must
+         * not fail a contact import that already succeeded.
+         */
+        app(ContactGroupContactLinker::class)->linkGroupQuietly($group);
 
         if ($group->isSyncedNativeGroup()) {
             $phones = collect($data['contacts'])->pluck('phone_number')->all();
@@ -528,7 +556,10 @@ class ContactGroupController extends Controller
         // created.
         $engineType = $account->currentSubscription?->engine_type;
 
-        if ($engineType !== 'qr') {
+        // Phase 5 Task 2 -- provider_capabilities is authoritative for
+        // this rule when it states it; the 'qr' literal now lives only
+        // in ProviderCapabilityService::supportsNativeWhatsAppGroups().
+        if (! app(ProviderCapabilityService::class)->supportsNativeWhatsAppGroups($engineType)) {
             return response()->json([
                 'success' => false,
                 'error_code' => 'NATIVE_GROUP_REQUIRES_QR_ENGINE',

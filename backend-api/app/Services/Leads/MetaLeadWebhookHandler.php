@@ -5,6 +5,7 @@ namespace App\Services\Leads;
 use App\Models\Account;
 use App\Models\Lead;
 use App\Models\SocialAccount;
+use App\Services\Crm\CaptureLeadLinker;
 use App\Services\WhatsApp\WhatsAppEngineFactory;
 use App\Support\PhoneNumberNormalizer;
 use Illuminate\Support\Facades\Http;
@@ -137,6 +138,22 @@ class MetaLeadWebhookHandler
             'lead_email' => $extracted['email'],
             'raw_field_data' => $fieldData,
         ]);
+
+        /*
+         * Phase 6 CRM Hardening (Issue 5) — promote this capture into
+         * the CRM as a `meta_ad` lead. Deliberately placed AFTER the
+         * capture row is committed and BEFORE the two WhatsApp sends, so
+         * the CRM record exists even if a send later fails.
+         *
+         * linkQuietly, never link: this handler is synchronous inside a
+         * Meta webhook and Meta retries any non-2xx response, so an
+         * exception escaping here would turn an already-persisted
+         * capture into an endless redelivery loop. A CRM failure is
+         * logged and the row stays unlinked for the backfill to pick up;
+         * every line of the existing capture and notify behaviour below
+         * is unchanged.
+         */
+        app(CaptureLeadLinker::class)->linkQuietly($lead);
 
         $this->notifyTenant($account, $lead, $extracted);
         $this->welcomeLead($account, $lead, $normalizedPhone, $extracted);

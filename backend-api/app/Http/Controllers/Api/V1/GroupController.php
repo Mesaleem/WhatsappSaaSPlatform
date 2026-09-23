@@ -7,6 +7,7 @@ use App\Http\Requests\CreateWhatsAppGroupRequest;
 use App\Models\Account;
 use App\Models\ContactGroup;
 use App\Services\Groups\NativeGroupCreationService;
+use App\Services\Access\ProviderCapabilityService;
 use Illuminate\Http\JsonResponse;
 
 /**
@@ -73,7 +74,10 @@ class GroupController extends Controller
         // already enforces.
         $engineType = $account->currentSubscription?->engine_type;
 
-        if ($engineType !== 'qr') {
+        // Phase 5 Task 2 -- provider_capabilities is authoritative for
+        // this rule when it states it; the 'qr' literal now lives only
+        // in ProviderCapabilityService::supportsNativeWhatsAppGroups().
+        if (! app(ProviderCapabilityService::class)->supportsNativeWhatsAppGroups($engineType)) {
             return response()->json([
                 'success' => false,
                 'error_code' => 'NATIVE_GROUP_REQUIRES_QR_ENGINE',

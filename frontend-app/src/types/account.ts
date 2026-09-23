@@ -311,3 +311,65 @@ export interface UpdateAccountPermissionsPayload {
   /** null resets the account to "every module enabled". */
   allowed_modules: AccountModule[] | null;
 }
+
+/**
+ * Phase 5 Task 8 — Bind Journey Node Capabilities to Plan Entitlements.
+ *
+ * Mirrors AccountController::listEntitlements(). Nothing here is a new
+ * column: `source` is the existing account_entitlements.source, and
+ * `plan_granted` is derived from the account's plan's own
+ * plan_entitlements rows.
+ */
+export type AccountEntitlementSource = 'plan' | 'manual_grant' | 'agent_delegated';
+
+/** Phase 5 Task 10 — see AccountEntitlementRow.revoked_reason. */
+export type AccountEntitlementRevokedReason = 'manual' | 'plan_downgrade';
+
+export interface AccountEntitlementRow {
+  slug: string;
+  label: string;
+  category: string | null;
+  /** The effective answer — the same value /auth/me reports to the tenant. */
+  granted: boolean;
+  /** Where the grant came from, or null when the account does not hold it. */
+  source: AccountEntitlementSource | null;
+  granted_by_account_id: number | null;
+  /**
+   * Whether the account's CURRENT plan bundles this capability.
+   * `plan_granted: true` with `granted: false` is meaningful, not a
+   * contradiction: the plan offers it and the account's WhatsApp
+   * provider cannot support it.
+   */
+  plan_granted: boolean;
+  /**
+   * Phase 5 Task 9 — the capability was DELIBERATELY taken away by an
+   * administrator, which is a different fact from never having held it.
+   * It is also what stops `entitlements:backfill-plan` from restoring
+   * it, so it must be visible rather than rendering as a plain
+   * "Not entitled".
+   */
+  revoked: boolean;
+  /** ISO timestamp of the revocation, or null. */
+  revoked_at: string | null;
+  /**
+   * Phase 5 Task 10 — WHY it was revoked, and therefore whether it can
+   * come back on its own:
+   *
+   *   'manual'          an administrator took it away. No automated
+   *                     reconciliation ever restores it.
+   *   'plan_downgrade'  the plan stopped including it (or the account's
+   *                     provider stopped supporting it). Restored
+   *                     automatically if the plan includes it again.
+   */
+  revoked_reason: AccountEntitlementRevokedReason | null;
+}
+
+export interface AccountEntitlementsResponse {
+  data: AccountEntitlementRow[];
+  meta: {
+    /** The plan slug from the account's most recent paid invoice, or null. */
+    plan: string | null;
+    /** The account's WhatsApp engine, server-resolved. */
+    provider: string | null;
+  };
+}

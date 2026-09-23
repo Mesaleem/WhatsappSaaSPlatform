@@ -23,9 +23,12 @@ import type {
   MessageTemplate,
   MessageTemplateStatus,
   SaveMessageTemplatePayload,
+  TemplateButtonSubType,
   TemplateHeaderType,
+  TemplateVariableComponent,
   TemplateVariableSchemaField,
   TemplateVariableType,
+  MetaTemplateCategory,
 } from '../../types/templates';
 import { inputClass, TableCard } from '../../components/common/Card';
 import { PageHeader, PageShell } from '../../components/common/PageShell';
@@ -99,6 +102,65 @@ function effectiveSchema(t: MessageTemplate): TemplateVariableSchemaField[] {
   return extractVariables(t.template_body).map(defaultVariableField);
 }
 
+/**
+ * Phase 4 Task 8 -- which Meta component a variable supplies a parameter
+ * for. Mirrors MessageTemplate::VARIABLE_COMPONENTS exactly.
+ *
+ * 'footer' is deliberately NOT offered: Meta accepts no runtime parameter
+ * for a template footer at all, the backend rejects it with a 422, and
+ * TemplateComponentTranslator refuses to send it. Exposing it as a choice
+ * would only let an operator build a template that can never be sent.
+ *
+ * A HEADER *media* parameter is NOT a choice here either -- it is driven
+ * by the template's own Header type / Media URL controls further up this
+ * same form (unchanged since the Media Templates feature), not by a
+ * {{token}}. Picking "Header" below therefore always means header TEXT,
+ * and the two are mutually exclusive on one template -- validated in
+ * handleSubmit() and again server-side.
+ */
+const COMPONENT_OPTIONS: { value: TemplateVariableComponent; label: string; hint: string }[] = [
+  { value: 'body', label: 'Body', hint: 'Fills a {{1}} placeholder in the message body.' },
+  { value: 'header', label: 'Header (text)', hint: 'Fills the template’s text header. At most one per template.' },
+  { value: 'button', label: 'Button', hint: 'Fills a dynamic URL suffix or a quick-reply payload.' },
+];
+
+/** Mirrors MessageTemplate::BUTTON_SUB_TYPES. */
+const BUTTON_SUB_TYPE_OPTIONS: { value: TemplateButtonSubType; label: string }[] = [
+  { value: 'url', label: 'URL' },
+  { value: 'quick_reply', label: 'Quick Reply' },
+];
+
+/** Meta addresses buttons positionally; the backend rule is integer 0-9. */
+const MAX_BUTTON_INDEX = 9;
+
+/**
+ * The component a field is configured for. An ABSENT `component` key --
+ * the shape of every template written before Task 7 -- means 'body',
+ * exactly as TemplateComponentTranslator::fieldsFor() reads it server-side.
+ */
+function componentOf(field: TemplateVariableSchemaField): TemplateVariableComponent {
+  return field.component ?? 'body';
+}
+
+/**
+ * Lowest button index not already claimed by another button field, so a
+ * freshly switched-to-Button variable never lands on a duplicate index
+ * (which both this form and the backend reject). Falls back to 0 once
+ * every index is taken -- the duplicate check then surfaces the problem
+ * rather than this helper silently inventing an out-of-range index.
+ */
+function nextFreeButtonIndex(fields: TemplateVariableSchemaField[], exceptKey: string): number {
+  const taken = new Set(
+    fields
+      .filter((f) => f.key !== exceptKey && componentOf(f) === 'button' && typeof f.button_index === 'number')
+      .map((f) => f.button_index as number),
+  );
+  for (let i = 0; i <= MAX_BUTTON_INDEX; i += 1) {
+    if (!taken.has(i)) return i;
+  }
+  return 0;
+}
+
 const VARIABLE_TYPE_OPTIONS: { value: TemplateVariableType; label: string }[] = [
   { value: 'string', label: 'String' },
   { value: 'number', label: 'Number' },
@@ -161,6 +223,12 @@ function TemplateModal({
   const [headerType, setHeaderType] = useState<TemplateHeaderType>(template?.header_type ?? 'text');
   const [headerMediaUrl, setHeaderMediaUrl] = useState(template?.header_media_url ?? '');
   const [accountId, setAccountId] = useState<number | ''>(template?.account_id ?? '');
+  // Phase 4 Task 5 -- Meta Cloud API template fields. Optional for a QR
+  // template; the backend rejects them outright for a non-Meta account and
+  // requires a language whenever a Meta template name is given.
+  const [language, setLanguage] = useState(template?.language ?? '');
+  const [category, setCategory] = useState<MetaTemplateCategory | ''>(template?.category ?? '');
+  const [metaTemplateName, setMetaTemplateName] = useState(template?.meta_template_name ?? '');
   const [variablesSchema, setVariablesSchema] = useState<TemplateVariableSchemaField[]>(
     template?.variables_schema ?? [],
   );
@@ -191,6 +259,53 @@ function TemplateModal({
     setVariablesSchema((prev) => prev.map((f) => (f.key === key ? { ...f, ...patch } : f)));
   };
 
+  /**
+   * Phase 4 Task 8 -- component changes cannot go through
+   * updateVariableField() above, because a plain spread-patch would LEAVE
+   * button metadata behind on a field that is no longer a button, and the
+   * backend rejects exactly that with a 422 ("non-button field containing
+   * button metadata"). So the three Meta keys are always rebuilt from
+   * scratch here rather than merged.
+   *
+   * Choosing "Body" DELETES the `component` key instead of writing
+   * `component: 'body'`. That is deliberate: a template configured before
+   * Task 7 has no `component` key at all, and opening it in this form and
+   * saving it again must not rewrite its stored schema into a different
+   * (if equivalent) shape. Absent already means body everywhere that
+   * reads it.
+   */
+  const setVariableComponent = (key: string, component: TemplateVariableComponent) => {
+    setVariablesSchema((prev) =>
+      prev.map((f) => {
+        if (f.key !== key) return f;
+
+        const next = { ...f };
+        delete next.component;
+        delete next.button_sub_type;
+        delete next.button_index;
+
+        if (component === 'header') {
+          next.component = 'header';
+        } else if (component === 'button') {
+          next.component = 'button';
+          next.button_sub_type = 'url';
+          next.button_index = nextFreeButtonIndex(prev, key);
+        }
+
+        return next;
+      }),
+    );
+  };
+
+  /**
+   * Phase 4 Task 8 -- component controls are Meta-only, gated on exactly
+   * what makes a template Meta-defined server-side
+   * (MessageTemplate::isMetaDefined() === filled(meta_template_name)).
+   * A QR template never shows them, so its Variable Configurator is
+   * byte-for-byte the form it has always been.
+   */
+  const isMetaTemplate = metaTemplateName.trim() !== '';
+
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     if (!title.trim() || !templateBody.trim()) {
@@ -208,6 +323,90 @@ function TemplateModal({
       setError(`"${incompleteSelect.label || incompleteSelect.key}" is a Dropdown field — add at least one option.`);
       return;
     }
+    // Phase 4 Task 5 -- mirrors MessageTemplateController's own rules so
+    // the common mistakes are caught before a round trip. The backend
+    // remains authoritative; anything it rejects still surfaces below.
+    if (metaTemplateName.trim() && !language.trim()) {
+      setError('A Meta template name also requires a language code (for example "en_US").');
+      return;
+    }
+    if (language.trim() && !/^[a-z]{2}(_[A-Z]{2})?$/.test(language.trim())) {
+      setError('Language must be a Meta language code such as "en" or "en_US".');
+      return;
+    }
+    if (metaTemplateName.trim() && !/^[a-z0-9_]+$/.test(metaTemplateName.trim())) {
+      setError('A Meta template name may only contain lowercase letters, numbers and underscores.');
+      return;
+    }
+    // Phase 4 Task 8 -- Meta component structure. Mirrors both
+    // MessageTemplateController::assertComponentStructure() (write time)
+    // and TemplateComponentTranslator::componentStructureErrors() (send
+    // time) so the operator is told what is wrong without a round trip;
+    // the backend stays authoritative and its 422 still surfaces below.
+    //
+    // Only for a Meta-defined template: a QR template's schema is read
+    // flat by TemplateRenderer, which has no notion of components at all.
+    if (isMetaTemplate) {
+      const headerFields = variablesSchema.filter((f) => componentOf(f) === 'header');
+      if (headerFields.length > 1) {
+        setError('A Meta template may carry at most one header parameter — only one variable can use the Header component.');
+        return;
+      }
+      if (headerFields.length > 0 && headerType !== 'text') {
+        setError(
+          `"${headerFields[0].label || headerFields[0].key}" fills a text header, but this template's Header type is set to ${headerType}. A Meta template header is either media or text, never both.`,
+        );
+        return;
+      }
+
+      const usedIndexes = new Set<number>();
+      for (const field of variablesSchema) {
+        const name = field.label || field.key;
+        if (componentOf(field) !== 'button') {
+          // Cannot be produced by this form (setVariableComponent strips
+          // them), but a schema authored through the API can carry them.
+          if (field.button_sub_type != null || field.button_index != null) {
+            setError(`"${name}" is not a button parameter, so it cannot carry a button type or index.`);
+            return;
+          }
+          continue;
+        }
+        if (!field.button_sub_type) {
+          setError(`"${name}" is a button parameter — choose URL or Quick Reply.`);
+          return;
+        }
+        if (typeof field.button_index !== 'number' || Number.isNaN(field.button_index)) {
+          setError(`"${name}" is a button parameter — set its button index.`);
+          return;
+        }
+        if (field.button_index < 0 || field.button_index > MAX_BUTTON_INDEX) {
+          setError(`"${name}" has an invalid button index — it must be between 0 and ${MAX_BUTTON_INDEX}.`);
+          return;
+        }
+        if (usedIndexes.has(field.button_index)) {
+          setError(
+            `Button index ${field.button_index} is used by more than one variable. Each Meta button takes exactly one parameter.`,
+          );
+          return;
+        }
+        usedIndexes.add(field.button_index);
+      }
+    }
+    // Every {{token}} in the body must be declared once a schema exists —
+    // an undeclared token is never substituted and would reach the
+    // recipient as literal text.
+    if (variablesSchema.length > 0) {
+      const declared = new Set(variablesSchema.map((f) => f.key));
+      const undeclared = variables.filter((v) => !declared.has(v));
+      if (undeclared.length > 0) {
+        setError(
+          `The body uses variable(s) the configurator does not define: ${undeclared
+            .map((v) => `{{${v}}}`)
+            .join(', ')}.`,
+        );
+        return;
+      }
+    }
     setError(null);
     setIsSaving(true);
     try {
@@ -220,6 +419,9 @@ function TemplateModal({
         variables_schema: variablesSchema,
         header_type: headerType,
         header_media_url: headerType === 'text' ? null : headerMediaUrl.trim(),
+        language: language.trim() || null,
+        category: category === '' ? null : category,
+        meta_template_name: metaTemplateName.trim() || null,
       };
       if (template) {
         await templateService.update(template.id, payload);
@@ -244,7 +446,15 @@ function TemplateModal({
           </button>
         </div>
 
-        <form onSubmit={(e) => void handleSubmit(e)} className="mt-4 space-y-4">
+        {/*
+          noValidate: the Button index input carries min/max as a UI
+          affordance, and the browser's own constraint bubble would
+          otherwise block submit before handleSubmit() runs -- so the
+          operator would never see this form's own, app-styled message.
+          Every rule in this form is enforced in handleSubmit() (and again
+          server-side), so nothing is lost by turning the native pass off.
+        */}
+        <form onSubmit={(e) => void handleSubmit(e)} noValidate className="mt-4 space-y-4">
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
             <div>
               <label className="text-sm font-medium text-slate-700">Title <span className="text-red-500">*</span></label>
@@ -264,6 +474,55 @@ function TemplateModal({
                 placeholder="e.g. Healthcare, Banking"
                 className={inputClass}
               />
+            </div>
+          </div>
+
+          {/*
+            Phase 4 Task 5 -- Meta Cloud API template fields. Left blank for
+            a QR template, which behaves exactly as before.
+          */}
+          <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+            <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
+              Meta Cloud API (optional)
+            </p>
+            <p className="mt-1 text-xs text-slate-500">
+              Only for accounts on the Meta provider. Leave blank for a QR template.
+            </p>
+            <div className="mt-3 grid grid-cols-1 gap-4 md:grid-cols-3">
+              <div>
+                <label htmlFor="tpl-language" className="text-sm font-medium text-slate-700">Language</label>
+                <input
+                  id="tpl-language"
+                  value={language}
+                  onChange={(e) => setLanguage(e.target.value)}
+                  placeholder="en_US"
+                  className={inputClass}
+                />
+              </div>
+              <div>
+                <label htmlFor="tpl-category" className="text-sm font-medium text-slate-700">Category</label>
+                <select
+                  id="tpl-category"
+                  value={category}
+                  onChange={(e) => setCategory(e.target.value as MetaTemplateCategory | '')}
+                  className={inputClass}
+                >
+                  <option value="">Not set</option>
+                  <option value="MARKETING">Marketing</option>
+                  <option value="UTILITY">Utility</option>
+                  <option value="AUTHENTICATION">Authentication</option>
+                </select>
+              </div>
+              <div>
+                <label htmlFor="tpl-meta-name" className="text-sm font-medium text-slate-700">Meta template name</label>
+                <input
+                  id="tpl-meta-name"
+                  value={metaTemplateName}
+                  onChange={(e) => setMetaTemplateName(e.target.value)}
+                  placeholder="order_update"
+                  className={inputClass}
+                />
+              </div>
             </div>
           </div>
 
@@ -434,6 +693,93 @@ function TemplateModal({
                         </label>
                       </div>
                     </div>
+                    {/*
+                      Phase 4 Task 8 -- Meta component placement. Rendered
+                      only for a Meta-defined template (a Meta template
+                      name is set); a QR template's configurator is
+                      completely unchanged.
+                    */}
+                    {isMetaTemplate && (
+                      <div className="mt-2 rounded-lg border border-fuchsia-200 bg-fuchsia-50/50 p-2">
+                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                          <div>
+                            <label
+                              htmlFor={`var-component-${field.key}`}
+                              className="text-xs font-medium text-slate-500"
+                            >
+                              Meta component
+                            </label>
+                            <select
+                              id={`var-component-${field.key}`}
+                              value={componentOf(field)}
+                              onChange={(e) =>
+                                setVariableComponent(field.key, e.target.value as TemplateVariableComponent)
+                              }
+                              className={`${inputClass} mt-1 py-1.5 text-sm`}
+                            >
+                              {COMPONENT_OPTIONS.map((opt) => (
+                                <option key={opt.value} value={opt.value}>
+                                  {opt.label}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+
+                          {componentOf(field) === 'button' && (
+                            <>
+                              <div>
+                                <label
+                                  htmlFor={`var-button-sub-type-${field.key}`}
+                                  className="text-xs font-medium text-slate-500"
+                                >
+                                  Button type
+                                </label>
+                                <select
+                                  id={`var-button-sub-type-${field.key}`}
+                                  value={field.button_sub_type ?? ''}
+                                  onChange={(e) =>
+                                    updateVariableField(field.key, {
+                                      button_sub_type: e.target.value as TemplateButtonSubType,
+                                    })
+                                  }
+                                  className={`${inputClass} mt-1 py-1.5 text-sm`}
+                                >
+                                  {BUTTON_SUB_TYPE_OPTIONS.map((opt) => (
+                                    <option key={opt.value} value={opt.value}>
+                                      {opt.label}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+                              <div>
+                                <label
+                                  htmlFor={`var-button-index-${field.key}`}
+                                  className="text-xs font-medium text-slate-500"
+                                >
+                                  Button index
+                                </label>
+                                <input
+                                  id={`var-button-index-${field.key}`}
+                                  type="number"
+                                  min={0}
+                                  max={MAX_BUTTON_INDEX}
+                                  value={field.button_index ?? ''}
+                                  onChange={(e) =>
+                                    updateVariableField(field.key, {
+                                      button_index: e.target.value === '' ? undefined : Number(e.target.value),
+                                    })
+                                  }
+                                  className={`${inputClass} mt-1 py-1.5 text-sm`}
+                                />
+                              </div>
+                            </>
+                          )}
+                        </div>
+                        <p className="mt-1.5 text-[11px] text-slate-500">
+                          {COMPONENT_OPTIONS.find((o) => o.value === componentOf(field))?.hint}
+                        </p>
+                      </div>
+                    )}
                     {field.type === 'select' && (
                       <div className="mt-2">
                         <label className="text-xs font-medium text-slate-500">

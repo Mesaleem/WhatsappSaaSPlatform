@@ -43,11 +43,14 @@ export async function notifyBackend(accountId, status) {
  * /api/internal/whatsapp-inbound endpoint (WhatsAppInboundController),
  * which was built for this call and previously had no caller.
  */
-export async function notifyInboundMessage(accountId, senderPhone, message) {
+export async function notifyInboundMessage(accountId, senderPhone, message, messageId = null) {
   try {
     await backendHttp.post(
       '/api/internal/whatsapp-inbound',
-      { account_id: Number(accountId), sender_phone: senderPhone, message },
+      // Phase 7 Task 3 — message_id: the Baileys message key id (msg.key.id),
+      // the message's stable WhatsApp identity. backend-api uses it to
+      // process each inbound message at most once (durable de-duplication).
+      { account_id: Number(accountId), sender_phone: senderPhone, message, message_id: messageId },
       { headers: { 'X-Internal-Secret': INTERNAL_API_SECRET } },
     );
   } catch (err) {

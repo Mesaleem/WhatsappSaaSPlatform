@@ -33,6 +33,22 @@ class WhatsAppSession extends Model
      */
     protected $hidden = [
         'meta_access_token',
+        // [Hardening, Phase 4 Task 9]: the webhook verify token is a
+        // per-tenant shared secret -- MetaWebhookController::verify()
+        // hash_equals() an inbound hub.verify_token against it to decide
+        // whether to complete Meta's subscription handshake -- but it was
+        // stored in plaintext AND serializable, so it did not have even
+        // the JSON-serialization protection meta_access_token has. It is
+        // returned deliberately (in cleartext) by MetaConfigController's
+        // own hand-built show()/store() response arrays, which read the
+        // attribute directly and are unaffected by $hidden; this only
+        // stops the value riding along if the MODEL is ever serialized.
+        //
+        // Deliberately NOT given an `encrypted` cast to match
+        // meta_access_token: every row already stores this column in
+        // plaintext, and adding the cast would make every existing row
+        // fail to decrypt on read.
+        'meta_webhook_verify_token',
     ];
 
     protected function casts(): array

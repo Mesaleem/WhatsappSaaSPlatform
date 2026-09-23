@@ -7,7 +7,9 @@ use App\Models\ChatbotLog;
 use App\Models\ChatbotRule;
 use App\Models\MessageDispatchLog;
 use App\Services\WhatsApp\WhatsAppEngineFactory;
+use App\Services\Messaging\InboundEventGate;
 use App\Services\WhatsApp\WhatsAppJourneyEngine;
+use App\Services\Messaging\MessageQuotaService;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -59,17 +61,35 @@ class ChatbotEngineService
      * through to the pre-existing process() below, completely unchanged.
      * See WhatsAppJourneyEngine's class docblock for the full contract.
      */
-    public function handleInboundMessage(int $accountId, string $senderPhone, string $incomingMessage, ?array $referral = null): ?ChatbotLog
+    /**
+     * Phase 7 Task 3 — $provider/$eventKey: the inbound message's durable
+     * identity (Meta WAMID, QR/Baileys message id). Everything below runs
+     * inside InboundEventGate: the conversation (account + phone) is
+     * serialized, and an event key already claimed is skipped entirely —
+     * no second Journey start or advance, no duplicate send, lead or
+     * quota. Without a key (older callers) only the serialization applies.
+     */
+    public function handleInboundMessage(int $accountId, string $senderPhone, string $incomingMessage, ?array $referral = null, ?string $provider = null, ?string $eventKey = null): ?ChatbotLog
     {
         try {
-            if (app(WhatsAppJourneyEngine::class)->handleInboundMessage($accountId, $senderPhone, $incomingMessage, $referral)) {
-                // Consumed by a Journey — no ChatbotLog row is created for
-                // it (flows do not yet have their own log table, a
-                // disclosed scope gap — see WhatsAppJourneyEngine::send()).
-                return null;
-            }
+            $gate = app(InboundEventGate::class)->run(
+                $accountId,
+                $senderPhone,
+                $provider ?? 'unknown',
+                $eventKey,
+                function () use ($accountId, $senderPhone, $incomingMessage, $referral) {
+                    if (app(WhatsAppJourneyEngine::class)->handleInboundMessage($accountId, $senderPhone, $incomingMessage, $referral)) {
+                        // Consumed by a Journey — no ChatbotLog row is created for
+                        // it (flows do not yet have their own log table, a
+                        // disclosed scope gap — see WhatsAppJourneyEngine::send()).
+                        return null;
+                    }
 
-            return $this->process($accountId, $senderPhone, $incomingMessage);
+                    return $this->process($accountId, $senderPhone, $incomingMessage);
+                },
+            );
+
+            return $gate['result'];
         } catch (Throwable $e) {
             // Both call sites (Meta webhook, Baileys internal endpoint) MUST
             // return a fast 2xx to their caller regardless of what happens
@@ -111,11 +131,14 @@ class ChatbotEngineService
         }
 
         $subscription = $account->currentSubscription;
-        $quotaExhausted = $subscription->billing_model !== 'unlimited'
-            && $subscription->total_allocated_messages !== null
-            && $subscription->used_messages >= $subscription->total_allocated_messages;
 
-        if ($quotaExhausted) {
+        // Phase 5 Task 3 -- was a verbatim copy of
+        // Subscription::computeStatus()'s exhaustion condition (the same
+        // copy WhatsAppJourneyEngine and ProcessPaymentAlertJob carried).
+        // hasQuotaFor(1) is exactly equivalent; see
+        // MessageQuotaService's docblock. Advisory and unlocked, as
+        // before -- the gate's timing is unchanged.
+        if (! app(MessageQuotaService::class)->hasQuotaFor($subscription, 1)) {
             MessageDispatchLog::record($accountId, 'chatbot', $senderPhone, success: false, errorReason: 'No active subscription or quota exhausted.', referenceType: 'chatbot_rule', referenceId: $rule->id);
 
             return $this->log($accountId, $rule->id, $senderPhone, $incomingMessage, null, 'failed');
@@ -142,13 +165,11 @@ class ChatbotEngineService
         // Chatbot auto-replies consume the SAME message quota as payment
         // alerts — without this, the quota system Module 3-9 built would
         // be trivially bypassed by flooding a tenant's chatbot with
-        // keyword triggers. Same lock discipline as
-        // ProcessPaymentAlertJob's success path.
-        DB::transaction(function () use ($subscription) {
-            $locked = $subscription->newQuery()->lockForUpdate()->find($subscription->id);
-            $locked?->increment('used_messages');
-            $locked?->refreshStatus();
-        });
+        // keyword triggers. Phase 5 Task 3: the lock-then-increment block
+        // that used to sit here is now MessageQuotaService::consume(),
+        // which also absorbs the null-safe handling this site already had
+        // (a subscription deleted mid-request is a no-op, not a fatal).
+        app(MessageQuotaService::class)->consume($subscription, 1);
 
         // [Bug fix, disclosed]: same has_media/media_url root cause as
         // TemplateMessageDispatcher/DirectMessageDispatcher -- see

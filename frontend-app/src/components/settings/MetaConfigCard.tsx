@@ -14,9 +14,30 @@ import { useAuth } from '../../core/context/AuthContext';
 import whatsappService from '../../services/whatsappService';
 import type { ApiErrorResponse } from '../../types/auth';
 import type { MetaConfigResponse, TestMetaConnectionResult } from '../../types/whatsapp';
+import { describeApiError } from '../../utils/apiError';
 
 const inputClass =
   'mt-1.5 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100';
+
+/**
+ * Phase 4 Task 2 — inline per-field validation message, fed either by this
+ * form's own pre-submit checks or by mapping a backend 422's `errors`
+ * object onto the matching input.
+ *
+ * Deliberately local rather than extracted into components/common: the
+ * only other instance lives inside DeveloperPage.tsx, and hoisting it
+ * would mean editing that unrelated file. Six lines of duplication is the
+ * cheaper trade against an unrelated refactor.
+ */
+function FieldError({ message }: { message?: string }) {
+  if (!message) return null;
+
+  return (
+    <p role="alert" className="mt-1.5 text-xs text-red-600">
+      {message}
+    </p>
+  );
+}
 
 /** Narrows an AxiosError's response body when it matches the test-connection result shape. */
 function isTestResultBody(data: unknown): data is TestMetaConnectionResult {
@@ -49,6 +70,7 @@ export default function MetaConfigCard() {
 
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [saveSuccess, setSaveSuccess] = useState<string | null>(null);
 
   const [copied, setCopied] = useState(false);
@@ -66,8 +88,7 @@ export default function MetaConfigCard() {
       setPhoneNumberId(data.meta_phone_number_id ?? '');
       setWabaId(data.meta_waba_id ?? '');
     } catch (err) {
-      const axiosErr = err as AxiosError<ApiErrorResponse>;
-      setLoadError(axiosErr.response?.data?.message ?? 'Failed to load Meta configuration.');
+      setLoadError(describeApiError(err, 'Could not load the Meta configuration. Please try again.').message);
     } finally {
       setIsLoading(false);
     }
@@ -103,16 +124,47 @@ export default function MetaConfigCard() {
     }
   };
 
+  const clearFieldError = (field: string) => {
+    setFieldErrors((prev) => {
+      if (!(field in prev)) return prev;
+      const next = { ...prev };
+      delete next[field];
+      return next;
+    });
+  };
+
   const handleSave = async (event: FormEvent) => {
     event.preventDefault();
+    // Double-submit guard: the button is already disabled while saving, but
+    // Enter inside a text input can fire submit before React re-renders it.
+    if (isSaving) return;
+
     setSaveError(null);
     setSaveSuccess(null);
 
-    if (!phoneNumberId.trim() || !wabaId.trim() || !accessToken.trim()) {
-      setSaveError('Phone Number ID, WABA ID and Access Token are all required.');
+    // Frontend validation PRE-empts the backend's; it never replaces it.
+    // MetaConfigController's own `required` rules stay authoritative, and
+    // anything it rejects is mapped back onto these same fields below.
+    const nextFieldErrors: Record<string, string> = {};
+
+    if (!phoneNumberId.trim()) {
+      nextFieldErrors.meta_phone_number_id = 'Phone Number ID is required.';
+    }
+    if (!wabaId.trim()) {
+      nextFieldErrors.meta_waba_id = 'WhatsApp Business Account ID is required.';
+    }
+    if (!accessToken.trim()) {
+      nextFieldErrors.meta_access_token = config?.configured
+        ? 'Enter the access token again to update these credentials.'
+        : 'Permanent Access Token is required.';
+    }
+
+    if (Object.keys(nextFieldErrors).length > 0) {
+      setFieldErrors(nextFieldErrors);
       return;
     }
 
+    setFieldErrors({});
     setIsSaving(true);
     try {
       const result = await whatsappService.saveMetaConfig({
@@ -127,9 +179,19 @@ export default function MetaConfigCard() {
         result.verified_name ? `Saved and verified as "${result.verified_name}".` : 'Meta credentials saved.',
       );
     } catch (err) {
-      const axiosErr = err as AxiosError<ApiErrorResponse>;
+      const described = describeApiError(err, 'Could not save these credentials. Please try again.');
+      // A Laravel 422 carries per-field `errors`; the "Meta rejected these
+      // credentials" 422 carries none and shows the banner only, with
+      // Meta's own stated reason appended when it sent one.
+      setFieldErrors(described.fieldErrors);
+
+      const metaReason = (err as AxiosError<ApiErrorResponse & { error?: string | null }>)
+        .response?.data?.error;
+
       setSaveError(
-        axiosErr.response?.data?.message ?? 'Could not save these credentials. Please try again.',
+        metaReason && described.status === 422
+          ? `${described.message} ${metaReason}`
+          : described.message,
       );
     } finally {
       setIsSaving(false);
@@ -189,6 +251,27 @@ export default function MetaConfigCard() {
         )}
       </div>
 
+      {/*
+        Phase 4 Task 2 — live connection status, straight from the backend's
+        `connection_status`. Carries no credential material: it is a plain
+        state string, shown alongside the masked token preview.
+      */}
+      {config?.configured && config.connection_status && (
+        <div className="mt-2 flex items-center gap-2">
+          <span className="text-xs text-slate-500">Connection status:</span>
+          <span
+            data-testid="meta-connection-status"
+            className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium ${
+              config.connection_status === 'connected'
+                ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                : 'border-amber-200 bg-amber-50 text-amber-700'
+            }`}
+          >
+            {config.connection_status === 'connected' ? 'Connected' : 'Not connected'}
+          </span>
+        </div>
+      )}
+
       {config?.configured && (
         <div className="mt-3 space-y-1 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
           <p>
@@ -219,43 +302,66 @@ export default function MetaConfigCard() {
         </div>
       )}
 
-      <form onSubmit={(e) => void handleSave(e)} className="mt-5 space-y-4">
+      <form onSubmit={(e) => void handleSave(e)} noValidate className="mt-5 space-y-4">
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
           <div>
-            <label className="text-sm font-medium text-slate-700">Phone Number ID <span className="text-red-500">*</span></label>
+            <label htmlFor="meta-phone-number-id" className="text-sm font-medium text-slate-700">
+              Phone Number ID <span className="text-red-500">*</span>
+            </label>
             <input
+              id="meta-phone-number-id"
               type="text"
               value={phoneNumberId}
-              onChange={(e) => setPhoneNumberId(e.target.value)}
+              onChange={(e) => {
+                setPhoneNumberId(e.target.value);
+                clearFieldError('meta_phone_number_id');
+              }}
               placeholder="e.g. 109876543210987"
+              aria-invalid={Boolean(fieldErrors.meta_phone_number_id)}
               className={inputClass}
             />
+            <FieldError message={fieldErrors.meta_phone_number_id} />
           </div>
 
           <div>
-            <label className="text-sm font-medium text-slate-700">WhatsApp Business Account ID (WABA ID) <span className="text-red-500">*</span></label>
+            <label htmlFor="meta-waba-id" className="text-sm font-medium text-slate-700">
+              WhatsApp Business Account ID (WABA ID) <span className="text-red-500">*</span>
+            </label>
             <input
+              id="meta-waba-id"
               type="text"
               value={wabaId}
-              onChange={(e) => setWabaId(e.target.value)}
+              onChange={(e) => {
+                setWabaId(e.target.value);
+                clearFieldError('meta_waba_id');
+              }}
               placeholder="e.g. 123456789012345"
+              aria-invalid={Boolean(fieldErrors.meta_waba_id)}
               className={inputClass}
             />
+            <FieldError message={fieldErrors.meta_waba_id} />
           </div>
         </div>
 
         <div>
-          <label className="text-sm font-medium text-slate-700">Permanent Access Token <span className="text-red-500">*</span></label>
+          <label htmlFor="meta-access-token" className="text-sm font-medium text-slate-700">
+            Permanent Access Token <span className="text-red-500">*</span>
+          </label>
           <div className="relative">
             <input
+              id="meta-access-token"
               type={showToken ? 'text' : 'password'}
               value={accessToken}
-              onChange={(e) => setAccessToken(e.target.value)}
+              onChange={(e) => {
+                setAccessToken(e.target.value);
+                clearFieldError('meta_access_token');
+              }}
               placeholder={
                 config?.configured ? 'Leave filled in only to replace the saved token' : 'EAAG...'
               }
               className={`${inputClass} pr-10`}
               autoComplete="off"
+              aria-invalid={Boolean(fieldErrors.meta_access_token)}
             />
             <button
               type="button"
@@ -266,6 +372,7 @@ export default function MetaConfigCard() {
               {showToken ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
             </button>
           </div>
+          <FieldError message={fieldErrors.meta_access_token} />
           <p className="mt-1 text-xs text-slate-500">
             Never displayed again after saving — only a masked preview is shown.
           </p>

@@ -8,6 +8,7 @@ use App\Models\PaymentAlert;
 use App\Services\WhatsApp\WhatsAppEngineFactory;
 use App\Services\Webhooks\WebhookDispatcher;
 use App\Support\PhoneNumberNormalizer;
+use App\Services\Messaging\MessageQuotaService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -98,11 +99,16 @@ class ProcessPaymentAlertJob implements ShouldQueue
         }
 
         $subscription = $account->currentSubscription;
-        $quotaExhausted = $subscription->billing_model !== 'unlimited'
-            && $subscription->total_allocated_messages !== null
-            && $subscription->used_messages >= $subscription->total_allocated_messages;
 
-        if ($quotaExhausted) {
+        // Phase 5 Task 3 -- this was a hand-inlined copy of
+        // Subscription::computeStatus()'s own exhaustion condition.
+        // hasQuotaFor(1) is exactly equivalent: remainingQuota() returns
+        // null for 'unlimited' or an unset total_allocated_messages
+        // (-> always true), otherwise max(0, total - used), so
+        // "! hasQuotaFor(1)" is precisely "capped AND used >= total".
+        // Advisory pre-send gate only -- unlocked, exactly as the
+        // arithmetic it replaces was.
+        if (! app(MessageQuotaService::class)->hasQuotaFor($subscription, 1)) {
             $this->fail($alert, 'Message quota exhausted for the current subscription period.');
 
             return;
@@ -163,11 +169,14 @@ class ProcessPaymentAlertJob implements ShouldQueue
         // two concurrent workers can't both read a stale used_messages
         // value and undercount.
         DB::transaction(function () use ($subscription, $alert, $costDeducted, $result) {
-            $lockedSubscription = $subscription->newQuery()
-                ->lockForUpdate()
-                ->find($subscription->id);
-            $lockedSubscription->increment('used_messages');
-            $lockedSubscription->refreshStatus();
+            // Phase 5 Task 3 -- consume() is called INSIDE this existing
+            // transaction on purpose. It opens its own transaction, which
+            // Laravel turns into a savepoint when one is already active,
+            // so the row lock it takes is still held until THIS outer
+            // transaction commits. The quota increment and the alert's
+            // status write therefore remain a single atomic unit, exactly
+            // as before -- only the arithmetic moved.
+            app(MessageQuotaService::class)->consume($subscription, 1);
 
             $alert->forceFill([
                 'status' => 'sent',

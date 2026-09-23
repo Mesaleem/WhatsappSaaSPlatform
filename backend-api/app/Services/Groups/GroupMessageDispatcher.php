@@ -6,10 +6,13 @@ use App\Jobs\ProcessGroupDispatchJob;
 use App\Models\Account;
 use App\Models\ContactGroup;
 use App\Models\ContactGroupMember;
+use App\Models\GroupDispatchRecipient;
 use App\Models\MessageDispatchLog;
 use App\Models\MessageTemplate;
 use App\Services\PaymentAlerts\PaymentAlertDispatcher;
 use App\Support\TemplateRenderer;
+use App\Services\Access\ProviderCapabilityService;
+use App\Services\Messaging\MessageQuotaService;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -113,7 +116,10 @@ class GroupMessageDispatcher
             // after a native group already exists, and the official Meta
             // Cloud API can never deliver to a WhatsApp group JID (see
             // NativeWhatsAppGroupService's class docblock).
-            if ($account->currentSubscription?->engine_type !== 'qr') {
+            // Phase 5 Task 2 -- provider_capabilities is authoritative for
+            // this rule when it states it; the 'qr' literal now lives only
+            // in ProviderCapabilityService::supportsNativeWhatsAppGroups().
+            if (! app(ProviderCapabilityService::class)->supportsNativeWhatsAppGroups($account->currentSubscription?->engine_type)) {
                 return [
                     'status' => 'unsupported_engine',
                     'message' => 'This account is no longer on the QR (Baileys) engine — Native WhatsApp Groups require it.',
@@ -158,18 +164,44 @@ class GroupMessageDispatcher
         // used_messages having moved without a corresponding audit row
         // (or vice versa).
         $reservation = DB::transaction(function () use ($subscription, $recipientCount, $accountId, $group, $template, $variables, $source, $apiKeyId) {
-            $locked = $subscription->newQuery()->lockForUpdate()->find($subscription->id);
 
-            if (! $locked->hasQuotaFor($recipientCount)) {
+            // Phase 5 fix P5-1 — the recipient list is read HERE, inside the
+            // reservation transaction, and N is its size: exactly these
+            // members are reserved, frozen below and sent by the job.
+            $members = $group->isNative() ? null : GroupDispatchRecipient::membersToReserve($group);
+
+            if ($members !== null) {
+                $recipientCount = $members->count();
+
+                if ($recipientCount === 0) {
+                    return ['status' => 'empty_group', 'message' => 'This contact group has no members.'];
+                }
+            }
+            // Phase 5 Task 4 -- the lock + re-check + increment(N) +
+            // refreshStatus block that used to sit inline here is now
+            // MessageQuotaService::reserve(), the same primitive the five
+            // consume-after paths use. reserve(), never consume(): this
+            // runs BEFORE anything is queued, so it must be able to
+            // REFUSE, and the re-check has to happen inside the lock.
+            //
+            // reserve() opens its own transaction, which Laravel turns
+            // into a savepoint inside this one, so the row lock it takes
+            // is still held until THIS transaction commits -- the
+            // reservation and recordGroupDispatchQueued() below remain a
+            // single atomic unit exactly as before.
+            if (! app(MessageQuotaService::class)->reserve($subscription, $recipientCount)) {
+                // Read back inside the same transaction so the number the
+                // caller is told is the one the refusal was based on.
+                // reserve() wrote nothing, so this is the pre-attempt
+                // state, identical to what the old inline code reported.
+                $current = $subscription->newQuery()->find($subscription->id);
+
                 return [
                     'status' => 'insufficient_quota',
                     'required' => $recipientCount,
-                    'remaining' => $locked->remainingQuota() ?? 0,
+                    'remaining' => $current?->remainingQuota() ?? 0,
                 ];
             }
-
-            $locked->increment('used_messages', $recipientCount);
-            $locked->refreshStatus();
 
             // A preview only, not the final per-recipient text — 'name'
             // (and every other member-specific field) differs per row and
@@ -192,10 +224,14 @@ class GroupMessageDispatcher
                 $apiKeyId,
             );
 
-            return ['status' => 'queued', 'dispatch_id' => $log->id];
+            if ($members !== null) {
+                GroupDispatchRecipient::freeze($log, $members);
+            }
+
+            return ['status' => 'queued', 'dispatch_id' => $log->id, 'recipient_count' => $recipientCount];
         });
 
-        if ($reservation['status'] === 'insufficient_quota') {
+        if ($reservation['status'] !== 'queued') {
             return $reservation;
         }
 
@@ -209,7 +245,7 @@ class GroupMessageDispatcher
         return [
             'status' => 'queued',
             'dispatch_id' => $reservation['dispatch_id'],
-            'queued_recipients_count' => $recipientCount,
+            'queued_recipients_count' => $reservation['recipient_count'],
         ];
     }
 }

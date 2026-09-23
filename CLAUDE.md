@@ -1,5 +1,20 @@
 # Project notes for AI coding assistants
 
+## Start with PROJECT_STATE.md
+
+`PROJECT_STATE.md` (repo root) is the single, continuously-updated description of
+this project: architecture, capability/plan model, API surface, test-suite status,
+and — most importantly — **which phases are done and which are pending**. It is
+updated at the end of every development task.
+
+Read it before answering anything about project status or planning new work. This
+file (`CLAUDE.md`) covers coding conventions only. The dated files under
+`Claude outputs/` are historical snapshots; `PROJECT_STATE.md` supersedes them
+wherever they disagree.
+
+**If you complete a development task, update `PROJECT_STATE.md` before reporting
+done** — its section 10 lists exactly which parts to touch.
+
 ## Page layout convention — keep new pages visually consistent
 
 This app has TWO competing page-layout patterns in the codebase today.

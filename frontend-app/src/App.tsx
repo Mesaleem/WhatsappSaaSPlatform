@@ -8,6 +8,7 @@ import DashboardPage from './pages/DashboardPage';
 import AccountsPage from './pages/admin/AccountsPage';
 import TemplateManagerPage from './pages/admin/TemplateManagerPage';
 import RouteMasterPage from './pages/admin/RouteMasterPage';
+import PlanManagementPage from './pages/admin/PlanManagementPage';
 import ActivityLogsPage from './pages/admin/ActivityLogsPage';
 import WhatsAppSetupPage from './pages/settings/WhatsAppSetupPage';
 import SendAlertPage from './pages/alerts/SendAlertPage';
@@ -32,6 +33,13 @@ import SocialInboxPage from './pages/social/SocialInboxPage';
 import CommentRulesPage from './pages/social/CommentRulesPage';
 import LeadsPage from './pages/social/LeadsPage';
 import SocialReportsPage from './pages/social/SocialReportsPage';
+import CrmLeadsPage from './pages/crm/CrmLeadsPage';
+import CrmLeadDetailPage from './pages/crm/CrmLeadDetailPage';
+import CrmPipelinePage from './pages/crm/CrmPipelinePage';
+import CrmContactsPage from './pages/crm/CrmContactsPage';
+import CrmContactDetailPage from './pages/crm/CrmContactDetailPage';
+import CrmTagsPage from './pages/crm/CrmTagsPage';
+import CrmAnalyticsPage from './pages/crm/CrmAnalyticsPage';
 import SubscriptionExpiredPage from './pages/errors/SubscriptionExpiredPage';
 import UnauthorizedPage from './pages/errors/UnauthorizedPage';
 
@@ -107,6 +115,22 @@ export default function App() {
                 and otherwise requires the exact role name, which no
                 Agent holds, so this is effectively "Super Admin only"
                 without adding a strictRole-shaped one-off. */}
+            {/*
+              Phase 5 Task 12 — Super Admin plan management.
+              strictRole, not role: `role` bypasses for Super Admin but
+              this page must be genuinely unreachable by anyone else,
+              and the backend refuses a non-Super-Admin call anyway
+              (PlanManagementController::assertSuperAdmin). Route
+              hiding is UX; that 403 is the security boundary.
+            */}
+            <Route
+              path="/admin/plans"
+              element={
+                <ProtectedRoute strictRole="super_admin">
+                  <PlanManagementPage />
+                </ProtectedRoute>
+              }
+            />
             <Route
               path="/admin/route-master"
               element={
@@ -368,6 +392,69 @@ export default function App() {
               element={
                 <ProtectedRoute permission="view-social-analytics" module="reports">
                   <SocialReportsPage />
+                </ProtectedRoute>
+              }
+            />
+            {/*
+              Phase 6 CRM Task 8 — the CRM frontend. Every route carries the
+              same three gates the backend puts on /api/crm/*: manage-crm,
+              the lead_crm module and the crm capability. These guards are
+              UX; tenant.isolation, module.guard, permission and
+              capability.guard on the API are the boundary.
+            */}
+            <Route
+              path="/crm/leads"
+              element={
+                <ProtectedRoute permission="manage-crm" module="lead_crm" capability="crm">
+                  <CrmLeadsPage />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/crm/leads/:id"
+              element={
+                <ProtectedRoute permission="manage-crm" module="lead_crm" capability="crm">
+                  <CrmLeadDetailPage />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/crm/pipeline"
+              element={
+                <ProtectedRoute permission="manage-crm" module="lead_crm" capability="crm">
+                  <CrmPipelinePage />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/crm/contacts"
+              element={
+                <ProtectedRoute permission="manage-crm" module="lead_crm" capability="crm">
+                  <CrmContactsPage />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/crm/contacts/:id"
+              element={
+                <ProtectedRoute permission="manage-crm" module="lead_crm" capability="crm">
+                  <CrmContactDetailPage />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/crm/tags"
+              element={
+                <ProtectedRoute permission="manage-crm" module="lead_crm" capability="crm">
+                  <CrmTagsPage />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/crm/analytics"
+              element={
+                <ProtectedRoute permission="manage-crm" module="lead_crm" capability="crm">
+                  <CrmAnalyticsPage />
                 </ProtectedRoute>
               }
             />

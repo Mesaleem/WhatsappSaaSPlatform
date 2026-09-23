@@ -4,7 +4,10 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
+use App\Services\Messaging\MessageQuotaService;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Support\Facades\DB;
 
 /**
  * [New feature, disclosed] — see the creating migration's docblock for
@@ -29,6 +32,26 @@ class MessageDispatchLog extends Model
         'reference_type',
         'reference_id',
         'sent_at',
+        // [Bug fix, Phase 4 Task 3]: record() has always passed
+        // 'gateway_message_id' into self::create(), but the column was
+        // never listed here -- so Laravel's mass-assignment guard silently
+        // dropped it and the column was NEVER written, for any provider.
+        //
+        // That broke a real, already-shipped correlation:
+        // MetaWebhookController::correlateFailedStatus() looks a dispatch
+        // row up by MessageDispatchLog::where('gateway_message_id', $wamid),
+        // so a post-send rejection from Meta (blocked template, opted-out
+        // recipient, expired 24h window) could never be matched back to
+        // the send it belongs to and never surfaced as 'failed' in
+        // Analytics/Message Logs. payment_alerts already had this column
+        // in its own $fillable, which is why THAT correlation worked and
+        // this one silently did not.
+        //
+        // Adding it changes no send behaviour on either provider -- the
+        // value was already being computed and passed; it just starts
+        // being persisted, which is what record()'s own docblock and the
+        // 2026_09_13_160000 migration always intended.
+        'gateway_message_id',
         // [New feature, disclosed]: template_name/message_preview — see
         // the migration that adds these two columns for the full
         // rationale and the pending-authorization note.
@@ -50,6 +73,11 @@ class MessageDispatchLog extends Model
         // column on this model already follows).
         'success_count',
         'failure_count',
+        // Phase 5 Task 5 -- per-recipient group dispatch rows. See the
+        // 2026_09_22_130000 migration for why these two exist and why no
+        // new table was needed.
+        'parent_dispatch_id',
+        'engine_type',
     ];
 
     protected function casts(): array
@@ -61,6 +89,7 @@ class MessageDispatchLog extends Model
             'recipient_count' => 'integer',
             'success_count' => 'integer',
             'failure_count' => 'integer',
+            'parent_dispatch_id' => 'integer',
         ];
     }
 
@@ -78,6 +107,52 @@ class MessageDispatchLog extends Model
     public function group(): BelongsTo
     {
         return $this->belongsTo(ContactGroup::class, 'group_id');
+    }
+
+    // =================================================================
+    // Phase 5 Task 5 -- per-recipient group dispatch rows
+    // =================================================================
+
+    /**
+     * A THIRD recipient_type value, alongside the column's own DB default
+     * 'individual' and recordGroupDispatchQueued()'s 'group'.
+     *
+     * It is deliberately its own value rather than reusing 'individual',
+     * and that choice is load-bearing for Analytics rather than cosmetic.
+     * AnalyticsController::resolveRecipientAwareTotals() counts
+     * 'individual' rows one-per-row by status and sums 'group' rows via
+     * success_count/failure_count. Labelling a recipient row 'individual'
+     * would count it AND its parent's counts -- every group message
+     * counted twice. Labelling it 'group' would sum its
+     * success_count/failure_count, which are null on a recipient row, so
+     * it would silently contribute nothing while still being scanned.
+     * A distinct value matches neither branch, so every existing
+     * Analytics figure is arithmetically unchanged by this task.
+     */
+    public const RECIPIENT_TYPE_GROUP_RECIPIENT = 'group_recipient';
+
+    /** reference_type for one member of an internal segment: reference_id = contact_group_members.id. */
+    public const REFERENCE_TYPE_GROUP_MEMBER = 'group_member';
+
+    /** reference_type for a native WhatsApp group's single send: reference_id = contact_groups.id. */
+    public const REFERENCE_TYPE_NATIVE_GROUP = 'group_native';
+
+    /** The batch this recipient row belongs to; null on every aggregate and individual row. */
+    public function parentDispatch(): BelongsTo
+    {
+        return $this->belongsTo(self::class, 'parent_dispatch_id');
+    }
+
+    /** The per-recipient rows underneath a group batch. */
+    public function recipientDispatches(): HasMany
+    {
+        return $this->hasMany(self::class, 'parent_dispatch_id');
+    }
+
+    /** Only the per-recipient rows — excludes aggregates and individual sends. */
+    public function scopeGroupRecipients(Builder $query): Builder
+    {
+        return $query->where('recipient_type', self::RECIPIENT_TYPE_GROUP_RECIPIENT);
     }
 
     public function scopeForAccount(Builder $query, int $accountId): Builder
@@ -212,6 +287,15 @@ class MessageDispatchLog extends Model
         ?string $messagePreview,
         string $source,
         ?int $apiKeyId,
+        // Phase 5 Task 5 -- trailing optional params, so every existing
+        // positional call site is unaffected. has_media was hardcoded
+        // `false` here for every batch, including a media blast, which
+        // made the Message Logs "Media Attachment" column read "No" for a
+        // group send that really did attach a file -- the same root cause
+        // record()'s own docblock documents for the individual paths, and
+        // the one it explicitly left open for this pathway.
+        bool $hasMedia = false,
+        ?string $mediaUrl = null,
     ): self {
         return self::create([
             'account_id' => $accountId,
@@ -223,7 +307,8 @@ class MessageDispatchLog extends Model
             'group_name' => $groupName,
             'recipient_count' => $recipientCount,
             'status' => 'queued',
-            'has_media' => false,
+            'has_media' => $hasMedia,
+            'media_url' => $mediaUrl,
             'template_name' => $templateName,
             'message_preview' => $messagePreview !== null
                 ? mb_substr(trim($messagePreview), 0, self::PREVIEW_MAX_LENGTH)
@@ -233,8 +318,91 @@ class MessageDispatchLog extends Model
     }
 
     /**
-     * Called exactly once, by ProcessGroupDispatchJob::handle(), once
-     * every member in the batch has been attempted. Resolves the
+     * Phase 5 Task 5 — ONE audit row per actual recipient attempt inside
+     * a group batch, written by ProcessGroupDispatchJob /
+     * ProcessGroupDirectMessageJob immediately after each driver call.
+     *
+     * Closes four gaps the Phase 5 Task 1 audit recorded, all of which
+     * came from a batch having only a single aggregate row:
+     *   - no per-recipient gateway_message_id, so a Meta status callback
+     *     could never be matched back to the group send it belonged to;
+     *   - has_media hardcoded false on the aggregate, even for a media
+     *     blast;
+     *   - no recipient-level delivery/failure audit at all;
+     *   - no engine recorded.
+     *
+     * The aggregate row is untouched and still owns the batch: recipient
+     * count, success/failure counts, the reservation and its refund, and
+     * the final batch status. These rows hang underneath it via
+     * parent_dispatch_id.
+     *
+     * DUPLICATE PROTECTION is the database's, not the cache's.
+     * createOrFirst() inserts against the
+     * unique(parent_dispatch_id, reference_type, reference_id) index and,
+     * on a collision, returns the row that is already there. So a job
+     * dispatched twice, a resolution that runs twice, or two workers
+     * racing the same batch all converge on exactly one row per
+     * recipient, and the FIRST recorded outcome stays authoritative --
+     * a later duplicate attempt never rewrites history.
+     *
+     * $gatewayMessageId is stored exactly as the provider returned it
+     * (Meta's WAMID, or whatever qr-engine-service supplies) and stays
+     * null when the provider returns none. Nothing is ever fabricated,
+     * and it is written only on a successful send — matching record()'s
+     * own long-standing rule.
+     *
+     * No credential is stored here: the parameters carry a phone number,
+     * a provider-issued id and the driver's own error text, never a
+     * token, secret or verify token.
+     */
+    public static function recordGroupRecipient(
+        self $parent,
+        string $recipientPhone,
+        string $referenceType,
+        int $referenceId,
+        bool $success,
+        ?string $engineType = null,
+        ?string $gatewayMessageId = null,
+        ?string $errorReason = null,
+        bool $hasMedia = false,
+        ?string $mediaUrl = null,
+    ): self {
+        return self::createOrFirst(
+            [
+                'parent_dispatch_id' => $parent->getKey(),
+                'reference_type' => $referenceType,
+                'reference_id' => $referenceId,
+            ],
+            [
+                // Tenancy is inherited from the batch, never re-derived
+                // and never taken from anything caller-supplied.
+                'account_id' => $parent->account_id,
+                'source' => $parent->source,
+                'api_key_id' => $parent->api_key_id,
+                'engine_type' => $engineType,
+                'recipient_phone' => $recipientPhone,
+                'recipient_type' => self::RECIPIENT_TYPE_GROUP_RECIPIENT,
+                'group_id' => $parent->group_id,
+                'group_name' => $parent->group_name,
+                'recipient_count' => 1,
+                'status' => $success ? 'sent' : 'failed',
+                'error_reason' => $success ? null : $errorReason,
+                'has_media' => $hasMedia,
+                'media_url' => $mediaUrl,
+                'template_name' => $parent->template_name,
+                'message_preview' => $parent->message_preview,
+                'sent_at' => $success ? now() : null,
+                'gateway_message_id' => $success ? $gatewayMessageId : null,
+            ],
+        );
+    }
+
+    /** The only non-terminal value this column ever holds — see recordGroupDispatchQueued(). */
+    public const STATUS_QUEUED = 'queued';
+
+    /**
+     * Called by ProcessGroupDispatchJob / ProcessGroupDirectMessageJob
+     * once every member in the batch has been attempted. Resolves the
      * 'queued' row recordGroupDispatchQueued() created above into its
      * final state by UPDATING that same row rather than creating a
      * second one — so dispatch_id (returned synchronously to the API
@@ -243,23 +411,148 @@ class MessageDispatchLog extends Model
      * 'failed' only if every recipient failed — a disclosed,
      * reasonable choice for a partial-success batch, since this column
      * has no native "partial" state.
+     *
+     * =================================================================
+     * Phase 5 Task 4 — THE FAILURE REFUND, AND WHY IT LIVES HERE
+     * =================================================================
+     * A group batch reserves N credits up front
+     * (MessageQuotaService::reserve(), from the two group dispatchers)
+     * and, until this task, never gave any of them back: a 10-recipient
+     * batch in which 4 recipients failed still billed all 10. That gap
+     * was documented in ProcessGroupDispatchJob's own docblock and is
+     * closed here — release($failureCount), so only recipients that
+     * actually did not receive anything are returned.
+     *
+     * This is the single write path BOTH group jobs already funnel
+     * every resolution through (including resolveAllFailed()), which is
+     * exactly why the refund belongs here rather than being repeated at
+     * the ~8 call sites. A model reaching for a service is a layering
+     * compromise, taken deliberately: the alternative was eight
+     * independent refund call sites, which is the class of duplication
+     * this whole phase exists to remove.
+     *
+     * IDEMPOTENCE is a persisted state transition, not a flag and not a
+     * cache entry, and NOT release()'s zero-floor:
+     *
+     *   1. the row is re-read under SELECT ... FOR UPDATE, so two
+     *      workers resolving the same dispatch are serialised by the
+     *      database rather than by anything in application memory;
+     *   2. the refund is applied ONLY on the 'queued' -> terminal
+     *      transition. `status` already distinguishes in-flight from
+     *      resolved, so no new column and no migration is needed: a row
+     *      that is no longer 'queued' has, by construction, already had
+     *      its refund applied inside this same transaction;
+     *   3. the release and the status write commit together. A refund
+     *      can never land without the row being marked resolved, and a
+     *      row can never be marked resolved without its refund having
+     *      landed — if release() throws, the whole transaction rolls
+     *      back and the row stays 'queued', still resolvable.
+     *
+     * The second worker therefore observes a non-'queued' row, refunds
+     * nothing, mutates nothing, and returns false. Callers that need to
+     * know whether THEY were the one to resolve it read that bool; the
+     * pre-existing callers that ignore it are unaffected.
+     *
+     * $errorReason overrides the computed "F of N recipient(s) failed."
+     * text. It exists so the three call sites that used to follow this
+     * method with a second `forceFill(['error_reason' => ...])->save()`
+     * can write inside the guarded transaction instead — otherwise that
+     * second write would still mutate a row this method had just
+     * declined to touch.
+     *
+     * @return bool true when THIS call performed the resolution (and the
+     *              refund); false when the dispatch was already resolved.
      */
-    public function resolveGroupDispatch(int $successCount, int $failureCount): void
+    public function resolveGroupDispatch(int $successCount, int $failureCount, ?string $errorReason = null): bool
     {
-        $total = $successCount + $failureCount;
+        return (bool) DB::transaction(function () use ($successCount, $failureCount, $errorReason) {
+            /** @var self|null $locked */
+            $locked = self::query()->whereKey($this->getKey())->lockForUpdate()->first();
 
-        $this->forceFill([
-            'status' => $successCount > 0 ? 'sent' : 'failed',
-            'sent_at' => $successCount > 0 ? now() : null,
-            'error_reason' => $failureCount > 0 ? "{$failureCount} of {$total} recipient(s) failed." : null,
-            // Dashboard Analytics Upgrade (Phase 5) — persisted so a
-            // "Total Group Messages Sent/Failed" KPI can sum actual
-            // per-recipient outcomes instead of counting this one
-            // summary row by its coarse sent/failed status (see the
-            // migration adding these two columns for the full
-            // root-cause explanation).
-            'success_count' => $successCount,
-            'failure_count' => $failureCount,
-        ])->save();
+            // Already resolved (or gone). Refund nothing, mutate nothing.
+            if (! $locked || $locked->status !== self::STATUS_QUEUED) {
+                return false;
+            }
+
+            if ($failureCount > 0) {
+                // Same subscription row the reservation debited:
+                // currentSubscription is one row per account, updated in
+                // place by InvoiceCreditService rather than superseded,
+                // so a plan change between reserve and resolve still
+                // credits back the row that was charged.
+                $subscription = $locked->account?->currentSubscription;
+
+                if ($subscription) {
+                    app(MessageQuotaService::class)->release($subscription, $failureCount);
+                }
+            }
+
+            $total = $successCount + $failureCount;
+
+            $locked->forceFill([
+                'status' => $successCount > 0 ? 'sent' : 'failed',
+                'sent_at' => $successCount > 0 ? now() : null,
+                'error_reason' => $errorReason
+                    ?? ($failureCount > 0 ? "{$failureCount} of {$total} recipient(s) failed." : null),
+                // Dashboard Analytics Upgrade (Phase 5) — persisted so a
+                // "Total Group Messages Sent/Failed" KPI can sum actual
+                // per-recipient outcomes instead of counting this one
+                // summary row by its coarse sent/failed status (see the
+                // migration adding these two columns for the full
+                // root-cause explanation).
+                'success_count' => $successCount,
+                'failure_count' => $failureCount,
+            ])->save();
+
+            // Keep the caller's own instance in step with what was just
+            // written, so code that reads $log->status after this call
+            // (or saves an unrelated attribute on it) is not working from
+            // a stale copy.
+            $this->forceFill($locked->getAttributes())->syncOriginal();
+
+            return true;
+        });
+    }
+
+    /**
+     * Phase 5 Task 4 — the ONE resolution that must NOT refund.
+     *
+     * Both group jobs wrap process() in a try/catch and mark the row
+     * failed when something throws. At that point the batch's real
+     * per-recipient outcome is unknown: some recipients may already have
+     * received their message. Refunding the whole reservation would
+     * hand back credits for messages that actually went out, so this
+     * deliberately returns nothing and records only the failure — the
+     * pre-existing behaviour, unchanged.
+     *
+     * What IS new is the guard. This used to be a bare forceFill, which
+     * would happily overwrite a row that process() had already resolved
+     * (a throw AFTER resolution is reachable: processNativeGroup()
+     * resolves and then writes the group's sync_status). The same
+     * 'queued'-only transition used above prevents that duplicate
+     * final-state mutation.
+     *
+     * @return bool true when this call marked the row failed.
+     */
+    public function failGroupDispatchWithoutRefund(string $reason): bool
+    {
+        return (bool) DB::transaction(function () use ($reason) {
+            /** @var self|null $locked */
+            $locked = self::query()->whereKey($this->getKey())->lockForUpdate()->first();
+
+            if (! $locked || $locked->status !== self::STATUS_QUEUED) {
+                return false;
+            }
+
+            $locked->forceFill([
+                'status' => 'failed',
+                'sent_at' => null,
+                'error_reason' => $reason,
+            ])->save();
+
+            $this->forceFill($locked->getAttributes())->syncOriginal();
+
+            return true;
+        });
     }
 }

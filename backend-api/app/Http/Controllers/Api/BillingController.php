@@ -5,7 +5,10 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Concerns\ResolvesTenantAccount;
 use App\Http\Controllers\Controller;
 use App\Models\Account;
+use App\Models\AgentCommission;
+use App\Models\AgentCommissionPayout;
 use App\Models\Invoice;
+use App\Services\Billing\AgentPayoutService;
 use App\Services\Pdf\SimplePdfWriter;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -243,6 +246,169 @@ class BillingController extends Controller
         return response()->json(array_merge($accounts->toArray(), [
             'scope' => $isRealSelection ? 'account' : 'global',
         ]));
+    }
+
+    /**
+     * GET /api/billing/commissions — Agent Commission Foundation. Super
+     * Admin sees every commission row; an Agent sees only rows where it
+     * is the earning Agent, scoped strictly by agent_scope_id
+     * (TenantIsolationMiddleware — derived off the authenticated user's
+     * own account_id, never request input), the exact same mechanism
+     * clientSummary() above already uses for this identical
+     * Super-Admin-vs-Agent shape. A plain Client Admin has no
+     * commissions of its own and is forbidden, same as clientSummary().
+     *
+     * Ledger Reporting Hardening — filters (?status=, ?from=/?to= against
+     * created_at, ?customer_id=) are validated and applied for every
+     * caller; an Agent's own forced forAgent($agentScopeId) scope below
+     * is applied FIRST and unconditionally, so these filters can only
+     * ever narrow that Agent's own rows further, never widen past them —
+     * there is no code path where an Agent-supplied filter value alone
+     * decides which agent_account_id is queried. ?agent_id= is validated
+     * the same way for everyone but is only ever HONORED for Super Admin,
+     * mirroring AccountController::index()'s identical ?agent_id=
+     * precedent (a client-supplied override from a non-Super-Admin is
+     * silently ignored rather than trusted).
+     *
+     * agentAccount/customerAccount/invoice are eager-loaded with an
+     * explicit column list — never N+1'd per row, and never dragging the
+     * full Invoice row (specifically gateway_raw_response, the full
+     * gateway response snapshot, and gateway_payment_id) into a ledger
+     * response that has no business exposing payment-gateway detail.
+     */
+    public function commissions(Request $request): JsonResponse
+    {
+        $isSuperAdmin = (bool) $request->attributes->get('is_super_admin');
+        $agentScopeId = $request->attributes->get('agent_scope_id');
+
+        abort_unless(
+            $isSuperAdmin || $agentScopeId !== null,
+            403,
+            'Only the Super Admin or an Agent can view commission records.'
+        );
+
+        $filters = $request->validate([
+            'status' => ['sometimes', Rule::in(AgentCommission::STATUSES)],
+            'from' => ['sometimes', 'date'],
+            'to' => ['sometimes', 'date'],
+            'customer_id' => ['sometimes', 'integer'],
+            'agent_id' => ['sometimes', 'integer'],
+        ]);
+
+        $perPage = min((int) $request->integer('per_page', 15), 100);
+
+        $query = AgentCommission::query()->with([
+            'agentAccount:id,company_name',
+            'customerAccount:id,company_name',
+            'invoice:id,invoice_number,total_amount,status,paid_at',
+        ]);
+
+        if (! $isSuperAdmin) {
+            $query->forAgent($agentScopeId);
+        }
+
+        $query
+            ->when($isSuperAdmin && ! empty($filters['agent_id']), fn ($q) => $q->forAgent((int) $filters['agent_id']))
+            ->when(! empty($filters['customer_id']), fn ($q) => $q->where('customer_account_id', (int) $filters['customer_id']))
+            ->when(! empty($filters['status']), fn ($q) => $q->where('status', $filters['status']))
+            ->when(! empty($filters['from']), fn ($q) => $q->whereDate('created_at', '>=', $filters['from']))
+            ->when(! empty($filters['to']), fn ($q) => $q->whereDate('created_at', '<=', $filters['to']))
+            ->orderByDesc('created_at');
+
+        return response()->json($query->paginate($perPage));
+    }
+
+    /**
+     * GET /api/billing/payouts — Agent Commission Payout Ledger. Same
+     * Super-Admin-vs-Agent shape as commissions() above: Super Admin sees
+     * every payout batch; an Agent sees only its own, scoped by the same
+     * agent_scope_id TenantIsolationMiddleware attribute already uses
+     * (never trusted from request input). Read-only -- see
+     * storePayout()/updatePayoutStatus() below for the Super-Admin-only
+     * mutations.
+     */
+    public function payouts(Request $request): JsonResponse
+    {
+        $isSuperAdmin = (bool) $request->attributes->get('is_super_admin');
+        $agentScopeId = $request->attributes->get('agent_scope_id');
+
+        abort_unless(
+            $isSuperAdmin || $agentScopeId !== null,
+            403,
+            'Only the Super Admin or an Agent can view payout records.'
+        );
+
+        $perPage = min((int) $request->integer('per_page', 15), 100);
+
+        $query = AgentCommissionPayout::query()
+            ->with([
+                'agentAccount:id,company_name',
+                'items:id,agent_commission_payout_id,agent_commission_id,amount_snapshot',
+            ])
+            ->orderByDesc('created_at');
+
+        if (! $isSuperAdmin) {
+            $query->forAgent($agentScopeId);
+        }
+
+        return response()->json($query->paginate($perPage));
+    }
+
+    /**
+     * POST /api/billing/payouts — Super-Admin-only. Body: agent_id (the
+     * Agent being paid out), commission_ids (candidate AgentCommission
+     * ids owned by that Agent), note (optional admin note). Every id in
+     * commission_ids is re-verified server-side by AgentPayoutService::
+     * createPayout() -- ownership, 'confirmed' status, and not already
+     * claimed by another active payout -- so this controller never
+     * trusts the caller's list at face value.
+     */
+    public function storePayout(Request $request, AgentPayoutService $payoutService): JsonResponse
+    {
+        $isSuperAdmin = (bool) $request->attributes->get('is_super_admin');
+        abort_unless($isSuperAdmin, 403, 'Only the Super Admin can create a payout.');
+
+        $data = $request->validate([
+            'agent_id' => ['required', 'integer', 'exists:accounts,id'],
+            'commission_ids' => ['required', 'array', 'min:1'],
+            'commission_ids.*' => ['integer'],
+            'note' => ['sometimes', 'nullable', 'string', 'max:1000'],
+        ]);
+
+        $payout = $payoutService->createPayout((int) $data['agent_id'], $data['commission_ids'], $data['note'] ?? null);
+
+        abort_if(! $payout, 422, 'No eligible confirmed, unclaimed commissions were found for this Agent.');
+
+        return response()->json($payout->load('items'), 201);
+    }
+
+    /**
+     * PATCH /api/billing/payouts/{id}/status — Super-Admin-only. Moves a
+     * payout through pending -> processing -> paid, or into failed/
+     * cancelled. Terminal statuses are final -- see
+     * AgentPayoutService::updateStatus()'s docblock.
+     */
+    public function updatePayoutStatus(Request $request, int $id, AgentPayoutService $payoutService): JsonResponse
+    {
+        $isSuperAdmin = (bool) $request->attributes->get('is_super_admin');
+        abort_unless($isSuperAdmin, 403, 'Only the Super Admin can update a payout.');
+
+        $data = $request->validate([
+            'status' => ['required', Rule::in(AgentCommissionPayout::STATUSES)],
+            'payout_reference' => ['sometimes', 'nullable', 'string', 'max:255'],
+            'note' => ['sometimes', 'nullable', 'string', 'max:1000'],
+        ]);
+
+        $updated = $payoutService->updateStatus(
+            $id,
+            $data['status'],
+            $data['payout_reference'] ?? null,
+            $data['note'] ?? null
+        );
+
+        abort_if(! $updated, 422, 'Payout not found, or already in a terminal state.');
+
+        return response()->json(AgentCommissionPayout::with('items')->findOrFail($id));
     }
 
     private function account(Request $request): Account

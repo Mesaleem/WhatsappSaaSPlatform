@@ -32,7 +32,7 @@ import { inputClass, TableCard } from '../../components/common/Card';
 import { PageHeader, PageShell } from '../../components/common/PageShell';
 import { ClearFiltersButton, Pagination, SearchInput, StatusFilterSelect } from '../../components/common/DataTableControls';
 import { TableSkeletonRows } from '../../components/common/Skeleton';
-import { extractErrorMessage as extractMessage } from '../../utils/apiError';
+import { describeApiError, extractErrorMessage as extractMessage } from '../../utils/apiError';
 
 type Tab = 'keys' | 'webhooks';
 
@@ -51,14 +51,22 @@ function formatDateTime(value: string | null): string {
 /** Reusable "copy this secret — shown only once" panel, used by both create modals. */
 function OneTimeSecretReveal({ label, value }: { label: string; value: string }) {
   const [copied, setCopied] = useState(false);
+  // Developer API Key Management UI — the clipboard failure used to be
+  // swallowed silently, which is the one moment in this whole flow where
+  // a silent failure is unrecoverable: the value is shown exactly once,
+  // so a user who believes they copied it and closes the dialog has lost
+  // it for good. Now it says so and points at the selectable <code>.
+  const [copyFailed, setCopyFailed] = useState(false);
 
   const handleCopy = async () => {
     try {
       await navigator.clipboard.writeText(value);
       setCopied(true);
+      setCopyFailed(false);
       setTimeout(() => setCopied(false), 2000);
     } catch {
-      // Clipboard API can be unavailable — the value is still selectable below.
+      setCopied(false);
+      setCopyFailed(true);
     }
   };
 
@@ -80,14 +88,35 @@ function OneTimeSecretReveal({ label, value }: { label: string; value: string })
           <button
             type="button"
             onClick={() => void handleCopy()}
+            aria-label={`Copy ${label}`}
             className="flex items-center gap-1 rounded-lg border border-slate-300 px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50"
           >
             <Copy className="h-3.5 w-3.5" />
             {copied ? 'Copied' : 'Copy'}
           </button>
         </div>
+        {copyFailed && (
+          <p role="alert" className="mt-1.5 text-xs text-red-600">
+            Could not copy automatically. Select the value above and copy it manually before closing.
+          </p>
+        )}
       </div>
     </div>
+  );
+}
+
+/**
+ * Developer API Key Management UI — inline, per-field validation message,
+ * fed either by this form's own pre-submit checks or by mapping a 422's
+ * `errors` object onto the matching input (see describeApiError()).
+ */
+function FieldError({ message }: { message?: string }) {
+  if (!message) return null;
+
+  return (
+    <p role="alert" className="mt-1.5 text-xs text-red-600">
+      {message}
+    </p>
   );
 }
 
@@ -119,6 +148,7 @@ function CreateApiKeyModal({
   const [accountId, setAccountId] = useState<number | ''>('');
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [revealedKey, setRevealedKey] = useState<string | null>(null);
   const [revealedSecret, setRevealedSecret] = useState<string | null>(null);
 
@@ -128,16 +158,62 @@ function CreateApiKeyModal({
     }
   }, [isSuperAdmin]);
 
+  /**
+   * The earliest date the backend will accept. ApiKeyController::store()
+   * validates `expires_at` as `after:now`, and a date-only input is
+   * parsed as that day's midnight — so "today" is always already in the
+   * past by the time it is submitted and would come back as a confusing
+   * 422. Tomorrow is the first value that can actually succeed.
+   */
+  const minExpiryDate = (() => {
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    return tomorrow.toISOString().slice(0, 10);
+  })();
+
+  const clearFieldError = (field: string) => {
+    setFieldErrors((prev) => {
+      if (!(field in prev)) return prev;
+      const next = { ...prev };
+      delete next[field];
+      return next;
+    });
+  };
+
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
+    // Double-submit guard: the button is already disabled while saving,
+    // but Enter-in-a-text-input can still fire submit before React has
+    // re-rendered the disabled state.
+    if (isSaving) return;
+
+    // Frontend validation only PRE-empts the backend's — it never
+    // replaces it. ApiKeyController::store()'s own rules stay
+    // authoritative, and anything it rejects is mapped back onto these
+    // same fields below.
+    const nextFieldErrors: Record<string, string> = {};
+
     if (!name.trim()) {
-      setError('Name is required.');
-      return;
+      nextFieldErrors.name = 'API key name is required.';
+    } else if (name.trim().length > 255) {
+      nextFieldErrors.name = 'Name cannot be longer than 255 characters.';
     }
+
+    if (expiresAt && expiresAt < minExpiryDate) {
+      nextFieldErrors.expires_at = 'Expiry must be a future date.';
+    }
+
     if (isSuperAdmin && accountId === '') {
-      setError('Select which client account this key is for.');
+      nextFieldErrors.account_id = 'Select which client account this key is for.';
+    }
+
+    if (Object.keys(nextFieldErrors).length > 0) {
+      setFieldErrors(nextFieldErrors);
+      setError(null);
       return;
     }
+
+    setFieldErrors({});
     setError(null);
     setIsSaving(true);
     try {
@@ -152,7 +228,12 @@ function CreateApiKeyModal({
       setRevealedSecret(result.plain_text_secret);
       onCreated(result.api_key);
     } catch (err) {
-      setError(extractMessage(err, 'Could not create this API key.'));
+      const described = describeApiError(err, 'The API key could not be created. Please try again.');
+      setError(described.message);
+      // A 422 puts its messages against `name` / `expires_at` inline;
+      // every other status carries no field detail and shows the banner
+      // only.
+      setFieldErrors(described.fieldErrors);
     } finally {
       setIsSaving(false);
     }
@@ -185,13 +266,18 @@ function CreateApiKeyModal({
             </div>
           </div>
         ) : (
-          <form onSubmit={(e) => void handleSubmit(e)} className="mt-4 space-y-4">
+          <form onSubmit={(e) => void handleSubmit(e)} noValidate className="mt-4 space-y-4">
             {isSuperAdmin && (
               <div>
                 <label className="text-sm font-medium text-slate-700">Client account <span className="text-red-500">*</span></label>
                 <select
                   value={accountId}
-                  onChange={(e) => setAccountId(e.target.value === '' ? '' : Number(e.target.value))}
+                  onChange={(e) => {
+                    setAccountId(e.target.value === '' ? '' : Number(e.target.value));
+                    clearFieldError('account_id');
+                  }}
+                  aria-label="Client account"
+                  aria-invalid={Boolean(fieldErrors.account_id)}
                   className={inputClass}
                   autoFocus
                 >
@@ -202,28 +288,56 @@ function CreateApiKeyModal({
                     </option>
                   ))}
                 </select>
+                <FieldError message={fieldErrors.account_id} />
                 <p className="mt-1 text-xs text-slate-500">Every API key belongs to exactly one client account.</p>
               </div>
             )}
+            {/*
+              The expiry input carries min={minExpiryDate}, and native
+              constraint validation blocks submission on a violation
+              BEFORE handleSubmit runs — the user gets a browser tooltip
+              whose wording and styling this app does not control, and
+              our own "Expiry must be a future date." never appears. The
+              form below is therefore marked noValidate so handleSubmit's
+              checks are the single, consistently-styled source of
+              client-side validation; min= stays as a picker affordance.
+              The backend's rules remain authoritative either way.
+            */}
             <div>
-              <label className="text-sm font-medium text-slate-700">Name <span className="text-red-500">*</span></label>
+              <label htmlFor="api-key-name" className="text-sm font-medium text-slate-700">
+                Name <span className="text-red-500">*</span>
+              </label>
               <input
+                id="api-key-name"
                 value={name}
-                onChange={(e) => setName(e.target.value)}
+                onChange={(e) => {
+                  setName(e.target.value);
+                  clearFieldError('name');
+                }}
                 placeholder="e.g. Production integration"
+                aria-invalid={Boolean(fieldErrors.name)}
                 className={inputClass}
                 autoFocus={!isSuperAdmin}
               />
+              <FieldError message={fieldErrors.name} />
             </div>
             <div>
-              <label className="text-sm font-medium text-slate-700">Expires at (optional)</label>
+              <label htmlFor="api-key-expires-at" className="text-sm font-medium text-slate-700">
+                Expires at (optional)
+              </label>
               <input
+                id="api-key-expires-at"
                 type="date"
                 value={expiresAt}
-                onChange={(e) => setExpiresAt(e.target.value)}
-                min={new Date().toISOString().slice(0, 10)}
+                onChange={(e) => {
+                  setExpiresAt(e.target.value);
+                  clearFieldError('expires_at');
+                }}
+                min={minExpiryDate}
+                aria-invalid={Boolean(fieldErrors.expires_at)}
                 className={inputClass}
               />
+              <FieldError message={fieldErrors.expires_at} />
               <p className="mt-1 text-xs text-slate-500">Leave blank for a key that never expires.</p>
             </div>
 
@@ -285,6 +399,11 @@ function ApiKeysTab() {
   const [regeneratingSecretId, setRegeneratingSecretId] = useState<number | null>(null);
   const [revealedSecretFor, setRevealedSecretFor] = useState<{ keyId: number; secret: string } | null>(null);
 
+  // Developer API Key Management UI — success feedback for create/revoke/
+  // regenerate, which previously reported only failures. Cleared on the
+  // next action so it never lingers next to a newer error.
+  const [success, setSuccess] = useState<string | null>(null);
+
   const load = useCallback(async () => {
     setIsLoading(true);
     setError(null);
@@ -293,7 +412,7 @@ function ApiKeysTab() {
       setKeys(res.data);
       setScope(res.scope);
     } catch (err) {
-      setError(extractMessage(err, 'Failed to load API keys.'));
+      setError(describeApiError(err, 'The API keys could not be loaded. Please try again.').message);
     } finally {
       setIsLoading(false);
     }
@@ -310,15 +429,18 @@ function ApiKeysTab() {
   };
 
   const confirmRevoke = async () => {
-    if (!pendingRevoke) return;
+    if (!pendingRevoke || revokingId !== null) return;
     const key = pendingRevoke;
     setRevokingId(key.id);
+    setError(null);
+    setSuccess(null);
     try {
       await developerService.revokeApiKey(key.id);
       await load();
+      setSuccess(`"${key.name}" has been revoked. Any integration using it will no longer authenticate.`);
       setPendingRevoke(null);
     } catch (err) {
-      setError(extractMessage(err, 'Could not revoke this key.'));
+      setError(describeApiError(err, 'The API key could not be revoked. Please try again.').message);
       setPendingRevoke(null);
     } finally {
       setRevokingId(null);
@@ -343,14 +465,22 @@ function ApiKeysTab() {
   };
 
   const doRegenerateSecret = async (key: ApiKey) => {
+    if (regeneratingSecretId !== null) return;
     setRegeneratingSecretId(key.id);
+    setError(null);
+    setSuccess(null);
     try {
       const result = await developerService.regenerateApiKeySecret(key.id);
       setRevealedSecretFor({ keyId: key.id, secret: result.plain_text_secret });
       await load();
+      setSuccess(`A new API secret was generated for "${key.name}". The previous secret no longer authenticates.`);
       setPendingRegenerateSecret(null);
     } catch (err) {
-      setError(extractMessage(err, 'Could not generate a secret for this key.'));
+      // A revoked key returns 422 with ApiKeyController's own written
+      // sentence ("This API key has been revoked and cannot be given a
+      // new secret.") — describeApiError prefers that over any generic
+      // text, since it tells the user exactly what to do instead.
+      setError(describeApiError(err, 'The API secret could not be regenerated. Please try again.').message);
       setPendingRegenerateSecret(null);
     } finally {
       setRegeneratingSecretId(null);
@@ -408,8 +538,23 @@ function ApiKeysTab() {
             ? 'Every API key across every client account. Select a client in the header to create a new one.'
             : (
               <>
-                Keys authenticate external systems calling{' '}
-                <code className="font-mono text-xs">POST /api/v1/messages/send-payment-alert</code>.
+                Send the key in the <code className="font-mono text-xs">X-API-KEY</code> header on requests to{' '}
+                <code className="font-mono text-xs">/api/v1/*</code>. Endpoints under{' '}
+                <code className="font-mono text-xs">/api/v1/whatsapp/*</code> also require{' '}
+                <code className="font-mono text-xs">X-API-SECRET</code>.{' '}
+                {/* Phase 6 CRM Hardening Round 2, Issue 14 — documented in the existing Developer Portal blurb (this app has no OpenAPI/doc framework to extend). */}
+                <code className="font-mono text-xs">POST /api/v1/crm/leads</code> creates a CRM lead
+                (<code className="font-mono text-xs">phone_number</code> required; optional{' '}
+                <code className="font-mono text-xs">name</code>, <code className="font-mono text-xs">email</code>,{' '}
+                <code className="font-mono text-xs">status</code>) and needs the CRM feature on your plan; its{' '}
+                <code className="font-mono text-xs">source</code> is always recorded as{' '}
+                <code className="font-mono text-xs">api</code>.{' '}
+                {/* Phase 6 CRM Task 11 — the single-lead operations added to /api/v1/crm/leads. */}
+                For one lead: <code className="font-mono text-xs">GET /api/v1/crm/leads/{'{id}'}</code>,{' '}
+                <code className="font-mono text-xs">PATCH …/{'{id}'}/status</code>,{' '}
+                <code className="font-mono text-xs">PATCH …/{'{id}'}/assignee</code> and{' '}
+                <code className="font-mono text-xs">POST|DELETE …/{'{id}'}/tags/{'{tag}'}</code>. Changes need an active
+                subscription.
               </>
             )}
         </p>
@@ -448,9 +593,16 @@ function ApiKeysTab() {
       </div>
 
       {error && (
-        <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+        <div role="alert" className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
           <XCircle className="h-4 w-4 flex-shrink-0" />
           {error}
+        </div>
+      )}
+
+      {success && (
+        <div role="status" className="flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+          <CheckCircle2 className="h-4 w-4 flex-shrink-0" />
+          {success}
         </div>
       )}
 
@@ -463,6 +615,7 @@ function ApiKeysTab() {
               <th className="px-6 py-3">Key</th>
               <th className="px-6 py-3">Secret</th>
               <th className="px-6 py-3">Status</th>
+              <th className="px-6 py-3">Created</th>
               <th className="px-6 py-3">Last Used</th>
               <th className="px-6 py-3">Expires</th>
               <th className="px-6 py-3 text-right">Action</th>
@@ -470,7 +623,7 @@ function ApiKeysTab() {
           </thead>
           <tbody className="divide-y divide-slate-100">
             {isLoading ? (
-              <TableSkeletonRows columns={scope === 'global' ? 8 : 7} />
+              <TableSkeletonRows columns={scope === 'global' ? 9 : 8} />
             ) : pagedKeys.length > 0 ? (
               pagedKeys.map((key) => {
                 const status = apiKeyStatus(key);
@@ -489,6 +642,7 @@ function ApiKeysTab() {
                         {status.label}
                       </span>
                     </td>
+                    <td className="px-6 py-3 text-slate-700">{formatDateTime(key.created_at)}</td>
                     <td className="px-6 py-3 text-slate-700">{formatDateTime(key.last_used_at)}</td>
                     <td className="px-6 py-3 text-slate-700">{key.expires_at ? formatDateTime(key.expires_at) : 'Never'}</td>
                     <td className="px-6 py-3 text-right">
@@ -527,8 +681,18 @@ function ApiKeysTab() {
               })
             ) : (
               <tr>
-                <td colSpan={scope === 'global' ? 8 : 7} className="px-6 py-6 text-center text-slate-400">
-                  {keys.length === 0 ? 'No API keys yet.' : 'No API keys match the current filters.'}
+                <td colSpan={scope === 'global' ? 9 : 8} className="px-6 py-10 text-center">
+                  {keys.length === 0 ? (
+                    <div className="flex flex-col items-center gap-2">
+                      <KeyRound className="h-6 w-6 text-slate-300" />
+                      <p className="text-sm font-medium text-slate-600">No API keys yet</p>
+                      <p className="max-w-sm text-xs text-slate-400">
+                        Create a key to let an external system call the Developer API on this account's behalf.
+                      </p>
+                    </div>
+                  ) : (
+                    <p className="text-sm text-slate-400">No API keys match the current filters.</p>
+                  )}
                 </td>
               </tr>
             )}
@@ -553,7 +717,11 @@ function ApiKeysTab() {
             setShowCreate(false);
             void load();
           }}
-          onCreated={() => void load()}
+          onCreated={(key) => {
+            setError(null);
+            setSuccess(`API key "${key.name}" was created.`);
+            void load();
+          }}
         />
       )}
 

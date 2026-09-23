@@ -297,6 +297,14 @@ class MessageTemplateController extends Controller
             ...$this->variablesSchemaRules(),
         ]);
 
+        // Phase 4 Task 8 -- the same component-structure invariant store()
+        // and update() enforce. Applied here too so the rule holds on
+        // EVERY write path into variables_schema, not only the two the
+        // Template Manager UI uses; a self-service request never sets
+        // these keys today, so nothing that used to be accepted stops
+        // being accepted.
+        $this->assertComponentStructure($data);
+
         // [Removed, disclosed]: this used to call
         // assertSingleApprovedTemplatePerAccount() here, blocking a new
         // request while an approved template was already live for this
@@ -488,6 +496,15 @@ class MessageTemplateController extends Controller
             // this format rule and the uniqueness check both see the
             // same value the row will actually be saved with.
             'template_code' => ['nullable', 'string', 'max:100', 'regex:/^[A-Z0-9_]+$/', Rule::unique('message_templates', 'template_code')],
+            // Phase 4 Task 5 -- the Meta-specific half of a template. All
+            // optional: a QR template omits every one of them and behaves
+            // exactly as before. assertMetaTemplateFields() below enforces
+            // that they may only be set for an account actually on the
+            // Meta provider.
+            'language' => ['sometimes', 'nullable', 'string', 'max:20', 'regex:/^[a-z]{2}(_[A-Z]{2})?$/'],
+            'category' => ['sometimes', 'nullable', 'string', Rule::in(MessageTemplate::META_CATEGORIES)],
+            'meta_template_name' => ['sometimes', 'nullable', 'string', 'max:512', 'regex:/^[a-z0-9_]+$/'],
+            'meta_template_status' => ['sometimes', 'nullable', 'string', Rule::in(MessageTemplate::META_STATUSES)],
             ...$this->variablesSchemaRules(),
         ]);
 
@@ -506,6 +523,14 @@ class MessageTemplateController extends Controller
                 404
             );
         }
+
+        // Phase 4 Task 5 -- Meta fields are only valid for a Meta-provider
+        // account, and every body {{token}} must be declared. Both run
+        // AFTER the ownership guards above so a caller can never use the
+        // error text to probe another tenant's account.
+        $this->assertMetaTemplateFields($data, $targetAccount);
+        $this->assertVariableStructure($data);
+        $this->assertComponentStructure($data);
 
         // [Removed, disclosed]: creation here used to be blocked when the
         // target client already had an approved template live
@@ -568,8 +593,25 @@ class MessageTemplateController extends Controller
             // as store(), ignoring this template's own row so re-saving
             // its existing code doesn't 422 against itself.
             'template_code' => ['sometimes', 'nullable', 'string', 'max:100', 'regex:/^[A-Z0-9_]+$/', Rule::unique('message_templates', 'template_code')->ignore($template->id)],
+            // Phase 4 Task 5 -- the Meta-specific half of a template. All
+            // optional: a QR template omits every one of them and behaves
+            // exactly as before. assertMetaTemplateFields() below enforces
+            // that they may only be set for an account actually on the
+            // Meta provider.
+            'language' => ['sometimes', 'nullable', 'string', 'max:20', 'regex:/^[a-z]{2}(_[A-Z]{2})?$/'],
+            'category' => ['sometimes', 'nullable', 'string', Rule::in(MessageTemplate::META_CATEGORIES)],
+            'meta_template_name' => ['sometimes', 'nullable', 'string', 'max:512', 'regex:/^[a-z0-9_]+$/'],
+            'meta_template_status' => ['sometimes', 'nullable', 'string', Rule::in(MessageTemplate::META_STATUSES)],
             ...$this->variablesSchemaRules(prefix: 'sometimes'),
         ]);
+
+        // Phase 4 Task 5 -- same two guards as store(). The account used
+        // for the provider check is the one the template will belong to
+        // AFTER this update (account_id is itself editable here).
+        $resolvedAccountId = array_key_exists('account_id', $data) ? $data['account_id'] : $template->account_id;
+        $this->assertMetaTemplateFields($data, $resolvedAccountId ? Account::find($resolvedAccountId) : null);
+        $this->assertVariableStructure($data, $template);
+        $this->assertComponentStructure($data);
 
         // Clearing the code (explicitly sent blank) re-derives one from
         // the template's title rather than leaving it null -- an
@@ -796,6 +838,12 @@ class MessageTemplateController extends Controller
             'variables_schema.*.required' => ['required_with:variables_schema', 'boolean'],
             'variables_schema.*.options' => ['required_if:variables_schema.*.type,select', 'array'],
             'variables_schema.*.options.*' => ['string', 'max:255'],
+            // Phase 4 Task 7 -- optional Meta component placement. Omitted
+            // entirely by every pre-existing schema, which then means
+            // 'body', exactly as before.
+            'variables_schema.*.component' => ['sometimes', 'nullable', 'string', Rule::in(MessageTemplate::VARIABLE_COMPONENTS)],
+            'variables_schema.*.button_sub_type' => ['sometimes', 'nullable', 'string', Rule::in(MessageTemplate::BUTTON_SUB_TYPES)],
+            'variables_schema.*.button_index' => ['sometimes', 'nullable', 'integer', 'min:0', 'max:9'],
         ];
     }
 
@@ -810,4 +858,159 @@ class MessageTemplateController extends Controller
     // ever assumed "the one" template for an account; this method was the
     // only place that limit was actually enforced). Removed rather than
     // left dead, so a future reader isn't left wondering why it's unused.
+
+    /**
+     * Phase 4 Task 5 -- requirement 4: a Meta template may only belong to
+     * an account actually using the Meta provider. A QR account has no
+     * WABA, so a meta_template_name on one of its templates could never
+     * resolve to anything at send time; accepting it would store a
+     * permanently unusable record and mislead the operator into thinking
+     * the template was live.
+     *
+     * $account is null only for a Super-Admin GLOBAL template (account_id
+     * null), which has no single engine to check -- those are allowed to
+     * carry Meta fields, exactly as they are allowed to be sent by any
+     * tenant today.
+     *
+     * @param array<string, mixed> $data
+     */
+    private function assertMetaTemplateFields(array $data, ?Account $account): void
+    {
+        $metaFields = array_filter([
+            'language' => $data['language'] ?? null,
+            'category' => $data['category'] ?? null,
+            'meta_template_name' => $data['meta_template_name'] ?? null,
+            'meta_template_status' => $data['meta_template_status'] ?? null,
+        ], static fn ($value) => filled($value));
+
+        if ($metaFields === [] || $account === null) {
+            return;
+        }
+
+        if ($account->currentSubscription?->engine_type !== 'meta') {
+            abort(422, 'Meta template fields (language, category, Meta template name/status) can only be set for an account using the Meta Cloud API provider.');
+        }
+
+        // Meta rejects a template send whose language does not match the
+        // registered template exactly, so a Meta-registered name without a
+        // language is an unusable record.
+        if (filled($metaFields['meta_template_name'] ?? null) && ! filled($metaFields['language'] ?? null)) {
+            abort(422, 'A Meta template name also requires a language code (for example "en_US").');
+        }
+    }
+
+    /**
+     * Phase 4 Task 5 -- requirement 6: every {{token}} in the body must be
+     * declared by the configured variables_schema.
+     *
+     * Once variables_schema is non-empty it becomes authoritative
+     * (MessageTemplate::effectiveVariablesSchema()), so an undeclared body
+     * token is never collected, never required and never substituted --
+     * TemplateRenderer leaves an unmatched token untouched and the
+     * RECIPIENT receives the literal string "{{amount}}". Validated at
+     * write time so a template can never reach the approved/sendable state
+     * in that shape.
+     *
+     * @param array<string, mixed> $data
+     */
+    private function assertVariableStructure(array $data, ?MessageTemplate $existing = null): void
+    {
+        $body = $data['template_body'] ?? $existing?->template_body;
+        $schema = array_key_exists('variables_schema', $data)
+            ? $data['variables_schema']
+            : $existing?->variables_schema;
+
+        if (! is_string($body)) {
+            return;
+        }
+
+        $undeclared = MessageTemplate::undeclaredVariableNamesFor($body, is_array($schema) ? $schema : null);
+
+        if ($undeclared !== []) {
+            abort(422, 'The template body uses variable(s) the configurator does not define: '
+                .implode(', ', array_map(static fn (string $k) => '{{'.$k.'}}', $undeclared))
+                .'. Add them in the Variable Configurator or remove them from the body.');
+        }
+    }
+
+    /**
+     * Phase 4 Task 8 -- WRITE-TIME structural validation of the Meta
+     * component markers Task 7 introduced (`component`,
+     * `button_sub_type`, `button_index`).
+     *
+     * variablesSchemaRules() above already constrains each key's VALUE
+     * (Rule::in for component/button_sub_type, integer 0-9 for the index)
+     * and so returns proper field-level 422 errors for an invalid
+     * component or sub-type. What a per-key rule cannot express is the
+     * relationship BETWEEN keys, which is what this method covers:
+     *
+     *   - a button parameter must declare both a sub-type and an index
+     *     (Meta addresses a button positionally; there is nothing to
+     *     infer either from);
+     *   - a non-button parameter must not carry button metadata at all --
+     *     it is meaningless on a body/header parameter and reads as a
+     *     mis-set component that would silently send the wrong payload;
+     *   - two parameters must not claim the same button index. Meta's
+     *     url and quick_reply buttons each accept exactly ONE runtime
+     *     parameter, so a second variable on the same index is always a
+     *     configuration mistake.
+     *
+     * Deliberately WRITE-time only. TemplateComponentTranslator's
+     * send-time componentStructureErrors() is unchanged: it stays the
+     * last line of defence for rows written before this check existed
+     * (or through some other path), and it is not made stricter here --
+     * that would turn a template that sends today into one that fails,
+     * which is not this task's remit.
+     *
+     * A schema with no `component` key anywhere -- i.e. every template
+     * written before Task 7 -- passes untouched: absent means 'body',
+     * and a body field carries no button metadata to object to.
+     *
+     * @param array<string, mixed> $data
+     */
+    private function assertComponentStructure(array $data): void
+    {
+        if (! array_key_exists('variables_schema', $data) || ! is_array($data['variables_schema'])) {
+            return;
+        }
+
+        $usedButtonIndexes = [];
+
+        foreach ($data['variables_schema'] as $field) {
+            if (! is_array($field)) {
+                continue;
+            }
+
+            $key = $field['key'] ?? '(unnamed)';
+            $component = filled($field['component'] ?? null) ? $field['component'] : 'body';
+            $subType = $field['button_sub_type'] ?? null;
+            $index = $field['button_index'] ?? null;
+            $hasSubType = filled($subType);
+            $hasIndex = $index !== null && $index !== '';
+
+            if ($component !== 'button') {
+                if ($hasSubType || $hasIndex) {
+                    abort(422, "\"{$key}\" is a {$component} parameter, so it cannot carry button settings. Set its component to Button, or clear its button type and index.");
+                }
+
+                continue;
+            }
+
+            if (! $hasSubType) {
+                abort(422, "\"{$key}\" is a button parameter, so it needs a button type (URL or Quick Reply).");
+            }
+
+            if (! $hasIndex) {
+                abort(422, "\"{$key}\" is a button parameter, so it needs a button index -- the button's own position in the registered Meta template.");
+            }
+
+            $index = (int) $index;
+
+            if (in_array($index, $usedButtonIndexes, true)) {
+                abort(422, "Button index {$index} is already used by another variable. Each Meta button takes exactly one parameter, so every button parameter needs its own index.");
+            }
+
+            $usedButtonIndexes[] = $index;
+        }
+    }
 }

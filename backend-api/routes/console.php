@@ -38,3 +38,19 @@ Schedule::command('ads:check-performance-rules')
 Schedule::command('queue:work database --queue=whatsapp-bulk --stop-when-empty --max-time=55')
     ->everyMinute()
     ->withoutOverlapping();
+
+// Phase 7 Task 1 — Journey temporal backbone. journeys:resume-due finds
+// sessions whose `delay` has elapsed and queues one ResumeJourneySessionJob
+// each on database:journeys; the worker line below drains that queue the
+// same way the whatsapp-bulk worker above drains its own (same external
+// `schedule:run` cron assumption, no new infrastructure). The session row
+// is the source of truth and every job claims it atomically, so an
+// overlapping tick, a duplicate job or a restarted worker cannot run a
+// step twice.
+Schedule::command('journeys:resume-due')
+    ->everyMinute()
+    ->withoutOverlapping();
+
+Schedule::command('queue:work database --queue=journeys --stop-when-empty --max-time=55')
+    ->everyMinute()
+    ->withoutOverlapping();

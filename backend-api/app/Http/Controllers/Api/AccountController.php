@@ -4,10 +4,18 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Account;
+use App\Models\AccountEntitlement;
+use App\Models\AgentSellingEntitlement;
+use App\Models\AgentCommissionRule;
+use App\Models\Capability;
 use App\Models\ContactGroup;
+use App\Models\Invoice;
+use App\Models\Plan;
 use App\Models\Subscription;
 use App\Models\User;
 use App\Services\AccountService;
+use App\Services\Access\AccessControlService;
+use App\Services\Access\ProviderCapabilityService;
 use App\Services\QuotaService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -19,6 +27,8 @@ class AccountController extends Controller
     public function __construct(
         private readonly AccountService $accountService,
         private readonly QuotaService $quotaService,
+        private readonly ProviderCapabilityService $providerCapabilities,
+        private readonly AccessControlService $accessControl,
     ) {
     }
 
@@ -773,5 +783,383 @@ class AccountController extends Controller
         ]);
 
         return response()->json($account->fresh());
+    }
+
+    /**
+     * POST /api/admin/accounts/{id}/entitlements — Phase 1 Foundation.
+     * Grants a Capability to a tenant account, enforced against
+     * ProviderCapabilityService::supports() at write time so an
+     * incompatible (provider, capability) pair can never be granted —
+     * e.g. QR + journey_automation, or Meta + whatsapp_groups. See the
+     * Phase 1 plan, Step 6/7.
+     *
+     * Super-Admin-only for Phase 1: an Agent reselling one of these
+     * capabilities to its own sub-clients is a separate, not-yet-wired
+     * dimension (agent_selling_entitlements — Task 12's schema exists,
+     * its seeder/controller does not), so an Agent is deliberately
+     * blocked here rather than silently granted unrestricted reach via
+     * the same manage-accounts permission it already holds for
+     * allowed_modules/updatePermissions above.
+     */
+    public function grantEntitlement(Request $request, int $id): JsonResponse
+    {
+        $account = Account::findOrFail($id);
+        $user = $request->user();
+        $isSuperAdmin = (bool) $user?->isSuperAdmin();
+
+        // Task 12 — an Agent may grant/resell a capability to one of its
+        // OWN sub-clients only (assertCallerCanAccessAccount reuses the
+        // exact same agent-scope guard every other {id}-addressed action
+        // in this controller already uses — never duplicated), and only
+        // a capability the Agent has itself been explicitly authorized
+        // to sell (AgentSellingEntitlement, granted by Super Admin via
+        // grantSellingEntitlement() below — an Agent can never grant
+        // this authorization to itself).
+        if (! $isSuperAdmin) {
+            abort_unless($user && $user->account?->account_type === 'agent', 403, 'Only Super Admin or an Agent may grant capabilities.');
+            $this->assertCallerCanAccessAccount($request, $account);
+        }
+
+        $data = $request->validate([
+            'capability' => ['required', 'string', Rule::exists('capabilities', 'slug')],
+        ]);
+
+        $capability = Capability::where('slug', $data['capability'])->firstOrFail();
+
+        if (! $isSuperAdmin) {
+            $agentScopeId = $this->callerAgentScopeId($request);
+
+            $isAuthorizedToSell = AgentSellingEntitlement::query()
+                ->where('agent_account_id', $agentScopeId)
+                ->where('capability_id', $capability->id)
+                ->where('sellable', true)
+                ->exists();
+
+            abort_unless($isAuthorizedToSell, 403, "You are not authorized to sell/grant the '{$capability->slug}' capability.");
+        }
+
+        $providerSlug = $account->currentSubscription?->engine_type ?? 'none';
+
+        if (! $this->providerCapabilities->supports($providerSlug, $capability->slug)) {
+            return response()->json([
+                'message' => $this->providerCapabilities->reasonIfUnsupported($providerSlug, $capability->slug)
+                    ?? "This capability is not supported on this account's current provider.",
+            ], 422);
+        }
+
+        $entitlement = $account->entitlements()->updateOrCreate(
+            ['capability_id' => $capability->id],
+            [
+                'source' => $isSuperAdmin ? 'manual_grant' : 'agent_delegated',
+                'granted_by_account_id' => $isSuperAdmin ? null : $user->account_id,
+                // Phase 5 Task 9 — an explicit re-grant clears a previous
+                // revocation. This is the ONLY path that does: a plan
+                // backfill deliberately leaves revoked rows alone, so a
+                // capability an administrator took away comes back only
+                // when an administrator puts it back.
+                'revoked_at' => null,
+                'revoked_by_user_id' => null,
+                // Phase 5 Task 10 — an explicit re-grant clears the
+                // reason too, so a later reconciliation sees an ordinary
+                // held entitlement rather than a stale revocation motive.
+                'revoked_reason' => null,
+            ],
+        );
+
+        return response()->json(['message' => 'Capability granted.', 'data' => $entitlement->load('capability')]);
+    }
+
+    /**
+     * DELETE /api/admin/accounts/{id}/entitlements/{capability} — revokes
+     * a previously granted Capability. Super Admin may revoke any grant;
+     * an Agent may revoke only on its own sub-client, same scope as
+     * grantEntitlement() above (Task 12).
+     */
+    public function revokeEntitlement(Request $request, int $id, string $capability): JsonResponse
+    {
+        $account = Account::findOrFail($id);
+        $user = $request->user();
+        $isSuperAdmin = (bool) $user?->isSuperAdmin();
+
+        if (! $isSuperAdmin) {
+            abort_unless($user && $user->account?->account_type === 'agent', 403, 'Only Super Admin or an Agent may revoke capabilities.');
+            $this->assertCallerCanAccessAccount($request, $account);
+        }
+
+        /*
+         * Phase 5 Task 9 — MARK, DO NOT DELETE.
+         *
+         * This used to be ->delete(). With the plan backfill this task
+         * adds, a deleted row is indistinguishable from "never granted",
+         * so the next backfill run would re-grant exactly the capability
+         * an administrator had just taken away. Marking keeps the
+         * decision on record: canTenant()/capabilityMapForAccount()
+         * ignore a revoked row, and the backfill skips it.
+         *
+         * Only re-granting through grantEntitlement() above clears it.
+         */
+        /*
+         * Phase 5 Task 10 — two corrections to Task 9's implementation,
+         * both found while wiring reconciliation:
+         *
+         *  1. `revoked_reason = 'manual'`. Task 10 needs to tell an
+         *     administrator's revocation apart from one caused by a plan
+         *     downgrade, because reconciliation may undo the second and
+         *     must NEVER undo the first.
+         *
+         *  2. Model saves, not a mass query-builder update. LogsActivity
+         *     hooks Eloquent's updated event, so the mass update Task 9
+         *     used changed authorization WITHOUT writing an audit row —
+         *     a real gap for an authorization-impacting operation. The
+         *     loop is bounded by one row (unique(account_id, capability_id)).
+         *     Saving through the model also fires the booted() cache
+         *     invalidation, so the explicit Cache::forget is no longer
+         *     needed here.
+         */
+        $rows = $account->entitlements()
+            ->active()
+            ->whereHas('capability', fn ($q) => $q->where('slug', $capability))
+            ->get();
+
+        foreach ($rows as $row) {
+            $row->forceFill([
+                'revoked_at' => now(),
+                'revoked_by_user_id' => $user?->id,
+                'revoked_reason' => AccountEntitlement::REVOKED_MANUAL,
+            ])->save();
+        }
+
+        return response()->json(['message' => 'Capability revoked.']);
+    }
+
+    /**
+     * GET /api/admin/accounts/{id}/entitlements — Phase 5 Task 8.
+     *
+     * The READ half of the grant/revoke pair below, which shipped
+     * without one: the Super Admin UI had no way to show what an account
+     * actually holds. Modelled directly on listSellingEntitlements()
+     * (same shape, same Account::findOrFail, same guard discipline), and
+     * scoped with assertCallerCanAccessAccount() — the SAME agent-scope
+     * check every other {id}-addressed action in this controller uses,
+     * so an Agent sees only its own sub-clients and gets a 404, not a
+     * 403, for anyone else's (never disclosing that the account exists).
+     *
+     * Every row is derived, nothing is stored: `granted` comes from
+     * AccessControlService::capabilityMapForAccount() (the same single-
+     * query source /auth/me uses, so the admin screen and the tenant's
+     * own capability map can never disagree), `source` from the existing
+     * account_entitlements.source column, and `plan_granted` from the
+     * account's current plan's own plan_entitlements rows.
+     *
+     * NO NEW COLUMN. 'plan' | 'manual_grant' | 'agent_delegated' already
+     * existed on account_entitlements; this endpoint only reads them.
+     */
+    public function listEntitlements(Request $request, int $id): JsonResponse
+    {
+        $account = Account::findOrFail($id);
+        $this->assertCallerCanAccessAccount($request, $account);
+
+        $granted = app(AccessControlService::class)->capabilityMapForAccount($account);
+
+        // Phase 5 Task 9 — every row, revoked included: "revoked" is a
+        // state the administrator needs to see, not an absence.
+        $rows = AccountEntitlement::where('account_id', $account->id)
+            ->with('capability')
+            ->get()
+            ->keyBy(fn (AccountEntitlement $row) => $row->capability?->slug);
+
+        /*
+         * What the account's CURRENT plan would grant. Read from
+         * plan_entitlements — never from a plan name — so this column
+         * stays correct the moment the plan/capability mapping is
+         * seeded, with no code change here.
+         *
+         * A capability the plan bundles but the account's provider
+         * cannot support is reported as plan_granted=true / granted=false,
+         * which is the honest reading: the plan offers it, the provider
+         * refuses it (InvoiceCreditService::grantPlanEntitlements()
+         * skips exactly those). Collapsing the two would hide a real
+         * provider incompatibility from the administrator.
+         */
+        /*
+         * `subscriptions` carries no plan reference — the Phase 1 plan
+         * deferred that column deliberately ("gains a nullable plan_id
+         * ... once the new tables exist"). The established link from an
+         * account to its plan is the plan_key on its most recent PAID
+         * invoice, which is the exact value
+         * InvoiceCreditService::grantPlanEntitlements() itself resolves
+         * the plan by. Reusing it here avoids a schema change for a
+         * read-only admin screen.
+         */
+        $planSlug = Invoice::forAccount($account->id)
+            ->where('status', 'paid')
+            ->latest('paid_at')
+            ->value('plan_key');
+        $planCapabilities = $planSlug
+            ? Plan::where('slug', $planSlug)->with('capabilities')->first()?->capabilities->pluck('slug')->all() ?? []
+            : [];
+
+        $data = Capability::orderBy('category')->orderBy('slug')->get()->map(function (Capability $capability) use ($granted, $rows, $planCapabilities) {
+            $row = $rows->get($capability->slug);
+
+            return [
+                'slug' => $capability->slug,
+                'label' => $capability->label,
+                'category' => $capability->category,
+                'granted' => (bool) ($granted[$capability->slug] ?? false),
+                // 'plan' | 'manual_grant' | 'agent_delegated' | null
+                'source' => $row?->source,
+                'granted_by_account_id' => $row?->granted_by_account_id,
+                'plan_granted' => in_array($capability->slug, $planCapabilities, true),
+                // Phase 5 Task 9 — true means "deliberately taken away",
+                // which is a different fact from "never held" and is what
+                // stops the plan backfill from restoring it.
+                'revoked' => (bool) $row?->isRevoked(),
+                'revoked_at' => $row?->revoked_at?->toISOString(),
+                // Phase 5 Task 10 — 'manual' | 'plan_downgrade' | null.
+                // The panel shows these differently: only one of them
+                // will ever come back on its own.
+                'revoked_reason' => $row?->isRevoked() ? ($row->revoked_reason ?? AccountEntitlement::REVOKED_MANUAL) : null,
+            ];
+        });
+
+        return response()->json([
+            'data' => $data,
+            'meta' => [
+                'plan' => $planSlug,
+                'provider' => $account->currentSubscription?->engine_type,
+            ],
+        ]);
+    }
+
+    /**
+     * 3-Tier Hierarchy — guards the Agent Selling Entitlements
+     * read endpoint (Task 12): Super Admin may view any Agent's selling
+     * entitlements; an Agent may view only its OWN (this is about the
+     * Agent's own resale authorization, not a sub-client lookup, so it
+     * deliberately does NOT reuse assertCallerCanAccessAccount()'s
+     * agent_id-ownership check — a different relationship).
+     */
+    private function assertCallerCanViewSellingEntitlements(Request $request, Account $agentAccount): void
+    {
+        $user = $request->user();
+
+        if ($user?->isSuperAdmin()) {
+            return;
+        }
+
+        abort_if(! $user || $user->account_id !== $agentAccount->id, 404);
+    }
+
+    /**
+     * POST /api/admin/accounts/{id}/selling-entitlements — Phase 1
+     * Foundation, Task 12. Super-Admin-only: authorizes an Agent account
+     * to resell one Capability to its own sub-clients. Kept as its own
+     * dimension (agent_selling_entitlements), separate from Spatie's
+     * Agent role permissions and from account_entitlements (what the
+     * Agent's own account holds) — see the migration's own docblock for
+     * the locked "3 separate dimensions" decision.
+     *
+     * Locked rule: an Agent may only be authorized to sell a capability
+     * it already holds itself — reuses AccessControlService::canTenant()
+     * rather than re-querying account_entitlements directly, so this
+     * never drifts from grantEntitlement()'s own definition of "holds".
+     */
+    public function grantSellingEntitlement(Request $request, int $id): JsonResponse
+    {
+        abort_unless($request->user()?->isSuperAdmin(), 403, 'Only Super Admin can grant Agent selling entitlements.');
+
+        $agentAccount = Account::findOrFail($id);
+        abort_unless($agentAccount->account_type === 'agent', 422, 'Selling entitlements can only be granted to an Agent account.');
+
+        $data = $request->validate([
+            'capability' => ['required', 'string', Rule::exists('capabilities', 'slug')],
+        ]);
+
+        $capability = Capability::where('slug', $data['capability'])->firstOrFail();
+
+        if (! $this->accessControl->canTenant($agentAccount, $capability->slug)) {
+            return response()->json([
+                'message' => "This Agent does not hold the '{$capability->slug}' capability itself — grant it to the Agent's own account first before authorizing resale.",
+            ], 422);
+        }
+
+        $sellingEntitlement = AgentSellingEntitlement::updateOrCreate(
+            ['agent_account_id' => $agentAccount->id, 'capability_id' => $capability->id],
+            ['sellable' => true],
+        );
+
+        return response()->json([
+            'message' => 'Agent authorized to sell this capability.',
+            'data' => $sellingEntitlement->load('capability'),
+        ]);
+    }
+
+    /**
+     * DELETE /api/admin/accounts/{id}/selling-entitlements/{capability} —
+     * revokes an Agent's authorization to sell a Capability. Super-
+     * Admin-only. Takes effect immediately — grantEntitlement()'s Agent
+     * branch above re-checks `sellable` on every call, no cache to
+     * invalidate.
+     */
+    public function revokeSellingEntitlement(Request $request, int $id, string $capability): JsonResponse
+    {
+        abort_unless($request->user()?->isSuperAdmin(), 403, 'Only Super Admin can revoke Agent selling entitlements.');
+
+        $agentAccount = Account::findOrFail($id);
+
+        AgentSellingEntitlement::where('agent_account_id', $agentAccount->id)
+            ->whereHas('capability', fn ($q) => $q->where('slug', $capability))
+            ->delete();
+
+        return response()->json(['message' => 'Agent selling entitlement revoked.']);
+    }
+
+    /**
+     * GET /api/admin/accounts/{id}/selling-entitlements — Super Admin
+     * may view any Agent's selling entitlements; an Agent may view only
+     * its own (assertCallerCanViewSellingEntitlements above).
+     */
+    public function listSellingEntitlements(Request $request, int $id): JsonResponse
+    {
+        $agentAccount = Account::findOrFail($id);
+        $this->assertCallerCanViewSellingEntitlements($request, $agentAccount);
+
+        $rows = AgentSellingEntitlement::where('agent_account_id', $agentAccount->id)
+            ->where('sellable', true)
+            ->with('capability')
+            ->get();
+
+        return response()->json(['data' => $rows]);
+    }
+
+    /**
+     * PUT /api/admin/accounts/{id}/commission-rule — Agent Commission
+     * Foundation. Super-Admin-only: configures (creates or updates) the
+     * single DB-driven commission rule for one Agent account — percentage
+     * or fixed amount, never a hardcoded rate anywhere in code. Updating
+     * an existing rule going forward never rewrites any AgentCommission
+     * row already generated under the previous value — those snapshot
+     * their own rule_type/rule_value at generation time (see
+     * InvoiceCreditService::grantAgentCommission()).
+     */
+    public function setCommissionRule(Request $request, int $id): JsonResponse
+    {
+        abort_unless($request->user()?->isSuperAdmin(), 403, 'Only Super Admin can configure Agent commission rules.');
+
+        $agentAccount = Account::findOrFail($id);
+        abort_unless($agentAccount->account_type === 'agent', 422, 'Commission rules can only be configured for an Agent account.');
+
+        $data = $request->validate([
+            'type' => ['required', Rule::in(AgentCommissionRule::TYPES)],
+            'value' => ['required', 'numeric', 'min:0'],
+        ]);
+
+        $rule = AgentCommissionRule::updateOrCreate(
+            ['agent_account_id' => $agentAccount->id],
+            ['type' => $data['type'], 'value' => $data['value']],
+        );
+
+        return response()->json(['message' => 'Agent commission rule saved.', 'data' => $rule]);
     }
 }

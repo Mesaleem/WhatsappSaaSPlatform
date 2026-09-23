@@ -42,7 +42,13 @@ class MessageDispatchLogController extends Controller
     // the recipient_type column's own DB default ('individual', see
     // the migration adding it) plus the one other value
     // recordGroupDispatchQueued() ever writes ('group').
-    private const VALID_RECIPIENT_TYPES = ['individual', 'group'];
+    // Phase 5 Task 5 -- 'group_recipient' added: a group batch now also
+    // writes one row per actual recipient underneath its aggregate row
+    // (MessageDispatchLog::recordGroupRecipient()), and a tenant needs to
+    // be able to select that slice of the grid like any other. Purely
+    // additive: the two pre-existing values are unchanged, and a request
+    // that sends no recipient_type filter still sees every row.
+    private const VALID_RECIPIENT_TYPES = ['individual', 'group', MessageDispatchLog::RECIPIENT_TYPE_GROUP_RECIPIENT];
 
     /** GET /api/message-logs — paginated, filterable data grid. */
     public function index(Request $request): JsonResponse

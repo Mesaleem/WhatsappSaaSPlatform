@@ -4,13 +4,14 @@ namespace App\Jobs;
 
 use App\Models\Account;
 use App\Models\ContactGroup;
-use App\Models\ContactGroupMember;
+use App\Models\GroupDispatchRecipient;
 use App\Models\MessageDispatchLog;
 use App\Models\MessageTemplate;
 use App\Services\PaymentAlerts\PaymentAlertDispatcher;
 use App\Services\WhatsApp\WhatsAppEngineFactory;
 use App\Support\PhoneNumberNormalizer;
 use App\Support\TemplateRenderer;
+use App\Services\Access\ProviderCapabilityService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -104,11 +105,14 @@ class ProcessGroupDispatchJob implements ShouldQueue
                 'exception' => $e->getMessage(),
             ]);
 
-            $log->forceFill([
-                'status' => 'failed',
-                'sent_at' => null,
-                'error_reason' => 'Internal error: '.$e->getMessage(),
-            ])->save();
+            // Phase 5 Task 4 -- deliberately NO refund here. When
+            // process() throws, which recipients actually received their
+            // message is unknown, and refunding the whole reservation
+            // would hand back credits for messages that really went out.
+            // The guarded write also stops this clobbering a row
+            // process() had already resolved (reachable: the native path
+            // resolves and then writes the group's sync_status).
+            $log->failGroupDispatchWithoutRefund('Internal error: '.$e->getMessage());
         }
     }
 
@@ -117,8 +121,7 @@ class ProcessGroupDispatchJob implements ShouldQueue
         $group = ContactGroup::find($log->group_id);
 
         if (! $group) {
-            $log->resolveGroupDispatch(0, 1);
-            $log->forceFill(['error_reason' => 'Contact group no longer exists.'])->save();
+            $this->resolveAllFailed($log, 'Contact group no longer exists.');
 
             return;
         }
@@ -129,20 +132,22 @@ class ProcessGroupDispatchJob implements ShouldQueue
             return;
         }
 
-        $members = ContactGroupMember::where('group_id', $log->group_id)->get();
+        // Phase 5 fix P5-1 — exactly the recipients the reservation froze
+        // (GroupDispatchRecipient), never the live membership: a member added
+        // since is not sent; one removed since is resolved as a failure below.
+        $members = GroupDispatchRecipient::recipientsFor($log);
 
         if ($members->isEmpty()) {
             // Edge case: every member was removed from the group between
             // GroupMessageDispatcher::dispatch() counting N and this job
-            // running. recordGroupDispatchQueued() already reserved N
-            // credits for this batch; those are not refunded (see this
-            // class's docblock), so this resolves the row honestly as a
-            // total failure rather than silently disappearing.
-            $log->forceFill([
-                'status' => 'failed',
-                'sent_at' => null,
-                'error_reason' => 'Group had no members left by the time this batch was processed.',
-            ])->save();
+            // running.
+            //
+            // [Phase 5 Task 4]: this branch used to be a raw forceFill
+            // that left success_count/failure_count NULL and refunded
+            // nothing -- the tenant paid for N recipients that provably
+            // received nothing. It now goes through the same guarded,
+            // refunding resolution as every other total-failure branch.
+            $this->resolveAllFailed($log, 'Group had no members left by the time this batch was processed.');
 
             return;
         }
@@ -155,19 +160,19 @@ class ProcessGroupDispatchJob implements ShouldQueue
         // deactivated, or the template edited/unapproved, in the gap
         // between enqueue and this job actually running.
         if (! $account) {
-            $this->resolveAllFailed($log, $members->count(), 'Account no longer exists.');
+            $this->resolveAllFailed($log, 'Account no longer exists.');
 
             return;
         }
 
         if (! $template) {
-            $this->resolveAllFailed($log, $members->count(), 'Template is no longer approved or available.');
+            $this->resolveAllFailed($log, 'Template is no longer approved or available.');
 
             return;
         }
 
         if (PaymentAlertDispatcher::isWhatsAppDisconnected($account)) {
-            $this->resolveAllFailed($log, $members->count(), 'WhatsApp account was disconnected before this batch could be processed.');
+            $this->resolveAllFailed($log, 'WhatsApp account was disconnected before this batch could be processed.');
 
             return;
         }
@@ -175,20 +180,58 @@ class ProcessGroupDispatchJob implements ShouldQueue
         try {
             $driver = WhatsAppEngineFactory::make($account);
         } catch (RuntimeException $e) {
-            $this->resolveAllFailed($log, $members->count(), $e->getMessage());
+            $this->resolveAllFailed($log, $e->getMessage());
 
             return;
         }
+
+        // Recorded on every recipient row: `source` is the entry point,
+        // not the provider, so without this an audit row could not say
+        // which engine carried the message.
+        $engineType = $account->currentSubscription?->engine_type;
 
         $successCount = 0;
         $failureCount = 0;
         $lastMemberIndex = $members->count() - 1;
 
         foreach ($members as $index => $member) {
+            // Phase 5 fix P5-1 — reserved, but no longer in the group: not
+            // sent, recorded as a failed recipient, refunded at resolution.
+            if ($member->removed) {
+                $failureCount++;
+
+                MessageDispatchLog::recordGroupRecipient(
+                    $log,
+                    (string) $member->phone_number,
+                    MessageDispatchLog::REFERENCE_TYPE_GROUP_MEMBER,
+                    (int) $member->id,
+                    success: false,
+                    engineType: $engineType,
+                    errorReason: 'Removed from the group after this batch was queued; not sent.',
+                );
+
+                continue;
+            }
+
             $normalizedPhone = PhoneNumberNormalizer::normalize($member->phone_number);
 
             if ($normalizedPhone === '') {
                 $failureCount++;
+
+                // Phase 5 Task 5 -- an unsendable number is still an
+                // attempt this batch was charged for, so it gets its own
+                // audit row. The raw stored value is recorded, not the
+                // empty normalized string, because that is the datum an
+                // operator needs to fix.
+                MessageDispatchLog::recordGroupRecipient(
+                    $log,
+                    (string) $member->phone_number,
+                    MessageDispatchLog::REFERENCE_TYPE_GROUP_MEMBER,
+                    (int) $member->id,
+                    success: false,
+                    engineType: $engineType,
+                    errorReason: "Recipient phone number '{$member->phone_number}' is not a valid number after normalization.",
+                );
             } else {
                 // Per-recipient personalization: the member's own name
                 // (contact_group_members.name) always wins over any
@@ -207,11 +250,36 @@ class ProcessGroupDispatchJob implements ShouldQueue
                     'group_id' => $log->group_id,
                 ]);
 
-                if (! empty($result['success'])) {
+                $succeeded = ! empty($result['success']);
+
+                if ($succeeded) {
                     $successCount++;
                 } else {
                     $failureCount++;
                 }
+
+                // Phase 5 Task 5 -- the per-recipient audit row, written
+                // immediately after the driver call while the provider's
+                // own result is still in hand. gateway_message_id is
+                // whatever the driver returned (Meta's WAMID, or
+                // qr-engine-service's own id) and stays null when it
+                // returned none -- never fabricated. This is the row
+                // MetaWebhookController::correlateFailedStatus() can now
+                // match a group send against.
+                //
+                // NOT a quota operation: the batch reserved N up front
+                // and releases the failures once, at resolution. Nothing
+                // here consumes or releases per recipient.
+                MessageDispatchLog::recordGroupRecipient(
+                    $log,
+                    $normalizedPhone,
+                    MessageDispatchLog::REFERENCE_TYPE_GROUP_MEMBER,
+                    (int) $member->id,
+                    success: $succeeded,
+                    engineType: $engineType,
+                    gatewayMessageId: $result['message_id'] ?? null,
+                    errorReason: $result['error'] ?? 'The WhatsApp engine rejected the message.',
+                );
             }
 
             // Anti-ban jitter between consecutive sends, same rationale
@@ -223,7 +291,25 @@ class ProcessGroupDispatchJob implements ShouldQueue
             }
         }
 
-        $log->resolveGroupDispatch($successCount, $failureCount);
+        // Phase 5 Task 4 -- resolve() derives the refund from what was
+        // RESERVED, not from what this loop attempted, so a membership
+        // change between enqueue and run cannot leave credits stranded.
+        // The two numbers agreeing is the normal case; when they do not,
+        // say so, because it is the only signal that the group changed
+        // underneath a queued batch.
+        $attempted = $successCount + $failureCount;
+        $reserved = (int) ($log->recipient_count ?? 0);
+
+        if ($attempted !== $reserved) {
+            Log::info('Group dispatch attempted a different number of recipients than were reserved.', [
+                'dispatch_log_id' => $log->id,
+                'reserved' => $reserved,
+                'attempted' => $attempted,
+                'succeeded' => $successCount,
+            ]);
+        }
+
+        $this->resolve($log, $successCount);
     }
 
     /**
@@ -250,25 +336,28 @@ class ProcessGroupDispatchJob implements ShouldQueue
         $template = MessageTemplate::query()->approvedFor($log->account_id)->find($this->templateId);
 
         if (! $account) {
-            $this->resolveAllFailed($log, 1, 'Account no longer exists.');
+            $this->resolveAllFailed($log, 'Account no longer exists.');
 
             return;
         }
 
         if (! $template) {
-            $this->resolveAllFailed($log, 1, 'Template is no longer approved or available.');
+            $this->resolveAllFailed($log, 'Template is no longer approved or available.');
 
             return;
         }
 
         if (! $group->isSyncedNativeGroup()) {
-            $this->resolveAllFailed($log, 1, 'This WhatsApp group is no longer synced (pending or failed).');
+            $this->resolveAllFailed($log, 'This WhatsApp group is no longer synced (pending or failed).');
 
             return;
         }
 
-        if ($account->currentSubscription?->engine_type !== 'qr') {
-            $this->resolveAllFailed($log, 1, 'This account is no longer on the QR (Baileys) engine.');
+        // Phase 5 Task 2 -- provider_capabilities is authoritative for
+        // this rule when it states it; the 'qr' literal now lives only
+        // in ProviderCapabilityService::supportsNativeWhatsAppGroups().
+        if (! app(ProviderCapabilityService::class)->supportsNativeWhatsAppGroups($account->currentSubscription?->engine_type)) {
+            $this->resolveAllFailed($log, 'This account is no longer on the QR (Baileys) engine.');
 
             return;
         }
@@ -276,7 +365,7 @@ class ProcessGroupDispatchJob implements ShouldQueue
         try {
             $driver = WhatsAppEngineFactory::make($account);
         } catch (RuntimeException $e) {
-            $this->resolveAllFailed($log, 1, $e->getMessage());
+            $this->resolveAllFailed($log, $e->getMessage());
 
             return;
         }
@@ -288,16 +377,33 @@ class ProcessGroupDispatchJob implements ShouldQueue
             'group_id' => $log->group_id,
         ]);
 
-        if (! empty($result['success'])) {
-            $log->resolveGroupDispatch(1, 0);
+        $nativeSucceeded = ! empty($result['success']);
+
+        // Phase 5 Task 5 -- a native group batch is ONE send to the group
+        // JID, so it gets exactly one recipient row, keyed on the group
+        // itself ('group_native') rather than on a member. The JID is
+        // recorded as the recipient, which is literally where the message
+        // went.
+        MessageDispatchLog::recordGroupRecipient(
+            $log,
+            (string) $group->wa_group_jid,
+            MessageDispatchLog::REFERENCE_TYPE_NATIVE_GROUP,
+            (int) $group->id,
+            success: $nativeSucceeded,
+            engineType: $account->currentSubscription?->engine_type,
+            gatewayMessageId: $result['message_id'] ?? null,
+            errorReason: $result['error'] ?? 'The QR engine rejected the message.',
+        );
+
+        if ($nativeSucceeded) {
+            $this->resolve($log, 1);
 
             return;
         }
 
         $errorMessage = $result['error'] ?? 'The QR engine rejected the message.';
 
-        $log->resolveGroupDispatch(0, 1);
-        $log->forceFill(['error_reason' => $errorMessage])->save();
+        $this->resolve($log, 0, $errorMessage);
 
         // [New, disclosed — closes part of the "no way to know a native
         // WhatsApp group was deleted/left" gap]: flips this group's own
@@ -333,9 +439,52 @@ class ProcessGroupDispatchJob implements ShouldQueue
         ])->save();
     }
 
-    private function resolveAllFailed(MessageDispatchLog $log, int $memberCount, string $reason): void
+    /**
+     * Phase 5 Task 4 -- the $memberCount parameter is gone: the failure
+     * count is now derived from the reservation by resolve() above, so a
+     * caller can no longer pass a number that disagrees with what was
+     * actually charged (this method used to be handed `1` on some
+     * branches and `$members->count()` on others for the same batch).
+     * The reason also rides INSIDE resolveGroupDispatch()'s guarded
+     * transaction now; it used to be a second, unguarded write that
+     * would still mutate a row the guard had just declined to resolve.
+     */
+    private function resolveAllFailed(MessageDispatchLog $log, string $reason): void
     {
-        $log->resolveGroupDispatch(0, $memberCount);
-        $log->forceFill(['error_reason' => $reason])->save();
+        $this->resolve($log, 0, $reason);
     }
+    /**
+     * Phase 5 Task 4 -- ONE resolution point, and the reason the failure
+     * count is DERIVED rather than tallied.
+     *
+     * The reservation debited exactly $log->recipient_count credits
+     * (MessageQuotaService::reserve(), from the dispatcher). The refund
+     * must therefore be "reserved minus actually delivered", not "members
+     * this job happened to attempt and fail" -- those two numbers are the
+     * same in the normal case and diverge whenever group membership
+     * changed between enqueue and run. If three members were removed in
+     * that window, the tenant was still charged for them and nothing was
+     * ever sent to them, so they are unsuccessful recipients and their
+     * credits are owed back; tallying attempts alone would silently keep
+     * that money.
+     *
+     * This also makes success_count + failure_count == recipient_count a
+     * structural invariant of every resolved group row, which the old
+     * per-branch counts (1 here, $members->count() there) did not hold --
+     * a drift the Phase 5 Task 1 audit called out.
+     *
+     * max(0, ...) keeps the count from going negative. Since Phase 5 fix
+     * P5-1 the job iterates the recipient list frozen at reservation
+     * (GroupDispatchRecipient), so members ADDED after reservation are
+     * never sent and cannot push attempts above what was reserved; only
+     * batches queued before that fix (no frozen rows) use the live
+     * membership, capped at recipient_count.
+     */
+    private function resolve(MessageDispatchLog $log, int $successCount, ?string $reason = null): bool
+    {
+        $reserved = (int) ($log->recipient_count ?? 0);
+
+        return $log->resolveGroupDispatch($successCount, max(0, $reserved - $successCount), $reason);
+    }
+
 }

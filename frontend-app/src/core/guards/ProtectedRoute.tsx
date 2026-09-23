@@ -34,6 +34,16 @@ interface ProtectedRouteProps {
    * Super Admin.
    */
   module?: AccountModule;
+  /**
+   * Phase 6 CRM Task 8 — require this capability slug to be granted in the
+   * user's /auth/me `capabilities` map (AccessControlService::capabilityMap:
+   * the account's plan entitlements, Super Admin bypass). Reads the
+   * existing map; it is not a new entitlement. UX only — the route's API
+   * calls are refused by capability.guard regardless. When the map is
+   * absent (an older /auth/me), no denial is invented, the same rule
+   * journey/nodeEntitlement.ts uses; the backend still decides.
+   */
+  capability?: string;
 }
 
 /**
@@ -51,7 +61,7 @@ interface ProtectedRouteProps {
  * behavior this mode replaces, so this guard's only remaining job is
  * authentication and permission/role gating.
  */
-export function ProtectedRoute({ children, permission, role, strictRole, module }: ProtectedRouteProps) {
+export function ProtectedRoute({ children, permission, role, strictRole, module, capability }: ProtectedRouteProps) {
   const { isAuthenticated, isLoading, user, hasPermission, hasRole, isSuperAdmin, hasModule } = useAuth();
   const location = useLocation();
 
@@ -83,6 +93,10 @@ export function ProtectedRoute({ children, permission, role, strictRole, module 
 
   if (module && !hasModule(module)) {
     return <Navigate to="/unauthorized" state={{ reason: 'module' }} replace />;
+  }
+
+  if (capability && !superAdmin && user.capabilities && !user.capabilities[capability]) {
+    return <Navigate to="/unauthorized" state={{ reason: 'capability' }} replace />;
   }
 
   return <>{children}</>;

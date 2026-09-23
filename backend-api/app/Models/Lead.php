@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 use App\Traits\LogsActivity;
 
 /**
@@ -51,6 +52,23 @@ class Lead extends Model
     public function socialAccount(): BelongsTo
     {
         return $this->belongsTo(SocialAccount::class);
+    }
+
+    /**
+     * Phase 6 Hardening (Issue 4), re-pointed in Round 2 — the CRM
+     * opportunity this capture row was promoted into.
+     *
+     * The link column moved from leads.crm_lead_id onto
+     * crm_leads.capture_lead_id so that it could carry a COMPOSITE,
+     * tenant-proving foreign key; see that migration for the engine
+     * evidence. This relationship is therefore now a hasOne rather than
+     * a belongsTo, and the tenant guard that used to live on this model
+     * lives on CrmLead, where the column now is. Nothing else about this
+     * model changed, and every pre-existing writer is untouched.
+     */
+    public function crmLead(): HasOne
+    {
+        return $this->hasOne(CrmLead::class, 'capture_lead_id');
     }
 
     public function scopeForAccount(Builder $query, int $accountId): Builder

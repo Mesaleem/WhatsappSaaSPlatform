@@ -4,33 +4,40 @@ import {
   AlertTriangle,
   ArrowLeft,
   Loader2,
-  MessageCircle,
-  MessageSquare,
+  Lock,
   Plus,
   Send,
-  Target,
   Trash2,
-  UserPlus,
   X,
   XCircle,
   Zap,
 } from 'lucide-react';
 import journeyService from '../../services/journeyService';
+import {
+  JOURNEY_NODE_CATEGORIES,
+  JOURNEY_NODE_CATEGORY_LABELS,
+} from '../../types/journeyNodes';
+import {
+  getJourneyNode,
+  journeyNodesByCategory,
+  validateJourneyGraph,
+} from '../../journey/nodeRegistry';
+import JourneyNodeConfigForm from '../../journey/JourneyNodeConfigForm';
+import { journeyNodeAvailability } from '../../journey/nodeEntitlement';
 import { ClearFiltersButton, SearchInput } from '../../components/common/DataTableControls';
 import { TableCard, inputClass } from '../../components/common/Card';
 import ConfirmModal from '../../components/common/ConfirmModal';
+import { useAuth } from '../../core/context/AuthContext';
 import { useTenant } from '../../core/context/TenantContext';
 import { extractErrorMessage } from '../../utils/apiError';
 import { indigo, activeGradient } from '../../theme/signalIndigo';
-import {
-  NODE_TYPE_LABELS,
-  TRIGGER_TYPE_LABELS,
-} from '../../types/journey';
+import { TRIGGER_TYPE_LABELS } from '../../types/journey';
 import type {
   ConditionOperator,
   FlowTriggerType,
   JourneyEdge,
   JourneyGraph,
+  JourneyLegacyEngineNodeType,
   JourneyNode,
   JourneyNodeOption,
   JourneyNodeType,
@@ -65,15 +72,33 @@ const NODE_HEIGHT = 92;
 const CANVAS_WIDTH = 1800;
 const CANVAS_HEIGHT = 1100;
 
-const NODE_TYPE_META: Record<JourneyNodeType, { icon: typeof Zap; color: string; bg: string }> = {
-  trigger: { icon: Zap, color: '#7c3aed', bg: '#f5f3ff' },
-  message: { icon: MessageSquare, color: '#2563eb', bg: '#eff6ff' },
-  question: { icon: MessageCircle, color: '#0891b2', bg: '#ecfeff' },
-  condition: { icon: Target, color: '#d97706', bg: '#fffbeb' },
-  save_lead: { icon: UserPlus, color: '#16a34a', bg: '#f0fdf4' },
-};
+/**
+ * Phase 5 — Journey / Automation: node metadata now comes from the ONE
+ * canonical registry (src/journey/nodeRegistry.tsx) instead of the
+ * hand-maintained NODE_TYPE_META map that used to sit here. That map
+ * covered five types; the registry covers all 32 (27 palette + the 5
+ * legacy ones saved flows already contain), and adding a node is a
+ * registry entry rather than an edit in three files.
+ *
+ * `fallbackMeta` only ever fires for a type this build has never heard
+ * of — a flow saved by a newer deploy. It renders visibly rather than
+ * crashing the canvas.
+ */
+const FALLBACK_META = { icon: Zap, color: '#64748b', bg: '#f1f5f9' };
 
-const ADDABLE_NODE_TYPES: JourneyNodeType[] = ['message', 'question', 'condition', 'save_lead'];
+function nodeMeta(type: string): { icon: typeof Zap; color: string; bg: string } {
+  const definition = getJourneyNode(type);
+
+  return definition
+    ? { icon: definition.icon as typeof Zap, color: definition.color, bg: definition.background }
+    : FALLBACK_META;
+}
+
+function nodeLabel(type: string): string {
+  return getJourneyNode(type)?.label ?? type;
+}
+
+
 
 const VALIDATION_TYPE_OPTIONS: { value: QuestionValidationType; label: string }[] = [
   { value: 'none', label: 'None' },
@@ -333,6 +358,8 @@ interface NodeDragState {
 
 interface ConnectDragState {
   sourceId: string;
+  /** Which declared branch this connection leaves from — see JourneyEdge.sourceHandle. */
+  sourceHandle: string;
   mouseX: number;
   mouseY: number;
 }
@@ -357,9 +384,29 @@ function JourneyCanvasEditor({
   const [saveError, setSaveError] = useState<string | null>(null);
   const [testingFlow, setTestingFlow] = useState<WhatsAppFlow | null>(null);
 
+  /*
+    Phase 5 Task 7 — the two dimensions the palette greys out on, both
+    read from data the app ALREADY has: the capability map /auth/me has
+    returned since Phase 1, and the tenant's own current subscription.
+    A Super Admin acting on a client sees that client's account; their
+    own bypass matches the server's.
+  */
+  const { user, isSuperAdmin } = useAuth();
+  const { selectedAccount } = useTenant();
+  const entitlement = useMemo(
+    () => ({
+      capabilities: user?.capabilities,
+      provider: (selectedAccount ?? user?.account)?.current_subscription?.engine_type ?? null,
+      isSuperAdmin: isSuperAdmin(),
+    }),
+    [user, selectedAccount, isSuperAdmin],
+  );
+
   const canvasRef = useRef<HTMLDivElement>(null);
   const nodeDragRef = useRef<NodeDragState | null>(null);
   const [connectDrag, setConnectDrag] = useState<ConnectDragState | null>(null);
+  /** Field-level configuration errors per node id, from the last save attempt. */
+  const [nodeErrors, setNodeErrors] = useState<Record<string, Record<string, string>>>({});
 
   const knownVariables = useMemo(
     () => graph.nodes.filter((n) => n.type === 'question' && n.data.variable_name).map((n) => n.data.variable_name as string),
@@ -378,7 +425,15 @@ function JourneyCanvasEditor({
   const addNode = (type: JourneyNodeType) => {
     const index = graph.nodes.length;
     const position = { x: 320 + (index % 3) * 260, y: 40 + Math.floor(index / 3) * 170 };
-    const node: JourneyNode = { id: genId(type), type, position, data: {} };
+    // Seeded from the registry so a freshly dropped node already holds a
+    // valid-shaped config (delay: 1 minute, api: GET, code: javascript)
+    // rather than an empty object the config form has to special-case.
+    const node: JourneyNode = {
+      id: genId(type),
+      type,
+      position,
+      data: { ...(getJourneyNode(type)?.defaultConfig ?? {}) },
+    };
     setGraph((g) => ({ ...g, nodes: [...g.nodes, node] }));
     setSelection({ kind: 'node', id: node.id });
   };
@@ -507,13 +562,29 @@ function JourneyCanvasEditor({
           if (!target) return g;
 
           const sourceNode = g.nodes.find((n) => n.id === prev.sourceId);
-          const sourceIsCondition = sourceNode?.type === 'condition';
+          const sourceIsLegacyCondition = sourceNode?.type === 'condition';
+          const branches = getJourneyNode(sourceNode?.type ?? '')?.sourceHandles.length ?? 1;
 
-          // Non-condition nodes have exactly one outgoing edge — replace it.
-          // Condition nodes may have several (one per branch) — append.
-          const edges = sourceIsCondition ? g.edges : g.edges.filter((e2) => e2.source !== prev.sourceId);
+          // A node with ONE outgoing branch has exactly one edge -- replace
+          // it. A branching node keeps one edge per branch, so replace only
+          // the edge already leaving THIS handle, never the sibling branch.
+          // 'condition' is the legacy shape: its branches live on the edge
+          // (edge.condition / edge.is_default) rather than on a handle, so
+          // it keeps appending exactly as before.
+          const edges = sourceIsLegacyCondition
+            ? g.edges
+            : branches > 1
+              ? g.edges.filter((e2) => !(e2.source === prev.sourceId && (e2.sourceHandle ?? 'next') === prev.sourceHandle))
+              : g.edges.filter((e2) => e2.source !== prev.sourceId);
 
-          const newEdge: JourneyEdge = { id: genId('edge'), source: prev.sourceId, target: target.id };
+          const newEdge: JourneyEdge = {
+            id: genId('edge'),
+            source: prev.sourceId,
+            target: target.id,
+            // Branch identity is explicit and persisted. Nothing downstream
+            // has to infer it from where a box sits on the canvas.
+            ...(sourceIsLegacyCondition ? {} : { sourceHandle: prev.sourceHandle }),
+          };
           setSelection({ kind: 'edge', id: newEdge.id });
 
           return { ...g, edges: [...edges, newEdge] };
@@ -525,10 +596,10 @@ function JourneyCanvasEditor({
     [canvasRelativePoint],
   );
 
-  const onHandleMouseDown = (e: ReactMouseEvent, sourceId: string) => {
+  const onHandleMouseDown = (e: ReactMouseEvent, sourceId: string, sourceHandle = 'next') => {
     e.stopPropagation();
     const p = canvasRelativePoint(e.clientX, e.clientY);
-    setConnectDrag({ sourceId, mouseX: p.x, mouseY: p.y });
+    setConnectDrag({ sourceId, sourceHandle, mouseX: p.x, mouseY: p.y });
     activeConnectListenersRef.current = { move: onWindowMouseMoveForConnect, up: onWindowMouseUpForConnect };
     window.addEventListener('mousemove', onWindowMouseMoveForConnect);
     window.addEventListener('mouseup', onWindowMouseUpForConnect);
@@ -542,6 +613,31 @@ function JourneyCanvasEditor({
     const hasTrigger = graph.nodes.some((n) => n.type === 'trigger');
     if (!hasTrigger) {
       setSaveError('This journey has no Trigger node.');
+      return;
+    }
+
+    // Phase 5 -- field-level configuration validation, from the registry.
+    // Deliberately NOT the HTML `required` attribute: this form is
+    // submitted through application code, and a native constraint bubble
+    // would block it before these messages could render -- the exact trap
+    // the Template Manager hit in Phase 4. The backend revalidates
+    // independently; this is UX, not authorization.
+    const graphErrors = validateJourneyGraph(
+      graph.nodes.map((n) => ({ id: n.id, type: n.type, data: n.data as Record<string, unknown> })),
+      graph.edges,
+    );
+    setNodeErrors(graphErrors);
+
+    const firstBadNodeId = Object.keys(graphErrors)[0];
+
+    if (firstBadNodeId) {
+      const node = graph.nodes.find((n) => n.id === firstBadNodeId);
+      const label = node ? (getJourneyNode(node.type)?.label ?? node.type) : firstBadNodeId;
+      const message = Object.values(graphErrors[firstBadNodeId])[0];
+
+      setSaveError(`${label}: ${message}`);
+      setSelection({ kind: 'node', id: firstBadNodeId });
+
       return;
     }
 
@@ -647,20 +743,55 @@ function JourneyCanvasEditor({
         <span className="text-xs font-semibold uppercase tracking-wide" style={{ color: indigo.muted }}>
           Add node:
         </span>
-        {ADDABLE_NODE_TYPES.map((type) => {
-          const meta = NODE_TYPE_META[type];
-          const Icon = meta.icon;
+        {/*
+          Generated from the node registry, grouped by category. Nothing
+          about a node is hardcoded here: adding one to the registry adds
+          it to this palette, with its own icon, label and description.
+        */}
+        {JOURNEY_NODE_CATEGORIES.map((category) => {
+          const nodes = journeyNodesByCategory(category);
+
+          if (nodes.length === 0) return null;
+
           return (
-            <button
-              key={type}
-              onClick={() => addNode(type)}
-              className="flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-semibold hover:bg-slate-50"
-              style={{ borderColor: indigo.border, color: meta.color }}
-            >
-              <Plus className="h-3 w-3" />
-              <Icon className="h-3.5 w-3.5" />
-              {NODE_TYPE_LABELS[type]}
-            </button>
+            <div key={category} data-testid={`palette-category-${category}`} className="flex flex-wrap items-center gap-1.5">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                {JOURNEY_NODE_CATEGORY_LABELS[category]}
+              </span>
+              {nodes.map((definition) => {
+                const Icon = definition.icon;
+                /*
+                  Phase 5 Task 7 — entitlement UX, NOT authorization. The
+                  server re-derives this from the account's own
+                  entitlements and subscription and answers 403
+                  JOURNEY_NODE_NOT_ENTITLED regardless of what this
+                  button does. Disabling it only spares the operator from
+                  configuring a node they were never going to be allowed
+                  to save. See src/journey/nodeEntitlement.ts.
+                */
+                const availability = journeyNodeAvailability(definition, entitlement);
+
+                return (
+                  <button
+                    key={definition.type}
+                    type="button"
+                    data-testid={`palette-node-${definition.type}`}
+                    data-node-category={definition.category}
+                    data-entitled={availability.available ? 'true' : 'false'}
+                    disabled={!availability.available}
+                    onClick={() => addNode(definition.type)}
+                    title={availability.reason ?? definition.description}
+                    className="flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-semibold hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
+                    style={{ borderColor: indigo.border, color: definition.color }}
+                  >
+                    <Plus className="h-3 w-3" />
+                    <Icon className="h-3.5 w-3.5" />
+                    {definition.label}
+                    {!availability.available && <Lock className="h-3 w-3 text-slate-400" />}
+                  </button>
+                );
+              })}
+            </div>
           );
         })}
         <span className="ml-auto text-[11px]" style={{ color: indigo.muted }}>
@@ -743,13 +874,16 @@ function JourneyCanvasEditor({
             </svg>
 
             {graph.nodes.map((node) => {
-              const meta = NODE_TYPE_META[node.type];
+              const meta = nodeMeta(node.type);
               const Icon = meta.icon;
+              const definition = getJourneyNode(node.type);
               const isSelected = selection?.kind === 'node' && selection.id === node.id;
 
               return (
                 <div
                   key={node.id}
+                  data-testid={`canvas-node-${node.id}`}
+                  data-node-type={node.type}
                   onMouseDown={(e) => onNodeMouseDown(e, node)}
                   className="absolute cursor-move select-none rounded-xl border bg-white shadow-sm"
                   style={{
@@ -764,7 +898,7 @@ function JourneyCanvasEditor({
                   <div className="flex items-center gap-1.5 rounded-t-xl px-2.5 py-1.5" style={{ background: meta.bg }}>
                     <Icon className="h-3.5 w-3.5 flex-shrink-0" style={{ color: meta.color }} />
                     <span className="text-xs font-semibold" style={{ color: meta.color }}>
-                      {NODE_TYPE_LABELS[node.type]}
+                      {nodeLabel(node.type)}
                     </span>
                     {node.type !== 'trigger' && (
                       <button
@@ -780,16 +914,44 @@ function JourneyCanvasEditor({
                     )}
                   </div>
                   <p className="line-clamp-2 px-2.5 py-2 text-[11px] text-slate-600">{nodePreview(node)}</p>
-
-                  {node.type !== 'save_lead' && (
-                    <div
-                      data-handle="true"
-                      onMouseDown={(e) => onHandleMouseDown(e, node.id)}
-                      className="absolute -right-1.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 cursor-crosshair rounded-full border-2 border-white"
-                      style={{ background: meta.color }}
-                      title="Drag to connect"
-                    />
+                  {nodeErrors[node.id] && (
+                    <p
+                      data-testid={`node-error-${node.id}`}
+                      className="px-2.5 pb-2 text-[11px] font-medium text-red-600"
+                    >
+                      {Object.values(nodeErrors[node.id])[0]}
+                    </p>
                   )}
+
+                  {/*
+                    One connection point per declared source handle. A
+                    branching node (conditional: TRUE / FALSE) therefore
+                    shows a labelled dot per branch, and the branch a
+                    connection belongs to is the handle id recorded on the
+                    edge — never which dot happens to sit higher.
+                  */}
+                  {node.type !== 'save_lead' &&
+                    (definition?.sourceHandles ?? [{ id: 'next', label: 'Next' }]).map((handle, handleIndex, handles) => (
+                      <div
+                        key={handle.id}
+                        data-handle="true"
+                        data-source-handle={handle.id}
+                        onMouseDown={(e) => onHandleMouseDown(e, node.id, handle.id)}
+                        className="absolute -right-1.5 flex items-center gap-1 whitespace-nowrap"
+                        style={{ top: `${((handleIndex + 1) / (handles.length + 1)) * 100}%`, transform: 'translateY(-50%)' }}
+                        title={`Drag to connect (${handle.label})`}
+                      >
+                        {handles.length > 1 && (
+                          <span className="text-[9px] font-bold uppercase tracking-wide" style={{ color: meta.color }}>
+                            {handle.label}
+                          </span>
+                        )}
+                        <span
+                          className="h-3.5 w-3.5 cursor-crosshair rounded-full border-2 border-white"
+                          style={{ background: meta.color }}
+                        />
+                      </div>
+                    ))}
                 </div>
               );
             })}
@@ -800,6 +962,7 @@ function JourneyCanvasEditor({
           {selectedNode && (
             <NodeEditorPanel
               node={selectedNode}
+              errors={nodeErrors[selectedNode.id]}
               knownVariables={knownVariables}
               onChange={(patch) => updateNodeData(selectedNode.id, patch)}
             />
@@ -825,15 +988,54 @@ function JourneyCanvasEditor({
 
 /** ---------- Node data editor (right-side panel) ---------- */
 
+/** The only five types with a bespoke panel; everything else is schema-driven. */
+const LEGACY_PANEL_TYPES: JourneyLegacyEngineNodeType[] = [
+  'trigger',
+  'message',
+  'question',
+  'condition',
+  'save_lead',
+];
+
 function NodeEditorPanel({
   node,
+  errors,
   knownVariables,
   onChange,
 }: {
   node: JourneyNode;
+  errors?: Record<string, string>;
   knownVariables: string[];
   onChange: (patch: Record<string, unknown>) => void;
 }) {
+  /*
+    Phase 5 — Journey / Automation.
+
+    The five legacy engine-executed types keep the hand-written panels
+    below, byte-for-byte: they carry behaviour the shipped
+    WhatsAppJourneyEngine depends on (option ids, validation sub-objects,
+    the condition node's edge-driven branching) that a generic form would
+    not reproduce faithfully, and an existing saved journey must keep
+    editing exactly as it did.
+
+    Every other registered type — all 27 palette nodes — is rendered from
+    its registry `configSchema` by ONE component. Before this branch
+    existed, selecting any of them fell through to the Save Lead panel at
+    the bottom of this function: in the palette, with a contract, and
+    still not editable. That was the gap.
+  */
+  if (!LEGACY_PANEL_TYPES.includes(node.type as JourneyLegacyEngineNodeType)) {
+    return (
+      <JourneyNodeConfigForm
+        nodeType={node.type}
+        config={node.data as Record<string, unknown>}
+        errors={errors}
+        knownVariables={knownVariables}
+        onChange={onChange}
+      />
+    );
+  }
+
   if (node.type === 'trigger') {
     return (
       <div>

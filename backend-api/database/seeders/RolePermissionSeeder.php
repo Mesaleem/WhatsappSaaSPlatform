@@ -69,6 +69,16 @@ class RolePermissionSeeder extends Seeder
         'manage-social-accounts',
         'launch-meta-ads',
         'manage-social-leads',
+        // Phase 6 CRM Hardening (Issue 1) — the CRM's own permission,
+        // split out of manage-social-leads. Deliberately separate: a
+        // Meta Lead Ads capture list and a tenant's full CRM contact
+        // book are different data at different sensitivity, and a Super
+        // Admin must be able to grant one without the other. The split
+        // is permission-model-only — see the accompanying
+        // add_manage_crm_permission migration for why the same three
+        // roles receive it, so nobody's effective access changes.
+        // /api/social/leads deliberately KEEPS manage-social-leads.
+        'manage-crm',
         'view-social-analytics',
         // Social Media Marketing & Meta Ads Automation Expansion (Phase 4).
         // Separate from manage-social-leads on purpose, mirroring the
@@ -147,6 +157,10 @@ class RolePermissionSeeder extends Seeder
             'manage-social-accounts',
             'launch-meta-ads',
             'manage-social-leads',
+            // Phase 6 CRM Hardening (Issue 1) — Admin already reached
+            // the CRM through manage-social-leads; this keeps that
+            // unchanged under the new permission.
+            'manage-crm',
             'view-social-analytics',
             'manage-comment-automation',
         ],
@@ -205,6 +219,12 @@ class RolePermissionSeeder extends Seeder
             'manage-social-accounts',
             'launch-meta-ads',
             'manage-social-leads',
+            // Phase 6 CRM Hardening (Issue 1) — same reasoning as
+            // 'admin' above: this role already reached the CRM through
+            // manage-social-leads, so granting the split-out permission
+            // to exactly the roles that already had access keeps
+            // effective authorization identical.
+            'manage-crm',
             'view-social-analytics',
             // Phase 4 — see PERMISSIONS' comment for why this is separate
             // from manage-social-leads.

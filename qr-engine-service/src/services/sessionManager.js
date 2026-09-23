@@ -505,7 +505,7 @@ export async function startSession(accountId, broadcast, { isReconnect = false }
 
         if (!body || !String(body).trim()) continue;
 
-        notifyInboundMessage(id, senderPhone, String(body));
+        notifyInboundMessage(id, senderPhone, String(body), msg.key?.id ?? null);
       } catch (err) {
         console.error(`[sessionManager] failed to process inbound message for account_id=${id}:`, err.message);
       }

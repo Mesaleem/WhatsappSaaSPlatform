@@ -53,11 +53,18 @@ interface PaymentGatewayInterface
     public function verifyWebhookSignature(string $rawBody, string $signatureHeader, string $webhookSecret): bool;
 
     /**
-     * Extract {order_id, payment_id, is_success} from an already-decoded
-     * webhook JSON payload, gateway-shape-specific.
+     * Extract {order_id, payment_id, is_success, is_refund, reference}
+     * from an already-decoded webhook JSON payload, gateway-shape-
+     * specific. is_refund is true only for a COMPLETED refund event
+     * (Razorpay: 'refund.processed'; Stripe: 'charge.refunded') — never
+     * true at the same time as is_success. reference is populated only
+     * for a refund event: a gateway-side identifier for that refund
+     * (Razorpay: the refund entity id; Stripe: the refund/charge id),
+     * kept purely for audit traceability by
+     * InvoiceCreditService::reverseAgentCommission().
      *
      * @param array<string, mixed> $payload
-     * @return array{order_id: ?string, payment_id: ?string, is_success: bool}
+     * @return array{order_id: ?string, payment_id: ?string, is_success: bool, is_refund: bool, reference: ?string}
      */
     public function parseWebhookEvent(array $payload): array;
 }

@@ -22,6 +22,11 @@ class DatabaseSeeder extends Seeder
         // RouteMasterSeeder's docblock for why this is safe to re-run.
         $this->call(RouteMasterSeeder::class);
 
+        // Phase 1 Foundation — Capability/Provider/ProviderCapability/
+        // Plan/PlanEntitlement catalog. Idempotent, additive; does not
+        // touch PlanCatalog or the live checkout flow.
+        $this->call(Phase1FoundationSeeder::class);
+
         // Platform-level Super Admin — no account_id, global system access.
         $superAdmin = User::firstOrCreate(
             ['email' => 'superadmin@wa-saas.local'],

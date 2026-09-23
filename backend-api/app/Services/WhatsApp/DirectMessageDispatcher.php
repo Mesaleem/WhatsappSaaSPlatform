@@ -4,10 +4,10 @@ namespace App\Services\WhatsApp;
 
 use App\Models\Account;
 use App\Models\MessageDispatchLog;
+use App\Services\Messaging\MessageQuotaService;
 use App\Services\PaymentAlerts\PaymentAlertDispatcher;
 use App\Support\PhoneNumberNormalizer;
 use App\Support\WhatsAppMediaPayloadBuilder;
-use Illuminate\Support\Facades\DB;
 use RuntimeException;
 
 /**
@@ -96,15 +96,25 @@ class DirectMessageDispatcher
             return ['status' => 'failed', 'message' => $msg];
         }
 
-        // Same lock-then-increment pattern, and the same "unconditional
-        // on billing_model" fix, as TemplateMessageDispatcher::dispatch().
+        // Phase 5 Task 2 -- this used to be an inline copy of
+        // TemplateMessageDispatcher's lock-then-increment block (one of
+        // four verbatim copies the Task 1 audit found). That whole block,
+        // unchanged in behaviour, now lives in
+        // MessageQuotaService::consume(), so this path holds no quota
+        // logic of its own at all -- no counter arithmetic, no row lock,
+        // no plan-limit reads. UnifiedQuotaAndCapabilityTest asserts that
+        // none of it creeps back in.
+        //
+        // consume(), NOT reserve(), deliberately: the message is already
+        // on WhatsApp by this line, so the counter must record it
+        // unconditionally -- refusing here would make used_messages lie.
+        // That is byte-identical to the previous behaviour, including
+        // staying unconditional on billing_model. Moving this to a
+        // reserve-before-send gate would change when a send is refused
+        // and is explicitly Task 3's decision, not this one's.
         $subscription = $account->currentSubscription;
         if ($subscription) {
-            DB::transaction(function () use ($subscription) {
-                $locked = $subscription->newQuery()->lockForUpdate()->find($subscription->id);
-                $locked->increment('used_messages');
-                $locked->refreshStatus();
-            });
+            app(MessageQuotaService::class)->consume($subscription, 1);
         }
 
         // [Bug fix, disclosed]: same has_media/media_url root cause as

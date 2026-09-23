@@ -6,6 +6,7 @@ use App\Jobs\CreateNativeWhatsAppGroupJob;
 use App\Models\Account;
 use App\Models\ContactGroup;
 use App\Models\ContactGroupMember;
+use App\Services\Crm\ContactGroupContactLinker;
 use App\Support\PhoneNumberNormalizer;
 use Illuminate\Support\Facades\DB;
 
@@ -47,6 +48,9 @@ class NativeGroupCreationService
             $rows = collect($contacts)
                 ->map(fn (array $c) => [
                     'group_id' => $group->id,
+                    // Round 2 — NOT NULL, half of the composite
+                    // (group_id, account_id) FK. From the group, never input.
+                    'account_id' => $group->account_id,
                     'phone_number' => PhoneNumberNormalizer::normalize($c['phone_number']),
                     'name' => $c['name'] ?? null,
                     'created_at' => $now,
@@ -55,6 +59,18 @@ class NativeGroupCreationService
                 ->all();
 
             ContactGroupMember::upsert($rows, ['group_id', 'phone_number'], ['name', 'updated_at']);
+
+            /*
+             * Phase 6 CRM Hardening (Issue 8) — reconcile the rows this
+             * bulk upsert just wrote to universal CRM Contacts. The
+             * upsert itself is deliberately left alone (it is the fast
+             * path this feature depends on); linking runs afterwards and
+             * only over rows whose contact_id is still NULL, so it is
+             * idempotent and adds nothing for rows already reconciled.
+             * Quietly: a CRM reconciliation failure must not fail a
+             * group creation.
+             */
+            app(ContactGroupContactLinker::class)->linkGroupQuietly($group);
 
             return $group;
         });
@@ -112,6 +128,8 @@ class NativeGroupCreationService
                 ->unique()
                 ->map(fn (string $digits) => [
                     'group_id' => $group->id,
+                    // Round 2 — NOT NULL, half of the composite FK.
+                    'account_id' => $group->account_id,
                     'phone_number' => $digits,
                     'name' => null,
                     'created_at' => $now,
@@ -121,6 +139,15 @@ class NativeGroupCreationService
 
             if ($rows !== []) {
                 ContactGroupMember::upsert($rows, ['group_id', 'phone_number'], ['updated_at']);
+
+                // Phase 6 CRM Hardening (Issue 8) — same reconciliation
+                // as create() above. Note that an imported native group
+                // can legitimately contain participants with no phone
+                // number at all (an @lid identifier), which
+                // digitsFromJid() has already filtered out above; the
+                // linker skips anything unresolvable rather than
+                // inventing a Contact for it.
+                app(ContactGroupContactLinker::class)->linkGroupQuietly($group);
             }
 
             return $group->fresh()->loadCount('members');

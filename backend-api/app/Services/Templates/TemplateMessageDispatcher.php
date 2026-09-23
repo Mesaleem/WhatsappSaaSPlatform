@@ -5,12 +5,12 @@ namespace App\Services\Templates;
 use App\Models\Account;
 use App\Models\MessageDispatchLog;
 use App\Models\MessageTemplate;
+use App\Services\Messaging\MessageQuotaService;
 use App\Services\PaymentAlerts\PaymentAlertDispatcher;
 use App\Services\WhatsApp\WhatsAppEngineFactory;
 use App\Support\PhoneNumberNormalizer;
 use App\Support\TemplateRenderer;
 use App\Support\WhatsAppMediaPayloadBuilder;
-use Illuminate\Support\Facades\DB;
 use RuntimeException;
 
 /**
@@ -104,6 +104,20 @@ class TemplateMessageDispatcher
             return ['status' => 'missing_variables', 'message' => 'Missing value(s) for: '.implode(', ', $missing), 'missing' => $missing];
         }
 
+        // Phase 4 Task 5 (requirement 4) -- a Meta-defined template names a
+        // template registered inside a WABA, so it is only sendable by an
+        // account actually on the Meta provider; a QR account has no WABA
+        // for the name to resolve against. Guarded strictly on
+        // isMetaDefined(), which is false for every template that existed
+        // before this task (meta_template_name is a new nullable column),
+        // so no existing send path changes behaviour.
+        if ($template->isMetaDefined() && $account->currentSubscription?->engine_type !== 'meta') {
+            $msg = 'This template is registered with Meta and can only be sent by an account using the Meta Cloud API provider.';
+            MessageDispatchLog::record($accountId, $source, $recipientPhone, success: false, errorReason: $msg, apiKeyId: $apiKeyId, referenceType: 'template', referenceId: $template->id, templateName: $template->title);
+
+            return ['status' => 'failed', 'message' => $msg];
+        }
+
         if (PaymentAlertDispatcher::isWhatsAppDisconnected($account)) {
             MessageDispatchLog::record($accountId, $source, $recipientPhone, success: false, errorReason: 'WhatsApp account is disconnected.', apiKeyId: $apiKeyId, referenceType: 'template', referenceId: $template->id, templateName: $template->title);
 
@@ -151,10 +165,95 @@ class TemplateMessageDispatcher
         // even for a real Media Template send (see record()'s own
         // docblock for the full root cause).
         $mediaMetaData = self::resolveMediaMetaData($template, $account, $mediaUrl);
-        $metaData = [
-            'template_id' => $template->id,
-            ...$mediaMetaData,
-        ];
+
+        // Phase 4 Task 6 -- a Meta-DEFINED template on a Meta account is
+        // the only case that switches to Graph's `type: template` payload.
+        // Everything else (every QR send, and a Meta account sending an
+        // ordinary non-Meta-defined template) keeps the existing
+        // rendered-text path byte for byte.
+        $isMetaTemplateSend = $template->isMetaDefined()
+            && $account->currentSubscription?->engine_type === 'meta';
+
+        // Phase 4 Task 7 -- set only when this send actually emits a Meta
+        // media header component. resolveMediaMetaData() returns [] for
+        // every Meta account (by design: it is the QR media path), so
+        // without this the audit row for a Meta media-header send would
+        // read "Media Attachment: No" even though a file was attached --
+        // the exact bug MessageDispatchLog::record()'s own docblock
+        // records for the QR path. Nothing else reads it.
+        $metaHeaderMediaUrl = null;
+
+        if ($isMetaTemplateSend) {
+            // Validation BEFORE the Graph call -- a send that Meta is
+            // certain to reject is refused locally instead, and no
+            // request ever leaves this process.
+            if (! filled($template->language)) {
+                $msg = 'This Meta template has no language code configured, so it cannot be sent. Set its language (for example "en_US") first.';
+                MessageDispatchLog::record($accountId, $source, $normalizedPhone, success: false, errorReason: $msg, apiKeyId: $apiKeyId, referenceType: 'template', referenceId: $template->id, templateName: $template->title, messagePreview: $renderedMessage);
+
+                return ['status' => 'failed', 'message' => $msg];
+            }
+
+            // Phase 4 Task 7 -- a schema that cannot be expressed as a
+            // valid Meta component set (a 'footer' parameter, a button
+            // field with no sub_type/index, two header parameters, a
+            // media header that also declares header text) is refused
+            // here rather than sent and rejected by Graph. Checked BEFORE
+            // the missing-value check: no set of supplied values can make
+            // a structurally invalid definition sendable. Returns
+            // 'failed', which both API controllers already map to 422.
+            $structureErrors = TemplateComponentTranslator::componentStructureErrors($template);
+
+            if ($structureErrors !== []) {
+                $msg = 'This template\'s variable schema cannot be sent to Meta: '.implode(' ', $structureErrors);
+                MessageDispatchLog::record($accountId, $source, $normalizedPhone, success: false, errorReason: $msg, apiKeyId: $apiKeyId, referenceType: 'template', referenceId: $template->id, templateName: $template->title, messagePreview: $renderedMessage);
+
+                return ['status' => 'failed', 'message' => $msg];
+            }
+
+            // Meta requires every positional parameter to be present and
+            // non-empty; the plain-text path's ''-substitution for an
+            // optional variable is not valid here.
+            $missingForMeta = TemplateComponentTranslator::missingComponentValues($template, $variables);
+
+            if ($missingForMeta !== []) {
+                $msg = 'Missing value(s) for: '.implode(', ', $missingForMeta);
+                MessageDispatchLog::record($accountId, $source, $normalizedPhone, success: false, errorReason: $msg, apiKeyId: $apiKeyId, referenceType: 'template', referenceId: $template->id, templateName: $template->title, messagePreview: $renderedMessage);
+
+                return ['status' => 'missing_variables', 'message' => $msg, 'missing' => $missingForMeta];
+            }
+
+            // Phase 4 Task 7 -- the send-time $mediaUrl override is passed
+            // through so a media-header template carries the file this
+            // send supplied, exactly as the QR path already allows via
+            // resolveMediaMetaData(). No new media storage is involved:
+            // the URL is the caller's own, and the template's configured
+            // header_media_url remains the fallback.
+            $components = TemplateComponentTranslator::toComponents($template, $variables, $mediaUrl);
+            $metaHeaderMediaUrl = TemplateComponentTranslator::headerMediaUrlIn($components);
+
+            // Deliberately NOT spread with $mediaMetaData or
+            // 'template_id': both are engine-internal hints that would
+            // land in the Graph body as unknown top-level keys.
+            // resolveMediaMetaData() already returns [] for a Meta
+            // account, so nothing is lost.
+            $metaData = [
+                'type' => 'template',
+                'template' => array_filter([
+                    'name' => $template->meta_template_name,
+                    'language' => ['code' => $template->language],
+                    // Omitted entirely when the template takes no
+                    // parameters -- Meta rejects an empty components
+                    // array on such a template.
+                    'components' => $components !== [] ? $components : null,
+                ], static fn ($value) => $value !== null),
+            ];
+        } else {
+            $metaData = [
+                'template_id' => $template->id,
+                ...$mediaMetaData,
+            ];
+        }
 
         $result = $driver->sendMessage($normalizedPhone, $renderedMessage, $metaData);
 
@@ -186,14 +285,15 @@ class TemplateMessageDispatcher
         // just a display bug. Now unconditional, matching
         // ProcessPaymentAlertJob exactly.
         if ($subscription) {
-            // Same lock-then-increment pattern as ProcessPaymentAlertJob,
-            // so a template send and a payment-alert send racing each
-            // other can never both read a stale used_messages value.
-            DB::transaction(function () use ($subscription) {
-                $locked = $subscription->newQuery()->lockForUpdate()->find($subscription->id);
-                $locked->increment('used_messages');
-                $locked->refreshStatus();
-            });
+            // Phase 5 Task 3 -- the transaction + row lock + increment +
+            // refreshStatus that used to sit inline here is now
+            // MessageQuotaService::consume(), byte-for-byte the same
+            // operation in one shared place. This path keeps its
+            // check -> send -> consume order exactly: the message is
+            // already on WhatsApp by this line, so usage is RECORDED,
+            // never re-gated. Turning this into reserve() would change
+            // when a send is refused and is deliberately out of scope.
+            app(MessageQuotaService::class)->consume($subscription, 1);
         }
 
         // Group Messaging Phase 4 — dispatch_log_id is additive (a new
@@ -204,7 +304,7 @@ class TemplateMessageDispatcher
         // (the new /v1/send-message individual-recipient path) is the
         // first caller that actually reads it, to return it as this
         // endpoint's own dispatch_id.
-        $log = MessageDispatchLog::record($accountId, $source, $normalizedPhone, success: true, apiKeyId: $apiKeyId, referenceType: 'template', referenceId: $template->id, templateName: $template->title, messagePreview: $renderedMessage, gatewayMessageId: $result['message_id'] ?? null, hasMedia: array_key_exists('media_url', $mediaMetaData), mediaUrl: $mediaMetaData['media_url'] ?? null);
+        $log = MessageDispatchLog::record($accountId, $source, $normalizedPhone, success: true, apiKeyId: $apiKeyId, referenceType: 'template', referenceId: $template->id, templateName: $template->title, messagePreview: $renderedMessage, gatewayMessageId: $result['message_id'] ?? null, hasMedia: array_key_exists('media_url', $mediaMetaData) || $metaHeaderMediaUrl !== null, mediaUrl: $mediaMetaData['media_url'] ?? $metaHeaderMediaUrl);
 
         return ['status' => 'sent', 'rendered_message' => $renderedMessage, 'dispatch_log_id' => $log->id];
     }

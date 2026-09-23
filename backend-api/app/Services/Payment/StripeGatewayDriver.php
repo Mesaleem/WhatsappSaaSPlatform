@@ -127,6 +127,16 @@ class StripeGatewayDriver implements PaymentGatewayInterface
      * does — the PaymentIntent's own id serves as both (it was stored as
      * gateway_order_id at creation, and is reused here as the
      * gateway_payment_id once it succeeds).
+     *
+     * A completed refund arrives as 'charge.refunded', whose $object is
+     * the CHARGE, not the PaymentIntent — its own 'id' is a "ch_..." id
+     * that would never match a stored gateway_order_id ("pi_..."). The
+     * Charge object's own 'payment_intent' field is what links it back
+     * to the PaymentIntent id our Invoice rows actually store, so
+     * order_id is resolved from that field for a refund event
+     * specifically. 'reference' is the refund's own id when Stripe
+     * includes it (object.refunds.data[0].id), falling back to the
+     * charge id otherwise.
      */
     public function parseWebhookEvent(array $payload): array
     {
@@ -134,10 +144,16 @@ class StripeGatewayDriver implements PaymentGatewayInterface
         $type = $payload['type'] ?? '';
         $id = $object['id'] ?? null;
 
+        $isRefund = $type === 'charge.refunded';
+
         return [
-            'order_id' => $id,
+            'order_id' => $isRefund ? ($object['payment_intent'] ?? $id) : $id,
             'payment_id' => $id,
-            'is_success' => $type === 'payment_intent.succeeded' || ($object['status'] ?? null) === 'succeeded',
+            'is_success' => ! $isRefund && (
+                $type === 'payment_intent.succeeded' || ($object['status'] ?? null) === 'succeeded'
+            ),
+            'is_refund' => $isRefund,
+            'reference' => $isRefund ? ($object['refunds']['data'][0]['id'] ?? $id) : null,
         ];
     }
 }

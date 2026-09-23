@@ -348,6 +348,23 @@ class Account extends Model
     }
 
     /**
+     * Phase 6 CRM Task 1 — the first level of the CRM's ownership chain,
+     * Account -> Contacts -> CRM Leads. Distinct from contactGroups()
+     * above: a ContactGroup is a broadcast list, a Contact is a person.
+     * See Contact's creating migration for why the two are separate.
+     */
+    public function contacts(): HasMany
+    {
+        return $this->hasMany(Contact::class);
+    }
+
+    /** Phase 6 CRM Task 7 — this tenant's CRM lead tags. */
+    public function crmTags(): HasMany
+    {
+        return $this->hasMany(CrmTag::class);
+    }
+
+    /**
      * The most recently started subscription row. Determined by max(starts_at)
      * rather than a mutable is_current flag, so there is no risk of two rows
      * both being "current" at once.
@@ -364,6 +381,25 @@ class Account extends Model
     public function whatsAppSession(): HasOne
     {
         return $this->hasOne(WhatsAppSession::class);
+    }
+
+    /**
+     * Phase 1 Foundation — this account's granted capability entitlements
+     * (account_entitlements). Required by AccessControlService::canTenant().
+     * See the Phase 1 plan, Step 5/7.
+     */
+    public function entitlements(): HasMany
+    {
+        return $this->hasMany(AccountEntitlement::class);
+    }
+
+    /**
+     * Phase 1 Foundation — this account's per-capability usage/quota
+     * counters (usage_quotas). See the Phase 1 plan, Step 5.
+     */
+    public function usageQuotas(): HasMany
+    {
+        return $this->hasMany(UsageQuota::class);
     }
 
     /**

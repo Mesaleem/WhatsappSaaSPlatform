@@ -39,6 +39,24 @@ export interface User {
   roles: Role[];
   /** Flattened, already-deduplicated-and-unioned-across-all-roles permission names (see backend's User::getAllPermissions()). */
   permissions: string[];
+  /**
+   * Phase 1 Foundation, Task 9 — { capability_slug => granted }, from
+   * AccessControlService::capabilityMap(). The backend has sent this on
+   * /auth/me since Phase 1; Phase 5 Task 7 is the first consumer, so
+   * this is the declaration catching up with the payload, not a new
+   * field.
+   *
+   * Optional because an older cached /auth/me response may predate a
+   * client refresh. UX only — never an authorization decision; see
+   * src/journey/nodeEntitlement.ts.
+   */
+  capabilities?: Record<string, boolean>;
+  /**
+   * CRM — the Super Admin's own CRM account ("Platform (Super Admin)"),
+   * the CRM target when no client is selected. Null/absent for every other
+   * user, and for a Super Admin when it has not been created yet.
+   */
+  platform_crm_account?: { id: number; company_name: string } | null;
   created_at: string;
 }
 

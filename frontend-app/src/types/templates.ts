@@ -41,7 +41,30 @@ export interface TemplateVariableSchemaField {
   type: TemplateVariableType;
   required: boolean;
   options?: string[];
+  /**
+   * Phase 4 Task 7 — which Meta template component this parameter fills.
+   * OPTIONAL and omitted on every schema written before that task, which
+   * the backend reads as 'body' (TemplateComponentTranslator::fieldsFor),
+   * so existing templates are unaffected. Meaningful only for a
+   * Meta-defined template; ignored entirely on the QR path, which renders
+   * {{token}} into one flat body string.
+   *
+   * 'footer' is deliberately NOT a value: Meta accepts no runtime
+   * parameter for a template footer, and the backend rejects it as a
+   * structural error before any Graph call.
+   */
+  component?: TemplateVariableComponent;
+  /** Required when component === 'button'; mirrors MessageTemplate::BUTTON_SUB_TYPES. */
+  button_sub_type?: TemplateButtonSubType;
+  /** Required when component === 'button' — the button's own position in the registered Meta template (0-based). Never inferred. */
+  button_index?: number;
 }
+
+/** Mirrors MessageTemplate::VARIABLE_COMPONENTS. Absent on a field means 'body'. */
+export type TemplateVariableComponent = 'body' | 'header' | 'button';
+
+/** Mirrors MessageTemplate::BUTTON_SUB_TYPES. */
+export type TemplateButtonSubType = 'url' | 'quick_reply';
 
 export interface MessageTemplate {
   id: number;
@@ -62,6 +85,15 @@ export interface MessageTemplate {
   rejection_reason: string | null;
   /** Media Templates (QR/Baileys-only) -- defaults to 'text' at the DB level for every template, including ones created before this feature existed. */
   header_type: TemplateHeaderType;
+  /**
+   * Phase 4 Task 5 — the Meta Cloud API half of a template. Null on every
+   * QR template and on every template created before this feature.
+   */
+  language: string | null;
+  category: MetaTemplateCategory | null;
+  /** The template's name inside the WABA — distinct from `template_code`, which is this platform's own global key. */
+  meta_template_name: string | null;
+  meta_template_status: MetaTemplateStatus | null;
   /** Only meaningful when header_type is 'image' or 'document'; null otherwise. */
   header_media_url: string | null;
   creator: { id: number; name: string } | null;
@@ -83,6 +115,12 @@ export interface AvailableTemplate {
   variables_schema: TemplateVariableSchemaField[];
 }
 
+/** Meta's own template classification — mirrors MessageTemplate::META_CATEGORIES. */
+export type MetaTemplateCategory = 'MARKETING' | 'UTILITY' | 'AUTHENTICATION';
+
+/** Meta's own review verdict — mirrors MessageTemplate::META_STATUSES. Separate from this platform's approval `status`. */
+export type MetaTemplateStatus = 'PENDING' | 'APPROVED' | 'REJECTED' | 'PAUSED' | 'DISABLED';
+
 export interface SaveMessageTemplatePayload {
   title: string;
   /** Developer API: unique, human-readable lookup key. Omit or send empty/null to auto-generate one from `title`. */
@@ -91,6 +129,15 @@ export interface SaveMessageTemplatePayload {
   template_body: string;
   account_id?: number | null;
   variables_schema?: TemplateVariableSchemaField[];
+  /**
+   * Phase 4 Task 5 — Meta-only fields. The backend rejects any of these
+   * for an account not on the Meta provider, and requires `language`
+   * whenever `meta_template_name` is set.
+   */
+  language?: string | null;
+  category?: MetaTemplateCategory | null;
+  meta_template_name?: string | null;
+  meta_template_status?: MetaTemplateStatus | null;
   /** Media Templates (QR/Baileys-only). Omit both (or send header_type: 'text') for a plain text template -- unchanged, existing behavior. */
   header_type?: TemplateHeaderType;
   header_media_url?: string | null;

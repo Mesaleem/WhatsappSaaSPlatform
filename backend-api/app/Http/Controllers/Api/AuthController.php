@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\LoginAuditLog;
 use App\Models\User;
+use App\Services\Access\AccessControlService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
@@ -14,6 +15,10 @@ use Illuminate\Validation\ValidationException;
 
 class AuthController extends Controller
 {
+    public function __construct(private readonly AccessControlService $accessControl)
+    {
+    }
+
     /**
      * Validate credentials, verify the user/account is active, issue a
      * Sanctum token scoped to the user's permissions, and return the
@@ -235,8 +240,20 @@ class AuthController extends Controller
             'is_active' => $user->is_active,
             'account_id' => $user->account_id,
             'account' => $user->account,
+            // CRM — the Super Admin's own CRM account (PlatformCrmAccount),
+            // the CRM target when no client is selected. Null for everyone
+            // else, and for a Super Admin when it has not been created.
+            'platform_crm_account' => $user->isSuperAdmin()
+                ? app(\App\Services\Crm\PlatformCrmAccount::class)->find()?->only(['id', 'company_name'])
+                : null,
             'roles' => $user->roles,
             'permissions' => $user->getAllPermissions()->pluck('name'),
+            // Phase 1 Foundation, Task 9 — { capability_slug => bool },
+            // driven by AccessControlService::capabilityMap() (Super
+            // Admin bypass + AccountEntitlement, single query), additive
+            // alongside effective_modules/allowed_modules above; neither
+            // is replaced in Phase 1.
+            'capabilities' => $this->accessControl->capabilityMap($user),
             'created_at' => $user->created_at,
         ];
     }

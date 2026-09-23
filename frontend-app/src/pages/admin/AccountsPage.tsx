@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Gauge, Loader2, Pencil, Plus, Power, PowerOff, RefreshCw, Timer } from 'lucide-react';
+import { Gauge, KeyRound, Loader2, Pencil, Plus, Power, PowerOff, RefreshCw, Timer } from 'lucide-react';
 import accountService from '../../services/accountService';
 import type { Account, AccountStatus } from '../../types/account';
 import { useAuth } from '../../core/context/AuthContext';
 import type { BillingModel, EngineType } from '../../types/subscription';
 import CreateAccountModal from '../../components/admin/CreateAccountModal';
 import UpdateQuotaModal from '../../components/admin/UpdateQuotaModal';
+import AccountEntitlementsModal from '../../components/admin/AccountEntitlementsModal';
 import { TableCard } from '../../components/common/Card';
 import { ClearFiltersButton, Pagination, SearchInput, StatusFilterSelect } from '../../components/common/DataTableControls';
 import { extractErrorMessage } from '../../utils/apiError';
@@ -40,26 +41,8 @@ function formatRate(rate: string | null): string {
   return `₹${Number(rate).toFixed(2)}/msg`;
 }
 
-/**
- * Wallet Visibility, disclosed: this page (shown to Super Admin as
- * "Manage Clients" and to an Agent as "My Clients" — see AppLayout's
- * two nav items pointing at this same route) is where an admin most
- * directly asks "how much of what this client paid is left" and, until
- * now, had no answer beyond raw message counts. Same
- * used_messages * rate_per_message / (total - used) * rate_per_message
- * formula already used in ClientBillingSummaryTable.tsx and
- * BillingPage.tsx's own Current Plan Status card — one formula, applied
- * everywhere a per_message subscription's usage is shown, so the three
- * never disagree.
- */
 function formatMoneyNum(amount: number | null): string {
-  // Defensive null handling (2026-09-18): spent_amount/remaining_balance
-  // are typed number | null since they're null for non-per_message
-  // subscriptions -- the two call sites below are already guarded by
-  // billing_model === 'per_message', so this should never actually see
-  // null, but the type says it can, and a bare `amount.toFixed(2)` on an
-  // unguarded null would throw at render time. Matches
-  // ClientBillingSummaryTable.tsx's own formatMoneyNum() exactly.
+  // spent_amount/remaining_balance come from the API (Subscription accessors); null for non-per_message subscriptions.
   if (amount === null) return '—';
   return `₹${amount.toFixed(2)}`;
 }
@@ -115,6 +98,12 @@ export default function AccountsPage() {
   // from `modalState` above (CreateAccountModal) since "Edit Quota"
   // opens a distinct, narrower modal, not the full account editor.
   const [quotaModalAccount, setQuotaModalAccount] = useState<Account | null>(null);
+  /*
+    Phase 5 Task 8 — the capability entitlement panel. Its own state for
+    the same reason the quota modal has its own: a distinct, narrower
+    screen, not another tab of the full account editor.
+  */
+  const [entitlementsAccount, setEntitlementsAccount] = useState<Account | null>(null);
   // Client Management & Account Deactivation Engine — quick-toggle action
   // (Actions column), distinct from the full Edit modal's Status
   // dropdown, mirroring UsersPage.tsx's handleToggle() UX for users.
@@ -370,13 +359,6 @@ export default function AccountsPage() {
                           </div>
                           {sub.billing_model === 'per_message' && sub.rate_per_message !== null && (
                             <div className="mt-1 space-y-0.5 text-xs text-slate-400">
-                              {/* Backend-computed (Subscription::spentAmount()/
-                                  remainingBalance() accessors, 2026-09-18) -- no
-                                  frontend subtraction here on purpose, so this
-                                  figure can never drift from the API response
-                                  (or lag behind it after a deploy). See those
-                                  accessors for the price_paid-minus-spent
-                                  rationale (never total_allocated_messages × rate). */}
                               <div>Spent: {formatMoneyNum(sub.spent_amount)}</div>
                               <div>Balance: {formatMoneyNum(sub.remaining_balance)}</div>
                             </div>
@@ -411,6 +393,15 @@ export default function AccountsPage() {
                           title="Extend subscription"
                         >
                           <Timer className="h-4 w-4" />
+                        </button>
+                        <button
+                          data-testid={`open-entitlements-${account.id}`}
+                          onClick={() => setEntitlementsAccount(account)}
+                          className="rounded-md p-1.5 text-slate-500 hover:bg-slate-100 hover:text-slate-700"
+                          aria-label="Capabilities"
+                          title="Capabilities"
+                        >
+                          <KeyRound className="h-4 w-4" />
                         </button>
                         {isAgentViewer && (
                           <button
@@ -460,6 +451,15 @@ export default function AccountsPage() {
 
       {modalState.open && (
         <CreateAccountModal account={modalState.account} onClose={closeModal} onSaved={handleSaved} />
+      )}
+
+      {entitlementsAccount && (
+        <AccountEntitlementsModal
+          account={entitlementsAccount}
+          /* Grant/revoke is Super-Admin-only server-side; an Agent gets the read-only panel. */
+          canManage={superAdmin}
+          onClose={() => setEntitlementsAccount(null)}
+        />
       )}
 
       {quotaModalAccount && (

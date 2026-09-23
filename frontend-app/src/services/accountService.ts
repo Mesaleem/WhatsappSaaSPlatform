@@ -2,6 +2,7 @@ import axiosInstance from '../core/api/axiosInstance';
 import type {
   Account,
   AccountDetail,
+  AccountEntitlementsResponse,
   AccountStatus,
   AccountType,
   CreateAccountPayload,
@@ -108,6 +109,33 @@ const accountService = {
   updatePermissions(id: number, payload: UpdateAccountPermissionsPayload) {
     return axiosInstance
       .patch<Account>(`${BASE}/${id}/permissions`, payload)
+      .then((res) => res.data);
+  },
+
+  /**
+   * Phase 5 Task 8 — an account's effective capability entitlements.
+   * The READ half of the grant/revoke pair that already existed; see
+   * AccountController::listEntitlements(). Every seeded capability is
+   * returned, entitled or not, so "not entitled" renders as a state
+   * rather than an absent row.
+   */
+  entitlements(id: number) {
+    return axiosInstance
+      .get<AccountEntitlementsResponse>(`${BASE}/${id}/entitlements`)
+      .then((res) => res.data);
+  },
+
+  /** Phase 5 Task 8 — Super Admin / Agent capability grant. */
+  grantEntitlement(id: number, capability: string) {
+    return axiosInstance
+      .post<{ message: string }>(`${BASE}/${id}/entitlements`, { capability })
+      .then((res) => res.data);
+  },
+
+  /** Phase 5 Task 8 — Super Admin capability revoke. */
+  revokeEntitlement(id: number, capability: string) {
+    return axiosInstance
+      .delete<{ message: string }>(`${BASE}/${id}/entitlements/${capability}`)
       .then((res) => res.data);
   },
 

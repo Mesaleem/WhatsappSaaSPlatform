@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api\Internal;
 
 use App\Http\Controllers\Controller;
+use App\Models\InboundMessageEvent;
 use App\Services\Chatbot\ChatbotEngineService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -39,12 +40,21 @@ class WhatsAppInboundController extends Controller
             'account_id' => ['required', 'integer', 'exists:accounts,id'],
             'sender_phone' => ['required', 'string', 'max:32'],
             'message' => ['required', 'string'],
+            // Phase 7 Task 3 — the Baileys message key id (msg.key.id), the
+            // message's own stable WhatsApp identity: the same message
+            // re-delivered keeps it, two different messages never share it.
+            // Optional so an older qr-engine build keeps working (without
+            // durable de-duplication — see InboundEventGate).
+            'message_id' => ['nullable', 'string', 'max:128'],
         ]);
 
         $log = app(ChatbotEngineService::class)->handleInboundMessage(
             (int) $data['account_id'],
             $data['sender_phone'],
             $data['message'],
+            null,
+            InboundMessageEvent::PROVIDER_QR,
+            ! empty($data['message_id']) ? 'wamsg:'.$data['message_id'] : null,
         );
 
         return response()->json(['received' => true, 'chatbot_log' => $log]);

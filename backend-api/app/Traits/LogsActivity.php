@@ -62,7 +62,12 @@ trait LogsActivity
             // generic 'update'.
             $actionType = array_keys($changes) === ['is_active'] ? 'toggle' : 'update';
 
-            $model->recordActivity($actionType, $original, $changes);
+            // Phase 6 CRM Task 9 — an opted-in model ($auditIdentity) also
+            // names the record the row is about, so an `update` row can
+            // be traced to its lead even when many are changed at once.
+            // Models without $auditIdentity are unaffected.
+            $identity = $model->auditIdentityAttributes();
+            $model->recordActivity($actionType, $identity + $original, $identity + $changes);
         });
 
         static::deleted(function ($model) {
@@ -82,6 +87,22 @@ trait LogsActivity
      *
      * @return array<string, mixed>
      */
+    /**
+     * Phase 6 CRM Task 9 — attributes a model always includes in its
+     * `update` rows so each row identifies its record (created/deleted rows
+     * already carry the full attribute set). Opt-in: a model declares
+     * `protected array $auditIdentity = ['id'];`. Empty for every other
+     * model, so their audit rows are exactly as before.
+     *
+     * @return array<string, mixed>
+     */
+    public function auditIdentityAttributes(): array
+    {
+        $keys = property_exists($this, 'auditIdentity') ? $this->auditIdentity : [];
+
+        return array_intersect_key($this->getAttributes(), array_flip($keys));
+    }
+
     protected function auditableAttributes(array $attributes): array
     {
         $excluded = array_flip(array_merge($this->getHidden(), ['created_at', 'updated_at']));

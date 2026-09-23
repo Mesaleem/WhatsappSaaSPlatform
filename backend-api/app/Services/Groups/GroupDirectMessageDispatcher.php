@@ -6,7 +6,10 @@ use App\Jobs\ProcessGroupDirectMessageJob;
 use App\Models\Account;
 use App\Models\ContactGroup;
 use App\Models\ContactGroupMember;
+use App\Models\GroupDispatchRecipient;
 use App\Models\MessageDispatchLog;
+use App\Services\Access\ProviderCapabilityService;
+use App\Services\Messaging\MessageQuotaService;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -75,7 +78,10 @@ class GroupDirectMessageDispatcher
                 ];
             }
 
-            if ($account->currentSubscription?->engine_type !== 'qr') {
+            // Phase 5 Task 2 -- provider_capabilities is authoritative for
+            // this rule when it states it; the 'qr' literal now lives only
+            // in ProviderCapabilityService::supportsNativeWhatsAppGroups().
+            if (! app(ProviderCapabilityService::class)->supportsNativeWhatsAppGroups($account->currentSubscription?->engine_type)) {
                 return [
                     'status' => 'unsupported_engine',
                     'message' => 'This account is no longer on the QR (Baileys) engine -- Native WhatsApp Groups require it.',
@@ -100,20 +106,40 @@ class GroupDirectMessageDispatcher
             ? (string) ($content['body'] ?? '')
             : (string) ($content['caption'] ?? '['.($content['media_type'] ?? 'media').']');
 
-        $reservation = DB::transaction(function () use ($subscription, $recipientCount, $accountId, $group, $preview, $source, $apiKeyId) {
-            $locked = $subscription->newQuery()->lockForUpdate()->find($subscription->id);
+        $reservation = DB::transaction(function () use ($subscription, $recipientCount, $accountId, $group, $preview, $source, $apiKeyId, $messageType, $content) {
 
-            if (! $locked->hasQuotaFor($recipientCount)) {
+            // Phase 5 fix P5-1 — the recipient list is read HERE, inside the
+            // reservation transaction, and N is its size: exactly these
+            // members are reserved, frozen below and sent by the job.
+            $members = $group->isNative() ? null : GroupDispatchRecipient::membersToReserve($group);
+
+            if ($members !== null) {
+                $recipientCount = $members->count();
+
+                if ($recipientCount === 0) {
+                    return ['status' => 'empty_group', 'message' => 'This contact group has no members.'];
+                }
+            }
+            // Phase 5 Task 4 -- see GroupMessageDispatcher's sibling
+            // comment: reserve() (not consume()) inside this same
+            // transaction, so the reservation and the queued audit row
+            // below still commit together.
+            if (! app(MessageQuotaService::class)->reserve($subscription, $recipientCount)) {
+                $current = $subscription->newQuery()->find($subscription->id);
+
                 return [
                     'status' => 'insufficient_quota',
                     'required' => $recipientCount,
-                    'remaining' => $locked->remainingQuota() ?? 0,
+                    'remaining' => $current?->remainingQuota() ?? 0,
                 ];
             }
 
-            $locked->increment('used_messages', $recipientCount);
-            $locked->refreshStatus();
-
+            // Phase 5 Task 5 -- has_media/media_url are finally real for a
+            // group batch. This call site is the only one in the codebase
+            // that KNOWS a group send carries a file, and it used to
+            // discard that fact (recordGroupDispatchQueued hardcoded
+            // has_media false), so Message Logs reported "No" for every
+            // media blast.
             $log = MessageDispatchLog::recordGroupDispatchQueued(
                 $accountId,
                 $group->id,
@@ -123,12 +149,18 @@ class GroupDirectMessageDispatcher
                 $preview,
                 $source,
                 $apiKeyId,
+                hasMedia: $messageType === 'media',
+                mediaUrl: $messageType === 'media' ? ($content['url'] ?? null) : null,
             );
 
-            return ['status' => 'queued', 'dispatch_id' => $log->id];
+            if ($members !== null) {
+                GroupDispatchRecipient::freeze($log, $members);
+            }
+
+            return ['status' => 'queued', 'dispatch_id' => $log->id, 'recipient_count' => $recipientCount];
         });
 
-        if ($reservation['status'] === 'insufficient_quota') {
+        if ($reservation['status'] !== 'queued') {
             return $reservation;
         }
 
@@ -137,7 +169,7 @@ class GroupDirectMessageDispatcher
         return [
             'status' => 'queued',
             'dispatch_id' => $reservation['dispatch_id'],
-            'queued_recipients_count' => $recipientCount,
+            'queued_recipients_count' => $reservation['recipient_count'],
         ];
     }
 }

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ComponentType } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ComponentType } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import {
   BarChart3,
@@ -7,6 +7,8 @@ import {
   ChevronsLeft,
   ChevronsRight,
   ClipboardList,
+  Columns3,
+  PieChart,
   Code2,
   Contact,
   CreditCard,
@@ -25,6 +27,7 @@ import {
   Share2,
   Smartphone,
   Sparkles,
+  Tags,
   Target,
   UserSearch,
   Users,
@@ -75,6 +78,12 @@ interface NavItem {
    * Admin is never affected by this, even while a client is selected.
    */
   requiresModule?: AccountModule;
+  /**
+   * Phase 6 CRM Task 8 — hide unless the /auth/me `capabilities` map grants
+   * this slug (Super Admin bypasses). Same rule as ProtectedRoute's
+   * `capability` prop; UX only, capability.guard is the boundary.
+   */
+  requiresCapability?: string;
   /**
    * Social Media Marketing & Meta Ads Automation Expansion (Phase 1).
    * Hides this item for the listed exact role slugs, regardless of
@@ -184,6 +193,15 @@ const NAV_ITEMS: NavItem[] = [
   { label: 'Social Inbox', to: '/social/inbox', icon: Inbox, tint: NAV_TINTS.social, permission: 'manage-social-leads', requiresModule: 'social_inbox' },
   { label: 'Comment Rules', to: '/social/comment-rules', icon: MessageSquare, tint: NAV_TINTS.social, permission: 'manage-comment-automation', requiresModule: 'comment_automation' },
   // Social Media Marketing & Meta Ads Automation Expansion — Final Phase.
+  // Phase 6 CRM Task 8 — the CRM frontend. Same three gates the backend
+  // puts on every /api/crm/* route: manage-crm + lead_crm module + crm
+  // capability.
+  { label: 'CRM Leads', to: '/crm/leads', icon: UserSearch, tint: NAV_TINTS.social, permission: 'manage-crm', requiresModule: 'lead_crm', requiresCapability: 'crm' },
+  { label: 'CRM Pipeline', to: '/crm/pipeline', icon: Columns3, tint: NAV_TINTS.social, permission: 'manage-crm', requiresModule: 'lead_crm', requiresCapability: 'crm' },
+  { label: 'CRM Contacts', to: '/crm/contacts', icon: Contact, tint: NAV_TINTS.social, permission: 'manage-crm', requiresModule: 'lead_crm', requiresCapability: 'crm' },
+  { label: 'CRM Tags', to: '/crm/tags', icon: Tags, tint: NAV_TINTS.social, permission: 'manage-crm', requiresModule: 'lead_crm', requiresCapability: 'crm' },
+  // Phase 6 CRM Task 12 — same three gates; the API is GET /api/crm/analytics.
+  { label: 'CRM Analytics', to: '/crm/analytics', icon: PieChart, tint: NAV_TINTS.social, permission: 'manage-crm', requiresModule: 'lead_crm', requiresCapability: 'crm' },
   { label: 'Instant Lead CRM', to: '/social/leads', icon: UserSearch, tint: NAV_TINTS.social, permission: 'manage-social-leads', requiresModule: 'lead_crm' },
   { label: 'Social Reports', to: '/social/reports', icon: FileBarChart, tint: NAV_TINTS.social, permission: 'view-social-analytics', requiresModule: 'reports' },
   { label: 'Manage Clients', to: '/admin/accounts', icon: Building2, tint: NAV_TINTS.accounts, superAdminOnly: true },
@@ -203,6 +221,8 @@ const NAV_ITEMS: NavItem[] = [
   // BUILD: Fully Dynamic Categorized Route Master & Nested Permission
   // Matrix UI — Super-Admin-only, same tier as the other platform-admin
   // nav items above/below it.
+  // Phase 5 Task 12 — plan management, Super Admin only.
+  { label: 'Plans', to: '/admin/plans', icon: Layers, tint: NAV_TINTS.gateway, superAdminOnly: true },
   { label: 'Route Master', to: '/admin/route-master', icon: Layers, tint: NAV_TINTS.gateway, superAdminOnly: true },
   // IMPLEMENT: Dynamic Route Master with Super-Admin Bypass & Global
   // Audit Tracking — requirement 4. Labeled 'Activity Logs' (not 'Audit
@@ -264,6 +284,7 @@ function isNavItemVisible(
     hasPermission: (p: string) => boolean;
     hasModule: (m: AccountModule) => boolean;
     hasRole: (roleName: string) => boolean;
+    hasCapability: (slug: string) => boolean;
   },
 ): boolean {
   if (item.superAdminOnly) return opts.isSuperAdmin;
@@ -273,6 +294,7 @@ function isNavItemVisible(
   if (item.requiresAccount && !opts.hasAccount) return false;
   if (item.permission && !opts.isSuperAdmin && !opts.hasPermission(item.permission)) return false;
   if (item.requiresModule && !opts.isSuperAdmin && !opts.hasModule(item.requiresModule)) return false;
+  if (item.requiresCapability && !opts.isSuperAdmin && !opts.hasCapability(item.requiresCapability)) return false;
   return true;
 }
 
@@ -298,12 +320,19 @@ export default function AppLayout() {
   // 3-Tier Hierarchy & Agent-Client Scope Engine (Phase 3 UI).
   const isAgent = !superAdmin && user?.account?.account_type === 'agent';
 
+  // Absent map (older /auth/me) = no invented denial; see ProtectedRoute.
+  const capabilities = user?.capabilities;
+  const hasCapability = useCallback(
+    (slug: string) => (capabilities ? Boolean(capabilities[slug]) : true),
+    [capabilities],
+  );
+
   const visibleItems = useMemo(
     () =>
       NAV_ITEMS.filter((item) =>
-        isNavItemVisible(item, { isSuperAdmin: superAdmin, isAgent, hasAccount, hasPermission, hasModule, hasRole }),
+        isNavItemVisible(item, { isSuperAdmin: superAdmin, isAgent, hasAccount, hasPermission, hasModule, hasRole, hasCapability }),
       ),
-    [superAdmin, isAgent, hasAccount, hasPermission, hasModule, hasRole],
+    [superAdmin, isAgent, hasAccount, hasPermission, hasModule, hasRole, hasCapability],
   );
 
   // Session Re-hydration & Refresh (Module-to-UI Sync architecture

@@ -46,6 +46,13 @@ export interface MetaConfigResponse {
   meta_webhook_verify_token: string | null;
   /** Absolute URL to paste into the Meta App Dashboard's webhook config. */
   webhook_url: string;
+  /**
+   * Phase 4 Task 2 — live connection state for the Meta provider, set to
+   * 'connected' by the backend once credentials verify against the Graph
+   * API. Carries no credential material. Optional because a cached
+   * response from before this field existed simply omits it.
+   */
+  connection_status?: 'connected' | 'connecting' | 'disconnected' | string;
 }
 
 export interface SaveMetaConfigPayload {

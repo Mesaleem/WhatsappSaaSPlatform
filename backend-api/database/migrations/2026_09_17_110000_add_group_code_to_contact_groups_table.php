@@ -120,8 +120,32 @@ return new class extends Migration
         }
     }
 
+    /**
+     * Driver-aware existence check — the original MySQL-only
+     * information_schema.statistics query left this migration (and its
+     * sibling add_group_code_to_contact_groups_table.php) unrunnable
+     * under sqlite, which is this project's own configured test/local
+     * driver (see phpunit.xml) — every RefreshDatabase-based Feature
+     * test failed with "no such table: information_schema.statistics"
+     * before this fix, regardless of what that test actually exercised.
+     * Fixed at the root (this shared existence check), not worked
+     * around per-test. sqlite's PRAGMA does not accept a bound
+     * parameter for the table name, so $table is interpolated directly
+     * -- safe here since every call site in this file passes a fixed
+     * string literal, never external input.
+     */
     private function indexExists(string $table, string $indexName): bool
     {
+        if (Schema::getConnection()->getDriverName() === 'sqlite') {
+            foreach (DB::select("PRAGMA index_list(\"{$table}\")") as $index) {
+                if ($index->name === $indexName) {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
         $result = DB::selectOne(
             'SELECT COUNT(1) AS cnt FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = ? AND index_name = ?',
             [$table, $indexName]

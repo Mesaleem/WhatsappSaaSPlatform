@@ -15,6 +15,7 @@ use App\Http\Controllers\Api\MessageLogController;
 use App\Http\Controllers\Api\MessageDispatchLogController;
 use App\Http\Controllers\Api\ExportController;
 use App\Http\Controllers\Api\PaymentGatewayController;
+use App\Http\Controllers\Api\PlanManagementController;
 use App\Http\Controllers\Api\PaymentWebhookController;
 use App\Http\Controllers\Api\BillingController;
 use App\Http\Controllers\Api\Admin\GatewaySettingsController;
@@ -47,6 +48,14 @@ use App\Http\Controllers\Api\SocialInboxController;
 use App\Http\Controllers\Api\SocialWebhookController;
 use App\Http\Controllers\Api\Admin\SocialGatewayController;
 use App\Http\Controllers\Api\LeadController;
+use App\Http\Controllers\Api\CrmLeadController;
+use App\Http\Controllers\Api\CrmContactController;
+use App\Http\Controllers\Api\CrmAssigneeController;
+use App\Http\Controllers\Api\CrmPipelineController;
+use App\Http\Controllers\Api\CrmTagController;
+use App\Http\Controllers\Api\CrmLeadBulkController;
+use App\Http\Controllers\Api\CrmAnalyticsController;
+use App\Http\Controllers\Api\V1\CrmLeadController as V1CrmLeadController;
 use App\Http\Controllers\Api\AICopywriterController;
 use App\Http\Controllers\Api\SocialMediaController;
 use App\Http\Controllers\Api\SocialReportController;
@@ -118,7 +127,12 @@ Route::post('/webhooks/stripe', [PaymentWebhookController::class, 'stripe']);
 // the 'external-api' limiter (AppServiceProvider::boot()), which reads
 // the account's api_rate_limit_per_minute setting — auth.apikey MUST run
 // first so api_account_id is resolved before the limiter callback fires.
-Route::middleware(['auth.apikey', 'throttle:external-api'])->prefix('v1')->group(function () {
+// Phase 3 Task 5 -- 'idempotency' is appended LAST (innermost) so it runs
+// after auth.apikey has resolved api_account_id (a key is scoped per
+// account) and after throttle:external-api (rate limits unchanged). It is
+// a no-op for any request that sends no Idempotency-Key header, so every
+// existing client of these three routes is unaffected.
+Route::middleware(['log.apirequest', 'auth.apikey', 'throttle:external-api', 'idempotency'])->prefix('v1')->group(function () {
     Route::post('/messages/send-payment-alert', [ExternalAlertController::class, 'sendPaymentAlert']);
     // Dynamic Templates & Variables System.
     Route::post('/messages/send-template', [TemplateMessageController::class, 'send']);
@@ -127,6 +141,41 @@ Route::middleware(['auth.apikey', 'throttle:external-api'])->prefix('v1')->group
     // recipient_type-based routing (individual vs group) happens
     // inside the controller action itself, not at the route level.
     Route::post('/send-message', [TemplateMessageController::class, 'sendMessage']);
+
+    /*
+     * Phase 6 CRM Hardening Round 2, Issue 1 — external CRM lead intake.
+     *
+     * Inherits this group's existing contract unchanged: log.apirequest
+     * (every call logged exactly once), auth.apikey (the key resolves the
+     * tenant), throttle:external-api (per-account rate limit) and
+     * idempotency (Idempotency-Key honoured the same way as on the send
+     * endpoints). capability.apikey:crm is layered on top — the same
+     * AccessControlService::canTenant() check the tenant API uses, reading
+     * api_account_id because this group deliberately has no
+     * tenant.isolation. See Api\V1\CrmLeadController for the full
+     * request/response documentation.
+     *
+     * Deliberately create-only: the message-sending endpoints above are
+     * untouched and still create no CRM leads.
+     *
+     * Phase 6 CRM Task 11 — the gates now match /api/crm/* exactly:
+     * subscription.apikey (writes need an active subscription, reads do
+     * not), module.apikey:lead_crm (the Super Admin's toggle) and
+     * capability.apikey:crm (the plan). Four single-lead operations join
+     * the intake: read, status, assignee, tag attach/detach. No list,
+     * delete, contact, pipeline, tag-CRUD or bulk endpoint on /v1. Every
+     * {id}/{tag} is numeric (anything else is 404).
+     */
+    Route::middleware(['subscription.apikey', 'module.apikey:lead_crm', 'capability.apikey:crm'])
+        ->prefix('crm/leads')
+        ->group(function () {
+            Route::post('/', [V1CrmLeadController::class, 'store']);
+            Route::get('/{id}', [V1CrmLeadController::class, 'show'])->whereNumber('id');
+            Route::patch('/{id}/status', [V1CrmLeadController::class, 'status'])->whereNumber('id');
+            Route::patch('/{id}/assignee', [V1CrmLeadController::class, 'assignee'])->whereNumber('id');
+            Route::post('/{id}/tags/{tag}', [V1CrmLeadController::class, 'attachTag'])->whereNumber(['id', 'tag']);
+            Route::delete('/{id}/tags/{tag}', [V1CrmLeadController::class, 'detachTag'])->whereNumber(['id', 'tag']);
+        });
 });
 
 // Developer API Platform for WhatsApp Group Creation & Unified
@@ -137,7 +186,10 @@ Route::middleware(['auth.apikey', 'throttle:external-api'])->prefix('v1')->group
 // docblock for the full rationale). Shares the same 'external-api'
 // rate limiter — ApiAuthMiddleware resolves api_account_id the same way
 // AuthenticateApiKey does, before the limiter callback fires.
-Route::middleware(['auth.apisecret', 'throttle:external-api'])->prefix('v1/whatsapp')->group(function () {
+// Phase 3 Task 5 -- same optional 'idempotency' guard as the group above,
+// innermost for the same reasons (ApiAuthMiddleware resolves
+// api_account_id before it runs).
+Route::middleware(['log.apirequest', 'auth.apisecret', 'throttle:external-api', 'idempotency'])->prefix('v1/whatsapp')->group(function () {
     Route::post('/groups/create', [V1GroupController::class, 'create']);
     Route::post('/messages/send', [UnifiedMessageController::class, 'send']);
 });
@@ -167,7 +219,7 @@ Route::middleware('auth:sanctum')->group(function () {
     // whose plan lapses. Invoice history must also stay visible after
     // expiry. permission:manage-subscriptions is already held by Admin
     // (RolePermissionSeeder) and is the correct gate on its own.
-    Route::middleware(['tenant.isolation', 'permission:manage-subscriptions'])->prefix('billing')->group(function () {
+    Route::middleware(['tenant.isolation', 'permission:manage-subscriptions', 'module.guard:billing'])->prefix('billing')->group(function () {
         Route::get('/plans', [PaymentGatewayController::class, 'plans']);
         Route::post('/create-order', [PaymentGatewayController::class, 'createOrder']);
         Route::post('/verify-payment', [PaymentGatewayController::class, 'verifyPayment']);
@@ -175,6 +227,20 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/invoices/{id}/pdf', [BillingController::class, 'pdf']);
         // Billing & Plans Module Overhaul — Super Admin Billing Overview.
         Route::get('/client-summary', [BillingController::class, 'clientSummary']);
+        // Agent Commission Foundation — same tenant.isolation +
+        // permission:manage-subscriptions + module.guard:billing gate as
+        // client-summary above; BillingController::commissions() applies
+        // the actual Super-Admin-vs-Agent scoping.
+        Route::get('/commissions', [BillingController::class, 'commissions']);
+
+        // Agent Commission Payout Ledger — same tenant.isolation +
+        // permission:manage-subscriptions + module.guard:billing gate;
+        // BillingController::payouts()/storePayout()/updatePayoutStatus()
+        // apply the actual Super-Admin-vs-Agent scoping and the explicit
+        // Super-Admin-only guard on the two mutating actions.
+        Route::get('/payouts', [BillingController::class, 'payouts']);
+        Route::post('/payouts', [BillingController::class, 'storePayout']);
+        Route::patch('/payouts/{id}/status', [BillingController::class, 'updatePayoutStatus']);
     });
 
     // Quota Exhaustion Request Workflow — Client Admin submits a top-up
@@ -275,7 +341,7 @@ Route::middleware('auth:sanctum')->group(function () {
         // Module 4: WhatsApp (QR engine) session management — bridges to
         // qr-engine-service. account_id is resolved from the authenticated
         // user server-side; never accepted from the client.
-        Route::prefix('whatsapp')->group(function () {
+        Route::middleware('module.guard:whatsapp_setup')->prefix('whatsapp')->group(function () {
             Route::get('/status', [WhatsAppController::class, 'status']);
             Route::post('/start-session', [WhatsAppController::class, 'startSession']);
             Route::post('/logout', [WhatsAppController::class, 'logout']);
@@ -284,7 +350,7 @@ Route::middleware('auth:sanctum')->group(function () {
         // Module 5: Meta Cloud API credential vault. Admin-only (not
         // manage-accounts) — this is per-tenant configuration, distinct
         // from platform-level account provisioning.
-        Route::middleware('role:admin')->prefix('whatsapp/meta-config')->group(function () {
+        Route::middleware(['role:admin', 'module.guard:whatsapp_setup'])->prefix('whatsapp/meta-config')->group(function () {
             Route::get('/', [MetaConfigController::class, 'show']);
             Route::post('/', [MetaConfigController::class, 'store']);
             Route::post('/test-connection', [MetaConfigController::class, 'testConnection']);
@@ -293,7 +359,7 @@ Route::middleware('auth:sanctum')->group(function () {
         // Module 9: Developer Portal — API key management + outbound webhook
         // subscriptions. One shared permission (manage-developer-settings)
         // since the frontend presents both as tabs of a single page.
-        Route::middleware('permission:manage-developer-settings')->prefix('developer')->group(function () {
+        Route::middleware(['permission:manage-developer-settings', 'module.guard:developer_api'])->prefix('developer')->group(function () {
             Route::get('/api-keys', [ApiKeyController::class, 'index']);
             Route::post('/api-keys', [ApiKeyController::class, 'store']);
             Route::delete('/api-keys/{id}', [ApiKeyController::class, 'destroy']);
@@ -349,17 +415,31 @@ Route::middleware('auth:sanctum')->group(function () {
         // two already-pending migrations — see this session's summary
         // report). Gated on the SAME 'chatbot' module slug for the same
         // reason.
-        Route::middleware('module.guard:chatbot')->prefix('whatsapp/flows')->group(function () {
+        //
+        // Phase 7 Task 1.5 — + capability.guard:journey_automation on EVERY
+        // journey route (list/show/sessions, create, update/toggle/test,
+        // cancel, delete): what the tenant's plan sold, the same
+        // CAPABILITY_NOT_ENTITLED 403 as the CRM routes. The module guard,
+        // the per-route permissions and the per-node entitlement check on
+        // save (JourneyNodeAuthorizer) all still apply. Super Admin is
+        // unchanged (the guard bypasses, as for every capability gate).
+        Route::middleware(['module.guard:chatbot', 'capability.guard:journey_automation'])->prefix('whatsapp/flows')->group(function () {
             Route::middleware('permission:manage-chatbot|whatsapp.view')->group(function () {
                 Route::get('/', [WhatsAppFlowController::class, 'index']);
                 Route::get('/{id}', [WhatsAppFlowController::class, 'show']);
                 Route::get('/{id}/sessions', [WhatsAppFlowController::class, 'sessions']);
+                // Phase 7 Task 2 — immutable journey versions.
+                Route::get('/{id}/versions', [WhatsAppFlowController::class, 'versions'])->whereNumber('id');
+                Route::get('/{id}/versions/{versionId}', [WhatsAppFlowController::class, 'showVersion'])->whereNumber(['id', 'versionId']);
             });
             Route::middleware('permission:manage-chatbot|whatsapp.create')->post('/', [WhatsAppFlowController::class, 'store']);
             Route::middleware('permission:manage-chatbot|whatsapp.edit')->group(function () {
                 Route::put('/{id}', [WhatsAppFlowController::class, 'update']);
                 Route::post('/{id}/toggle', [WhatsAppFlowController::class, 'toggle']);
                 Route::post('/{id}/test', [WhatsAppFlowController::class, 'test']);
+                // Phase 7 Task 1 — stop one open (awaiting-reply or delayed) run.
+                Route::post('/{id}/sessions/{sessionId}/cancel', [WhatsAppFlowController::class, 'cancelSession']);
+                Route::post('/{id}/versions/{versionId}/publish', [WhatsAppFlowController::class, 'publishVersion'])->whereNumber(['id', 'versionId']);
             });
             Route::middleware('permission:manage-chatbot|whatsapp.delete')->delete('/{id}', [WhatsAppFlowController::class, 'destroy']);
         });
@@ -413,7 +493,7 @@ Route::middleware('auth:sanctum')->group(function () {
 
         // Social Media Marketing & Meta Ads Automation Expansion (Phase 4).
         // Ad Comment Auto-Responder — rule CRUD (CommentRulesPage).
-        Route::middleware('permission:manage-comment-automation')->prefix('social/comment-rules')->group(function () {
+        Route::middleware(['permission:manage-comment-automation', 'module.guard:comment_automation'])->prefix('social/comment-rules')->group(function () {
             Route::get('/', [CommentAutomationRuleController::class, 'index']);
             Route::post('/', [CommentAutomationRuleController::class, 'store']);
             Route::put('/{id}', [CommentAutomationRuleController::class, 'update']);
@@ -424,7 +504,7 @@ Route::middleware('auth:sanctum')->group(function () {
         // Unified Social Inbox — gated on manage-social-leads (same tier
         // as the Instant Lead Bridge it surfaces alongside FB/IG DMs;
         // see SocialInboxController's docblock).
-        Route::middleware('permission:manage-social-leads')->prefix('social/inbox')->group(function () {
+        Route::middleware(['permission:manage-social-leads', 'module.guard:social_inbox'])->prefix('social/inbox')->group(function () {
             Route::get('/threads', [SocialInboxController::class, 'threads']);
             Route::get('/threads/{id}/messages', [SocialInboxController::class, 'messages']);
             Route::post('/send', [SocialInboxController::class, 'send']);
@@ -440,10 +520,198 @@ Route::middleware('auth:sanctum')->group(function () {
         // before this. Same permission tier as the Inbox above
         // (manage-social-leads), since both surface the same underlying
         // data.
-        Route::middleware('permission:manage-social-leads')->prefix('social/leads')->group(function () {
+        Route::middleware(['permission:manage-social-leads', 'module.guard:lead_crm'])->prefix('social/leads')->group(function () {
             Route::get('/', [LeadController::class, 'index']);
             Route::get('/{id}', [LeadController::class, 'show']);
         });
+
+        /*
+         * Phase 6 — CRM, Task 2. The CRM lead API (crm_leads/contacts,
+         * created in Task 1). Entirely separate from /social/leads
+         * directly above, which stays a read-only view over the existing
+         * Meta/journey `leads` capture table — same word, different
+         * domain, untouched by this phase.
+         *
+         * THREE GATES, each a different question, none redundant:
+         *  - permission:manage-crm — RBAC: may this USER touch CRM data?
+         *    Phase 6 Hardening (Issue 1) SPLIT THIS OUT of
+         *    manage-social-leads, which these routes used in Task 2. A
+         *    tenant's full CRM contact book is broader and more
+         *    sensitive than a Meta Lead Ads capture list, and a Super
+         *    Admin must be able to grant one without the other. The
+         *    split changes the permission model only, not anyone's
+         *    effective access: manage-crm is seeded onto exactly the
+         *    roles that already held manage-social-leads (super_admin,
+         *    admin, social_marketer) — see the
+         *    add_manage_crm_permission migration.
+         *    /api/social/leads directly above deliberately KEEPS
+         *    manage-social-leads and is untouched by that split.
+         *  - module.guard:lead_crm — the Super Admin's per-tenant toggle,
+         *    mandatory for every new route in this group per the
+         *    ARCHITECTURE ENFORCER rule above. 'lead_crm' is an existing
+         *    Account::MODULES slug (no slug was invented) and is already
+         *    what gates /social/leads.
+         *  - capability.guard:crm — what the tenant's PLAN actually sold
+         *    them (account_entitlements, via AccessControlService). A
+         *    Super Admin can have the module on while the plan never
+         *    included CRM; that must still be refused, and frontend route
+         *    hiding is not a gate.
+         * Order matches the chain the hardening brief specifies:
+         * module -> permission -> capability, inside the group's own
+         * tenant.isolation + subscription.guard.
+         *
+         * No /v1 prefix: /api/v1/* in this codebase is exclusively the
+         * external, API-key-authenticated Developer API. These are
+         * session-authenticated tenant-UI routes and belong here, the
+         * same correction already recorded for /api/groups above.
+         */
+        /*
+         * crm.target (post-Phase-6 fix) runs first: a Super Admin with no
+         * client selected acts on their own platform CRM account, and a
+         * Super Admin's target account must itself hold lead_crm + crm.
+         * No-op for every other caller. See EnsureCrmTargetAccount.
+         */
+        Route::middleware(['crm.target', 'module.guard:lead_crm', 'permission:manage-crm', 'capability.guard:crm'])
+            ->prefix('crm')
+            ->group(function () {
+                /*
+                 * Task 9 — whereNumber() on every {id}: previously a
+                 * non-numeric id (e.g. DELETE /crm/leads/bulk, which now
+                 * sits beside a real /bulk/* prefix) reached an int-typed
+                 * controller parameter and 500ed. It is now a plain 404.
+                 */
+                Route::prefix('leads')->group(function () {
+                    Route::get('/', [CrmLeadController::class, 'index']);
+                    Route::post('/', [CrmLeadController::class, 'store']);
+                    Route::get('/{id}', [CrmLeadController::class, 'show'])->whereNumber('id');
+                    Route::match(['put', 'patch'], '/{id}', [CrmLeadController::class, 'update'])->whereNumber('id');
+                    // Phase 6 Hardening (Issue 9). Never touches the
+                    // Contact — see the controller action's docblock.
+                    Route::delete('/{id}', [CrmLeadController::class, 'destroy'])->whereNumber('id');
+                    /*
+                     * Task 3 — explicit Contact reassignment. Its own
+                     * action endpoint rather than a field on the update
+                     * route above, so a general edit can never re-point a
+                     * lead at another person by accident. Same three
+                     * gates as every route in this group.
+                     */
+                    Route::patch('/{id}/contact', [CrmLeadController::class, 'reassignContact'])->whereNumber('id');
+                    /*
+                     * Task 4 — the explicit ownership action. Assign,
+                     * reassign and unassign all land here; the general
+                     * update route above keeps accepting
+                     * assigned_user_id for existing clients, and both
+                     * funnel through CrmLeadService::changeAssignee().
+                     */
+                    Route::patch('/{id}/assignee', [CrmLeadController::class, 'assignee'])->whereNumber('id');
+                    /*
+                     * Task 5 — the explicit lifecycle action. The
+                     * general update route above keeps accepting
+                     * `status` for existing clients, and both funnel
+                     * through CrmLeadService's single status step.
+                     */
+                    Route::patch('/{id}/status', [CrmLeadController::class, 'status'])->whereNumber('id');
+
+                    /*
+                     * Phase 6 CRM Task 9 — bulk operations over up to
+                     * CrmBulkLeadSelection::MAX_LEADS (100) leads: the four
+                     * operations that exist individually, all or nothing,
+                     * one transaction each. Same gates as this group; no
+                     * bulk-specific permission. Not on /api/v1. See
+                     * CrmLeadBulkController.
+                     */
+                    Route::prefix('bulk')->group(function () {
+                        Route::post('assignee', [CrmLeadBulkController::class, 'assignee']);
+                        Route::post('status', [CrmLeadBulkController::class, 'status']);
+                        Route::post('tags/attach', [CrmLeadBulkController::class, 'attachTag']);
+                        Route::post('tags/detach', [CrmLeadBulkController::class, 'detachTag']);
+                    });
+
+                    /*
+                     * Phase 6 CRM Task 7 — tag assignment, one tag per
+                     * call. Idempotent both ways (200 no-op when already
+                     * attached / not attached). Never changes status.
+                     * whereNumber: a non-numeric id is a plain 404.
+                     */
+                    Route::post('/{id}/tags/{tag}', [CrmLeadController::class, 'attachTag'])
+                        ->whereNumber(['id', 'tag']);
+                    Route::delete('/{id}/tags/{tag}', [CrmLeadController::class, 'detachTag'])
+                        ->whereNumber(['id', 'tag']);
+                });
+
+                /*
+                 * Phase 6 Hardening (Issue 2) — the Contacts API. Same
+                 * three gates as leads above, by construction: it is the
+                 * same route group, so a future endpoint cannot be added
+                 * here with a weaker set by accident.
+                 */
+                /*
+                 * Task 4 — the eligible-assignee selector. Same three
+                 * gates as every other CRM route, and deliberately NOT
+                 * /api/team/users, which is gated on manage-team and
+                 * returns inactive, non-CRM users plus their contact
+                 * details. See CrmAssigneeController.
+                 */
+                Route::get('assignees', [CrmAssigneeController::class, 'index']);
+
+                /*
+                 * Task 6 — the Kanban/pipeline view. READ-ONLY: moving a
+                 * lead between columns is a lifecycle change and goes
+                 * through PATCH /crm/leads/{id}/status, which owns the
+                 * transition matrix, the outcome bookkeeping and the
+                 * audit trail. Same three gates as every route in this
+                 * group; deliberately NOT added to /api/v1.
+                 */
+                Route::get('pipeline', [CrmPipelineController::class, 'index']);
+
+                /*
+                 * Task 12 — CRM analytics. READ-ONLY aggregates over
+                 * crm_leads for the resolved account; inherits every gate
+                 * of this group (no analytics-specific permission or
+                 * capability — CRM entitlement covers it). Not on /api/v1.
+                 * See CrmAnalyticsController / CrmAnalyticsService.
+                 */
+                Route::get('analytics', [CrmAnalyticsController::class, 'index']);
+
+                /*
+                 * Phase 6 CRM Task 7 — tenant-scoped lead tags. Inherits
+                 * this group's module.guard:lead_crm + permission:manage-crm
+                 * + capability.guard:crm and the outer tenant.isolation +
+                 * subscription.guard; no tag-specific permission or
+                 * capability exists. See CrmTagController.
+                 */
+                Route::prefix('tags')->group(function () {
+                    Route::get('/', [CrmTagController::class, 'index']);
+                    Route::post('/', [CrmTagController::class, 'store']);
+                    Route::get('/{id}', [CrmTagController::class, 'show'])->whereNumber('id');
+                    Route::match(['put', 'patch'], '/{id}', [CrmTagController::class, 'update'])->whereNumber('id');
+                    Route::delete('/{id}', [CrmTagController::class, 'destroy'])->whereNumber('id');
+                });
+
+                Route::prefix('contacts')->group(function () {
+                    Route::get('/', [CrmContactController::class, 'index']);
+                    Route::post('/', [CrmContactController::class, 'store']);
+                    Route::get('/{id}', [CrmContactController::class, 'show'])->whereNumber('id');
+                    Route::match(['put', 'patch'], '/{id}', [CrmContactController::class, 'update'])->whereNumber('id');
+                    // Phase 6 Hardening (Issue 10). Refused with 409
+                    // while leads or group memberships depend on it.
+                    Route::delete('/{id}', [CrmContactController::class, 'destroy'])->whereNumber('id');
+                    /*
+                     * Round 2, Limitation 6 — Contact merge. POST with the
+                     * action in the path, matching this codebase's existing
+                     * action-endpoint style (/groups/{id}/recreate,
+                     * /whatsapp/flows/{id}/toggle, /api-key/regenerate)
+                     * rather than introducing a PATCH-with-verb convention.
+                     * Registered AFTER /{id} so the literal segment can
+                     * never be shadowed.
+                     */
+                    Route::post('/{source}/merge/{target}', [CrmContactController::class, 'merge'])->whereNumber(['source', 'target']);
+                    // Task 3 — the Contact -> Leads half of the
+                    // relationship. Returns CRM leads only, never raw
+                    // capture rows.
+                    Route::get('/{id}/leads', [CrmContactController::class, 'leads'])->whereNumber('id');
+                });
+            });
 
         // Social Media Marketing & Meta Ads Automation Expansion — Final
         // Phase. AI Ad Copywriter — gated the SAME tier as
@@ -486,7 +754,7 @@ Route::middleware('auth:sanctum')->group(function () {
         // endpoint — the spec explicitly asks the SAME page to also show
         // "monthly metric graphs", which needs data in a chartable shape,
         // not PDF bytes.
-        Route::middleware('permission:view-social-analytics')->prefix('social/reports')->group(function () {
+        Route::middleware(['permission:view-social-analytics', 'module.guard:reports'])->prefix('social/reports')->group(function () {
             Route::get('/summary', [SocialReportController::class, 'summary']);
             Route::get('/generate', [SocialReportController::class, 'generate']);
         });
@@ -494,7 +762,7 @@ Route::middleware('auth:sanctum')->group(function () {
         // UI overhaul: Team Users page — tenant Admin managing sub-users
         // under their own account. manage-team already exists in
         // RolePermissionSeeder (Admin only) but was unused until now.
-        Route::middleware('permission:manage-team')->prefix('team')->group(function () {
+        Route::middleware(['permission:manage-team', 'module.guard:team_management'])->prefix('team')->group(function () {
             Route::get('/users', [TeamController::class, 'index']);
             Route::post('/users', [TeamController::class, 'store']);
             Route::patch('/users/{id}', [TeamController::class, 'update']);
@@ -512,7 +780,7 @@ Route::middleware('auth:sanctum')->group(function () {
         // Module 6: Payment alert dispatch. send-messages is held by
         // every seeded role (Admin, User) — this is the same permission
         // already gating ordinary WhatsApp usage, not a new privilege tier.
-        Route::middleware('permission:send-messages')->prefix('alerts')->group(function () {
+        Route::middleware(['permission:send-messages', 'module.guard:send_alert'])->prefix('alerts')->group(function () {
             Route::post('/send', [PaymentAlertController::class, 'send']);
             Route::post('/bulk-upload', [PaymentAlertController::class, 'bulkUpload']);
             // Dynamic Templates & Variables System — Client Admin Dynamic
@@ -668,7 +936,7 @@ Route::middleware('auth:sanctum')->group(function () {
         // Advanced Broadcast Engine + Mail Template Manager. Composing and
         // sending broadcasts is treated the same as manage-chatbot/
         // manage-team above: an active-subscription admin-console feature.
-        Route::middleware('permission:manage-notifications')->group(function () {
+        Route::middleware(['permission:manage-notifications', 'module.guard:notifications'])->group(function () {
             Route::prefix('notification-templates')->group(function () {
                 Route::get('/', [NotificationTemplateController::class, 'index']);
                 Route::get('/{id}', [NotificationTemplateController::class, 'show']);
@@ -713,6 +981,50 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::put('/accounts/{id}/quota', [AccountController::class, 'updateQuota']);
         // Absolute Super Admin Control — Dynamic Client Privilege Toggles.
         Route::patch('/accounts/{id}/permissions', [AccountController::class, 'updatePermissions']);
+
+        // Phase 1 Foundation, Task 7 — Capability entitlement grant/revoke,
+        // write-time checked against ProviderCapabilityService::supports()
+        // so an incompatible (provider, capability) pair can never be
+        // granted. Super-Admin-only (see AccountController::
+        // grantEntitlement()'s docblock for why an Agent is not yet
+        // allowed here).
+        // Phase 5 Task 8 — the READ half of the grant/revoke pair below,
+        // for the Super Admin entitlement panel. Agent-scoped by the same
+        // assertCallerCanAccessAccount() guard every other {id} action
+        // in AccountController uses.
+        Route::get('/accounts/{id}/entitlements', [AccountController::class, 'listEntitlements']);
+        Route::post('/accounts/{id}/entitlements', [AccountController::class, 'grantEntitlement']);
+        Route::delete('/accounts/{id}/entitlements/{capability}', [AccountController::class, 'revokeEntitlement']);
+
+        /*
+         * Phase 5 Task 10 — Super-Admin plan management (create/modify,
+         * including the capability bundle). Named 'plans-management' so
+         * it cannot be confused with the pre-existing, customer-facing
+         * read-only '/plans' checkout listing, which is untouched.
+         *
+         * Super-Admin-only inside the controller as well as here: a plan
+         * is a GLOBAL object, so unlike the account entitlement routes
+         * above there is deliberately no Agent path.
+         */
+        Route::get('/plans-management', [PlanManagementController::class, 'index']);
+        Route::post('/plans-management', [PlanManagementController::class, 'store']);
+        Route::put('/plans-management/{slug}', [PlanManagementController::class, 'update']);
+
+        // Phase 1 Foundation, Task 12 — Agent Selling Entitlements.
+        // Super-Admin-only grant/revoke of which Capabilities an Agent
+        // may resell to its own sub-clients; GET is readable by Super
+        // Admin (any Agent) or the Agent itself (its own only) — see
+        // AccountController::assertCallerCanViewSellingEntitlements().
+        Route::post('/accounts/{id}/selling-entitlements', [AccountController::class, 'grantSellingEntitlement']);
+        Route::delete('/accounts/{id}/selling-entitlements/{capability}', [AccountController::class, 'revokeSellingEntitlement']);
+        Route::get('/accounts/{id}/selling-entitlements', [AccountController::class, 'listSellingEntitlements']);
+
+        // Agent Commission Foundation — Super-Admin-only configuration
+        // of one Agent's DB-driven commission rule. Same
+        // permission:manage-accounts gate as the rest of this group, PLUS
+        // an explicit isSuperAdmin() check inside the controller (see
+        // AccountController::setCommissionRule()).
+        Route::put('/accounts/{id}/commission-rule', [AccountController::class, 'setCommissionRule']);
 
         // Absolute Super Admin Control — Password Override. Same
         // permission:manage-accounts gate as the rest of this group, PLUS

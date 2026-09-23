@@ -82,9 +82,39 @@ class PaymentWebhookController extends Controller
 
         $event = $driver->parseWebhookEvent($payload);
 
+        // Agent Commission Foundation — refund/reversal lifecycle.
+        // Checked BEFORE the payment-success branch below: is_refund and
+        // is_success are never both true (see each driver's
+        // parseWebhookEvent()), so this ordering doesn't change outcome,
+        // but keeps the refund path legible as its own branch rather
+        // than folded into the "not successful" no-op below.
+        if ($event['is_refund']) {
+            if (! $event['order_id']) {
+                return response()->json(['received' => true]);
+            }
+
+            $invoice = Invoice::where('gateway_order_id', $event['order_id'])->first();
+
+            if (! $invoice) {
+                Log::warning("PaymentWebhookController: {$gateway} refund webhook for order_id '{$event['order_id']}' matches no invoice — ignoring.");
+
+                return response()->json(['received' => true]);
+            }
+
+            // No-op when this Invoice never had an Agent commission (a
+            // direct customer, or an Agent customer with no commission
+            // rule configured at purchase time) — see
+            // InvoiceCreditService::reverseAgentCommission()'s own
+            // docblock. Also idempotent: a commission already 'reversed'
+            // is left exactly as it is on a duplicate refund webhook.
+            app(InvoiceCreditService::class)->reverseAgentCommission($invoice->id, $event['reference']);
+
+            return response()->json(['received' => true]);
+        }
+
         if (! $event['is_success'] || ! $event['order_id']) {
             // Signature-valid but not a "payment succeeded" event (e.g.
-            // payment.failed, a refund, a non-payment Stripe event type) —
+            // payment.failed, a non-payment Stripe event type) —
             // correctly nothing to credit. Not an error.
             return response()->json(['received' => true]);
         }

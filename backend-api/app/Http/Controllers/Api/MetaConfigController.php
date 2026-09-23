@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Account;
 use App\Models\WhatsAppSession;
+use Illuminate\Database\QueryException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Http;
@@ -33,6 +34,10 @@ class MetaConfigController extends Controller
             'meta_access_token_masked' => $this->maskToken($session?->meta_access_token),
             'meta_webhook_verify_token' => $session?->meta_webhook_verify_token,
             'webhook_url' => url('/api/webhooks/meta'),
+            // Phase 4 Task 1 -- additive field, existing keys unchanged.
+            // Set to 'connected' by store() once credentials verify
+            // against the Graph API; 'disconnected' until then.
+            'connection_status' => $session?->status ?? 'disconnected',
         ]);
     }
 
@@ -68,6 +73,25 @@ class MetaConfigController extends Controller
             'meta_access_token' => ['required', 'string'],
         ]);
 
+        // Phase 4 Task 1: a Meta phone number belongs to exactly one WABA
+        // and therefore to exactly one tenant here. MetaWebhookController
+        // resolves the owning account purely by meta_phone_number_id, so
+        // letting a second tenant claim the same number would silently
+        // route that number's inbound messages to whichever row the
+        // database returned first. Checked before the (slower) Graph call
+        // so a conflicting attempt never even reaches Meta.
+        $conflict = WhatsAppSession::query()
+            ->where('meta_phone_number_id', $data['meta_phone_number_id'])
+            ->where('account_id', '!=', $account->id)
+            ->exists();
+
+        if ($conflict) {
+            return response()->json([
+                'message' => 'This WhatsApp phone number is already connected to another account on this platform. Disconnect it there first, or use a different phone number.',
+                'error_code' => 'META_NUMBER_ALREADY_CONNECTED',
+            ], 409);
+        }
+
         $verification = $this->verifyWithMeta($data['meta_phone_number_id'], $data['meta_access_token']);
 
         if (! $verification['success']) {
@@ -82,7 +106,35 @@ class MetaConfigController extends Controller
         $session->meta_waba_id = $data['meta_waba_id'];
         $session->meta_access_token = $data['meta_access_token']; // encrypted cast on write
         $session->meta_webhook_verify_token ??= Str::random(40);
-        $session->save();
+
+        // Connection status for the Meta provider. Until now this column
+        // was only ever written by the QR engine's status callback, so a
+        // fully-configured Meta account sat at the 'disconnected' default
+        // forever. The credentials have just been verified against the
+        // live Graph API, so 'connected' is the accurate state.
+        //
+        // This is inert for sending: PaymentAlertDispatcher::
+        // isWhatsAppDisconnected() gates on engine_type === 'qr' before it
+        // reads status at all, so no QR or Meta send path changes
+        // behaviour because of this write.
+        $session->status = 'connected';
+        $session->last_connected_at = now();
+
+        try {
+            $session->save();
+        } catch (QueryException $e) {
+            // SQLSTATE 23000 -- the unique index on meta_phone_number_id
+            // firing as the concurrency backstop behind the check above,
+            // the same pattern payment_ref and idempotency keys use.
+            if ($e->getCode() !== '23000') {
+                throw $e;
+            }
+
+            return response()->json([
+                'message' => 'This WhatsApp phone number is already connected to another account on this platform. Disconnect it there first, or use a different phone number.',
+                'error_code' => 'META_NUMBER_ALREADY_CONNECTED',
+            ], 409);
+        }
 
         return response()->json([
             'message' => 'Meta credentials saved.',
@@ -91,6 +143,10 @@ class MetaConfigController extends Controller
             'meta_access_token_masked' => $this->maskToken($session->meta_access_token),
             'meta_webhook_verify_token' => $session->meta_webhook_verify_token,
             'webhook_url' => url('/api/webhooks/meta'),
+            // Phase 4 Task 2 -- additive, and the same key show() returns, so
+            // the UI can render the live status straight from the save
+            // response instead of having to re-fetch. Existing keys unchanged.
+            'connection_status' => $session->status,
             'verified_name' => $verification['verified_name'] ?? null,
             'display_phone_number' => $verification['display_phone_number'] ?? null,
         ], 201);
