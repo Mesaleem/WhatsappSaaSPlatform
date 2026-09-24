@@ -38,7 +38,10 @@ import {
   CONDITIONAL_TRUE_HANDLE,
   DELAY_UNITS,
   MAX_REPLY_BUTTONS,
+  NUMERIC_CONDITIONAL_OPERATORS,
+  UNARY_CONDITIONAL_OPERATORS,
   type AnyJourneyNodeType,
+  type ConditionalOperator,
   type JourneyNodeCapability,
   type JourneyNodeCategory,
   type JourneyNodeConfigErrors,
@@ -613,7 +616,7 @@ const ADVANCED_NODES: JourneyNodeDefinition[] = [
       { key: 'match', label: 'Match', type: 'select', options: [{ value: 'all', label: 'All conditions' }, { value: 'any', label: 'Any condition' }] },
     ],
     validate: (c): JourneyNodeConfigErrors => {
-      const conditions = arr(c, 'conditions') as { variable?: string; operator?: string }[];
+      const conditions = arr(c, 'conditions') as { variable?: string; operator?: ConditionalOperator; value?: string }[];
 
       if (conditions.length === 0) {
         return { conditions: 'Add at least one condition.' };
@@ -625,6 +628,25 @@ const ADVANCED_NODES: JourneyNodeDefinition[] = [
 
       if (conditions.some((r) => !r.operator)) {
         return { conditions: 'Every condition needs an operator.' };
+      }
+
+      // Phase 7 Task 4 — the same rules the engine applies (JourneyConditionEvaluator).
+      const needsValue = (r: { operator?: ConditionalOperator }) =>
+        !!r.operator && !UNARY_CONDITIONAL_OPERATORS.includes(r.operator);
+
+      if (conditions.some((r) => needsValue(r) && r.operator !== 'equals' && r.operator !== 'not_equals' && (r.value ?? '') === '')) {
+        return { conditions: 'Every condition needs a value (except "is set" / "is not set").' };
+      }
+
+      if (
+        conditions.some(
+          (r) =>
+            !!r.operator &&
+            NUMERIC_CONDITIONAL_OPERATORS.includes(r.operator) &&
+            ((r.value ?? '').trim() === '' || !Number.isFinite(Number((r.value ?? '').trim()))),
+        )
+      ) {
+        return { conditions: 'Number comparisons need a numeric value.' };
       }
 
       return {};
@@ -931,6 +953,28 @@ const LEGACY_NODES: JourneyNodeDefinition[] = [
       { key: 'prompt_text', label: 'Question', type: 'textarea', required: true },
       { key: 'variable_name', label: 'Save answer as', type: 'variable', required: true },
     ],
+    // Phase 7 Task 5 — mirrors backend JourneyActionConfig: a button or
+    // list question the engine would refuse (no options) is caught here,
+    // before the save publishes it.
+    validate: (c): JourneyNodeConfigErrors => {
+      const inputType = str(c, 'input_type') || 'text';
+
+      if (inputType === 'text') {
+        return {};
+      }
+
+      const options = arr(c, 'options') as { id?: string; title?: string }[];
+
+      if (options.length === 0) {
+        return { options: 'Add at least one option for a button or list question.' };
+      }
+
+      if (options.some((o) => !(o.id ?? '').trim() && !(o.title ?? '').trim())) {
+        return { options: 'Every option needs a title.' };
+      }
+
+      return {};
+    },
     summarize: (c) => (str(c, 'prompt_text') ? truncate(str(c, 'prompt_text')) : null),
     legacy: true,
   },

@@ -54,3 +54,12 @@ Schedule::command('journeys:resume-due')
 Schedule::command('queue:work database --queue=journeys --stop-when-empty --max-time=55')
     ->everyMinute()
     ->withoutOverlapping();
+
+// Phase 5 fix P5-3 — settles (and refunds) group message batches whose job
+// died without completing them. Same external `schedule:run` cron
+// assumption as every entry above. Only batches past the stale thresholds
+// in MessageDispatchLog are touched; each is re-checked under its row lock,
+// so an overlapping or repeated run is harmless.
+Schedule::command('group-dispatch:recover-stale')
+    ->everyFiveMinutes()
+    ->withoutOverlapping();

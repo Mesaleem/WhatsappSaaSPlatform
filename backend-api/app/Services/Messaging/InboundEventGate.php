@@ -41,8 +41,8 @@ class InboundEventGate
 
     /**
      * @template T
-     * @param callable(): T $process
-     * @return array{handled: bool, result: T|null, reason?: string}
+     * @param callable(?int): T $process receives the claim id (null without an event key)
+     * @return array{handled: bool, result: T|null, reason?: string, original_event_id?: int|null}
      */
     public function run(int $accountId, string $phone, string $provider, ?string $eventKey, callable $process): array
     {
@@ -61,11 +61,17 @@ class InboundEventGate
                 $claimId = $this->claim($accountId, $phone, $provider, $eventKey);
 
                 if ($claimId === null) {
-                    return ['handled' => false, 'result' => null, 'reason' => 'duplicate'];
+                    // Phase 7 Task 7 — the ORIGINAL claim, so the skip can be
+                    // correlated with what that message did (one indexed read,
+                    // duplicates only).
+                    return ['handled' => false, 'result' => null, 'reason' => 'duplicate', 'original_event_id' => $this->claimedId($accountId, $provider, $eventKey)];
                 }
             }
 
-            $result = $process();
+            // Phase 7 Task 7 — the claim id is handed to the processor for
+            // correlation (null without an event key). A processor that takes
+            // no argument is unaffected.
+            $result = $process($claimId);
 
             if ($claimId !== null) {
                 InboundMessageEvent::query()->whereKey($claimId)->update(['processed_at' => now()]);
@@ -95,6 +101,15 @@ class InboundEventGate
         return (int) DB::table('inbound_message_events')
             ->where('account_id', $accountId)->where('provider', $provider)->where('event_key', mb_substr($eventKey, 0, 191))
             ->value('id');
+    }
+
+    private function claimedId(int $accountId, string $provider, string $eventKey): ?int
+    {
+        $id = DB::table('inbound_message_events')
+            ->where('account_id', $accountId)->where('provider', $provider)->where('event_key', mb_substr($eventKey, 0, 191))
+            ->value('id');
+
+        return $id === null ? null : (int) $id;
     }
 
     private function acquire(int $accountId, string $phone, string $owner): bool

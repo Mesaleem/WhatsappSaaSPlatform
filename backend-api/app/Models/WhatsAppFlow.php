@@ -75,6 +75,16 @@ class WhatsAppFlow extends Model
      * journeys:resume-due continues it). It stays listed here, not in
      * EXECUTABLE_NODE_TYPES, because this list must match the frontend
      * palette exactly and a type may not appear in both lists.
+     *
+     * EXCEPTION (Phase 7 Task 4): `conditional` is executed too — pure
+     * control flow, no send (WhatsAppJourneyEngine + JourneyConditionEvaluator:
+     * rules combined by match all/any, then the "true"/"false" handle). Same
+     * listing rule as `delay`.
+     *
+     * EXCEPTION (Phase 7 Task 6): `text`, `image`, `video`, `document` and
+     * `audio` are executed too — one outbound message each through the
+     * unified driver (JourneyActionConfig::PALETTE_SEND_TYPES). Same
+     * listing rule as `delay`.
      */
     public const PALETTE_NODE_TYPES = [
         // Message (7)

@@ -7,7 +7,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Account;
 use App\Models\Lead;
 use App\Models\SocialAccount;
-use App\Services\WhatsApp\WhatsAppEngineFactory;
+use App\Services\WhatsApp\DirectMessageDispatcher;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Http;
@@ -61,6 +61,9 @@ class SocialInboxController extends Controller
     use ResolvesTenantAccount;
 
     private const API_VERSION = 'v19.0';
+
+    /** message_dispatch_logs.source for a WhatsApp reply to a lead thread (P5-2). */
+    public const DISPATCH_SOURCE = 'social_inbox';
 
     /** GET /api/social/inbox/threads */
     public function threads(Request $request): JsonResponse
@@ -192,22 +195,27 @@ class SocialInboxController extends Controller
             return response()->json(['message' => 'This lead has no phone number on file.'], 422);
         }
 
-        $account->loadMissing(['currentSubscription', 'whatsAppSession']);
+        // Phase 5 P5-2 -- this used to resolve the engine driver and send
+        // through it directly: no quota was consumed and no dispatch-log
+        // row was written. It now goes through the unified
+        // individual-recipient path, which owns the subscription/quota
+        // gate, the disconnected-QR check, phone normalization, provider
+        // resolution, the single quota consumption on a confirmed send,
+        // and the dispatch log on every terminal branch. No provider,
+        // quota or logging logic lives here. $account is the tenant
+        // resolved by requireAccount() and $lead was already scoped to it
+        // by parseThreadId(); nothing from the request body chooses the
+        // sending account.
+        $result = DirectMessageDispatcher::dispatch(
+            $account->id,
+            $lead->lead_phone,
+            'text',
+            ['body' => $message],
+            source: self::DISPATCH_SOURCE,
+        );
 
-        if (! $account->hasActiveSubscription()) {
-            return response()->json(['message' => 'This account has no active WhatsApp subscription.'], 422);
-        }
-
-        try {
-            $driver = WhatsAppEngineFactory::make($account);
-        } catch (RuntimeException $e) {
-            return response()->json(['message' => $e->getMessage()], 422);
-        }
-
-        $result = $driver->sendMessage($lead->lead_phone, $message);
-
-        if (empty($result['success'])) {
-            return response()->json(['message' => $result['error'] ?? 'Failed to send the WhatsApp message.'], 422);
+        if ($result['status'] !== 'sent') {
+            return response()->json(['message' => $result['message'] ?? 'Failed to send the WhatsApp message.'], 422);
         }
 
         return response()->json(['message' => 'Message sent.']);

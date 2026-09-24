@@ -90,8 +90,17 @@ class MessageDispatchLog extends Model
             'success_count' => 'integer',
             'failure_count' => 'integer',
             'parent_dispatch_id' => 'integer',
+            'claimed_at' => 'datetime',
         ];
     }
+
+    /**
+     * Phase 5 fix P5-3 -- the claim token is an internal ownership marker
+     * for a running group job; it has no meaning to any API consumer.
+     */
+    protected $hidden = [
+        'claim_token',
+    ];
 
     public function account(): BelongsTo
     {
@@ -515,6 +524,12 @@ class MessageDispatchLog extends Model
     }
 
     /**
+     * [Phase 5 fix P5-3 — no longer called by the group jobs.] A job that
+     * throws now settles through settleGroupDispatchFromRecipients(), which
+     * refunds exactly the recipients that provably received nothing
+     * (reserved - recipient rows with sent_at), instead of refunding
+     * nothing. Kept, unchanged, for its existing callers and tests.
+     *
      * Phase 5 Task 4 — the ONE resolution that must NOT refund.
      *
      * Both group jobs wrap process() in a try/catch and mark the row
@@ -554,5 +569,211 @@ class MessageDispatchLog extends Model
 
             return true;
         });
+    }
+
+    // =================================================================
+    // Phase 5 fix P5-3 — group batch ownership, slicing and recovery
+    // =================================================================
+    //
+    // A group batch lives in ONE parent row from reservation to settlement.
+    // P5-3 adds three things around the existing settlement
+    // (resolveGroupDispatch(), unchanged):
+    //
+    //   1. an ATOMIC CLAIM, so only one job run can ever send for a batch;
+    //   2. SETTLEMENT FROM THE PERSISTED RECIPIENT ROWS, so a batch that
+    //      stops part-way (exception, timeout, killed worker) is refunded
+    //      exactly reserved - delivered, and counts are never guessed;
+    //   3. STALE-BATCH RECOVERY for an owner that died without settling.
+    //
+    // The quota side is untouched: every refund still goes through
+    // resolveGroupDispatch() -> MessageQuotaService::release(), once, on
+    // the locked 'queued' -> terminal transition.
+
+    /**
+     * Hard limit for one run (one slice) of a group job. Must stay below
+     * the database queue's retry_after (config/queue.php, 90 s) so a
+     * running slice is never handed to a second worker, and above the
+     * worst case of one slice: the slice budget below plus one recipient
+     * (<= 8 s pacing + <= 15 s provider HTTP timeout + DB writes).
+     */
+    public const GROUP_JOB_TIMEOUT_SECONDS = 85;
+
+    /**
+     * A slice stops starting new sends once it has run this long, hands the
+     * batch back (releases its claim) and queues a continuation job for the
+     * remaining recipients. 50 s + one worst-case recipient (~24 s) stays
+     * inside GROUP_JOB_TIMEOUT_SECONDS, whatever the group's size.
+     */
+    public const GROUP_JOB_SLICE_BUDGET_SECONDS = 50;
+
+    /**
+     * A CLAIMED batch whose owner has not heartbeated for this long is
+     * dead: a live owner heartbeats before every send, i.e. at most every
+     * ~24 s, and no slice may run past GROUP_JOB_TIMEOUT_SECONDS.
+     */
+    public const GROUP_CLAIM_STALE_AFTER_SECONDS = 900;
+
+    /**
+     * An UNCLAIMED queued batch (never started, or waiting for its
+     * continuation slice) is only presumed abandoned after this long, to
+     * tolerate ordinary queue latency and backlog.
+     */
+    public const GROUP_UNCLAIMED_STALE_AFTER_SECONDS = 3600;
+
+    /**
+     * Atomically take ownership of a queued group batch. A conditional
+     * UPDATE, not a read-then-write: of any number of concurrent callers
+     * exactly one moves claim_token from NULL to its own token, and the
+     * rest get false and must not send anything.
+     */
+    public function claimGroupDispatch(string $token): bool
+    {
+        return self::query()
+            ->whereKey($this->getKey())
+            ->where('recipient_type', 'group')
+            ->where('status', self::STATUS_QUEUED)
+            ->whereNull('claim_token')
+            ->update(['claim_token' => $token, 'claimed_at' => now()]) === 1;
+    }
+
+    /**
+     * Called before every send. Refreshes the heartbeat and answers "do I
+     * still own a still-queued batch?". False means the batch was settled
+     * (failed()/recovery) or is owned by someone else: the caller must stop
+     * without sending.
+     *
+     * Ownership is decided by the SELECT, not by the UPDATE's affected-row
+     * count: MySQL/MariaDB report 0 affected rows when claimed_at is
+     * rewritten with the same second, which would look like a lost claim.
+     */
+    public function heartbeatGroupDispatch(string $token): bool
+    {
+        $owned = fn () => self::query()
+            ->whereKey($this->getKey())
+            ->where('status', self::STATUS_QUEUED)
+            ->where('claim_token', $token);
+
+        $owned()->update(['claimed_at' => now()]);
+
+        return $owned()->exists();
+    }
+
+    /**
+     * Give the batch back (only if this token still owns it) so the next
+     * slice can claim it. claimed_at keeps the time of the hand-over, which
+     * is what the unclaimed stale threshold measures from.
+     */
+    public function releaseGroupDispatchClaim(string $token): bool
+    {
+        return self::query()
+            ->whereKey($this->getKey())
+            ->where('status', self::STATUS_QUEUED)
+            ->where('claim_token', $token)
+            ->update(['claim_token' => null, 'claimed_at' => now()]) === 1;
+    }
+
+    /**
+     * reference_ids of the recipient rows this batch already has, so a
+     * continuation slice skips every recipient an earlier slice attempted.
+     *
+     * @return array<int, true> keyed by reference_id
+     */
+    public function recordedGroupRecipientReferenceIds(string $referenceType): array
+    {
+        return self::query()
+            ->where('parent_dispatch_id', $this->getKey())
+            ->where('account_id', $this->account_id)
+            ->where('recipient_type', self::RECIPIENT_TYPE_GROUP_RECIPIENT)
+            ->where('reference_type', $referenceType)
+            ->pluck('reference_id')
+            ->mapWithKeys(fn ($id) => [(int) $id => true])
+            ->all();
+    }
+
+    /**
+     * Settle a queued group batch from what was ACTUALLY delivered, as
+     * persisted in its recipient rows (sent_at is set only when the
+     * provider accepted the message, and is never cleared afterwards).
+     *
+     *   delivered = recipient rows with sent_at (capped at the reservation)
+     *   refund    = reserved - delivered
+     *
+     * The refund, the counts and the terminal status are written by the
+     * existing resolveGroupDispatch(), inside this same locked transaction,
+     * so it happens at most once whoever calls this (normal completion,
+     * a caught exception, the job's failed() hook, or stale recovery) and
+     * however many times.
+     *
+     * $onlyIfStale: the recovery command's re-check, made under the row
+     * lock, so a batch whose owner heartbeated after it was listed is left
+     * alone.
+     *
+     * @return bool true when THIS call settled the batch.
+     */
+    public function settleGroupDispatchFromRecipients(?string $reason = null, bool $onlyIfStale = false): bool
+    {
+        return (bool) DB::transaction(function () use ($reason, $onlyIfStale) {
+            /** @var self|null $locked */
+            $locked = self::query()->whereKey($this->getKey())->lockForUpdate()->first();
+
+            if (! $locked || $locked->status !== self::STATUS_QUEUED || $locked->recipient_type !== 'group') {
+                return false;
+            }
+
+            if ($onlyIfStale && ! $locked->isStaleGroupDispatch()) {
+                return false;
+            }
+
+            $reserved = max(0, (int) $locked->recipient_count);
+
+            $delivered = min($reserved, self::query()
+                ->where('parent_dispatch_id', $locked->getKey())
+                ->where('account_id', $locked->account_id)
+                ->where('recipient_type', self::RECIPIENT_TYPE_GROUP_RECIPIENT)
+                ->whereNotNull('sent_at')
+                ->count());
+
+            $settled = $locked->resolveGroupDispatch($delivered, $reserved - $delivered, $reason);
+
+            if ($settled) {
+                $this->forceFill($locked->getAttributes())->syncOriginal();
+            }
+
+            return $settled;
+        });
+    }
+
+    /** True when this queued group batch's owner is gone (see the thresholds above). */
+    public function isStaleGroupDispatch(): bool
+    {
+        if ($this->status !== self::STATUS_QUEUED || $this->recipient_type !== 'group') {
+            return false;
+        }
+
+        if ($this->claim_token !== null) {
+            return $this->claimed_at !== null
+                && $this->claimed_at->lte(now()->subSeconds(self::GROUP_CLAIM_STALE_AFTER_SECONDS));
+        }
+
+        $lastActivity = $this->claimed_at ?? $this->created_at;
+
+        return $lastActivity !== null
+            && $lastActivity->lte(now()->subSeconds(self::GROUP_UNCLAIMED_STALE_AFTER_SECONDS));
+    }
+
+    /** Queued group batches that look abandoned; each is re-checked under lock before settling. */
+    public function scopeStaleGroupDispatches(Builder $query): Builder
+    {
+        $claimCutoff = now()->subSeconds(self::GROUP_CLAIM_STALE_AFTER_SECONDS);
+        $unclaimedCutoff = now()->subSeconds(self::GROUP_UNCLAIMED_STALE_AFTER_SECONDS);
+
+        return $query
+            ->where('status', self::STATUS_QUEUED)
+            ->where('recipient_type', 'group')
+            ->where(function (Builder $q) use ($claimCutoff, $unclaimedCutoff) {
+                $q->where(fn (Builder $c) => $c->whereNotNull('claim_token')->where('claimed_at', '<=', $claimCutoff))
+                    ->orWhere(fn (Builder $c) => $c->whereNull('claim_token')->whereNotNull('claimed_at')->where('claimed_at', '<=', $unclaimedCutoff))
+                    ->orWhere(fn (Builder $c) => $c->whereNull('claim_token')->whereNull('claimed_at')->where('created_at', '<=', $unclaimedCutoff));
+            });
     }
 }

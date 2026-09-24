@@ -285,15 +285,30 @@ export interface TemplateNodeConfig {
   variables?: ApiKeyValue[];
 }
 
+/**
+ * Mirrors backend JourneyConditionEvaluator::OPERATORS (Phase 7 Task 4) —
+ * the engine refuses anything else. Text operators compare trimmed,
+ * case-insensitive text; the four numeric ones need numbers on both sides.
+ */
 export type ConditionalOperator =
   | 'equals'
   | 'not_equals'
   | 'contains'
   | 'not_contains'
+  | 'starts_with'
+  | 'ends_with'
   | 'exists'
   | 'not_exists'
   | 'greater_than'
-  | 'less_than';
+  | 'less_than'
+  | 'greater_or_equal'
+  | 'less_or_equal';
+
+/** Operators that take no value. */
+export const UNARY_CONDITIONAL_OPERATORS: ConditionalOperator[] = ['exists', 'not_exists'];
+
+/** Operators whose value must be a number. */
+export const NUMERIC_CONDITIONAL_OPERATORS: ConditionalOperator[] = ['greater_than', 'less_than', 'greater_or_equal', 'less_or_equal'];
 
 export interface ConditionalRule {
   variable: string;

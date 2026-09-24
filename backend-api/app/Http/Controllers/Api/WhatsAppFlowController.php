@@ -5,10 +5,14 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Concerns\ResolvesTenantAccount;
 use App\Http\Controllers\Controller;
 use App\Models\Account;
+use App\Models\InboundMessageEvent;
+use App\Models\JourneyExecutionEvent;
 use App\Models\WhatsAppFlow;
 use App\Models\WhatsAppFlowSession;
 use App\Models\WhatsAppFlowVersion;
 use App\Services\Access\JourneyNodeAuthorizer;
+use App\Services\WhatsApp\JourneyActionConfig;
+use App\Services\WhatsApp\JourneyConditionEvaluator;
 use App\Services\WhatsApp\JourneyVersionService;
 use App\Services\WhatsApp\WhatsAppJourneyEngine;
 use App\Support\PhoneNumberNormalizer;
@@ -160,6 +164,73 @@ class WhatsAppFlowController extends Controller
             ->get();
 
         return response()->json(['data' => $sessions]);
+    }
+
+    /** Phase 7 Task 7 — execution history returned by sessionDetail() (most recent N, oldest first). */
+    private const SESSION_HISTORY_LIMIT = 200;
+
+    /**
+     * GET /api/whatsapp/flows/{id}/sessions/{sessionId} — Phase 7 Task 7.
+     * Read-only operational view of ONE run: its current state, why it is
+     * in that state (last_error + normalised failure category), its retry
+     * position (attempt / max / next attempt), and its execution history
+     * (journey_execution_events, newest SESSION_HISTORY_LIMIT rows, oldest
+     * first) with each inbound message's provider event key (WAMID / QR
+     * message id) for correlation.
+     *
+     * Same gates as the sessions list (module.guard:chatbot +
+     * capability.guard:journey_automation + manage-chatbot|whatsapp.view).
+     * Scoped to the RESOLVED tenant: the flow, the session and every
+     * history row are filtered by that account — another tenant's id is a
+     * 404, never a leak. Three queries, no N+1.
+     */
+    public function sessionDetail(Request $request, int $id, int $sessionId): JsonResponse
+    {
+        $flow = $this->flowFor($request, $id);
+
+        $session = WhatsAppFlowSession::query()
+            ->forAccount($flow->account_id)
+            ->where('flow_id', $flow->id)
+            ->find($sessionId);
+        abort_if(! $session, 404, 'Session not found.');
+
+        $events = JourneyExecutionEvent::query()
+            ->forAccount($flow->account_id)
+            ->where('session_id', $session->id)
+            ->orderByDesc('id')
+            ->limit(self::SESSION_HISTORY_LIMIT)
+            ->get(['id', 'flow_version_id', 'inbound_event_id', 'source', 'event', 'node_id', 'node_type', 'result', 'attempt', 'error_category', 'error_message', 'scheduled_for', 'details', 'created_at'])
+            ->reverse()
+            ->values();
+
+        $inboundIds = $events->pluck('inbound_event_id')->filter()->unique()->values();
+        $inboundKeys = $inboundIds->isEmpty() ? collect() : InboundMessageEvent::query()
+            ->where('account_id', $flow->account_id)
+            ->whereIn('id', $inboundIds)
+            ->get(['id', 'provider', 'event_key'])
+            ->keyBy('id');
+
+        $lastFailure = $events->last(fn (JourneyExecutionEvent $e) => $e->error_category !== null);
+        $retrying = $session->status === WhatsAppFlowSession::STATUS_WAITING && $session->last_error !== null;
+
+        return response()->json(['data' => [
+            'session' => $session->toArray() + [
+                'error_category' => in_array($session->status, [WhatsAppFlowSession::STATUS_ACTIVE, WhatsAppFlowSession::STATUS_COMPLETED], true) ? null : $lastFailure?->error_category,
+                'retry' => [
+                    'retrying' => $retrying,
+                    'failed_node_id' => $retrying ? $session->current_node_id : null,
+                    'attempt' => (int) $session->attempts,
+                    'max_attempts' => WhatsAppJourneyEngine::MAX_RESUME_ATTEMPTS,
+                    'next_attempt_at' => $retrying ? $session->wait_until?->toIso8601String() : null,
+                ],
+            ],
+            'history' => $events->map(fn (JourneyExecutionEvent $e) => $e->toArray() + [
+                'inbound_event' => $e->inbound_event_id !== null && $inboundKeys->has($e->inbound_event_id)
+                    ? $inboundKeys[$e->inbound_event_id]->only(['provider', 'event_key'])
+                    : null,
+            ])->all(),
+            'history_limit' => self::SESSION_HISTORY_LIMIT,
+        ]]);
     }
 
     /**
@@ -361,6 +432,11 @@ class WhatsAppFlowController extends Controller
             $errors[$key] = $messages;
         }
 
+        // Phase 7 Task 4 — condition definitions the engine would refuse.
+        foreach ($this->conditionErrors($nodes, $data['graph_data']['edges'] ?? []) as $key => $messages) {
+            $errors[$key] = array_merge($errors[$key] ?? [], $messages);
+        }
+
         if (! empty($errors)) {
             throw ValidationException::withMessages($errors);
         }
@@ -420,6 +496,15 @@ class WhatsAppFlowController extends Controller
             }
         }
 
+        // Phase 7 Task 5 — action nodes: refuse values that could never run
+        // (wrong types, unknown input/validation types). Empty fields are a
+        // savable draft; the engine fails the node if it is reached as-is.
+        $actionError = JourneyActionConfig::error($type, $data, draft: true);
+
+        if ($actionError !== null) {
+            $errors["graph_data.nodes.{$index}.data"] = [$actionError];
+        }
+
         if ($type === 'delay') {
             $amount = $data['amount'] ?? null;
 
@@ -431,6 +516,79 @@ class WhatsAppFlowController extends Controller
                 $errors["graph_data.nodes.{$index}.data.unit"] = [
                     'Delay unit must be one of: '.implode(', ', self::DELAY_UNITS).'.',
                 ];
+            }
+        }
+
+        return $errors;
+    }
+
+    /**
+     * Phase 7 Task 4 — refuse condition definitions that could never be
+     * evaluated safely, using the SAME rules the engine applies at run time
+     * (JourneyConditionEvaluator), so a save can't produce a journey that
+     * fails on its first branch:
+     *
+     *   - `conditional`: match must be all|any; conditions a list of
+     *     objects; every stated operator known; numeric operators need a
+     *     numeric value. An empty list / empty variable is still a
+     *     savable draft (the engine fails it if it is ever reached).
+     *   - legacy `condition`: every edge condition must use a known
+     *     operator with a usable value, and at most ONE edge may be the
+     *     default branch (several used to mean "the last one").
+     *
+     * @param array<int, array<string, mixed>> $nodes
+     * @param array<int, array<string, mixed>> $edges
+     * @return array<string, array<int, string>>
+     */
+    private function conditionErrors(array $nodes, array $edges): array
+    {
+        $errors = [];
+
+        foreach ($nodes as $i => $node) {
+            $type = $node['type'] ?? null;
+            $data = is_array($node['data'] ?? null) ? $node['data'] : [];
+
+            if ($type === 'conditional') {
+                $problems = JourneyConditionEvaluator::conditionListErrors($data['conditions'] ?? [], $data['match'] ?? null, requireRules: false);
+
+                if ($problems !== []) {
+                    $errors["graph_data.nodes.{$i}.data.conditions"] = $problems;
+                }
+            }
+
+            if ($type !== 'condition' || empty($node['id'])) {
+                continue;
+            }
+
+            $defaults = 0;
+
+            foreach ($edges as $j => $edge) {
+                if (($edge['source'] ?? null) !== $node['id']) {
+                    continue;
+                }
+
+                if (! empty($edge['is_default'])) {
+                    $defaults++;
+
+                    continue;
+                }
+
+                if (! array_key_exists('condition', $edge) || $edge['condition'] === null) {
+                    continue;
+                }
+
+                $condition = $edge['condition'];
+                $problem = is_array($condition)
+                    ? JourneyConditionEvaluator::definitionError($condition['operator'] ?? 'equals', $condition['value'] ?? null)
+                    : 'A branch condition must be an object.';
+
+                if ($problem !== null) {
+                    $errors["graph_data.edges.{$j}.condition"] = [$problem];
+                }
+            }
+
+            if ($defaults > 1) {
+                $errors["graph_data.nodes.{$i}.default_branch"] = ['A Condition node can have only one default ("else") branch.'];
             }
         }
 

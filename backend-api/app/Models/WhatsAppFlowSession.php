@@ -64,6 +64,68 @@ class WhatsAppFlowSession extends Model
     /** Statuses from which a session can still do something — the only ones that can be cancelled. */
     public const OPEN_STATUSES = [self::STATUS_ACTIVE, self::STATUS_WAITING, self::STATUS_BLOCKED];
 
+    /** Phase 7 Task 9 — a session in one of these never changes status again. */
+    public const TERMINAL_STATUSES = [self::STATUS_COMPLETED, self::STATUS_FAILED, self::STATUS_EXPIRED, self::STATUS_CANCELLED];
+
+    /**
+     * Phase 7 Task 9 — THE session state machine (from => allowed to). Every
+     * write in WhatsAppJourneyEngine is a conditional UPDATE guarded by its
+     * `from` set (transition(), cancelSession(), restoreBlocked(), the
+     * resume claim, recoverInterruptedRuns()), so a write racing another
+     * one can only ever perform a transition listed here.
+     *
+     *   active   → waiting    delay parked; immediate-path retry scheduled;
+     *                         interrupted immediate run recovered (scheduler)
+     *            → blocked    entitlement lost (inbound path)
+     *            → completed / failed / expired / cancelled
+     *            (active → active: checkpoint / question pause, no status change)
+     *   waiting  → active     question reached by a resumed run
+     *            → blocked    entitlement lost at resume / mid-run
+     *            → completed / failed / expired / cancelled
+     *            (waiting → waiting: claim lease, retry backoff, checkpoint)
+     *   blocked  → waiting    entitlement restored, it had a timer
+     *            → active     entitlement restored, it was awaiting a reply
+     *            → cancelled
+     *   completed / failed / expired / cancelled: terminal, no way out.
+     *
+     * Who acts on which state: inbound messages reach only `active`
+     * (continue) and `blocked` (restore, when entitled); the scheduler
+     * reaches only due `waiting` (claim), `blocked` (restore) and
+     * interrupted `active` (recovery); operators reach any open state
+     * (cancel) and, through a manual test, replace the phone's open session.
+     */
+    public const TRANSITIONS = [
+        self::STATUS_ACTIVE => [self::STATUS_ACTIVE, self::STATUS_WAITING, self::STATUS_BLOCKED, self::STATUS_COMPLETED, self::STATUS_FAILED, self::STATUS_EXPIRED, self::STATUS_CANCELLED],
+        self::STATUS_WAITING => [self::STATUS_WAITING, self::STATUS_ACTIVE, self::STATUS_BLOCKED, self::STATUS_COMPLETED, self::STATUS_FAILED, self::STATUS_EXPIRED, self::STATUS_CANCELLED],
+        self::STATUS_BLOCKED => [self::STATUS_WAITING, self::STATUS_ACTIVE, self::STATUS_CANCELLED],
+        self::STATUS_COMPLETED => [],
+        self::STATUS_FAILED => [],
+        self::STATUS_EXPIRED => [],
+        self::STATUS_CANCELLED => [],
+    ];
+
+    public static function canTransition(string $from, string $to): bool
+    {
+        return in_array($to, self::TRANSITIONS[$from] ?? [], true);
+    }
+
+    /**
+     * Phase 7 Task 9 — defence in depth for Eloquent saves: a model whose
+     * loaded status is terminal may not be saved with a different status.
+     * (The engine's own writes are conditional UPDATEs and never rely on
+     * this; it catches a future caller that would forceFill()->save().)
+     */
+    protected static function booted(): void
+    {
+        static::updating(function (self $session) {
+            $from = (string) $session->getOriginal('status');
+
+            if ($session->isDirty('status') && ! self::canTransition($from, (string) $session->status)) {
+                throw new \LogicException("Journey session #{$session->id}: illegal status change {$from} → {$session->status}.");
+            }
+        });
+    }
+
     protected $fillable = [
         'account_id',
         'flow_id',

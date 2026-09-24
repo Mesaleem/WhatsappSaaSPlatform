@@ -62,10 +62,14 @@ const CONDITION_OPERATORS: { value: ConditionalOperator; label: string }[] = [
   { value: 'not_equals', label: 'does not equal' },
   { value: 'contains', label: 'contains' },
   { value: 'not_contains', label: 'does not contain' },
+  { value: 'starts_with', label: 'starts with' },
+  { value: 'ends_with', label: 'ends with' },
   { value: 'exists', label: 'is set' },
   { value: 'not_exists', label: 'is not set' },
-  { value: 'greater_than', label: 'is greater than' },
-  { value: 'less_than', label: 'is less than' },
+  { value: 'greater_than', label: 'is greater than (number)' },
+  { value: 'less_than', label: 'is less than (number)' },
+  { value: 'greater_or_equal', label: 'is at least (number)' },
+  { value: 'less_or_equal', label: 'is at most (number)' },
 ];
 
 function FieldShell({

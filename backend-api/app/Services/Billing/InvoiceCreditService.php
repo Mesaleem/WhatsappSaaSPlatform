@@ -64,20 +64,75 @@ class InvoiceCreditService
             }
 
             /*
-             * Phase 5 Task 11 — the DATABASE plan, not PlanCatalog.
-             *
-             * findForFulfilment(), not findPurchasable(): a customer who
-             * already paid must be credited even if the plan has since
-             * been deactivated. Activation gates NEW purchases
-             * (PaymentGatewayController), never the fulfilment of money
-             * that has already changed hands.
+             * Phase 5 fix P5-4 — the terms THIS ORDER bought, captured on
+             * the invoice from the database plan when the order was
+             * created (PaymentGatewayController::createOrder()). The live
+             * plan is not consulted: an admin changing, deactivating or
+             * retiring the plan after checkout cannot change what an
+             * already-placed order delivers.
              */
-            $plan = $this->plans->findForFulfilment($invoice->plan_key);
-            if (! $plan) {
-                Log::error("InvoiceCreditService: unknown plan_key '{$invoice->plan_key}' on invoice #{$invoice->id}.");
+            $terms = $invoice->purchasedPlanTerms();
 
-                return false;
+            if ($terms === null) {
+                /*
+                 * No captured terms: an order placed before P5-4 (the
+                 * migration invents none) — fulfilled exactly as before,
+                 * from the plan row.
+                 *
+                 * Phase 5 Task 11 — the DATABASE plan, not PlanCatalog.
+                 * findForFulfilment(), not findPurchasable(): a customer who
+                 * already paid must be credited even if the plan has since
+                 * been deactivated. Activation gates NEW purchases
+                 * (PaymentGatewayController), never the fulfilment of money
+                 * that has already changed hands.
+                 */
+                $plan = $this->plans->findForFulfilment($invoice->plan_key);
+                if (! $plan) {
+                    Log::error("InvoiceCreditService: unknown plan_key '{$invoice->plan_key}' on invoice #{$invoice->id}.");
+
+                    return false;
+                }
+
+                Log::info("InvoiceCreditService: invoice #{$invoice->id} predates captured plan terms; fulfilling from the current plan row.");
+
+                $terms = [
+                    'engine_type' => $plan->engine_type,
+                    'billing_model' => $plan->billing_model,
+                    'rate_per_message' => $plan->rate_per_message,
+                    'total_allocated_messages' => $plan->total_allocated_messages,
+                    'duration_days' => (int) $plan->duration_days,
+                ];
             }
+
+            /*
+             * Phase 5 fix P5-5 — one fulfilment at a time PER ACCOUNT.
+             *
+             * The invoice lock above makes one invoice exactly-once, but two
+             * DIFFERENT invoices of the same account (a double checkout, a
+             * renewal paid while another order is in flight) used to be
+             * fulfilled side by side: both read "no subscription yet" and
+             * both ran the plan reconciliation, so the loser hit the
+             * account_entitlements unique key, rolled back, and a PAID order
+             * stayed pending — the customer charged and not credited
+             * (reproduced on MariaDB by
+             * tests/Probes/payment_fulfillment_concurrency_probe.php). With
+             * an existing subscription the two credits only stayed correct
+             * because of the subscription row lock.
+             *
+             * Locking the invoice owner's account row serializes every
+             * fulfilment of that account; the second waits, then reads the
+             * first one's committed subscription and entitlements. Lock
+             * order is always invoice → account → subscription (no other
+             * code path takes these the other way round). The owner is the
+             * invoice's account_id — never anything from the request.
+             *
+             * Taken BEFORE the invoice row is written: that write makes
+             * MariaDB/InnoDB take a shared lock on the parent account row
+             * (foreign-key check), and two fulfilments each holding that
+             * shared lock and then asking for the exclusive one deadlock
+             * (observed with the probe) — one paid order rolled back.
+             */
+            $account = Account::query()->lockForUpdate()->find($invoice->account_id);
 
             $invoice->forceFill([
                 'status' => 'paid',
@@ -86,17 +141,22 @@ class InvoiceCreditService
                 'gateway_raw_response' => $rawResponse,
             ])->save();
 
-            $account = Account::find($invoice->account_id);
             if (! $account) {
                 Log::error("InvoiceCreditService: account #{$invoice->account_id} not found for invoice #{$invoice->id}.");
 
                 return true; // invoice IS paid — the money was real — just can't credit a missing account.
             }
 
-            $existingSubscription = $account->currentSubscription;
-            $subscription = $existingSubscription
-                ? Subscription::query()->lockForUpdate()->find($existingSubscription->id)
-                : new Subscription(['account_id' => $account->id]);
+            // The current subscription (Account::currentSubscription: latest
+            // starts_at), read with a row lock so it is the committed state
+            // of whatever fulfilment ran before this one.
+            $subscription = Subscription::query()
+                ->where('account_id', $account->id)
+                ->orderByDesc('starts_at')
+                ->orderByDesc('id')
+                ->lockForUpdate()
+                ->first()
+                ?? new Subscription(['account_id' => $account->id]);
 
             // "Extend expiration date" (spec, literal): a renewal on a still-
             // active plan stacks on top of the current expiry rather than
@@ -112,16 +172,16 @@ class InvoiceCreditService
             // architectural call in the Module 8 report; a "replace on
             // upgrade" model is equally defensible and would be a one-line
             // change here if that's what's actually wanted.]
-            $subscription->engine_type = $plan->engine_type;
-            $subscription->billing_model = $plan->billing_model;
-            $subscription->rate_per_message = $plan->rate_per_message;
-            $subscription->total_allocated_messages = $plan->billing_model === 'unlimited'
+            $subscription->engine_type = $terms['engine_type'];
+            $subscription->billing_model = $terms['billing_model'];
+            $subscription->rate_per_message = $terms['rate_per_message'];
+            $subscription->total_allocated_messages = $terms['billing_model'] === 'unlimited'
                 ? null
-                : ($subscription->total_allocated_messages ?? 0) + (int) $plan->total_allocated_messages;
+                : ($subscription->total_allocated_messages ?? 0) + (int) $terms['total_allocated_messages'];
             $subscription->price_paid = (float) ($subscription->price_paid ?? 0) + (float) $invoice->total_amount;
             $subscription->payment_mode = $invoice->payment_gateway;
             $subscription->starts_at = $subscription->starts_at ?? now();
-            $subscription->expires_at = $baseExpiry->copy()->addDays($plan->duration_days);
+            $subscription->expires_at = $baseExpiry->copy()->addDays($terms['duration_days']);
             $subscription->status = 'active';
             $subscription->save();
 

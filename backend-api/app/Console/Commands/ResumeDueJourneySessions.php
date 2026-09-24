@@ -34,6 +34,11 @@ class ResumeDueJourneySessions extends Command
         // already due, so it is picked up by the query below in this run).
         $restored = app(WhatsAppJourneyEngine::class)->restoreEntitledBlockedSessions();
 
+        // Phase 7 Task 9 — immediate-path runs whose process died mid-run are
+        // parked as due 'waiting' at their checkpoint, so the scan below
+        // resumes them in this same run (bounded by --limit).
+        $recovered = app(WhatsAppJourneyEngine::class)->recoverInterruptedRuns($limit);
+
         $ids = WhatsAppFlowSession::query()
             ->where('status', WhatsAppFlowSession::STATUS_WAITING)
             ->whereNotNull('wait_until')
@@ -47,7 +52,7 @@ class ResumeDueJourneySessions extends Command
             ResumeJourneySessionJob::dispatch((int) $id)->onConnection('database')->onQueue('journeys');
         }
 
-        $this->info("Restored {$restored} blocked and dispatched {$ids->count()} due journey session(s).");
+        $this->info("Restored {$restored} blocked, recovered {$recovered} interrupted and dispatched {$ids->count()} due journey session(s).");
 
         return self::SUCCESS;
     }

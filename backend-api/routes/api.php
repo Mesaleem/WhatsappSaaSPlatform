@@ -428,6 +428,8 @@ Route::middleware('auth:sanctum')->group(function () {
                 Route::get('/', [WhatsAppFlowController::class, 'index']);
                 Route::get('/{id}', [WhatsAppFlowController::class, 'show']);
                 Route::get('/{id}/sessions', [WhatsAppFlowController::class, 'sessions']);
+                // Phase 7 Task 7 — one run's state, retry position and execution history.
+                Route::get('/{id}/sessions/{sessionId}', [WhatsAppFlowController::class, 'sessionDetail'])->whereNumber(['id', 'sessionId']);
                 // Phase 7 Task 2 — immutable journey versions.
                 Route::get('/{id}/versions', [WhatsAppFlowController::class, 'versions'])->whereNumber('id');
                 Route::get('/{id}/versions/{versionId}', [WhatsAppFlowController::class, 'showVersion'])->whereNumber(['id', 'versionId']);

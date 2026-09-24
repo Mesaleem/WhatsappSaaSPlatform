@@ -8,6 +8,7 @@ use App\Models\ChatbotRule;
 use App\Models\MessageDispatchLog;
 use App\Services\WhatsApp\WhatsAppEngineFactory;
 use App\Services\Messaging\InboundEventGate;
+use App\Services\WhatsApp\JourneyExecutionRecorder;
 use App\Services\WhatsApp\WhatsAppJourneyEngine;
 use App\Services\Messaging\MessageQuotaService;
 use Illuminate\Support\Collection;
@@ -77,8 +78,9 @@ class ChatbotEngineService
                 $senderPhone,
                 $provider ?? 'unknown',
                 $eventKey,
-                function () use ($accountId, $senderPhone, $incomingMessage, $referral) {
-                    if (app(WhatsAppJourneyEngine::class)->handleInboundMessage($accountId, $senderPhone, $incomingMessage, $referral)) {
+                function (?int $inboundEventId = null) use ($accountId, $senderPhone, $incomingMessage, $referral) {
+                    // Phase 7 Task 7 — the inbound claim id correlates the journey's execution history.
+                    if (app(WhatsAppJourneyEngine::class)->handleInboundMessage($accountId, $senderPhone, $incomingMessage, $referral, $inboundEventId)) {
                         // Consumed by a Journey — no ChatbotLog row is created for
                         // it (flows do not yet have their own log table, a
                         // disclosed scope gap — see WhatsAppJourneyEngine::send()).
@@ -88,6 +90,11 @@ class ChatbotEngineService
                     return $this->process($accountId, $senderPhone, $incomingMessage);
                 },
             );
+
+            // Phase 7 Task 7 — a skipped redelivery of a message a Journey handled.
+            if (($gate['reason'] ?? null) === 'duplicate') {
+                app(JourneyExecutionRecorder::class)->recordDuplicate($accountId, $gate['original_event_id'] ?? null, $provider ?? 'unknown');
+            }
 
             return $gate['result'];
         } catch (Throwable $e) {

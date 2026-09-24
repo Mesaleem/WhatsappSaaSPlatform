@@ -103,7 +103,7 @@ class PaymentGatewayController extends Controller
         $currency = 'INR';
         $invoiceNumber = $this->generateInvoiceNumber($account->id);
 
-        $invoice = Invoice::create([
+        $invoice = new Invoice([
             'account_id' => $account->id,
             'invoice_number' => $invoiceNumber,
             'plan_key' => $data['plan_key'],
@@ -118,6 +118,12 @@ class PaymentGatewayController extends Controller
             'payment_gateway' => $data['gateway'],
             'status' => 'pending',
         ]);
+
+        // Phase 5 fix P5-4 — and the rest of the purchased terms (engine,
+        // billing model, rate, quota, duration), from the same database
+        // row, in the same INSERT. Fulfilment reads these, not the plan,
+        // so an admin edit after this point cannot change this order.
+        $invoice->capturePlanTerms($plan)->save();
 
         // Both gateways require the smallest currency unit (paise for INR),
         // never a decimal major-unit amount.

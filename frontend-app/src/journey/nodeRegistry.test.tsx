@@ -397,6 +397,22 @@ describe('validation: unknown node type', () => {
 // ====================================================================
 // 6. Conditional branches
 // ====================================================================
+describe('legacy question node (Phase 7 Task 5)', () => {
+  const base = { prompt_text: 'Pick one', variable_name: 'choice' };
+
+  it('accepts a text question without options', () => {
+    expect(validateJourneyNodeConfig('question', { ...base, input_type: 'text' })).toEqual({});
+    expect(validateJourneyNodeConfig('question', base)).toEqual({});
+  });
+
+  it('requires options for a button or list question, each with a title', () => {
+    expect(validateJourneyNodeConfig('question', { ...base, input_type: 'buttons', options: [] }).options).toContain('at least one option');
+    expect(validateJourneyNodeConfig('question', { ...base, input_type: 'list' }).options).toContain('at least one option');
+    expect(validateJourneyNodeConfig('question', { ...base, input_type: 'buttons', options: [{ id: '', title: ' ' }] }).options).toContain('title');
+    expect(validateJourneyNodeConfig('question', { ...base, input_type: 'buttons', options: [{ id: 'y', title: 'Yes' }] })).toEqual({});
+  });
+});
+
 describe('conditional node branches', () => {
   it('declares explicit TRUE and FALSE handles', () => {
     const handles = getJourneyNode('conditional')!.sourceHandles;
@@ -422,6 +438,29 @@ describe('conditional node branches', () => {
     expect(
       validateJourneyNodeConfig('conditional', { conditions: [{ variable: 'x' }] }).conditions,
     ).toContain('operator');
+  });
+
+  it('needs a value for value operators but not for is set / is not set (Phase 7 Task 4)', () => {
+    expect(
+      validateJourneyNodeConfig('conditional', { conditions: [{ variable: 'x', operator: 'contains', value: '' }] }).conditions,
+    ).toContain('value');
+    expect(
+      validateJourneyNodeConfig('conditional', { conditions: [{ variable: 'x', operator: 'exists' }] }).conditions,
+    ).toBeUndefined();
+    expect(
+      validateJourneyNodeConfig('conditional', { conditions: [{ variable: 'x', operator: 'not_exists' }] }).conditions,
+    ).toBeUndefined();
+  });
+
+  it('needs a numeric value for number comparisons (Phase 7 Task 4)', () => {
+    for (const operator of ['greater_than', 'less_than', 'greater_or_equal', 'less_or_equal']) {
+      expect(
+        validateJourneyNodeConfig('conditional', { conditions: [{ variable: 'x', operator, value: 'ten' }] }).conditions,
+      ).toContain('numeric');
+      expect(
+        validateJourneyNodeConfig('conditional', { conditions: [{ variable: 'x', operator, value: '10' }] }).conditions,
+      ).toBeUndefined();
+    }
   });
 
   it('rejects an outgoing edge that does not name its branch', () => {

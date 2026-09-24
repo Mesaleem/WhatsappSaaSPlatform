@@ -79,6 +79,30 @@ class JourneyNodeAuthorizer
             return 'This account has no active subscription.';
         }
 
+        return $this->capabilityDenial($account, $nodeType, $requirements);
+    }
+
+    /**
+     * Phase 7 Task 8 — the RUN-TIME node check (WhatsAppJourneyEngine):
+     * provider + capability only. Account status and subscription state are
+     * deliberately NOT checked here: at run time they are the send gate's
+     * business (JourneySendGate), which tells a temporarily exhausted quota
+     * (retryable) apart from a missing entitlement (permanent). Checking
+     * "has an active subscription" here made an exhausted quota look like a
+     * missing entitlement and failed the node permanently.
+     */
+    public function runtimeDenialFor(Account $account, string $nodeType): ?string
+    {
+        $requirements = JourneyNodeCatalog::requirementsFor($nodeType);
+
+        return $requirements === null ? null : $this->capabilityDenial($account, $nodeType, $requirements);
+    }
+
+    /**
+     * @param  array{capabilities: array<int, string>, providers: array<int, string>}  $requirements
+     */
+    private function capabilityDenial(Account $account, string $nodeType, array $requirements): ?string
+    {
         $provider = $this->providerFor($account);
 
         if (! $this->providerAllowed($account, $requirements['providers'])) {

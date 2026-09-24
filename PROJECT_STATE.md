@@ -8,10 +8,10 @@
 | | |
 |---|---|
 | **Last updated** | 2026-09-24 |
-| **Last completed work** | Phase 7 Task 3 — durable inbound idempotency (`inbound_message_events`) + per-conversation lease · Task 2 Journey versions · P5-1 · Tasks 1–1.6 |
-| **Backend test suite** | **1478 passed, 0 failures** (MariaDB, authoritative) · 1474 + 4 skipped (SQLite) · frontend 545 passed |
-| **Migrations** | 117 (117th = `2026_09_24_140000` inbound events + conversation locks; 115th/116th = journey versions + backfill; 114th = `group_dispatch_recipients`; 113th = `qr → journey_automation`; 112th = temporal columns; 111th = platform CRM account) — 111th–117th **not yet run on the real DB** |
-| **Next up** | Phase 7 Task 2 (not yet specified). Owner decisions pending from Task 1 — see §8.1 "Journey (Phase 7)". CRM Notes are backlog (§8.4). |
+| **Last completed work** | **P5-5 CLOSED** — payment fulfilment exactly-once, now also serialized per account (`InvoiceCreditService` locks the invoice owner's account row); proven on MariaDB by `tests/Probes/payment_fulfillment_concurrency_probe.php` · **Phase 7 CLOSED** (Task 10 release-readiness audit; 2 cross-task regressions fixed — see §8.1 Phase 7 closure record) · Phase 7 Task 9 — Journey production hardening: one session state machine (`WhatsAppFlowSession::TRANSITIONS`, terminal saves refused), guarded checkpoint, recovery of interrupted immediate runs (run lease + `recoverInterruptedRuns()` in `journeys:resume-due`), manual test serialized and replaces every open session, race-free restore events; MariaDB cross-process + deploy probes (`tests/Probes/`) · Phase 7 Task 8 — one quota/entitlement classification for every Journey send (`JourneySendGate`; quota exhausted/plan expired → retried `quota_failure`, suspended/no subscription → failed `entitlement_blocked`; node capability via `JourneyNodeAuthorizer::runtimeDenialFor`) · Phase 7 Task 7 — Journey observability: durable `journey_execution_events` history, failure categories, retry visibility, read-only `GET /whatsapp/flows/{id}/sessions/{sessionId}`, opt-in `journeys:prune-history` · Phase 7 Task 6 — palette `text`/`image`/`video`/`document`/`audio` nodes executed; one completion/terminal contract (`transition()` compare-and-set: ended sessions are never rewritten) · Phase 7 Task 5 — Journey action execution hardening (`JourneyActionConfig`, checkpoint per node, immediate-path failures retried via the Task 1 model) · Phase 7 Task 4 — Journey condition/branching hardening (`JourneyConditionEvaluator`; `conditional` node executed) · P5-4 — orders fulfilled from plan terms captured on the invoice at checkout · P5-3 — group jobs: atomic claim, failure settlement from recipient rows, bounded slices, stale-batch recovery · P5-2 — Social Inbox lead reply now goes through `DirectMessageDispatcher` (quota + dispatch log) · Phase 7 Task 3 — durable inbound idempotency (`inbound_message_events`) + per-conversation lease · Task 2 Journey versions · P5-1 · Tasks 1–1.6 |
+| **Backend test suite** | **1958 passed, 0 failures** (MariaDB, authoritative) · 1953 + 5 skipped (SQLite) · frontend 549 passed (unchanged) |
+| **Migrations** | 120 (120th = `2026_09_24_170000` journey execution events (Phase 7 T7); 119th = `2026_09_24_160000` invoice plan-terms snapshot (P5-4); 118th = `2026_09_24_150000` group-batch claim columns (P5-3); 117th = `2026_09_24_140000` inbound events + conversation locks; 115th/116th = journey versions + backfill; 114th = `group_dispatch_recipients`; 113th = `qr → journey_automation`; 112th = temporal columns; 111th = platform CRM account) — 111th–120th **not yet run on the real DB** |
+| **Next up** | **Phase 8** (not yet specified). Phase 7 is closed in code; its production rollout (10 pending migrations, sequence in §8.1 Phase 7 closure record) is an owner action and has NOT been performed. Owner decisions open: (1) run migration 120 on the real DB; (2) whether to schedule `journeys:prune-history --force` (dry run by default, not scheduled). Owner decisions pending from Task 1 — see §8.1 "Journey (Phase 7)". CRM Notes are backlog (§8.4). |
 
 ---
 
@@ -148,7 +148,7 @@ Module-off means **backend-blocked**, not merely UI-hidden.
 
 ## 4. Database
 
-**117 migrations**, **57 Eloquent models**. Grouped by domain:
+**119 migrations**, **57 Eloquent models**. Grouped by domain:
 
 | Domain | Key tables |
 |---|---|
@@ -156,7 +156,7 @@ Module-off means **backend-blocked**, not merely UI-hidden.
 | Billing | `subscriptions`, `plans`, `plan_entitlements`, `account_entitlements`, `usage_quotas`, `invoices`, `payment_gateway_settings`, `quota_requests` |
 | Agent/reseller | `agent_selling_entitlements`, `agent_commission_rules`, `agent_commissions`, `agent_commission_payouts`, `agent_commission_payout_items` |
 | Entitlement core | `capabilities`, `providers`, `provider_capabilities` |
-| WhatsApp | `whatsapp_sessions`, `message_templates`, `message_dispatch_logs`, `group_dispatch_recipients` (P5-1), `whatsapp_flows`, `whatsapp_flow_versions` (Phase 7 T2), `whatsapp_flow_sessions`, `inbound_message_events` + `journey_conversation_locks` (Phase 7 T3) |
+| WhatsApp | `whatsapp_sessions`, `message_templates`, `message_dispatch_logs`, `group_dispatch_recipients` (P5-1), `whatsapp_flows`, `whatsapp_flow_versions` (Phase 7 T2), `whatsapp_flow_sessions`, `inbound_message_events` + `journey_conversation_locks` (Phase 7 T3), `journey_execution_events` (Phase 7 T7, append-only) |
 | Contacts & groups | `contact_groups`, `contact_group_members` |
 | **CRM** | `contacts`, `crm_leads`, `crm_capture_link_failures`, `crm_tags`, `crm_lead_tags` |
 | Social & ads | `social_accounts`, `social_provider_configs`, `leads`, `ad_campaigns`, `ad_campaign_daily_metrics`, `organic_posts`, `comment_automation_rules`, `comment_automation_events` |
@@ -182,6 +182,59 @@ Module-off means **backend-blocked**, not merely UI-hidden.
   unique(flow_id, version)); `published_version_id` is what NEW sessions start on;
   `whatsapp_flow_sessions.flow_version_id` is the version a session runs — the engine reads nodes,
   edges and branches ONLY from it. Never update or delete a version row (the model throws).
+- **Journey actions have one execution contract** (Phase 7 Task 5, docblock of
+  `WhatsAppJourneyEngine`). Executable: trigger, message, question, condition, conditional, delay,
+  save_lead. Before every node advance() CHECKPOINTS `current_node_id` (and any captured answer).
+  Malformed action config (`JourneyActionConfig`), an edge to a missing node or a bad condition →
+  `failed` at the node, never retried. A send that did not go out, a failed capture write, a CRM
+  promotion failure while the account is CRM-entitled, or any exception → retried from the failed
+  node with the Task 1 backoff on BOTH paths (immediate path: `runImmediate()` parks it `waiting`),
+  then `failed` after `MAX_RESUME_ATTEMPTS`. Nothing downstream of a failed node runs. Not
+  CRM-entitled → capture kept, `not_entitled` recorded, journey continues (Task 10 contract).
+  Exactly-once provider delivery is NOT guaranteed (see the docblock).
+- **Journey session state machine** (Phase 7 Task 9, `WhatsAppFlowSession::TRANSITIONS`). Terminal:
+  completed/failed/expired/cancelled — no exit; an Eloquent save that would move one throws. Every
+  engine write is a conditional UPDATE guarded by its `from` set; the per-node checkpoint is one too, so a
+  run stops at the next node once the session was cancelled/replaced/ended elsewhere. An immediate
+  (inbound/test) run holds a run lease (`wait_until` on an `active` row, RESUME_LEASE_SECONDS); every
+  normal end clears it, so `active` + expired lease = interrupted run → `journeys:resume-due` parks it
+  `waiting` at its checkpoint (`recoverInterruptedRuns()`), resumed at-least-once. `active` with no lease
+  = awaiting a reply (legitimately indefinite, never touched). The trigger is the first checkpoint.
+- **Journey send classification** (Phase 7 Task 8, `JourneySendGate`). Every Journey send goes through
+  `WhatsAppJourneyEngine::send()` → `JourneySendGate::refusal()` (re-reads the subscription row each
+  time, so usage consumed earlier in the same run is seen — a run can no longer overshoot the cap):
+  quota exhausted / plan expired → `quota_failure`, RETRIED by the Task 1/5 machinery then `failed`;
+  suspended account / no subscription → `entitlement_blocked`, `failed` at once (`JourneyStepFailed`
+  `retryable=false`). Palette text/media nodes check only capability/provider at run time
+  (`JourneyNodeAuthorizer::runtimeDenialFor`); save-time `denialFor()` is unchanged. Legacy nodes stay
+  grandfathered (no `whatsapp_send` check). journey_automation / chatbot module → `blocked` (Task 1.6).
+- **Journey execution history** (Phase 7 Task 7, `JourneyExecutionEvent` docblock). Every run writes
+  append-only `journey_execution_events` through `JourneyExecutionRecorder` (never throws; one INSERT
+  per event; no bodies/answers/graph/credentials). 15 events (session_started/resumed/waiting/blocked/
+  restored/completed/expired/failed/cancelled, node_started/succeeded/failed/retry_scheduled,
+  reply_received, inbound_deduplicated); 11 error categories. Correlation: account, flow, pinned
+  version, session, node, `inbound_event_id` (→ `inbound_message_events.event_key` = WAMID), and
+  `details.dispatch_log_id` / `lead_id` / `crm_lead_id`. `attempt` = the session's resume-claim number
+  (0 on the immediate path). flow/session ids are NOT foreign keys (history outlives a deleted journey);
+  account cascades. Instrumentation must never change execution order or outcome.
+- **Journey completion / terminal contract** (Phase 7 Task 6). Also executable now: palette `text`
+  (`{{ var }}` substitution from collected answers, missing → '', empty render → `failed`) and
+  `image`/`video`/`document`/`audio` (http(s) `mediaUrl`, sent via `WhatsAppMediaPayloadBuilder`,
+  node entitlement re-checked at run time → `failed` if denied). The other 20 palette types still
+  `expire` with a reason. `completed` only via `complete()` at a valid end (no outgoing edge,
+  unconnected branch, save_lead); `expired` always carries `last_error` (also on the resumed path).
+  Every status change of a running session goes through `transition()` — one conditional UPDATE
+  (`WHERE status IN (active, waiting)`), no row lock (ConsumeAfterQuotaMigrationTest forbids
+  `lockForUpdate` in the engine) — so completed/failed/expired/cancelled never change again and
+  blocked changes only via `restoreBlocked()`.
+- **Journey branching has one contract** (Phase 7 Task 4). Both branching nodes — legacy
+  `condition` (branch on each edge; first match in edge order, else the single default, else
+  dead end) and palette `conditional` (rules, `match` all = AND / any = OR, then the one edge on the
+  `true`/`false` handle) — evaluate through `App\Services\WhatsApp\JourneyConditionEvaluator`: pure,
+  no eval/DB/clock; 12 operators; context = the session's own `context_data` only. A malformed
+  condition FAILS the session (`last_error`, `current_node_id` = node) and sends nothing; the save
+  API refuses the same definitions (drafts with empty rules still save). The 25-step limit now
+  records `last_error`. Do not add operators or context sources outside the evaluator.
 - **Every inbound WhatsApp message passes `InboundEventGate`** (Phase 7 Task 3, inside
   `ChatbotEngineService::handleInboundMessage`): (1) take the (account, phone) lease in
   `journey_conversation_locks` (conditional UPDATE; 120 s lease; waits ≤ 10 s); (2) claim the event in
@@ -194,6 +247,32 @@ Module-off means **backend-blocked**, not merely UI-hidden.
   transaction; `ProcessGroupDispatchJob` / `ProcessGroupDirectMessageJob` iterate that list
   (read by parent + account, never from the job payload). A member added later is never sent; one
   removed later is a failed, refunded recipient. Never re-read live membership in a group job.
+- **An order is fulfilled with the terms it was created with** (P5-4).
+  `PaymentGatewayController::createOrder()` captures engine, billing model, rate, quota and duration
+  from the database plan onto the invoice (`Invoice::capturePlanTerms()`, same INSERT;
+  `plan_*` columns, `plan_terms_captured_at` marker). `InvoiceCreditService::markPaidAndCreditQuota()`
+  reads them via `purchasedPlanTerms()` and never re-reads the plan for them. The columns are not
+  fillable, are hidden, and are immutable once captured (model `updating` guard). An invoice with no
+  captured terms (pre-P5-4 order) is fulfilled from the plan row as before; nothing is backfilled.
+  The capability bundle is still reconciled from the live plan (unchanged).
+- **One payment, one fulfilment; one account, one fulfilment at a time** (P5-5).
+  `markPaidAndCreditQuota()` in ONE transaction: lock the invoice → already paid? return false (the
+  webhook acks, verify-payment answers "already confirmed/processed" with the paid invoice) → lock the
+  invoice OWNER's account row (never a request value) → mark paid → lock the current subscription →
+  credit quota / extend expiry once → reconcile entitlements → Agent commission (unique invoice_id).
+  Lock order is always invoice → account → subscription; the account lock is taken BEFORE the invoice
+  write (that write takes a FK shared lock on the account, which deadlocked two fulfilments). Any
+  exception rolls the whole fulfilment back and the invoice stays pending for the gateway's retry.
+- **A group batch has one owner and always settles** (P5-3). A group job may send only after
+  `MessageDispatchLog::claimGroupDispatch()` (conditional UPDATE of `claim_token`, NULL → token while
+  `queued`) and only while `heartbeatGroupDispatch()` confirms it still owns a still-queued batch —
+  never guard on a plain status read. Every settlement (completion, caught exception, `failed()`,
+  `group-dispatch:recover-stale`) goes through `settleGroupDispatchFromRecipients()`: delivered =
+  recipient rows with `sent_at`, refund = reserved − delivered via the existing
+  `resolveGroupDispatch()` (locked queued → terminal, once). A run is bounded (`$timeout` 85 s <
+  `retry_after` 90 s; 50 s slice budget, then `continueInNextSlice()` releases the claim and queues
+  the next slice, which skips recipients that already have a row). Stale: claimed with no heartbeat
+  for 900 s, or unclaimed and idle for 3600 s.
 - **No model uses `SoftDeletes`.** The architecture report recommends adding it to `accounts`,
   `invoices`, `subscriptions`, `message_templates`; that has **not** been done.
 
@@ -410,19 +489,19 @@ identical 404s. Writes need an active subscription; reads do not. API-key writes
 
 ## 6. Test Suite
 
-**53 feature test files**, run with `php artisan test`.
+**64 feature test files** + 2 unit files (+ `tests/Probes/`: 3 MariaDB-only probe scripts, not PHPUnit), run with `php artisan test`.
 
 | | SQLite (secondary) | **MariaDB (authoritative)** |
 |---|---|---|
-| Tests | 1474 passed, 4 skipped | **1478 passed** |
-| Assertions | 6926 | 6936 |
+| Tests | 1953 passed, 5 skipped | **1958 passed** |
+| Assertions | 9449 | 9468 |
 | Failures | 0 | **0** |
 
-The 4 SQLite skips are foreign-key tests SQLite cannot express. **MariaDB is authoritative —
+The 5 SQLite skips: 4 foreign-key tests SQLite cannot express + P5-5's real-concurrency test (needs MariaDB; it runs the payment probe against `wa_throwaway_probe`). **MariaDB is authoritative —
 a green SQLite run does not compensate for a MariaDB failure.**
 
-**Frontend** (`frontend-app`, vitest + Testing Library): **18 test files, 545 tests, 0
-failures** after the manual-source lock (417 before Task 8; +87 Task 8, +19 Task 9; Task 10 none; +1 Task 11; +11 Task 12; +7 Add-lead fix; +2 own-CRM fix; +1 source lock). `npm run build` (tsc -b + vite build)
+**Frontend** (`frontend-app`, vitest + Testing Library): **18 test files, 549 tests, 0
+failures** (+2 Phase 7 Task 4, +2 Task 5) after the manual-source lock (417 before Task 8; +87 Task 8, +19 Task 9; Task 10 none; +1 Task 11; +11 Task 12; +7 Add-lead fix; +2 own-CRM fix; +1 source lock). `npm run build` (tsc -b + vite build)
 clean; `npm run lint` (oxlint) 64 warnings / 0 errors — all 64 pre-existing, none in CRM files.
 
 Running the suite needs `JOURNEY_REGISTRY_PATH` pointed at
@@ -574,6 +653,10 @@ P6-1…P6-3). Fixes are applied one item per task:
 | Item | Fix | Status | Migration | Suite after |
 |---|---|---|---|---|
 | P5-1 | Group recipients frozen at reservation (`group_dispatch_recipients`); both group jobs iterate it | ✅ closed | `2026_09_24_120000` (new table) | **1446** |
+| P5-2 | Social Inbox `lead:` reply (`SocialInboxController::sendToLead()`) sends through `DirectMessageDispatcher` instead of its own driver call — quota-gated, one `MessageQuotaService::consume()` on a confirmed send, `message_dispatch_logs` row with `source = social_inbox`. `SocialInboxLeadReplyDispatchTest` (17) | ✅ closed | none | **1495** (MariaDB) · 1491 + 4 skipped (SQLite) |
+| P5-3 | Group jobs: atomic claim (`claim_token`/`claimed_at`), heartbeat before every send, `failed()` + caught exceptions settle from recipient rows (refund = reserved − delivered, once), `$timeout` 85 s + `failOnTimeout`, 50 s slices with continuation jobs, `group-dispatch:recover-stale` every 5 min. `GroupDispatchReliabilityTest` (49); MariaDB multi-process race + kill -9 + real `queue:work` slicing verified outside PHPUnit | ✅ closed | `2026_09_24_150000` (2 nullable columns + index) | **1544** (MariaDB) · 1540 + 4 skipped (SQLite) |
+| P5-4 | Invoice snapshots the purchased plan terms at order creation (`plan_engine_type`, `plan_billing_model`, `plan_rate_per_message`, `plan_total_allocated_messages`, `plan_duration_days`, `plan_terms_captured_at`); fulfilment uses them, not the live plan; not fillable, hidden, immutable. `InvoicePlanTermsSnapshotTest` (24) | ✅ closed | `2026_09_24_160000` (6 nullable columns) | **1568** (MariaDB) · 1564 + 4 skipped (SQLite) |
+| P5-5 | Payment fulfilment exactly-once — same-invoice duplicates were already safe (invoice row lock + `isPaid()`), but two different invoices of one account fulfilled at once rolled one back (entitlement unique-key clash, then an FK-lock deadlock): a paid order stayed pending. Fixed by locking the owner's account row (before the invoice write) and the current subscription. | ✅ **CLOSED** | none | **1958** (MariaDB) · 1953 + 5 skipped (SQLite) · payment probe 18/18 ×3 |
 
 #### Journey (Phase 7) task-by-task
 
@@ -584,6 +667,109 @@ P6-1…P6-3). Fixes are applied one item per task:
 | 1.6 | Enforce Journey Entitlement at Runtime | ✅ | none (`blocked` is a new value of the existing string `status`) | **1431** · frontend 545 (type only) |
 | 3 | Journey Trigger Reliability, Idempotency & Event Inbox | ✅ | 1: `2026_09_24_140000` (`inbound_message_events`, `journey_conversation_locks`) — **not yet run on the real DB** · qr-engine-service now sends `message_id` | **1478** · frontend unchanged |
 | 2 | Journey Versioning and In-Progress Run Isolation | ✅ | 2: `2026_09_24_130000` (versions table + `published_version_id` + `flow_version_id`), `130001` (backfill: v1 per journey, sessions pinned) — **not yet run on the real DB** | **1461** · frontend 545 (type only) |
+| 4 | Journey Condition / Branching Engine Hardening | ✅ | none | **1671** (MariaDB) · 1667 + 4 skipped (SQLite) · frontend 547 |
+| 5 | Journey Action Execution Hardening | ✅ | none | **1718** (MariaDB) · 1714 + 4 skipped (SQLite) · frontend 549 |
+| 6 | Journey Remaining Node Execution & Completion Semantics | ✅ | none | **1798** (MariaDB) · 1794 + 4 skipped (SQLite) · frontend 549 (unchanged) |
+| 7 | Journey Observability, Audit & Operational Controls | ✅ | 1 additive: `2026_09_24_170000` (`journey_execution_events`) — **not yet run on the real DB** · `journeys:prune-history` exists but is a dry run by default and NOT scheduled (owner decision) | **1829** (MariaDB) · 1825 + 4 skipped (SQLite) · frontend 549 (unchanged) |
+
+| 8 | Journey Quota, Retry & Entitlement Consistency | ✅ | none | **1862** (MariaDB) · 1858 + 4 skipped (SQLite) · frontend 549 (unchanged) |
+| 9 | Journey Production Hardening & Recovery | ✅ | none | **1914** (MariaDB) · 1910 + 4 skipped (SQLite) · frontend 549 (unchanged) · probes: concurrency 8/8 (×6 runs), deploy 13/13 |
+
+| 10 | Journey Final Release Readiness & Phase 7 Closure | ✅ | none | **1942** (MariaDB) · 1938 + 4 skipped (SQLite) · frontend 549 (unchanged) · probes: concurrency 8/8 (×3), deploy 13/13 |
+
+#### Phase 7 closure record (Task 10) — **Phase 7 CLOSED** in code; NOT yet deployed to production
+
+**Regressions found and fixed in Task 10** (both: a Task 1/1.6 inbound path undoing the Task 9
+interrupted-run guarantee): (1) a customer message reaching an interrupted run (`active` + run lease)
+expired it — it now falls through to the chatbot and the scheduler recovers the run; (2) an interrupted
+run blocked by lost entitlement on the inbound path lost its timer and came back as "awaiting a reply" —
+it now keeps a timer and returns to `waiting` on restoration.
+
+**Journey capability** (runtime): `chatbot` module + `journey_automation` capability
+(JourneyRuntimeEntitlement) — else sessions `blocked`, restored automatically. Palette send nodes also
+need `whatsapp_send` (JourneyNodeAuthorizer: save/publish time via `denialFor`, run time via
+`runtimeDenialFor`). API: auth → tenant.isolation → subscription.guard → module.guard:chatbot →
+capability.guard:journey_automation → permission (manage-chatbot | whatsapp.view/create/edit/delete).
+
+**Executable nodes (12)**: trigger, message, question, condition, save_lead (legacy, grandfathered —
+no `whatsapp_send` check) · delay, conditional, text, image, video, document, audio (palette).
+The other 20 palette types persist but end a run as `expired` / `unsupported_node`.
+
+**State machine**: `WhatsAppFlowSession::TRANSITIONS` (see §4). Open: active, waiting, blocked. Terminal
+(immutable; Eloquent save refused; every engine write is a guarded conditional UPDATE): completed,
+failed, expired, cancelled. Legitimately indefinite: `active` awaiting a reply; `blocked` awaiting
+entitlement; `waiting` on a deactivated journey (held, resumes on reactivation).
+
+**Retry / recovery matrix** (tested: JourneyPhase7ReleaseReadinessTest::test_the_authoritative_failure_matrix)
+
+| Failure | Outcome | Category |
+|---|---|---|
+| invalid configuration | `failed`, never retried | invalid_configuration |
+| missing node | `failed`, never retried | missing_node |
+| unsupported node | terminal `expired`, never retried | unsupported_node |
+| provider failure | retried (60 s, 120 s…, 3 resume attempts) → `failed` | provider_failure |
+| CRM failure (save_lead) | retried → `failed` | crm_failure |
+| quota exhausted / plan expired | retried → `failed` | quota_failure |
+| suspended account / no subscription | `failed` at once | entitlement_blocked |
+| `whatsapp_send` revoked (palette node) | `failed` at once | entitlement_blocked |
+| journey_automation / chatbot revoked | `blocked`, restored on re-entitlement | entitlement_blocked |
+| execution limit (25 steps/run) | `expired` | execution_limit |
+| cancellation | `cancelled` (terminal) | cancelled |
+| worker/process crash | resumed from the durable checkpoint (claim lease / run lease, 600 s) | internal_error |
+| terminal session | never revived by inbound, scheduler, job, restore, recovery, API or test | — |
+
+(There is no separate "suspended subscription": `Subscription::computeStatus()` yields only
+active/expired/exhausted; suspension is the account status.)
+
+**Exactly-once limitation**: provider delivery is at-least-once. A crash after the provider accepted a
+message and before the next checkpoint re-sends that one node on recovery (if it also preceded the quota
+consume/dispatch log, that first delivery is unmetered/unlogged). save_lead is idempotent; only its
+completion message can repeat. History is written after the fact (a crash can lose one row, never state).
+
+**Production deployment sequence** (owner-run; nothing has touched `wa_saas_platform`):
+1. Back up `wa_saas_platform`.
+2. Deploy backend + frontend + qr-engine-service code.
+3. `php artisan migrate --force` — the 10 pending migrations, in order: `2026_09_23_130000` (platform CRM
+   account), `2026_09_24_100000` (temporal columns), `110000` (qr → journey_automation), `120000` (group
+   recipients, P5-1), `130000` + `130001` (versions + backfill), `140000` (inbound events + locks),
+   `150000` (group claim, P5-3), `160000` (invoice plan terms, P5-4), `170000` (execution history).
+   Proven on MariaDB 10.11.14 by `tests/Probes/journey_deploy_probe.php` (fresh; upgrade from the
+   110-migration schema with legacy journeys/sessions/leads; rollback; re-apply; idempotent backfills).
+   All ten have `down()` (`130001`'s is intentionally a no-op — the backfilled versions go with `130000`'s
+   drop); roll back with `migrate:rollback --step=10` only from a backup-verified state.
+4. `php artisan entitlements:backfill-plan --dry-run` (review).
+5. `php artisan entitlements:backfill-plan` (idempotent).
+6. Restart: queue workers (`php artisan queue:restart`), qr-engine-service (sends `message_id`, Task 3),
+   PHP-FPM/opcache.
+7. Verify the scheduler (`php artisan schedule:list` shows `journeys:resume-due` and the
+   `queue:work database --queue=journeys` entry every minute) and that `schedule:run` is in cron.
+8. Smoke test: a test journey (keyword → text → delay 1 min → text) via the Test button; session
+   completes after ≥1 scheduler minute.
+9. QR: send a message to a QR number; `inbound_message_events` row with the Baileys `message_id`.
+10. Meta: webhook verify (GET) + a real message; `inbound_message_events` row with the WAMID.
+11. `GET /api/whatsapp/flows/{id}/sessions/{sessionId}` shows the history (session_started … session_completed).
+
+**Runtime processes**
+| Process | Needed for |
+|---|---|
+| Web/PHP (Meta webhook `POST /api/webhooks/meta`, QR `POST /api/internal/whatsapp-inbound`) | inbound journeys: start, answers, immediate sends, immediate retries parking |
+| qr-engine-service | QR inbound (with `message_id` for dedup) and all QR sends |
+| Laravel scheduler, every minute (`journeys:resume-due`: restore blocked → recover interrupted → dispatch due) | delays, all retries, interrupted-run recovery, entitlement restoration |
+| `queue:work database --queue=journeys` (scheduled every minute, `--stop-when-empty`) | executing the dispatched resumes |
+| (none extra) | execution history — written inline; never load-bearing |
+| `journeys:prune-history` — MANUAL only (dry run unless `--force`; 90-day events except open sessions, 30-day unreferenced inbound keys) | retention, owner decision; not scheduled |
+
+Monitoring: watch `whatsapp_flow_sessions` for `waiting` rows with `wait_until` far in the past (scheduler
+or worker down) and `failed` counts by `journey_execution_events.error_category`.
+
+**Known intentional limitations**: at-least-once provider delivery; no expiry for sessions awaiting a
+reply; immediate runs check journey entitlement at start, resumed runs before every node; legacy nodes
+are grandfathered from `whatsapp_send`; 20 palette node types are not executable; subscription.guard
+refuses Journey writes (incl. cancel) while the plan is not active; history pruning is manual.
+
+~~Task 7 finding: palette text/media nodes failed permanently on an exhausted quota while `message`
+retried~~ — **resolved by Task 8** (all sends retry `quota_failure`). Task 8 also found and fixed: a
+run judged every send against the usage it saw when it started, so one run could send past the cap.
 
 Task 1 audit findings (the brief assumed more than exists): there are **no** journey
 `versions`, `runs`, `nodes`/`edges` or `triggers` tables — a journey is one `whatsapp_flows`
@@ -645,7 +831,7 @@ the Baileys message id).
 - **No AI credit ledger.**
 - ~~No durable journey-execution persistence~~ — **closed by Phase 7 Task 1** (waiting sessions,
   resume scheduler). Still open: no flow versioning; no expiry sweep for sessions stuck at a
-  question (pre-existing disclosed gap); immediate-path send failures are still logged only.
+  question (pre-existing disclosed gap); immediate-path send failures are retried/failed since Phase 7 Task 5.
 - **No soft deletes anywhere.**
 - **LinkedIn / Google OAuth unimplemented** — the factory throws by design.
 - **`POST /api/roles` is broken** by the Spatie guard mismatch (§7).

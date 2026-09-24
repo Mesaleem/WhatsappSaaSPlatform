@@ -18,6 +18,7 @@ use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 use RuntimeException;
 use Throwable;
 
@@ -67,6 +68,18 @@ class ProcessGroupDispatchJob implements ShouldQueue
     public int $tries = 1;
 
     /**
+     * Phase 5 fix P5-3 — one run (one slice) may never outlive this; see
+     * MessageDispatchLog::GROUP_JOB_TIMEOUT_SECONDS for why 85 s (below the
+     * database queue's retry_after, above one worst-case slice). A large
+     * group is not given a giant timeout: it is processed in slices, each
+     * queueing the next (continueInNextSlice()).
+     */
+    public int $timeout = MessageDispatchLog::GROUP_JOB_TIMEOUT_SECONDS;
+
+    /** A timed-out run is failed (not retried) and reaches failed(), which settles the batch. */
+    public bool $failOnTimeout = true;
+
+    /**
      * @param array<string, string> $variables Caller-supplied template
      *     variables, applied to every recipient; each member's own
      *     'name' (from contact_group_members.name) overrides any 'name'
@@ -91,32 +104,60 @@ class ProcessGroupDispatchJob implements ShouldQueue
             return;
         }
 
-        // Defensive, same as ProcessPaymentAlertJob: makes a duplicate
-        // dispatch() call a no-op instead of a duplicate send/resolve.
+        // A cheap early exit only. It is NOT the duplicate-execution guard:
+        // two workers can both read 'queued' here.
         if ($log->status !== 'queued') {
             return;
         }
 
+        // Phase 5 fix P5-3 — the guard: an atomic conditional UPDATE. Only
+        // one run can own the batch; any other copy of this job (duplicate
+        // dispatch, redelivery) gets false and sends nothing.
+        $token = (string) Str::uuid();
+
+        if (! $log->claimGroupDispatch($token)) {
+            Log::info('ProcessGroupDispatchJob: batch is already claimed or settled; this run does nothing.', [
+                'dispatch_log_id' => $log->id,
+            ]);
+
+            return;
+        }
+
         try {
-            $this->process($log);
+            $this->process($log, $token);
         } catch (Throwable $e) {
             Log::error('ProcessGroupDispatchJob failed unexpectedly.', [
                 'dispatch_log_id' => $log->id,
                 'exception' => $e->getMessage(),
             ]);
 
-            // Phase 5 Task 4 -- deliberately NO refund here. When
-            // process() throws, which recipients actually received their
-            // message is unknown, and refunding the whole reservation
-            // would hand back credits for messages that really went out.
-            // The guarded write also stops this clobbering a row
-            // process() had already resolved (reachable: the native path
-            // resolves and then writes the group's sync_status).
-            $log->failGroupDispatchWithoutRefund('Internal error: '.$e->getMessage());
+            // Phase 5 fix P5-3 — settle instead of leaving the refund
+            // unresolved. Every recipient that was delivered has a
+            // recipient row with sent_at (written right after the provider
+            // accepted it), so the refund is exactly reserved - delivered;
+            // the old "unknown outcome, refund nothing" is no longer true.
+            $log->settleGroupDispatchFromRecipients('Internal error: '.$e->getMessage());
         }
     }
 
-    private function process(MessageDispatchLog $log): void
+    /**
+     * Phase 5 fix P5-3 — Laravel calls this when the job dies outside
+     * handle()'s own try/catch: the run exceeded $timeout (the worker is
+     * killed), or the job was marked failed by the queue. Settles the
+     * batch from its recipient rows. Idempotent: settlement only happens
+     * on the locked 'queued' -> terminal transition, so a second call,
+     * or a call for an already-settled batch, changes nothing.
+     */
+    public function failed(?Throwable $exception = null): void
+    {
+        $log = MessageDispatchLog::find($this->dispatchLogId);
+
+        $log?->settleGroupDispatchFromRecipients(
+            'Group job failed before completing: '.($exception?->getMessage() ?? 'unknown error'),
+        );
+    }
+
+    private function process(MessageDispatchLog $log, string $token): void
     {
         $group = ContactGroup::find($log->group_id);
 
@@ -127,7 +168,7 @@ class ProcessGroupDispatchJob implements ShouldQueue
         }
 
         if ($group->isNative()) {
-            $this->processNativeGroup($log, $group);
+            $this->processNativeGroup($log, $group, $token);
 
             return;
         }
@@ -190,15 +231,39 @@ class ProcessGroupDispatchJob implements ShouldQueue
         // which engine carried the message.
         $engineType = $account->currentSubscription?->engine_type;
 
-        $successCount = 0;
-        $failureCount = 0;
-        $lastMemberIndex = $members->count() - 1;
+        // Phase 5 fix P5-3 — slicing. Recipients an earlier slice of this
+        // batch already attempted have a recipient row and are skipped, so a
+        // continuation never re-sends. The list itself is still the frozen
+        // one (P5-1); nothing here reads the live group.
+        $recorded = $log->recordedGroupRecipientReferenceIds(MessageDispatchLog::REFERENCE_TYPE_GROUP_MEMBER);
+        $sliceStartedAt = now()->getTimestamp();
+        $attemptedThisSlice = 0;
+        // Pacing continues across slices: if an earlier slice already
+        // attempted recipients, the first send of this slice is spaced too.
+        $paceNextSend = $recorded !== [];
 
-        foreach ($members as $index => $member) {
+        foreach ($members as $member) {
+            if (isset($recorded[(int) $member->id])) {
+                continue;
+            }
+
+            // Bounded run time whatever the group size: once the slice
+            // budget is spent, hand the rest to a fresh job.
+            if ($attemptedThisSlice > 0
+                && now()->getTimestamp() - $sliceStartedAt >= MessageDispatchLog::GROUP_JOB_SLICE_BUDGET_SECONDS) {
+                $this->continueInNextSlice($log, $token);
+
+                return;
+            }
+
             // Phase 5 fix P5-1 — reserved, but no longer in the group: not
             // sent, recorded as a failed recipient, refunded at resolution.
             if ($member->removed) {
-                $failureCount++;
+                if (! $this->stillOwns($log, $token)) {
+                    return;
+                }
+
+                $attemptedThisSlice++;
 
                 MessageDispatchLog::recordGroupRecipient(
                     $log,
@@ -216,7 +281,11 @@ class ProcessGroupDispatchJob implements ShouldQueue
             $normalizedPhone = PhoneNumberNormalizer::normalize($member->phone_number);
 
             if ($normalizedPhone === '') {
-                $failureCount++;
+                if (! $this->stillOwns($log, $token)) {
+                    return;
+                }
+
+                $attemptedThisSlice++;
 
                 // Phase 5 Task 5 -- an unsendable number is still an
                 // attempt this batch was charged for, so it gets its own
@@ -232,84 +301,70 @@ class ProcessGroupDispatchJob implements ShouldQueue
                     engineType: $engineType,
                     errorReason: "Recipient phone number '{$member->phone_number}' is not a valid number after normalization.",
                 );
-            } else {
-                // Per-recipient personalization: the member's own name
-                // (contact_group_members.name) always wins over any
-                // caller-supplied 'name' variable — a group dispatch's
-                // whole purpose is addressing each recipient by their own
-                // stored name. Every other caller-supplied variable is
-                // unchanged across the batch.
-                $memberVariables = array_merge($this->variables, [
-                    'name' => $member->name ?? '',
-                ]);
 
-                $renderedMessage = TemplateRenderer::render($template->template_body, $memberVariables);
-
-                $result = $driver->sendMessage($normalizedPhone, $renderedMessage, [
-                    'template_id' => $template->id,
-                    'group_id' => $log->group_id,
-                ]);
-
-                $succeeded = ! empty($result['success']);
-
-                if ($succeeded) {
-                    $successCount++;
-                } else {
-                    $failureCount++;
-                }
-
-                // Phase 5 Task 5 -- the per-recipient audit row, written
-                // immediately after the driver call while the provider's
-                // own result is still in hand. gateway_message_id is
-                // whatever the driver returned (Meta's WAMID, or
-                // qr-engine-service's own id) and stays null when it
-                // returned none -- never fabricated. This is the row
-                // MetaWebhookController::correlateFailedStatus() can now
-                // match a group send against.
-                //
-                // NOT a quota operation: the batch reserved N up front
-                // and releases the failures once, at resolution. Nothing
-                // here consumes or releases per recipient.
-                MessageDispatchLog::recordGroupRecipient(
-                    $log,
-                    $normalizedPhone,
-                    MessageDispatchLog::REFERENCE_TYPE_GROUP_MEMBER,
-                    (int) $member->id,
-                    success: $succeeded,
-                    engineType: $engineType,
-                    gatewayMessageId: $result['message_id'] ?? null,
-                    errorReason: $result['error'] ?? 'The WhatsApp engine rejected the message.',
-                );
+                continue;
             }
 
-            // Anti-ban jitter between consecutive sends, same rationale
-            // and range as ProcessPaymentAlertJob's single-send delay —
-            // skipped after the last member since there is no next send
-            // in this batch left to space out.
-            if ($index !== $lastMemberIndex) {
+            // Anti-ban jitter between consecutive provider sends, same
+            // rationale and range as before (and as ProcessPaymentAlertJob's
+            // single-send delay) — never before the batch's first send.
+            if ($paceNextSend) {
                 sleep(random_int(3, 8));
             }
-        }
 
-        // Phase 5 Task 4 -- resolve() derives the refund from what was
-        // RESERVED, not from what this loop attempted, so a membership
-        // change between enqueue and run cannot leave credits stranded.
-        // The two numbers agreeing is the normal case; when they do not,
-        // say so, because it is the only signal that the group changed
-        // underneath a queued batch.
-        $attempted = $successCount + $failureCount;
-        $reserved = (int) ($log->recipient_count ?? 0);
+            // Checked immediately before the send, after the pacing: if the
+            // batch was settled meanwhile (failed()/stale recovery) or is
+            // owned by another run, stop without sending.
+            if (! $this->stillOwns($log, $token)) {
+                return;
+            }
 
-        if ($attempted !== $reserved) {
-            Log::info('Group dispatch attempted a different number of recipients than were reserved.', [
-                'dispatch_log_id' => $log->id,
-                'reserved' => $reserved,
-                'attempted' => $attempted,
-                'succeeded' => $successCount,
+            $attemptedThisSlice++;
+            $paceNextSend = true;
+
+            // Per-recipient personalization: the member's own name
+            // (contact_group_members.name) always wins over any
+            // caller-supplied 'name' variable — a group dispatch's
+            // whole purpose is addressing each recipient by their own
+            // stored name. Every other caller-supplied variable is
+            // unchanged across the batch.
+            $memberVariables = array_merge($this->variables, [
+                'name' => $member->name ?? '',
             ]);
+
+            $renderedMessage = TemplateRenderer::render($template->template_body, $memberVariables);
+
+            $result = $driver->sendMessage($normalizedPhone, $renderedMessage, [
+                'template_id' => $template->id,
+                'group_id' => $log->group_id,
+            ]);
+
+            // Phase 5 Task 5 -- the per-recipient audit row, written
+            // immediately after the driver call while the provider's
+            // own result is still in hand. gateway_message_id is
+            // whatever the driver returned (Meta's WAMID, or
+            // qr-engine-service's own id) and stays null when it
+            // returned none -- never fabricated. This is the row
+            // MetaWebhookController::correlateFailedStatus() can now
+            // match a group send against, and (P5-3) the row settlement
+            // counts as delivered.
+            //
+            // NOT a quota operation: the batch reserved N up front
+            // and releases the failures once, at resolution. Nothing
+            // here consumes or releases per recipient.
+            MessageDispatchLog::recordGroupRecipient(
+                $log,
+                $normalizedPhone,
+                MessageDispatchLog::REFERENCE_TYPE_GROUP_MEMBER,
+                (int) $member->id,
+                success: ! empty($result['success']),
+                engineType: $engineType,
+                gatewayMessageId: $result['message_id'] ?? null,
+                errorReason: $result['error'] ?? 'The WhatsApp engine rejected the message.',
+            );
         }
 
-        $this->resolve($log, $successCount);
+        $this->resolve($log);
     }
 
     /**
@@ -330,7 +385,7 @@ class ProcessGroupDispatchJob implements ShouldQueue
      * $this->variables is rendered as-is, same as the preview
      * GroupMessageDispatcher::dispatch() already computed.
      */
-    private function processNativeGroup(MessageDispatchLog $log, ContactGroup $group): void
+    private function processNativeGroup(MessageDispatchLog $log, ContactGroup $group, string $token): void
     {
         $account = Account::with(['currentSubscription', 'whatsAppSession'])->find($log->account_id);
         $template = MessageTemplate::query()->approvedFor($log->account_id)->find($this->templateId);
@@ -370,6 +425,18 @@ class ProcessGroupDispatchJob implements ShouldQueue
             return;
         }
 
+        // Phase 5 fix P5-3 — never a second send into the group: if this
+        // batch's single native send was already attempted, just settle.
+        if (isset($log->recordedGroupRecipientReferenceIds(MessageDispatchLog::REFERENCE_TYPE_NATIVE_GROUP)[(int) $group->id])) {
+            $this->resolve($log);
+
+            return;
+        }
+
+        if (! $this->stillOwns($log, $token)) {
+            return;
+        }
+
         $renderedMessage = TemplateRenderer::render($template->template_body, $this->variables);
 
         $result = $driver->sendMessage($group->wa_group_jid, $renderedMessage, [
@@ -396,14 +463,14 @@ class ProcessGroupDispatchJob implements ShouldQueue
         );
 
         if ($nativeSucceeded) {
-            $this->resolve($log, 1);
+            $this->resolve($log);
 
             return;
         }
 
         $errorMessage = $result['error'] ?? 'The QR engine rejected the message.';
 
-        $this->resolve($log, 0, $errorMessage);
+        $this->resolve($log, $errorMessage);
 
         // [New, disclosed — closes part of the "no way to know a native
         // WhatsApp group was deleted/left" gap]: flips this group's own
@@ -451,7 +518,7 @@ class ProcessGroupDispatchJob implements ShouldQueue
      */
     private function resolveAllFailed(MessageDispatchLog $log, string $reason): void
     {
-        $this->resolve($log, 0, $reason);
+        $this->resolve($log, $reason);
     }
     /**
      * Phase 5 Task 4 -- ONE resolution point, and the reason the failure
@@ -480,11 +547,44 @@ class ProcessGroupDispatchJob implements ShouldQueue
      * batches queued before that fix (no frozen rows) use the live
      * membership, capped at recipient_count.
      */
-    private function resolve(MessageDispatchLog $log, int $successCount, ?string $reason = null): bool
+    private function resolve(MessageDispatchLog $log, ?string $reason = null): bool
     {
-        $reserved = (int) ($log->recipient_count ?? 0);
+        // Phase 5 fix P5-3 — "delivered" is no longer this slice's own
+        // tally: it is read from the persisted recipient rows, so a batch
+        // processed in several slices (or settled after a failure) counts
+        // every delivery exactly once. Same resolveGroupDispatch(), same
+        // refund = reserved - delivered, same single locked transition.
+        return $log->settleGroupDispatchFromRecipients($reason);
+    }
 
-        return $log->resolveGroupDispatch($successCount, max(0, $reserved - $successCount), $reason);
+    /** Phase 5 fix P5-3 — heartbeat + "is this batch still mine and still queued?" */
+    private function stillOwns(MessageDispatchLog $log, string $token): bool
+    {
+        if ($log->heartbeatGroupDispatch($token)) {
+            return true;
+        }
+
+        Log::warning('ProcessGroupDispatchJob: lost ownership of the batch (settled or claimed elsewhere); stopping without sending.', [
+            'dispatch_log_id' => $log->id,
+        ]);
+
+        return false;
+    }
+
+    /**
+     * Phase 5 fix P5-3 — hand the batch back and queue the next slice on
+     * the same connection/queue. If the claim can no longer be released
+     * the batch was settled meanwhile, and nothing is queued.
+     */
+    private function continueInNextSlice(MessageDispatchLog $log, string $token): void
+    {
+        if (! $log->releaseGroupDispatchClaim($token)) {
+            return;
+        }
+
+        static::dispatch($this->dispatchLogId, $this->templateId, $this->variables, $this->apiKeyId)
+            ->onConnection($this->connection)
+            ->onQueue($this->queue);
     }
 
 }
