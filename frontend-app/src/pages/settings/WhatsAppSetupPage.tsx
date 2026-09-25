@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { MessageCircle, Radio } from 'lucide-react';
 import { useAuth } from '../../core/context/AuthContext';
+import { useTenant } from '../../core/context/TenantContext';
 import whatsappService from '../../services/whatsappService';
 import QRScannerModal from '../../components/qr/QRScannerModal';
 import MetaConfigCard from '../../components/settings/MetaConfigCard';
@@ -14,7 +15,17 @@ const STATUS_META: Record<WhatsAppStatus, { label: string; dot: string }> = {
 
 export default function WhatsAppSetupPage() {
   const { user } = useAuth();
-  const engineType = user?.account?.current_subscription?.engine_type ?? null;
+  const { selectedAccountId, selectedAccount } = useTenant();
+  // Agent acting on a Sub-Client (or Super Admin on a client): every call
+  // below AND the QRScannerModal socket must address the SAME account.
+  // Previously the socket joined the caller's own account room while the
+  // axios interceptor silently sent ?account_id=<selected> to
+  // start-session, so the QR was broadcast to a room nobody was in.
+  const effectiveAccountId = selectedAccountId ?? user?.account_id ?? null;
+  const engineType =
+    (selectedAccountId
+      ? selectedAccount?.current_subscription?.engine_type
+      : user?.account?.current_subscription?.engine_type) ?? null;
 
   const [status, setStatus] = useState<WhatsAppStatus>('disconnected');
   const [isLoadingStatus, setIsLoadingStatus] = useState(true);
@@ -25,14 +36,14 @@ export default function WhatsAppSetupPage() {
   const loadStatus = useCallback(async () => {
     setIsLoadingStatus(true);
     try {
-      const res = await whatsappService.status();
+      const res = await whatsappService.status(effectiveAccountId ?? undefined);
       setStatus(res.status);
     } catch {
       // Leave status as-is — the page still renders, just possibly stale.
     } finally {
       setIsLoadingStatus(false);
     }
-  }, []);
+  }, [effectiveAccountId]);
 
   useEffect(() => {
     if (engineType === 'qr') {
@@ -56,7 +67,7 @@ export default function WhatsAppSetupPage() {
   const handleLogout = async () => {
     setIsLoggingOut(true);
     try {
-      await whatsappService.logout();
+      await whatsappService.logout(effectiveAccountId ?? undefined);
       setStatus('disconnected');
       showToast('WhatsApp disconnected.');
     } catch {
@@ -139,9 +150,9 @@ export default function WhatsAppSetupPage() {
         </div>
       </div>
 
-      {isModalOpen && user?.account_id && (
+      {isModalOpen && effectiveAccountId !== null && (
         <QRScannerModal
-          accountId={user.account_id}
+          accountId={effectiveAccountId}
           onClose={() => setIsModalOpen(false)}
           onConnected={handleConnected}
         />

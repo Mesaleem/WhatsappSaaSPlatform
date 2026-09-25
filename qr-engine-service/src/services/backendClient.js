@@ -59,43 +59,26 @@ export async function notifyInboundMessage(accountId, senderPhone, message) {
 }
 
 /**
- * Verifies a frontend Bearer token by asking backend-api who it belongs to,
- * and confirms that user is allowed to see accountId's session (their own
- * account, or Super Admin). This is the multi-tenant isolation boundary for
- * the *live* Socket.IO stream — see server.js's io.use() middleware.
+ * Verifies a frontend Bearer token AND that its user may manage accountId's
+ * WhatsApp session, by asking backend-api the question it already answers
+ * for the REST side: GET /api/whatsapp/status?account_id=X runs through
+ * TenantIsolationMiddleware (Super Admin: any account; Agent: own account
+ * or an owned Sub-Client; everyone else: own account only) and is DB-only,
+ * so it never calls back into this service. 200 => allowed; 401/403/404/422
+ * => forbidden. Replaces the former /api/auth/me role heuristic, which had
+ * no notion of Agent -> Sub-Client ownership and rejected every Agent
+ * connection for a Sub-Client with 'forbidden'. One authorization source
+ * of truth instead of two that drift.
+ * Network/timeout errors still throw (caller maps them to 'token
+ * verification failed').
  */
 export async function verifyAccountAccess(token, accountId) {
-  const { data } = await backendHttp.get('/api/auth/me', {
-    headers: { Authorization: `Bearer ${token}` },
+  const response = await backendHttp.get('/api/whatsapp/status', {
+    headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
+    params: { account_id: accountId },
     timeout: 5000,
+    validateStatus: (status) => status < 500,
   });
 
-  const user = data?.user;
-  if (!user) return false;
-
-  // [Bug fix, disclosed — corrects the previous comment here, which
-  // misdiagnosed this]: backend-api's GET /api/auth/me never returns a
-  // singular `user.role` field at all — AuthController::formatUser()
-  // returns `'roles' => $user->roles` (the PLURAL Eloquent collection of
-  // every role the user holds; see that method's own docblock: it was
-  // deliberately changed from a single arbitrary role to the full array
-  // so multi-role users are represented correctly). So `user.role?.name`
-  // here was ALWAYS undefined, for every user including Super Admin — a
-  // field-name/shape mismatch (`role` vs `roles`, singular object vs
-  // array), not a stale role-name string as the previous comment claimed
-  // (that string, 'super_admin', was already correct; it just could
-  // never be reached through `user.role?.name`). This made isSuperAdmin
-  // always false, so a Super Admin's Socket.IO connection always fell
-  // through to `String(user.account_id) === String(accountId)` — which
-  // can never match, since a Super Admin's own account_id is null —
-  // rejecting ('forbidden') their own test device AND every client
-  // account's live QR/status stream, exactly the symptom reported
-  // ("You aren't authorized to manage this account's WhatsApp
-  // connection.") even though the REST endpoints on the Laravel side
-  // (TenantIsolationMiddleware) already correctly allow Super Admin.
-  // Root cause confirmed by reading AuthController::formatUser() and
-  // User::isSuperAdmin() (hasRole('super_admin')) directly, not inferred.
-  const roles = Array.isArray(user.roles) ? user.roles : [];
-  const isSuperAdmin = roles.some((role) => role?.name === 'super_admin');
-  return isSuperAdmin || String(user.account_id) === String(accountId);
+  return response.status === 200;
 }

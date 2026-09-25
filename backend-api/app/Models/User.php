@@ -58,6 +58,11 @@ class User extends Authenticatable
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
             'is_active' => 'boolean',
+            // Integer cast so strict comparisons against Account::agent_id
+            // (cast 'integer') hold on PDO drivers that return numeric
+            // columns as strings (production); without it Agent scoping in
+            // TenantIsolationMiddleware 404'd every Sub-Client on the server.
+            'account_id' => 'integer',
         ];
     }
 
