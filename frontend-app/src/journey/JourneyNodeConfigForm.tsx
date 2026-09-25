@@ -432,13 +432,21 @@ export default function JourneyNodeConfigForm({
                         update(pairs.map((p, i) => (i === index ? { ...p, key: e.target.value } : p)))
                       }
                     />
+                    {/*
+                      P5-6 — a credential value comes back from the server
+                      masked (`masked: true`, value = the mask). It is never
+                      shown or re-typed: left untouched, the mask is sent back
+                      and the server keeps the stored (encrypted) value; typing
+                      replaces it.
+                    */}
                     <input
-                      type="text"
+                      type={pair.masked ? 'password' : 'text'}
                       className={`${inputClass} !mt-0`}
-                      value={pair.value ?? ''}
-                      placeholder="value"
+                      value={pair.masked ? '' : (pair.value ?? '')}
+                      placeholder={pair.masked ? 'Saved — type to replace' : 'value'}
+                      autoComplete="off"
                       onChange={(e) =>
-                        update(pairs.map((p, i) => (i === index ? { ...p, value: e.target.value } : p)))
+                        update(pairs.map((p, i) => (i === index ? { key: p.key, value: e.target.value } : p)))
                       }
                     />
                   </div>

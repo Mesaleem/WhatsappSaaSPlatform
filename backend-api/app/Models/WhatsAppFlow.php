@@ -7,7 +7,9 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use App\Models\Concerns\HasJourneyGraph;
+use App\Models\Concerns\MasksJourneySecrets;
 use App\Services\WhatsApp\JourneyVersionService;
+use App\Support\JourneySecrets;
 use App\Traits\LogsActivity;
 
 /**
@@ -17,6 +19,7 @@ use App\Traits\LogsActivity;
 class WhatsAppFlow extends Model
 {
     use HasJourneyGraph;
+    use MasksJourneySecrets;
     use LogsActivity;
 
     /**
@@ -49,6 +52,11 @@ class WhatsAppFlow extends Model
     public const TRIGGER_TYPES = ['keyword', 'ctwa_referral', 'default'];
 
     /**
+     * P5-7: the complete list of RUNTIME-EXECUTABLE types (these five plus
+     * the palette exceptions noted below) is JourneyNodeCatalog::
+     * RUNTIME_EXECUTABLE_TYPES — that is the list publish/activation and the
+     * engine enforce.
+     *
      * The five node types WhatsAppJourneyEngine actually EXECUTES today.
      * Unchanged, and still the only types the engine has a branch for —
      * every saved flow keeps running exactly as it did.
@@ -137,6 +145,24 @@ class WhatsAppFlow extends Model
 
             $flow->publishOnSave = true;
         });
+    }
+
+    /**
+     * P5-6 — audit rows (LogsActivity) carry the graph with every credential
+     * value masked: neither plaintext nor ciphertext reaches activity_logs.
+     *
+     * @param  array<string, mixed>  $attributes
+     * @return array<string, mixed>
+     */
+    protected function auditableAttributes(array $attributes): array
+    {
+        $attributes = array_diff_key($attributes, array_flip(array_merge($this->getHidden(), ['created_at', 'updated_at'])));
+
+        if (array_key_exists('graph_data', $attributes)) {
+            $attributes['graph_data'] = JourneySecrets::maskJson($attributes['graph_data']);
+        }
+
+        return $attributes;
     }
 
     public function versions(): HasMany

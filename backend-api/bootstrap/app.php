@@ -131,4 +131,24 @@ return Application::configure(basePath: dirname(__DIR__))
         $exceptions->shouldRenderJsonWhen(function (Request $request, Throwable $e) {
             return $request->is('api/*') || $request->expectsJson();
         });
+
+        // P5-8 — a route permission refusal (spatie `permission:` / `role:`
+        // middleware) is an authorization decision: audit it, then let the
+        // default rendering answer exactly as before (returning null).
+        // The tenant is the one TenantIsolationMiddleware resolved (or the
+        // actor's own account) — never a request value. The recorded
+        // category is `missing_permission`, never an entitlement category.
+        $exceptions->render(function (\Spatie\Permission\Exceptions\UnauthorizedException $e, Request $request) {
+            $resolved = $request->attributes->get('account_id');
+            $account = $resolved ? \App\Models\Account::findCached((int) $resolved) : $request->user()?->account;
+            $required = array_merge($e->getRequiredPermissions(), $e->getRequiredRoles());
+
+            app(\App\Services\Access\EntitlementAuditLogger::class)->record($account, false, [
+                'action' => 'route.access', 'resource_type' => 'route', 'source' => 'api',
+                'category' => 'missing_permission', 'permission' => implode('|', $required),
+                'actor_account_id' => $request->user()?->account_id, 'http_status' => 403,
+            ]);
+
+            return null;
+        });
     })->create();

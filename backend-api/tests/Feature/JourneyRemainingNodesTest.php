@@ -335,8 +335,9 @@ class JourneyRemainingNodesTest extends TestCase
         $account = $this->account();
         $user = User::factory()->create(['account_id' => $account->id, 'is_active' => true]);
         $user->assignRole('admin');
-        $post = fn (array $node) => $this->actingAs($user)->postJson('/api/whatsapp/flows', [
-            'name' => 'X', 'trigger_type' => 'keyword', 'trigger_value' => 'go', 'is_active' => true,
+        // P5-7 — a half-built draft saves with `publish: false`; publishing needs a runnable graph.
+        $post = fn (array $node, bool $publish = true) => $this->actingAs($user)->postJson('/api/whatsapp/flows', [
+            'name' => 'X', 'trigger_type' => 'keyword', 'trigger_value' => 'go', 'is_active' => true, 'publish' => $publish,
             'graph_data' => ['nodes' => [['id' => 't', 'type' => 'trigger', 'data' => []], $node], 'edges' => [['id' => 'e', 'source' => 't', 'target' => $node['id']]]],
         ]);
 
@@ -345,8 +346,10 @@ class JourneyRemainingNodesTest extends TestCase
         $post(['id' => 'x', 'type' => 'text', 'data' => ['text' => ['x']]])->assertStatus(422)->assertJsonValidationErrors('graph_data.nodes.1.data');
 
         // Drafts (the registry's defaultConfig) still save; a full node too.
-        $post(['id' => 'i', 'type' => 'image', 'data' => ['mediaUrl' => '']])->assertCreated();
-        $post(['id' => 'x', 'type' => 'text', 'data' => ['text' => '']])->assertCreated();
+        $post(['id' => 'i', 'type' => 'image', 'data' => ['mediaUrl' => '']], false)->assertCreated();
+        $post(['id' => 'x', 'type' => 'text', 'data' => ['text' => '']], false)->assertCreated();
+        // ...and cannot be published as they are.
+        $post(['id' => 'i', 'type' => 'image', 'data' => ['mediaUrl' => '']])->assertStatus(422)->assertJsonPath('error_code', 'JOURNEY_NOT_PUBLISHABLE');
         $post($this->media('v', 'video', ['caption' => 'Watch']))->assertCreated();
     }
 

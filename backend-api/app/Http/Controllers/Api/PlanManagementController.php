@@ -43,6 +43,28 @@ class PlanManagementController extends Controller
     ) {
     }
 
+    /** Phase 8 Task 2 — per-period cap; fits usage_quotas.allocated (unsigned int). */
+    private const MAX_INCLUDED_CREDITS = 1_000_000_000;
+
+    /**
+     * Phase 8 Task 2 — a plan may include credits only if it also sells the
+     * `ai` capability: credits are AI credits, and a plan that should not
+     * give AI must not hand out credits by accident (a zero-credit plan with
+     * or without `ai` is always fine). Capability and credits stay separate
+     * checks at run time (CreditEntitlementService); this only stops a
+     * misconfigured PLAN.
+     *
+     * @param  array<int, string>  $capabilities  the plan's resulting bundle
+     */
+    private function assertCreditsNeedAi(int $includedCredits, array $capabilities): void
+    {
+        if ($includedCredits > 0 && ! in_array(\App\Services\Credits\CreditEntitlementService::CAPABILITY, $capabilities, true)) {
+            throw \Illuminate\Validation\ValidationException::withMessages([
+                'included_credits' => ['A plan can include credits only if it also includes the "ai" capability.'],
+            ]);
+        }
+    }
+
     private function assertSuperAdmin(Request $request): void
     {
         abort_unless($request->user()?->isSuperAdmin(), 403, 'Only Super Admin can manage plans.');
@@ -64,6 +86,8 @@ class PlanManagementController extends Controller
             'billing_model' => $plan->billing_model,
             'rate_per_message' => $plan->rate_per_message,
             'total_allocated_messages' => $plan->total_allocated_messages,
+            // Phase 8 Task 2 — AI credits allocated per purchased period.
+            'included_credits' => (int) $plan->included_credits,
             'is_active' => $plan->is_active,
             'capabilities' => $plan->capabilities->pluck('slug')->sort()->values()->all(),
             'accounts' => $this->reconciler->candidateAccountIdsForPlan($plan->slug)->count(),
@@ -123,6 +147,8 @@ class PlanManagementController extends Controller
             'billing_model' => ['required', 'string', Rule::in(['flat_quota', 'per_message', 'unlimited'])],
             'rate_per_message' => ['sometimes', 'nullable', 'numeric', 'min:0'],
             'total_allocated_messages' => ['sometimes', 'nullable', 'integer', 'min:1'],
+            // Phase 8 Task 2 — 0 = the plan includes no credits.
+            'included_credits' => ['sometimes', 'integer', 'min:0', 'max:'.self::MAX_INCLUDED_CREDITS],
             'is_active' => ['sometimes', 'boolean'],
             'capabilities' => ['sometimes', 'array'],
             // distinct stops a payload listing the same capability twice;
@@ -130,12 +156,15 @@ class PlanManagementController extends Controller
             'capabilities.*' => ['string', 'distinct', Rule::exists('capabilities', 'slug')],
         ]);
 
+        $this->assertCreditsNeedAi((int) ($data['included_credits'] ?? 0), $data['capabilities'] ?? []);
+
         $plan = $this->plans->create($data['slug'], $data, $data['capabilities'] ?? []);
 
         return response()->json([
             'message' => 'Plan created.',
             'data' => [
                 'slug' => $plan->slug,
+                'included_credits' => (int) $plan->included_credits,
                 'capabilities' => $plan->capabilities->pluck('slug')->sort()->values()->all(),
             ],
         ], 201);
@@ -163,10 +192,17 @@ class PlanManagementController extends Controller
             'billing_model' => ['sometimes', 'string', Rule::in(['flat_quota', 'per_message', 'unlimited'])],
             'rate_per_message' => ['sometimes', 'nullable', 'numeric', 'min:0'],
             'total_allocated_messages' => ['sometimes', 'nullable', 'integer', 'min:1'],
+            // Phase 8 Task 2 — 0 = the plan includes no credits.
+            'included_credits' => ['sometimes', 'integer', 'min:0', 'max:'.self::MAX_INCLUDED_CREDITS],
             'is_active' => ['sometimes', 'boolean'],
             'capabilities' => ['sometimes', 'array'],
             'capabilities.*' => ['string', 'distinct', Rule::exists('capabilities', 'slug')],
         ]);
+
+        $this->assertCreditsNeedAi(
+            (int) ($data['included_credits'] ?? $plan->included_credits),
+            array_key_exists('capabilities', $data) ? $data['capabilities'] : $plan->capabilities()->pluck('slug')->all(),
+        );
 
         $result = $this->plans->modify(
             $plan,
@@ -183,6 +219,7 @@ class PlanManagementController extends Controller
                 : 'Plan updated.',
             'data' => [
                 'slug' => $result['plan']->slug,
+                'included_credits' => (int) $result['plan']->included_credits,
                 'capabilities' => $result['plan']->capabilities->pluck('slug')->sort()->values()->all(),
                 'bundle_changed' => $result['bundle_changed'],
                 'added' => $result['added'],

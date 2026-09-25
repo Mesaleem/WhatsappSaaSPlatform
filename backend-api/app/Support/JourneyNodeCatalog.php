@@ -136,10 +136,41 @@ final class JourneyNodeCatalog
         'email' => ['capabilities' => ['email'], 'providers' => ['none']],
         // Chaining into another journey is the Journey product itself.
         'journey' => ['capabilities' => ['journey_automation'], 'providers' => ['none']],
-        // Waiting is control flow. The queue/delay worker that will
-        // eventually run it is a later task's concern.
+        // Waiting is control flow, executed by the Phase 7 temporal
+        // backbone (session parked 'waiting', journeys:resume-due).
         'delay' => ['capabilities' => [], 'providers' => ['none']],
     ];
+
+    /**
+     * P5-7 — RUNTIME TRUTH. The node types WhatsAppJourneyEngine::advance()
+     * has a handler for today, and nothing else. This is the backend's
+     * authoritative answer to "is this node executable?", distinct from
+     * "does this node exist in the palette" (NODES above / the frontend
+     * registry). Publishing or activating a journey that contains any
+     * other type is refused (WhatsAppFlowController, 422
+     * JOURNEY_NODE_NOT_EXECUTABLE), and a session that reaches one ends
+     * with the deterministic `unsupported_node` outcome.
+     *
+     *   legacy:  trigger, message, question, condition, save_lead
+     *   palette: delay (Phase 7 T1), conditional (T4), text + 4 media (T6)
+     *
+     * The other 20 palette types depend on integrations this platform does
+     * not have yet (AI, an outbound HTTP runner, a code sandbox, email
+     * sending from a journey, payment links, commerce catalogs, interactive
+     * Cloud API messages, template sends from a journey, sub-journeys,
+     * human hand-off) — they stay persistable as DRAFTS, never publishable.
+     * The frontend registry's `runtimeSupported` flag mirrors this list and
+     * JourneyRuntimeSafetyTest fails on any disagreement.
+     */
+    public const RUNTIME_EXECUTABLE_TYPES = [
+        'trigger', 'message', 'question', 'condition', 'save_lead',
+        'delay', 'conditional', 'text', 'image', 'video', 'document', 'audio',
+    ];
+
+    public static function isRuntimeExecutable(mixed $nodeType): bool
+    {
+        return is_string($nodeType) && in_array($nodeType, self::RUNTIME_EXECUTABLE_TYPES, true);
+    }
 
     /**
      * Requirements for a node type, or null for a type this catalog does

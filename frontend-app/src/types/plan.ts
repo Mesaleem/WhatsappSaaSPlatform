@@ -25,6 +25,11 @@ export interface ManagedPlan {
   billing_model: PlanBillingModel;
   rate_per_message: string | number | null;
   total_allocated_messages: number | null;
+  /**
+   * Phase 8 Task 2 — AI credits allocated to a subscriber for every
+   * purchased period (0 = none). Only a plan that sells `ai` may include any.
+   */
+  included_credits: number;
   /** Purchasable right now. Deactivating blocks NEW purchases only. */
   is_active: boolean;
   /** Capability slugs this plan bundles, from plan_entitlements. */
@@ -62,6 +67,8 @@ export interface CreatePlanPayload {
   description?: string | null;
   rate_per_message?: number | null;
   total_allocated_messages?: number | null;
+  /** Phase 8 Task 2 — AI credits per purchased period (0 = none). */
+  included_credits?: number;
   is_active?: boolean;
   capabilities?: string[];
 }
@@ -78,6 +85,7 @@ export interface UpdatePlanResult {
   message: string;
   data: {
     slug: string;
+    included_credits?: number;
     capabilities: string[];
     bundle_changed: boolean;
     added: string[];

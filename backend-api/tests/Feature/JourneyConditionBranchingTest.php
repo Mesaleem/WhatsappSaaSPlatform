@@ -675,13 +675,13 @@ class JourneyConditionBranchingTest extends TestCase
     // Save-time validation (same rules as run time)
     // ==================================================================
 
-    private function saveAs(Account $account, array $nodes, array $edges)
+    private function saveAs(Account $account, array $nodes, array $edges, bool $publish = true)
     {
         $user = User::factory()->create(['account_id' => $account->id, 'is_active' => true]);
         $user->assignRole('admin');
 
         return $this->actingAs($user)->postJson('/api/whatsapp/flows', [
-            'name' => 'Branching', 'trigger_type' => 'keyword', 'trigger_value' => 'go', 'is_active' => true,
+            'name' => 'Branching', 'trigger_type' => 'keyword', 'trigger_value' => 'go', 'is_active' => true, 'publish' => $publish,
             'graph_data' => ['nodes' => [['id' => 't', 'type' => 'trigger', 'data' => []], ...$nodes], 'edges' => [$this->e('t', $nodes[0]['id']), ...$edges]],
         ]);
     }
@@ -726,9 +726,14 @@ class JourneyConditionBranchingTest extends TestCase
             $this->e('c', 'b', ['sourceHandle' => 'false']),
         ])->assertCreated();
 
-        // A half-built draft is still savable (the engine fails it only if reached).
+        // A half-built draft is still savable as a draft (P5-7: `publish: false`)...
         $this->saveAs($account, [['id' => 'c', 'type' => 'conditional', 'data' => ['conditions' => [], 'match' => 'all']], $a], [
             $this->e('c', 'a', ['sourceHandle' => 'true']),
-        ])->assertCreated();
+        ], publish: false)->assertCreated();
+
+        // ...but cannot be published: the engine would fail it when reached.
+        $this->saveAs($account, [['id' => 'c', 'type' => 'conditional', 'data' => ['conditions' => [], 'match' => 'all']], $a], [
+            $this->e('c', 'a', ['sourceHandle' => 'true']),
+        ])->assertStatus(422)->assertJsonPath('error_code', 'JOURNEY_NOT_PUBLISHABLE');
     }
 }

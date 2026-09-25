@@ -19,7 +19,9 @@ import {
 } from '../../types/journeyNodes';
 import {
   getJourneyNode,
+  isRuntimeExecutableNodeType,
   journeyNodesByCategory,
+  nonExecutableNodeTypes,
   validateJourneyGraph,
 } from '../../journey/nodeRegistry';
 import JourneyNodeConfigForm from '../../journey/JourneyNodeConfigForm';
@@ -605,7 +607,7 @@ function JourneyCanvasEditor({
     window.addEventListener('mouseup', onWindowMouseUpForConnect);
   };
 
-  const handleSave = () => {
+  const handleSave = (publish = true) => {
     if (!name.trim()) {
       setSaveError('Give this journey a name.');
       return;
@@ -641,12 +643,26 @@ function JourneyCanvasEditor({
       return;
     }
 
+    // P5-7 — a journey is published only when the runtime can run every
+    // node. UX mirror of the server's 422 JOURNEY_NOT_PUBLISHABLE (the
+    // server decides): say which nodes block it and offer a draft save.
+    const blocking = nonExecutableNodeTypes(graph.nodes);
+
+    if (publish && blocking.length > 0) {
+      const labels = blocking.map((type) => getJourneyNode(type)?.label ?? type).join(', ');
+
+      setSaveError(`${labels} cannot run yet, so this journey cannot be published. Remove ${blocking.length === 1 ? 'it' : 'them'}, or use Save draft.`);
+
+      return;
+    }
+
     const payload: SaveFlowPayload = {
       name: name.trim(),
       trigger_type: triggerType,
       trigger_value: triggerValue.trim() || null,
       graph_data: graph,
       is_active: isActive,
+      ...(publish ? {} : { publish: false }),
     };
 
     setSaveError(null);
@@ -696,8 +712,18 @@ function JourneyCanvasEditor({
             <input type="checkbox" checked={isActive} onChange={(e) => setIsActive(e.target.checked)} className="h-4 w-4 rounded border-slate-300 text-indigo-600" />
             Active
           </label>
+          {/* P5-7 — a draft may hold nodes the runtime cannot execute yet; it is never what new sessions run. */}
           <button
-            onClick={handleSave}
+            onClick={() => handleSave(false)}
+            disabled={isSaving}
+            data-testid="journey-save-draft"
+            className="rounded-lg border px-3 py-2 text-xs font-semibold disabled:opacity-60"
+            style={{ borderColor: indigo.border, color: indigo.ink }}
+          >
+            Save draft
+          </button>
+          <button
+            onClick={() => handleSave()}
             disabled={isSaving}
             className="flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
             style={{ background: activeGradient }}
@@ -770,6 +796,8 @@ function JourneyCanvasEditor({
                   to save. See src/journey/nodeEntitlement.ts.
                 */
                 const availability = journeyNodeAvailability(definition, entitlement);
+                // P5-7 — runtime truth (UX): placeable in a draft, not publishable yet.
+                const runnable = isRuntimeExecutableNodeType(definition.type);
 
                 return (
                   <button
@@ -778,9 +806,10 @@ function JourneyCanvasEditor({
                     data-testid={`palette-node-${definition.type}`}
                     data-node-category={definition.category}
                     data-entitled={availability.available ? 'true' : 'false'}
+                    data-runtime={runnable ? 'executable' : 'draft-only'}
                     disabled={!availability.available}
                     onClick={() => addNode(definition.type)}
-                    title={availability.reason ?? definition.description}
+                    title={availability.reason ?? (runnable ? definition.description : `${definition.description} Not executable yet — a journey containing it can only be saved as a draft.`)}
                     className="flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-semibold hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
                     style={{ borderColor: indigo.border, color: definition.color }}
                   >
@@ -788,6 +817,9 @@ function JourneyCanvasEditor({
                     <Icon className="h-3.5 w-3.5" />
                     {definition.label}
                     {!availability.available && <Lock className="h-3 w-3 text-slate-400" />}
+                    {availability.available && !runnable && (
+                      <span className="rounded bg-slate-100 px-1 text-[9px] font-bold uppercase tracking-wide text-slate-500">Draft only</span>
+                    )}
                   </button>
                 );
               })}

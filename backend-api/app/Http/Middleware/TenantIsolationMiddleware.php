@@ -3,6 +3,7 @@
 namespace App\Http\Middleware;
 
 use App\Models\Account;
+use App\Services\Access\EntitlementAuditLogger;
 use Closure;
 use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\Response;
@@ -101,6 +102,15 @@ class TenantIsolationMiddleware
                 $isOwnedSubClient = $targetAccount && $targetAccount->agent_id === $accountId;
 
                 if (! $targetAccount || (! $isOwnAccount && ! $isOwnedSubClient)) {
+                    // P5-8 — recorded on the Agent's OWN account; the requested
+                    // id only appears in the payload (never as the row's tenant).
+                    app(EntitlementAuditLogger::class)->record($user->account, false, [
+                        'action' => 'account.target', 'resource_type' => 'account', 'source' => 'api',
+                        'category' => 'unauthorized_target_account', 'actor_account_id' => $accountId,
+                        'target_account_id' => is_numeric($requestedAccountId) ? (int) $requestedAccountId : null,
+                        'http_status' => 404,
+                    ]);
+
                     return response()->json(['message' => 'The selected client account was not found or is not one of your Sub-Clients.'], 404);
                 }
 

@@ -249,8 +249,9 @@ class JourneyActionExecutionTest extends TestCase
         $account = $this->account();
         $user = User::factory()->create(['account_id' => $account->id, 'is_active' => true]);
         $user->assignRole('admin');
-        $post = fn (array $node) => $this->actingAs($user)->postJson('/api/whatsapp/flows', [
-            'name' => 'X', 'trigger_type' => 'keyword', 'trigger_value' => 'go', 'is_active' => true,
+        // P5-7 — a half-built draft saves with `publish: false`; publishing needs a runnable graph.
+        $post = fn (array $node, bool $publish = true) => $this->actingAs($user)->postJson('/api/whatsapp/flows', [
+            'name' => 'X', 'trigger_type' => 'keyword', 'trigger_value' => 'go', 'is_active' => true, 'publish' => $publish,
             'graph_data' => ['nodes' => [['id' => 't', 'type' => 'trigger', 'data' => []], $node], 'edges' => [['id' => 'e', 'source' => 't', 'target' => $node['id']]]],
         ]);
 
@@ -262,8 +263,10 @@ class JourneyActionExecutionTest extends TestCase
             ->assertStatus(422)->assertJsonValidationErrors('graph_data.nodes.1.data');
 
         // Half-built drafts still save.
-        $post(['id' => 'm', 'type' => 'message', 'data' => []])->assertCreated();
-        $post(['id' => 'q', 'type' => 'question', 'data' => ['input_type' => 'buttons']])->assertCreated();
+        $post(['id' => 'm', 'type' => 'message', 'data' => []], false)->assertCreated();
+        $post(['id' => 'q', 'type' => 'question', 'data' => ['input_type' => 'buttons']], false)->assertCreated();
+        // ...and cannot be published as they are.
+        $post(['id' => 'm', 'type' => 'message', 'data' => []])->assertStatus(422)->assertJsonPath('error_code', 'JOURNEY_NOT_PUBLISHABLE');
     }
 
     // ==================================================================

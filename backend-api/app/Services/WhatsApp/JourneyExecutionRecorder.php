@@ -35,6 +35,7 @@ final class JourneyExecutionRecorder
         'execution_limit',       // MAX_ADVANCE_STEPS reached in one run
         'flow_unavailable',      // the journey was deactivated/removed, or the account is gone
         'cancelled',             // an operator cancelled the session
+        'reply_timeout',         // P5-7: a question went unanswered past WhatsAppJourneyEngine::QUESTION_REPLY_TTL_SECONDS
         'internal_error',        // anything else (unexpected exception, integrity guard)
     ];
 

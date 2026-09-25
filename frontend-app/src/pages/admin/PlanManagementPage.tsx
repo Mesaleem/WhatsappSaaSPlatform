@@ -63,6 +63,8 @@ interface PlanFormState {
   billing_model: PlanBillingModel;
   rate_per_message: string;
   total_allocated_messages: string;
+  /** Phase 8 Task 2 — AI credits per purchased period. */
+  included_credits: string;
   is_active: boolean;
   capabilities: string[];
 }
@@ -78,6 +80,7 @@ function emptyForm(): PlanFormState {
     billing_model: 'flat_quota',
     rate_per_message: '',
     total_allocated_messages: '',
+    included_credits: '0',
     is_active: true,
     capabilities: [],
   };
@@ -94,6 +97,7 @@ function formFromPlan(plan: ManagedPlan): PlanFormState {
     billing_model: plan.billing_model,
     rate_per_message: plan.rate_per_message == null ? '' : String(plan.rate_per_message),
     total_allocated_messages: plan.total_allocated_messages == null ? '' : String(plan.total_allocated_messages),
+    included_credits: String(plan.included_credits ?? 0),
     is_active: plan.is_active,
     capabilities: [...plan.capabilities],
   };
@@ -262,6 +266,9 @@ function PlanFormModal({
     const quota = numberOrNull(form.total_allocated_messages);
     if (quota !== plan.total_allocated_messages) patch.total_allocated_messages = quota;
 
+    const credits = Number(form.included_credits || 0);
+    if (credits !== (plan.included_credits ?? 0)) patch.included_credits = credits;
+
     if (form.is_active !== plan.is_active) patch.is_active = form.is_active;
 
     // Absent unless genuinely changed — see this function's docblock.
@@ -290,6 +297,7 @@ function PlanFormModal({
           description: form.description || null,
           rate_per_message: numberOrNull(form.rate_per_message),
           total_allocated_messages: numberOrNull(form.total_allocated_messages),
+          included_credits: Number(form.included_credits || 0),
           is_active: form.is_active,
           capabilities: form.capabilities,
         };
@@ -465,6 +473,22 @@ function PlanFormModal({
                 placeholder="Leave empty for unlimited"
               />
               <FieldError errors={errors} name="total_allocated_messages" />
+            </label>
+
+            {/* Phase 8 Task 2 — per purchased period; the backend refuses credits on a plan without `ai`. */}
+            <label className="block text-xs font-medium text-slate-700">
+              Included AI credits / period
+              <input
+                type="number"
+                min={0}
+                step={1}
+                data-testid="plan-included-credits"
+                className={inputClass}
+                value={form.included_credits}
+                onChange={(e) => set('included_credits', e.target.value)}
+              />
+              <span className="mt-1 block text-[11px] font-normal text-slate-400">0 = none. Requires the “ai” capability; applies to new orders.</span>
+              <FieldError errors={errors} name="included_credits" />
             </label>
 
             <label className="block text-xs font-medium text-slate-700">
@@ -668,6 +692,7 @@ export default function PlanManagementPage() {
                 <th className="px-4 py-2 font-semibold">Billing</th>
                 <th className="px-4 py-2 font-semibold">Price</th>
                 <th className="px-4 py-2 font-semibold">Quota</th>
+                <th className="px-4 py-2 font-semibold">AI credits</th>
                 <th className="px-4 py-2 font-semibold">Duration</th>
                 <th className="px-4 py-2 font-semibold">Capabilities</th>
                 <th className="px-4 py-2 font-semibold">Accounts</th>
@@ -688,6 +713,9 @@ export default function PlanManagementPage() {
                     {plan.price}
                   </td>
                   <td className="px-4 py-2.5 text-slate-600">{plan.total_allocated_messages ?? '—'}</td>
+                  <td className="px-4 py-2.5 text-slate-600" data-testid={`plan-credits-${plan.slug}`}>
+                    {plan.included_credits ?? 0}
+                  </td>
                   <td className="px-4 py-2.5 text-slate-600">{plan.duration_days}d</td>
                   <td className="px-4 py-2.5 text-slate-600" data-testid={`plan-capabilities-${plan.slug}`}>
                     {plan.capabilities.length}

@@ -14,6 +14,11 @@ const ACTION_TYPE_OPTIONS: { value: ActivityActionType; label: string }[] = [
   { value: 'update', label: 'Update' },
   { value: 'delete', label: 'Delete' },
   { value: 'toggle', label: 'Toggle' },
+  // P5-8 — entitlement authorization decisions (module "Entitlement Authorization").
+  { value: 'allowed', label: 'Allowed' },
+  { value: 'denied', label: 'Denied' },
+  // Phase 8 Task 1 — a retried credit operation (module "Credits").
+  { value: 'replay', label: 'Replay' },
 ];
 
 const ACTION_BADGE: Record<ActivityActionType, string> = {
@@ -21,6 +26,9 @@ const ACTION_BADGE: Record<ActivityActionType, string> = {
   update: 'bg-sky-50 text-sky-700 ring-sky-600/20',
   toggle: 'bg-amber-50 text-amber-700 ring-amber-600/20',
   delete: 'bg-red-50 text-red-700 ring-red-600/20',
+  allowed: 'bg-teal-50 text-teal-700 ring-teal-600/20',
+  denied: 'bg-rose-50 text-rose-700 ring-rose-600/20',
+  replay: 'bg-slate-50 text-slate-600 ring-slate-500/20',
 };
 
 const EMPTY_FILTERS: ActivityLogFilters = {};

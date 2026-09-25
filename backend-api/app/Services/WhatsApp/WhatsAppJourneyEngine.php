@@ -10,13 +10,16 @@ use App\Models\Subscription;
 use App\Models\WhatsAppFlow;
 use App\Models\WhatsAppFlowSession;
 use App\Models\WhatsAppFlowVersion;
+use App\Support\JourneyNodeCatalog;
 use App\Support\PhoneNumberNormalizer;
 use App\Support\WhatsAppMediaPayloadBuilder;
+use App\Services\Access\EntitlementAuditLogger;
 use App\Services\Access\JourneyNodeAuthorizer;
 use App\Services\Access\JourneyRuntimeEntitlement;
 use App\Services\Crm\CaptureLeadLinker;
 use App\Services\Messaging\InboundEventGate;
 use App\Services\Messaging\MessageQuotaService;
+use Closure;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -167,6 +170,16 @@ use Throwable;
  *     'failed' after MAX_RESUME_ATTEMPTS resumed attempts.
  *   NOT EXECUTABLE (palette node without an engine branch) → 'expired',
  *     last_error (unchanged outcome).
+ *     P5-7: "executable" is JourneyNodeCatalog::RUNTIME_EXECUTABLE_TYPES —
+ *     checked before anything else at every node — and such a journey can
+ *     no longer be published or activated (JourneyPublishValidator).
+ *   P5-7 — NODE ENTITLEMENT is re-checked at run time for EVERY catalog node
+ *     (not only text/media), against the account's current entitlements and
+ *     its own provider; legacy types stay grandfathered.
+ *   P5-7 — A RUN THAT FAILED PERMANENTLY AT ITS FIRST NODE does not consume
+ *     the inbound message (consumedByStart()): the chatbot answers it.
+ *   P5-7 — A QUESTION UNANSWERED FOR QUESTION_REPLY_TTL_SECONDS is 'expired'
+ *     (reply_timeout) and never captures a later message.
  *   NODE ENTITLEMENT DENIED (text/media: JourneyNodeAuthorizer::
  *     runtimeDenialFor — capability/provider only) → 'failed'.
  *   SEND REFUSED BY THE ACCOUNT'S SENDING STATE (Phase 7 Task 8,
@@ -235,6 +248,18 @@ class WhatsAppJourneyEngine
     /** Phase 7 Task 7 — nodes whose execution has an external side effect (node_started is recorded). */
     private const SIDE_EFFECT_NODE_TYPES = ['message', 'question', 'save_lead'];
 
+    /**
+     * P5-7 — how long a session paused at a question waits for the answer.
+     * 24 h = WhatsApp's customer-service window: after it, a free-form reply
+     * from the business is no longer deliverable on the Cloud API anyway,
+     * and a message arriving that late is a new conversation, not the
+     * answer. Derived from last_interaction_at (written when the prompt was
+     * sent); no extra column. An expired question session never captures a
+     * message: it is closed as 'expired' (reply_timeout) and the message is
+     * routed as if no session existed.
+     */
+    public const QUESTION_REPLY_TTL_SECONDS = 86400;
+
     /** Phase 7 Task 1 — resume attempts per wait before the session is marked 'failed'. */
     public const MAX_RESUME_ATTEMPTS = 3;
 
@@ -274,18 +299,34 @@ class WhatsAppJourneyEngine
     /** Phase 7 Task 7 — ids written by the most recent save_lead. */
     private array $lastLeadRefs = [];
 
+    /** P5-7 — nodes that completed successfully in the current entry point's run. */
+    private int $nodesSucceeded = 0;
+
+    /** P5-8 — authorization decisions already audited in the current entry point's run (dedupe). */
+    private array $auditedDecisions = [];
+
+    /** P5-8 — the session the current run executes (for auditing a send-gate refusal). */
+    private ?WhatsAppFlowSession $runSession = null;
+
     /**
      * @return bool true if this message was consumed by an active/newly-
      *         started journey (caller should NOT also run chatbot_rules
      *         matching for it), false if no journey applies (caller
      *         should fall through to its existing chatbot_rules logic).
      */
-    public function handleInboundMessage(int $accountId, string $senderPhone, string $incomingMessage, ?array $referral = null, ?int $inboundEventId = null): bool
+    public function handleInboundMessage(int $accountId, string $senderPhone, string $incomingMessage, ?array $referral = null, ?int $inboundEventId = null, ?Closure $chatbotRuleMatches = null): bool
     {
         $this->beginTrace('inbound', $inboundEventId);
 
         try {
             $session = WhatsAppFlowSession::findActive($accountId, $senderPhone);
+
+            // P5-7 — a question left unanswered past the reply window is over:
+            // it must not capture this (unrelated, much later) message.
+            if ($session && $this->questionReplyExpired($session)) {
+                $this->expireUnansweredQuestion($session);
+                $session = null;
+            }
 
             // Phase 7 Task 1.6 — a journey this account is no longer entitled
             // to may not run. Checked only when a journey would otherwise act
@@ -322,7 +363,7 @@ class WhatsAppJourneyEngine
                 return false;
             }
 
-            return $this->tryStartSession($accountId, $senderPhone, $incomingMessage, $referral);
+            return $this->tryStartSession($accountId, $senderPhone, $incomingMessage, $referral, $chatbotRuleMatches);
         } catch (Throwable $e) {
             // Same "never let this bubble up and break the webhook's fast
             // 2xx" discipline as ChatbotEngineService::handleInboundMessage().
@@ -661,6 +702,69 @@ class WhatsAppJourneyEngine
         return $recovered;
     }
 
+    /**
+     * P5-7 — close every question session whose reply window has passed
+     * (journeys:resume-due, every minute). The inbound path applies the same
+     * rule itself, so this sweep is housekeeping — it keeps the sessions
+     * list honest — not what protects a late message. Bounded; one guarded
+     * conditional UPDATE per session (still active, no run lease, still
+     * past the window), so a session answered meanwhile is never expired.
+     *
+     * @return int sessions expired
+     */
+    public function expireUnansweredQuestions(int $limit = 200): int
+    {
+        $this->beginTrace('scheduler');
+
+        $candidates = WhatsAppFlowSession::query()
+            ->where('status', WhatsAppFlowSession::STATUS_ACTIVE)
+            ->whereNull('wait_until')
+            ->where('last_interaction_at', '<=', now()->subSeconds(self::QUESTION_REPLY_TTL_SECONDS))
+            ->orderBy('id')
+            ->limit($limit)
+            ->get();
+
+        $expired = 0;
+
+        foreach ($candidates as $session) {
+            $expired += $this->expireUnansweredQuestion($session) ? 1 : 0;
+        }
+
+        return $expired;
+    }
+
+    /** P5-7 — an 'active' session awaiting a reply (no run lease) whose reply window has passed. */
+    private function questionReplyExpired(WhatsAppFlowSession $session): bool
+    {
+        if ($session->status !== WhatsAppFlowSession::STATUS_ACTIVE || $session->wait_until !== null) {
+            return false;
+        }
+
+        $since = $session->last_interaction_at ?? $session->updated_at ?? $session->created_at;
+
+        return $since !== null && $since->lte(now()->subSeconds(self::QUESTION_REPLY_TTL_SECONDS));
+    }
+
+    private function expireUnansweredQuestion(WhatsAppFlowSession $session): bool
+    {
+        $this->nodeType = 'question';
+
+        // Guarded: only a session still awaiting a reply (active, no lease)
+        // whose last interaction is still outside the window.
+        $written = WhatsAppFlowSession::query()->whereKey($session->id)
+            ->where('status', WhatsAppFlowSession::STATUS_ACTIVE)
+            ->whereNull('wait_until')
+            ->where(fn ($q) => $q->whereNull('last_interaction_at')->orWhere('last_interaction_at', '<=', now()->subSeconds(self::QUESTION_REPLY_TTL_SECONDS)))
+            ->update(['status' => WhatsAppFlowSession::STATUS_EXPIRED, 'last_error' => 'No reply within '.intdiv(self::QUESTION_REPLY_TTL_SECONDS, 3600).' hours — the question expired.']) === 1;
+
+        if ($written) {
+            $session->refresh();
+            $this->trace($session, Ev::SESSION_EXPIRED, ['node_type' => 'question', 'error_category' => 'reply_timeout', 'error_message' => (string) $session->last_error]);
+        }
+
+        return $written;
+    }
+
     /** Phase 7 Task 9 — how long an immediate run may take before it counts as interrupted. */
     private function runLease(): \Illuminate\Support\Carbon
     {
@@ -716,6 +820,7 @@ class WhatsAppJourneyEngine
         }
 
         Log::info("WhatsAppJourneyEngine: session #{$session->id} blocked — account #{$session->account_id} is not entitled to Journey automation.");
+        $this->auditDecision($session, (int) $session->account_id, false, ['action' => 'journey.session.run', 'reason' => JourneyRuntimeEntitlement::reason()] + $this->runtimeEntitlementDenial((int) $session->account_id));
         $this->trace($session, Ev::SESSION_BLOCKED, ['error_category' => 'entitlement_blocked', 'error_message' => (string) $session->last_error]);
     }
 
@@ -749,6 +854,8 @@ class WhatsAppJourneyEngine
                 $restored++;
                 $session->forceFill(['status' => $to])->syncOriginal();
                 $this->trace($session, Ev::SESSION_RESTORED, ['result' => $to]);
+                // P5-8 — entitlement restored: the allowed decision that un-blocked it.
+                $this->auditDecision($session, (int) $session->account_id, true, ['action' => 'journey.session.restore', 'category' => 'entitled', 'capability' => JourneyRuntimeEntitlement::CAPABILITY]);
             }
         }
 
@@ -908,6 +1015,7 @@ class WhatsAppJourneyEngine
     /** @param array<string, mixed> $details */
     private function nodeSucceeded(WhatsAppFlowSession $session, string $result, array $details = []): void
     {
+        $this->nodesSucceeded++;
         $this->trace($session, Ev::NODE_SUCCEEDED, [
             'node_type' => $this->nodeType,
             'result' => $result,
@@ -923,6 +1031,50 @@ class WhatsAppJourneyEngine
         $this->nodeType = null;
         $this->lastDispatchLogId = null;
         $this->lastLeadRefs = [];
+        $this->nodesSucceeded = 0;
+        $this->auditedDecisions = [];
+        $this->runSession = null;
+    }
+
+    /**
+     * P5-8 — record one runtime authorization decision in the entitlement
+     * audit trail (EntitlementAuditLogger → activity_logs). The tenant is
+     * ALWAYS the session's / journey's own account, never anything a
+     * message carried. One logical decision = one row per run: the same
+     * (session, action, node type, outcome, category) is recorded once
+     * however many nodes of that type the run executes. Never throws.
+     *
+     * @param  array<string, mixed>  $fields
+     */
+    private function auditDecision(?WhatsAppFlowSession $session, int $accountId, bool $allowed, array $fields, ?int $flowId = null): void
+    {
+        $key = implode('|', [$session?->id ?? 'flow:'.$flowId, $fields['action'] ?? '', $fields['node_type'] ?? '', (int) $allowed, $fields['category'] ?? '']);
+
+        if (isset($this->auditedDecisions[$key])) {
+            return;
+        }
+
+        $this->auditedDecisions[$key] = true;
+
+        app(EntitlementAuditLogger::class)->record(Account::findCached($accountId), $allowed, $fields + [
+            'source' => $this->source,
+            'module' => 'chatbot',
+            'resource_type' => 'journey',
+            'resource_id' => $session?->flow_id ?? $flowId,
+            'session_id' => $session?->id,
+            'flow_version_id' => $session?->flow_version_id,
+            'inbound_event_id' => $this->inboundEventId,
+        ]);
+    }
+
+    /** P5-8 — which half of the Journey runtime entitlement (chatbot module ∧ journey_automation) is missing. */
+    private function runtimeEntitlementDenial(int $accountId): array
+    {
+        $account = Account::findCached($accountId);
+
+        return $account && ! $account->hasModuleEnabled(JourneyRuntimeEntitlement::MODULE)
+            ? ['category' => 'module_disabled', 'module' => JourneyRuntimeEntitlement::MODULE]
+            : ['category' => 'capability_not_entitled', 'capability' => JourneyRuntimeEntitlement::CAPABILITY];
     }
 
     /** @param array<string, mixed> $attributes */
@@ -1092,6 +1244,7 @@ class WhatsAppJourneyEngine
 
         $data = $node['data'] ?? [];
         $trimmed = trim($incomingMessage);
+        $this->runSession = $session;
 
         $validationError = $this->validateAnswer($trimmed, $data['validation'] ?? null);
 
@@ -1157,9 +1310,9 @@ class WhatsAppJourneyEngine
      * This mirrors chatbot_rules' own "specific match, then fallback"
      * evaluation order (ChatbotEngineService::findMatchingRule()).
      */
-    private function tryStartSession(int $accountId, string $senderPhone, string $incomingMessage, ?array $referral): bool
+    private function tryStartSession(int $accountId, string $senderPhone, string $incomingMessage, ?array $referral, ?Closure $chatbotRuleMatches = null): bool
     {
-        $flow = $this->matchFlow($accountId, $incomingMessage, $referral);
+        $flow = $this->matchFlow($accountId, $incomingMessage, $referral, $chatbotRuleMatches);
 
         if (! $flow) {
             return false;
@@ -1168,6 +1321,10 @@ class WhatsAppJourneyEngine
         // Phase 7 Task 1.6 — a trigger matched, but the account may not run
         // journeys any more: start nothing, send nothing, fall through.
         if (! $this->runtimeAllowed($accountId)) {
+            // P5-8 — audited on the journey's own account (a matched trigger is
+            // a real attempt to run it).
+            $this->auditDecision(null, (int) $flow->account_id, false, ['action' => 'journey.session.start', 'reason' => JourneyRuntimeEntitlement::reason()] + $this->runtimeEntitlementDenial((int) $flow->account_id), $flow->id);
+
             return false;
         }
 
@@ -1220,10 +1377,55 @@ class WhatsAppJourneyEngine
 
         $this->runImmediate($account, $flow, $session, (string) $firstEdge['target']);
 
+        return $this->consumedByStart($session);
+    }
+
+    /**
+     * P5-7 — "a journey matched" is not "a journey ran". The message counts
+     * as consumed by the journey only if the run got somewhere: at least
+     * one node completed, or the session is still open (paused at a
+     * question, parked on a delay, or parked for a retry of a TRANSIENT
+     * failure — the journey still owns it and will send). A run that ended
+     * permanently at its very first node (unsupported node, invalid
+     * configuration, denied node entitlement, broken edge) did nothing for
+     * the customer: its failure is recorded on the session and in the
+     * execution history, and the message goes on to the chatbot rules.
+     */
+    private function consumedByStart(WhatsAppFlowSession $session): bool
+    {
+        if ($this->nodesSucceeded > 0) {
+            return true;
+        }
+
+        $status = WhatsAppFlowSession::query()->whereKey($session->id)->value('status');
+
+        if (in_array($status, [WhatsAppFlowSession::STATUS_FAILED, WhatsAppFlowSession::STATUS_EXPIRED], true)) {
+            Log::info("WhatsAppJourneyEngine: session #{$session->id} failed at its first node — the message is not consumed by the journey.", [
+                'flow_id' => $session->flow_id,
+                'current_node_id' => $session->current_node_id,
+            ]);
+
+            return false;
+        }
+
         return true;
     }
 
-    private function matchFlow(int $accountId, string $incomingMessage, ?array $referral): ?WhatsAppFlow
+    /**
+     * P5-7 — deterministic trigger selection, lowest id first at every tier:
+     * ctwa_referral (specific ad, then catch-all) > keyword > default.
+     *
+     * DEFAULT TRIGGER. A `default` journey is the journey-level FALLBACK: it
+     * is considered only when no ctwa/keyword journey matched AND no chatbot
+     * rule other than a fallback rule matches the message
+     * ($chatbotRuleMatches, evaluated lazily — only when a default journey
+     * exists). It used to run before the chatbot for every message no
+     * journey keyword matched, silently swallowing messages the tenant's
+     * keyword/exact/regex chatbot rules were configured to answer. A
+     * chatbot `fallback` rule does not outrank a default journey (both are
+     * catch-alls; the journey keeps the precedence it always had).
+     */
+    private function matchFlow(int $accountId, string $incomingMessage, ?array $referral, ?Closure $chatbotRuleMatches = null): ?WhatsAppFlow
     {
         if ($referral !== null) {
             $sourceAdId = $referral['source_id'] ?? null;
@@ -1233,6 +1435,7 @@ class WhatsAppJourneyEngine
                 ->active()
                 ->whereNotNull('published_version_id')
                 ->where('trigger_type', 'ctwa_referral')
+                ->orderBy('id')
                 ->get();
 
             // Prefer a flow scoped to THIS specific ad_id over a
@@ -1261,6 +1464,7 @@ class WhatsAppJourneyEngine
                 ->active()
                 ->whereNotNull('published_version_id')
                 ->where('trigger_type', 'keyword')
+                ->orderBy('id')
                 ->get();
 
             foreach ($keywordFlows as $flow) {
@@ -1274,12 +1478,19 @@ class WhatsAppJourneyEngine
             }
         }
 
-        return WhatsAppFlow::query()
+        $default = WhatsAppFlow::query()
             ->forAccount($accountId)
             ->active()
             ->whereNotNull('published_version_id')
             ->where('trigger_type', 'default')
+            ->orderBy('id')
             ->first();
+
+        if ($default && $chatbotRuleMatches !== null && $chatbotRuleMatches()) {
+            return null;
+        }
+
+        return $default;
     }
 
     /**
@@ -1292,6 +1503,7 @@ class WhatsAppJourneyEngine
     {
         $subscription = $account->currentSubscription;
         $steps = 0;
+        $this->runSession = $session;
         // Phase 7 Task 2 — every node, edge and branch comes from the
         // session's pinned version. $flow is used only for its id/name.
         $graph = $this->graphFor($session, $flow);
@@ -1364,6 +1576,41 @@ class WhatsAppJourneyEngine
 
             if ($configError !== null) {
                 $this->failSession($session, "Node '{$nodeId}' ({$type}): {$configError}", 'invalid_configuration');
+
+                return;
+            }
+
+            // P5-7 — a type the runtime has no handler for ends the run here,
+            // before any side effect, with the one deterministic outcome
+            // (JourneyNodeCatalog::RUNTIME_EXECUTABLE_TYPES is the truth).
+            if (! JourneyNodeCatalog::isRuntimeExecutable($type)) {
+                Log::warning("WhatsAppJourneyEngine: session #{$session->id} — node type '{$type}' is not executable. Marking expired.");
+                $this->expire($session, "Node '{$nodeId}' has type '{$type}', which the engine cannot execute.", 'unsupported_node');
+
+                return;
+            }
+
+            // P5-7 — every catalog node is re-authorized at run time against the
+            // account's CURRENT entitlements and provider (publish-time checks
+            // are not trusted after the fact). Legacy types are grandfathered
+            // (no catalog entry → null); the account's sending state is the
+            // send gate's (JourneySendGate), as before.
+            //
+            // P5-8 — the decision (the same one runtimeDenialFor() returns) is
+            // audited when it actually checked something (capability and/or
+            // provider): allowed once per node type per run, denied always.
+            $decision = app(JourneyNodeAuthorizer::class)->decide($account, (string) $type, runtime: true);
+
+            if ($decision['governed'] && $decision['category'] !== 'no_requirement') {
+                $this->auditDecision($session, (int) $session->account_id, $decision['allowed'], [
+                    'action' => 'journey.node.execute', 'node_type' => (string) $type, 'node_id' => $nodeId,
+                    'category' => $decision['category'], 'capability' => $decision['capability'], 'capabilities' => $decision['capabilities'],
+                    'provider' => $decision['provider'], 'providers' => $decision['providers'], 'reason' => $decision['reason'],
+                ]);
+            }
+
+            if (! $decision['allowed']) {
+                $this->failSession($session, "Node '{$nodeId}' ({$type}): {$decision['reason']}", 'entitlement_blocked');
 
                 return;
             }
@@ -1497,17 +1744,8 @@ class WhatsAppJourneyEngine
             // one quota-guarded send, checkpoint, first outgoing edge or a
             // successful end.
             if (in_array($type, JourneyActionConfig::PALETTE_SEND_TYPES, true)) {
-                // Phase 7 Task 8 — capability/provider only; the account's
-                // sending state is the send gate's (retryable quota vs
-                // permanent entitlement), exactly as for every other send.
-                $denial = app(JourneyNodeAuthorizer::class)->runtimeDenialFor($account, (string) $type);
-
-                if ($denial !== null) {
-                    $this->failSession($session, "Node '{$nodeId}' ({$type}): {$denial}", 'entitlement_blocked');
-
-                    return;
-                }
-
+                // Node entitlement (capability/provider) was re-checked above
+                // for every catalog node (P5-7; Phase 7 Task 8 semantics).
                 if ($type === 'text') {
                     $text = JourneyActionConfig::renderText((string) $data['text'], $session->context_data ?? []);
 
@@ -1821,6 +2059,17 @@ class WhatsAppJourneyEngine
         $refusal = app(JourneySendGate::class)->refusal($account, $subscription);
 
         if ($refusal !== null) {
+            // P5-8 — a PERMANENT refusal is an entitlement decision (account
+            // suspended / no subscription) and is audited; a quota refusal is
+            // usage, not entitlement, and is not.
+            if ($refusal['category'] === 'entitlement_blocked' && $this->runSession) {
+                $this->auditDecision($this->runSession, (int) $account->id, false, [
+                    'action' => 'journey.node.send', 'node_type' => $this->nodeType, 'reason' => $refusal['reason'],
+                    'category' => $account->isAdministrativelyActive() ? 'no_active_subscription' : 'account_suspended',
+                    'provider' => $subscription?->engine_type,
+                ]);
+            }
+
             $this->lastSendError = $refusal['reason'];
             $this->lastSendCategory = $refusal['category'];
             $this->lastSendRetryable = $refusal['retryable'];

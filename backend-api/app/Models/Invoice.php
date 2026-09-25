@@ -39,6 +39,8 @@ class Invoice extends Model
         'plan_rate_per_message',
         'plan_total_allocated_messages',
         'plan_duration_days',
+        // Phase 8 Task 2 — the plan's AI-credit allowance for the purchased period.
+        'plan_included_credits',
         'plan_terms_captured_at',
     ];
 
@@ -67,6 +69,7 @@ class Invoice extends Model
             'plan_rate_per_message' => 'decimal:4',
             'plan_total_allocated_messages' => 'integer',
             'plan_duration_days' => 'integer',
+            'plan_included_credits' => 'integer',
             'plan_terms_captured_at' => 'datetime',
         ];
     }
@@ -90,6 +93,7 @@ class Invoice extends Model
             'plan_rate_per_message' => $plan->rate_per_message,
             'plan_total_allocated_messages' => $plan->total_allocated_messages,
             'plan_duration_days' => $plan->duration_days,
+            'plan_included_credits' => (int) $plan->included_credits,
             'plan_terms_captured_at' => now(),
         ]);
     }
@@ -113,6 +117,17 @@ class Invoice extends Model
             'total_allocated_messages' => $this->plan_total_allocated_messages,
             'duration_days' => (int) $this->plan_duration_days,
         ];
+    }
+
+    /**
+     * Phase 8 Task 2 — the AI credits this order bought for its period:
+     * the plan's allowance captured with the other terms. 0 when nothing
+     * was captured (pre-P5-4 order, top-up invoice) or the terms were
+     * captured before credits existed — such an order bought no credits.
+     */
+    public function purchasedIncludedCredits(): int
+    {
+        return $this->plan_terms_captured_at === null ? 0 : (int) ($this->plan_included_credits ?? 0);
     }
 
     public function account(): BelongsTo

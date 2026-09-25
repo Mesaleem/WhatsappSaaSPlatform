@@ -11,7 +11,9 @@
 
 import type { PaginatedResponse } from './account';
 
-export type ActivityActionType = 'create' | 'update' | 'delete' | 'toggle';
+/** 'allowed' / 'denied' — P5-8 entitlement authorization decisions (module "Entitlement Authorization"). */
+/** 'replay' — Phase 8 Task 1: a retried credit operation that changed nothing (module "Credits"). */
+export type ActivityActionType = 'create' | 'update' | 'delete' | 'toggle' | 'allowed' | 'denied' | 'replay';
 
 export interface ActivityLog {
   id: number;

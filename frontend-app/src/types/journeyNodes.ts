@@ -239,6 +239,12 @@ export type ApiMethod = 'GET' | 'POST';
 export interface ApiKeyValue {
   key: string;
   value: string;
+  /**
+   * P5-6 — set by the server on a credential value it stores encrypted;
+   * `value` is then only the mask. Sending the pair back unchanged keeps
+   * the stored secret.
+   */
+  masked?: boolean;
 }
 
 export interface ApiNodeConfig {

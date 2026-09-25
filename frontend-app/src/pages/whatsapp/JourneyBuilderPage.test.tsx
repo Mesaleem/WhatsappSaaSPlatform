@@ -175,6 +175,11 @@ function saveButton() {
   return screen.getByRole('button', { name: /Save Journey/ });
 }
 
+/** P5-7 — a journey holding a node the runtime cannot execute yet is saved as a draft. */
+function draftButton() {
+  return screen.getByTestId('journey-save-draft');
+}
+
 /** The last graph_data the page tried to persist. */
 function savedPayload(mock: Mock): SaveFlowPayload {
   const args = mock.mock.calls.at(-1)!;
@@ -367,9 +372,16 @@ describe('configuration validation', () => {
       within(form).getByTestId('node-field-url').querySelector('input')!,
       'https://example.com/offer',
     );
+    // P5-7 — external_url is not runtime-executable yet: publishing is refused
+    // client-side (the server refuses too) and the draft save goes through.
     await user.click(saveButton());
+    expect(await screen.findByText(/cannot run yet, so this journey cannot be published/)).toBeTruthy();
+    expect(journeys.create).not.toHaveBeenCalled();
+
+    await user.click(draftButton());
 
     await waitFor(() => expect(journeys.create).toHaveBeenCalled());
+    expect(savedPayload(journeys.create).publish).toBe(false);
   });
 });
 
@@ -470,7 +482,7 @@ describe('security', () => {
     // If this were ever evaluated, the assignment below would land on
     // globalThis and the assertion after it would fail.
     await user.type(editor, 'globalThis.__journey_code_ran = true;');
-    await user.click(saveButton());
+    await user.click(draftButton());
 
     await waitFor(() => expect(journeys.create).toHaveBeenCalled());
 
@@ -591,8 +603,98 @@ describe('entitlement UX', () => {
     const form = await screen.findByTestId('node-config-api');
     await user.type(within(form).getByTestId('node-field-url').querySelector('input')!, 'https://x.test/y');
 
-    await user.click(saveButton());
+    // P5-7 — an api node journey is a draft (not runtime-executable yet).
+    await user.click(draftButton());
 
     expect(await screen.findByText(/external_api/)).toBeTruthy();
+  });
+});
+
+// ====================================================================
+// P5-7 — runtime truth / P5-6 — masked credentials
+// ====================================================================
+describe('runtime truth and secret handling', () => {
+  it('marks exactly the nodes the runtime cannot execute as draft-only', async () => {
+    const user = userEvent.setup();
+    await openNewEditor(user);
+
+    const draftOnly = [...document.querySelectorAll('[data-runtime="draft-only"]')]
+      .map((el) => (el as HTMLElement).dataset.testid!.replace('palette-node-', ''))
+      .sort();
+    const executable = [...document.querySelectorAll('[data-runtime="executable"]')]
+      .map((el) => (el as HTMLElement).dataset.testid!.replace('palette-node-', ''))
+      .sort();
+
+    expect(executable).toEqual(['audio', 'conditional', 'delay', 'document', 'image', 'text', 'video']);
+    expect(draftOnly).toHaveLength(20);
+    expect(draftOnly).toContain('api');
+  });
+
+  it('publishes an executable journey without the publish flag (server default)', async () => {
+    const user = userEvent.setup();
+    await openNewEditor(user);
+
+    await user.click(screen.getByTestId('palette-node-delay'));
+    await user.click(saveButton());
+
+    await waitFor(() => expect(journeys.create).toHaveBeenCalled());
+    expect(savedPayload(journeys.create).publish).toBeUndefined();
+  });
+
+  it('never shows a masked credential and sends the mask back untouched to keep it', async () => {
+    const flow = clone(legacyFlow);
+    flow.graph_data.nodes.push({
+      id: 'api_1',
+      type: 'api',
+      position: { x: 900, y: 400 },
+      data: {
+        method: 'GET',
+        url: 'https://api.example.test/v1',
+        headers: [
+          { key: 'Authorization', value: '********', masked: true },
+          { key: 'Accept', value: 'application/json' },
+        ],
+      },
+    });
+
+    const user = userEvent.setup();
+    await openExistingEditor(user, flow);
+    await selectCanvasNode(user, 'api');
+
+    const form = await screen.findByTestId('node-config-api');
+    const secretInput = within(form).getByPlaceholderText('Saved — type to replace') as HTMLInputElement;
+
+    expect(secretInput.type).toBe('password');
+    expect(secretInput.value).toBe('');
+    expect(form.innerHTML).not.toContain('********');
+    expect((within(form).getByDisplayValue('application/json') as HTMLInputElement).type).toBe('text');
+
+    await user.click(draftButton());
+    await waitFor(() => expect(journeys.update).toHaveBeenCalled());
+
+    const sent = savedPayload(journeys.update).graph_data.nodes.find((n) => n.id === 'api_1')!;
+    expect((sent.data as { headers: unknown[] }).headers[0]).toEqual({ key: 'Authorization', value: '********', masked: true });
+  });
+
+  it('replaces a masked credential when a new value is typed', async () => {
+    const flow = clone(legacyFlow);
+    flow.graph_data.nodes.push({
+      id: 'api_1',
+      type: 'api',
+      position: { x: 900, y: 400 },
+      data: { method: 'GET', url: 'https://api.example.test/v1', headers: [{ key: 'Authorization', value: '********', masked: true }] },
+    });
+
+    const user = userEvent.setup();
+    await openExistingEditor(user, flow);
+    await selectCanvasNode(user, 'api');
+
+    const form = await screen.findByTestId('node-config-api');
+    await user.type(within(form).getByPlaceholderText('Saved — type to replace'), 'Bearer new');
+    await user.click(draftButton());
+    await waitFor(() => expect(journeys.update).toHaveBeenCalled());
+
+    const sent = savedPayload(journeys.update).graph_data.nodes.find((n) => n.id === 'api_1')!;
+    expect((sent.data as { headers: unknown[] }).headers[0]).toEqual({ key: 'Authorization', value: 'Bearer new' });
   });
 });

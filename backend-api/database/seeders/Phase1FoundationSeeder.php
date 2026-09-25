@@ -7,6 +7,7 @@ use App\Models\Plan;
 use App\Models\Provider;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Schema;
 
 /**
  * Phase 1 Foundation — seeds the Capability/Provider/ProviderCapability/
@@ -187,9 +188,9 @@ class Phase1FoundationSeeder extends Seeder
      * cutover from PlanCatalog to `plans` is behaviour-preserving.
      */
     private const PLANS = [
-        'starter' => ['label' => 'Starter', 'price' => 499.00, 'duration_days' => 30, 'description' => '500 messages/month over the QR (Baileys) engine.', 'capability' => 'whatsapp_send', 'usage_limit' => 500, 'engine_type' => 'qr', 'billing_model' => 'flat_quota', 'rate_per_message' => null, 'total_allocated_messages' => 500],
-        'growth' => ['label' => 'Growth', 'price' => 1999.00, 'duration_days' => 30, 'description' => '2,500 messages/month over the QR (Baileys) engine.', 'capability' => 'whatsapp_send', 'usage_limit' => 2500, 'engine_type' => 'qr', 'billing_model' => 'flat_quota', 'rate_per_message' => null, 'total_allocated_messages' => 2500],
-        'business' => ['label' => 'Business', 'price' => 7999.00, 'duration_days' => 30, 'description' => '10,000 messages/month over the official Meta Cloud API.', 'capability' => 'whatsapp_send', 'usage_limit' => 10000, 'engine_type' => 'meta', 'billing_model' => 'flat_quota', 'rate_per_message' => null, 'total_allocated_messages' => 10000],
+        'starter' => ['label' => 'Starter', 'price' => 499.00, 'duration_days' => 30, 'description' => '500 messages/month over the QR (Baileys) engine.', 'capability' => 'whatsapp_send', 'usage_limit' => 500, 'engine_type' => 'qr', 'billing_model' => 'flat_quota', 'rate_per_message' => null, 'total_allocated_messages' => 500, 'included_credits' => 0],
+        'growth' => ['label' => 'Growth', 'price' => 1999.00, 'duration_days' => 30, 'description' => '2,500 messages/month over the QR (Baileys) engine.', 'capability' => 'whatsapp_send', 'usage_limit' => 2500, 'engine_type' => 'qr', 'billing_model' => 'flat_quota', 'rate_per_message' => null, 'total_allocated_messages' => 2500, 'included_credits' => 0],
+        'business' => ['label' => 'Business', 'price' => 7999.00, 'duration_days' => 30, 'description' => '10,000 messages/month over the official Meta Cloud API.', 'capability' => 'whatsapp_send', 'usage_limit' => 10000, 'engine_type' => 'meta', 'billing_model' => 'flat_quota', 'rate_per_message' => null, 'total_allocated_messages' => 10000, 'included_credits' => 0],
     ];
 
     public function run(): void
@@ -241,6 +242,20 @@ class Phase1FoundationSeeder extends Seeder
                 'rate_per_message' => $attrs['rate_per_message'],
                 'total_allocated_messages' => $attrs['total_allocated_messages'],
             ]);
+
+            /*
+             * Phase 8 Task 2 — the plan's AI-credit allowance per purchased
+             * period. Owner decision: 0 for every existing plan (Starter does
+             * not even sell `ai`). Written ONLY when the plan row is created
+             * here: a value a Super Admin later sets through plan management
+             * is an explicit product decision that re-seeding must not reset.
+             * Existing rows already hold an explicit 0 from the migration's
+             * NOT NULL DEFAULT 0. (Guarded so the seeder still runs against a
+             * database the Phase 8 migration has not reached yet.)
+             */
+            if ($plan->wasRecentlyCreated && Schema::hasColumn('plans', 'included_credits')) {
+                $plan->forceFill(['included_credits' => $attrs['included_credits']])->save();
+            }
 
             /*
              * The plan's message quota rides on its own capability row's

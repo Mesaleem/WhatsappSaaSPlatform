@@ -10,11 +10,14 @@ use App\Models\JourneyExecutionEvent;
 use App\Models\WhatsAppFlow;
 use App\Models\WhatsAppFlowSession;
 use App\Models\WhatsAppFlowVersion;
+use App\Services\Access\EntitlementAuditLogger;
 use App\Services\Access\JourneyNodeAuthorizer;
 use App\Services\WhatsApp\JourneyActionConfig;
 use App\Services\WhatsApp\JourneyConditionEvaluator;
+use App\Services\WhatsApp\JourneyPublishValidator;
 use App\Services\WhatsApp\JourneyVersionService;
 use App\Services\WhatsApp\WhatsAppJourneyEngine;
+use App\Support\JourneySecrets;
 use App\Support\PhoneNumberNormalizer;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -61,7 +64,7 @@ class WhatsAppFlowController extends Controller
         $account = $this->account($request);
 
         $flow = WhatsAppFlow::forAccount($account->id)->find($id);
-        abort_if(! $flow, 404, 'Flow not found.');
+        $this->abortIfMissingFlow($request, $account, $flow, $id);
 
         return response()->json(['data' => $flow]);
     }
@@ -71,7 +74,12 @@ class WhatsAppFlowController extends Controller
         $account = $this->account($request);
 
         $data = $this->validateFlow($request);
-        $this->assertNodesEntitled($request, $account, $data['graph_data']['nodes']);
+        $this->assertNodesEntitled($request, $account, $data['graph_data']['nodes'], $this->saveAction($request), null);
+
+        // P5-7 — a journey that is published (the default) must be executable.
+        if ($this->publishFlag($request)) {
+            $this->assertPublishable($data['graph_data'], $account, 'journey.publish', null);
+        }
 
         $flow = new WhatsAppFlow([
             'account_id' => $account->id,
@@ -93,10 +101,19 @@ class WhatsAppFlowController extends Controller
         $account = $this->account($request);
 
         $flow = WhatsAppFlow::forAccount($account->id)->find($id);
-        abort_if(! $flow, 404, 'Flow not found.');
+        $this->abortIfMissingFlow($request, $account, $flow, $id);
 
-        $data = $this->validateFlow($request);
-        $this->assertNodesEntitled($request, $account, $data['graph_data']['nodes']);
+        $data = $this->validateFlow($request, $flow);
+        $this->assertNodesEntitled($request, $account, $data['graph_data']['nodes'], $this->saveAction($request), $flow->id);
+
+        // P5-7 — publishing (the default) requires an executable graph; a
+        // draft save (`publish: false`) that switches the journey ON requires
+        // the version it would then run (the published one) to be executable.
+        if ($this->publishFlag($request)) {
+            $this->assertPublishable($data['graph_data'], $account, 'journey.publish', $flow->id);
+        } elseif (($data['is_active'] ?? false) && ! $flow->is_active) {
+            $this->assertPublishedVersionRunnable($flow, $account);
+        }
 
         $flow->fill([
             'name' => $data['name'],
@@ -123,7 +140,7 @@ class WhatsAppFlowController extends Controller
         $account = $this->account($request);
 
         $flow = WhatsAppFlow::forAccount($account->id)->find($id);
-        abort_if(! $flow, 404, 'Flow not found.');
+        $this->abortIfMissingFlow($request, $account, $flow, $id);
 
         $flow->delete();
 
@@ -136,7 +153,12 @@ class WhatsAppFlowController extends Controller
         $account = $this->account($request);
 
         $flow = WhatsAppFlow::forAccount($account->id)->find($id);
-        abort_if(! $flow, 404, 'Flow not found.');
+        $this->abortIfMissingFlow($request, $account, $flow, $id);
+
+        // P5-7 — switching a journey ON makes its published version live.
+        if (! $flow->is_active) {
+            $this->assertPublishedVersionRunnable($flow, $account);
+        }
 
         $flow->forceFill(['is_active' => ! $flow->is_active])->save();
 
@@ -155,7 +177,7 @@ class WhatsAppFlowController extends Controller
         $account = $this->account($request);
 
         $flow = WhatsAppFlow::forAccount($account->id)->find($id);
-        abort_if(! $flow, 404, 'Flow not found.');
+        $this->abortIfMissingFlow($request, $account, $flow, $id);
 
         $sessions = WhatsAppFlowSession::query()
             ->where('flow_id', $flow->id)
@@ -247,7 +269,7 @@ class WhatsAppFlowController extends Controller
         $account = $this->account($request);
 
         $flow = WhatsAppFlow::forAccount($account->id)->find($id);
-        abort_if(! $flow, 404, 'Flow not found.');
+        $this->abortIfMissingFlow($request, $account, $flow, $id);
 
         $data = $request->validate([
             'phone_number' => ['required', 'string', 'max:32'],
@@ -295,7 +317,7 @@ class WhatsAppFlowController extends Controller
         $account = $this->account($request);
 
         $flow = WhatsAppFlow::forAccount($account->id)->find($id);
-        abort_if(! $flow, 404, 'Flow not found.');
+        $this->abortIfMissingFlow($request, $account, $flow, $id);
 
         $session = WhatsAppFlowSession::query()
             ->forAccount($account->id)
@@ -350,7 +372,8 @@ class WhatsAppFlowController extends Controller
         $flow = $this->flowFor($request, $id);
         $version = $this->versionFor($flow, $versionId);
 
-        $this->assertNodesEntitled($request, $account, $version->nodes());
+        $this->assertNodesEntitled($request, $account, $version->nodes(), 'journey.publish', $flow->id);
+        $this->assertPublishable($version->graph_data ?? [], $account, 'journey.publish', $flow->id);
 
         $versions->publish($flow, $version);
 
@@ -362,7 +385,7 @@ class WhatsAppFlowController extends Controller
         $account = $this->account($request);
 
         $flow = WhatsAppFlow::forAccount($account->id)->find($id);
-        abort_if(! $flow, 404, 'Flow not found.');
+        $this->abortIfMissingFlow($request, $account, $flow, $id);
 
         return $flow;
     }
@@ -386,7 +409,7 @@ class WhatsAppFlowController extends Controller
         return $request->boolean('publish', true);
     }
 
-    private function validateFlow(Request $request): array
+    private function validateFlow(Request $request, ?WhatsAppFlow $existing = null): array
     {
         $data = $request->validate([
             'name' => ['required', 'string', 'max:255'],
@@ -434,6 +457,13 @@ class WhatsAppFlowController extends Controller
 
         // Phase 7 Task 4 — condition definitions the engine would refuse.
         foreach ($this->conditionErrors($nodes, $data['graph_data']['edges'] ?? []) as $key => $messages) {
+            $errors[$key] = array_merge($errors[$key] ?? [], $messages);
+        }
+
+        // P5-6 — credentials: never in an `api` URL (it cannot be masked in
+        // part), and a masked value sent back must correspond to a secret
+        // this journey already stores. No message contains a value.
+        foreach (JourneySecrets::urlCredentialErrors($nodes) + JourneySecrets::unresolvedMaskErrors($nodes, $existing?->graph_data) as $key => $messages) {
             $errors[$key] = array_merge($errors[$key] ?? [], $messages);
         }
 
@@ -661,17 +691,44 @@ class WhatsAppFlowController extends Controller
      *
      * @param array<int, array<string, mixed>> $nodes
      */
-    private function assertNodesEntitled(Request $request, Account $account, array $nodes): void
+    private function assertNodesEntitled(Request $request, Account $account, array $nodes, string $action = 'journey.save', ?int $flowId = null): void
     {
+        $audit = app(EntitlementAuditLogger::class);
+
         // Same Super-Admin bypass EnsureModuleEnabledMiddleware and
         // SubscriptionGuardMiddleware already give, for the same reason:
         // a Super Admin is never blocked by a toggle they control, even
         // while acting on a client's behalf via ?account_id=.
         if ($request->attributes->get('is_super_admin')) {
+            // P5-8 — the bypass itself is an audited decision (one row).
+            $audit->record($account, true, [
+                'action' => $action, 'resource_type' => 'journey', 'resource_id' => $flowId, 'source' => 'api',
+                'module' => 'chatbot', 'category' => 'super_admin_bypass',
+            ]);
+
             return;
         }
 
-        $denials = $this->nodeAuthorizer->denialsForNodes($account, $nodes);
+        // P5-8 — one audited decision per distinct GOVERNED node type (the
+        // same decide() the enforcement below uses; legacy types check
+        // nothing and record nothing). denials == the denied subset, so the
+        // enforced outcome is unchanged.
+        $decisions = $this->nodeAuthorizer->decisionsForNodes($account, $nodes);
+        $denials = [];
+
+        foreach ($decisions as $type => $decision) {
+            $audit->record($account, $decision['allowed'], [
+                'action' => $action, 'resource_type' => 'journey', 'resource_id' => $flowId, 'source' => 'api',
+                'module' => 'chatbot', 'node_type' => $type, 'category' => $decision['category'],
+                'capability' => $decision['capability'], 'capabilities' => $decision['capabilities'],
+                'provider' => $decision['provider'], 'providers' => $decision['providers'],
+                'reason' => $decision['reason'], 'error_code' => $decision['allowed'] ? null : 'JOURNEY_NODE_NOT_ENTITLED',
+            ]);
+
+            if (! $decision['allowed']) {
+                $denials[$type] = $decision['reason'];
+            }
+        }
 
         if ($denials === []) {
             return;
@@ -683,6 +740,83 @@ class WhatsAppFlowController extends Controller
             'error_code' => 'JOURNEY_NODE_NOT_ENTITLED',
             'nodes' => $denials,
         ], 403));
+    }
+
+    /** P5-8 — the audited action of a create/update: publishing (the default) or a draft save. */
+    private function saveAction(Request $request): string
+    {
+        return $this->publishFlag($request) ? 'journey.publish' : 'journey.save';
+    }
+
+    /**
+     * P5-8 — a journey id that is not in the resolved tenant is a 404, as
+     * before. When that id DOES exist under another account, the attempt is
+     * a cross-tenant access and is audited — on the ACTOR's resolved
+     * account, naming the other account only inside the payload. The
+     * response is identical either way (no existence oracle).
+     */
+    private function abortIfMissingFlow(Request $request, Account $account, ?WhatsAppFlow $flow, int $id): void
+    {
+        if ($flow) {
+            return;
+        }
+
+        $owner = WhatsAppFlow::query()->whereKey($id)->value('account_id');
+
+        if ($owner !== null && (int) $owner !== (int) $account->id) {
+            app(EntitlementAuditLogger::class)->record($account, false, [
+                'action' => 'journey.'.($request->route()?->getActionMethod() ?? 'access'),
+                'resource_type' => 'journey', 'resource_id' => $id, 'source' => 'api',
+                'category' => 'cross_tenant', 'target_account_id' => (int) $owner, 'http_status' => 404,
+            ]);
+        }
+
+        abort(404, 'Flow not found.');
+    }
+
+    /**
+     * P5-7 — 422 JOURNEY_NOT_PUBLISHABLE unless the runtime can execute this
+     * graph (JourneyPublishValidator). Applies to every caller, the Super
+     * Admin included: managing a tenant's journey does not make an
+     * unsupported node executable.
+     *
+     * @param  array<string, mixed>  $graph
+     */
+    private function assertPublishable(array $graph, ?Account $account = null, string $action = 'journey.publish', ?int $flowId = null): void
+    {
+        $nodes = is_array($graph['nodes'] ?? null) ? $graph['nodes'] : [];
+        $errors = JourneyPublishValidator::errors($nodes, is_array($graph['edges'] ?? null) ? $graph['edges'] : []);
+
+        if ($errors === []) {
+            return;
+        }
+
+        // P5-8 — audited as what it is: a publishability refusal, NOT a
+        // missing entitlement. `unsupported_node` when a node cannot run,
+        // otherwise `invalid_configuration`.
+        $unsupported = collect($nodes)->pluck('type')->first(fn ($type) => ! \App\Support\JourneyNodeCatalog::isRuntimeExecutable($type));
+        app(EntitlementAuditLogger::class)->record($account, false, [
+            'action' => $action, 'resource_type' => 'journey', 'resource_id' => $flowId, 'source' => 'api',
+            'module' => 'chatbot', 'category' => $unsupported !== null ? 'unsupported_node' : 'invalid_configuration',
+            'node_type' => is_string($unsupported) ? $unsupported : null,
+            'error_code' => 'JOURNEY_NOT_PUBLISHABLE', 'http_status' => 422,
+        ]);
+
+        abort(response()->json([
+            'message' => 'This journey cannot be published: '.collect($errors)->flatten()->first(),
+            'error_code' => 'JOURNEY_NOT_PUBLISHABLE',
+            'errors' => $errors,
+        ], 422));
+    }
+
+    /** P5-7 — activation check: the version new sessions would start on must be executable. */
+    private function assertPublishedVersionRunnable(WhatsAppFlow $flow, ?Account $account = null): void
+    {
+        $published = $flow->publishedVersion;
+
+        if ($published) {
+            $this->assertPublishable($published->graph_data ?? [], $account, 'journey.activate', $flow->id);
+        }
     }
 
     private function account(Request $request): Account

@@ -70,6 +70,8 @@ class PlanManagementService
                 'billing_model' => $attributes['billing_model'] ?? 'flat_quota',
                 'rate_per_message' => $attributes['rate_per_message'] ?? null,
                 'total_allocated_messages' => $attributes['total_allocated_messages'] ?? null,
+                // Phase 8 Task 2 — explicit 0 unless supplied.
+                'included_credits' => (int) ($attributes['included_credits'] ?? 0),
                 'is_active' => $attributes['is_active'] ?? true,
             ]);
 
@@ -110,6 +112,9 @@ class PlanManagementService
                 // written only for keys actually supplied, so a
                 // capability edit cannot touch any of them.
                 'engine_type', 'billing_model', 'rate_per_message', 'total_allocated_messages', 'is_active',
+                // Phase 8 Task 2 — applies to orders placed from now on
+                // (invoices capture it); never re-allocates past periods.
+                'included_credits',
             ]));
 
             if ($core !== []) {

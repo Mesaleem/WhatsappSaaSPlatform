@@ -45,6 +45,7 @@ const response: ManagedPlansResponse = {
       billing_model: 'flat_quota',
       rate_per_message: null,
       total_allocated_messages: 500,
+      included_credits: 0,
       is_active: true,
       capabilities: ['external_api', 'social', 'whatsapp_groups', 'whatsapp_send'],
       accounts: 12,
@@ -59,6 +60,7 @@ const response: ManagedPlansResponse = {
       billing_model: 'flat_quota',
       rate_per_message: null,
       total_allocated_messages: 10000,
+      included_credits: 2000,
       is_active: false,
       capabilities: ['crm', 'whatsapp_send'],
       accounts: 3,
@@ -188,8 +190,10 @@ describe('create', () => {
     // No invented fields reach the API.
     expect(Object.keys(payload).sort()).toEqual([
       'billing_model', 'capabilities', 'description', 'duration_days', 'engine_type',
-      'is_active', 'label', 'price', 'rate_per_message', 'slug', 'total_allocated_messages',
+      'included_credits', 'is_active', 'label', 'price', 'rate_per_message', 'slug', 'total_allocated_messages',
     ]);
+    // Phase 8 Task 2 — untouched, the allowance is an explicit 0.
+    expect(payload.included_credits).toBe(0);
   });
 
   it('renders a duplicate-slug 422 as a field error', async () => {
@@ -481,7 +485,7 @@ describe('after a successful write', () => {
     withScale.data.push({
       slug: 'scale', label: 'Scale', price: 4999, duration_days: 60, description: null,
       engine_type: 'meta', billing_model: 'flat_quota', rate_per_message: null,
-      total_allocated_messages: 25000, is_active: true, capabilities: ['whatsapp_send'], accounts: 0,
+      total_allocated_messages: 25000, included_credits: 0, is_active: true, capabilities: ['whatsapp_send'], accounts: 0,
     });
     // open() already consumed the first call; every later read includes it.
     plans.list.mockResolvedValue(withScale);
@@ -517,5 +521,44 @@ describe('no hardcoded plan data', () => {
     // And none of the seeded ones, because the API did not return them.
     expect(screen.queryByTestId('plan-row-starter')).toBeNull();
     expect(screen.queryByTestId('plan-row-business')).toBeNull();
+  });
+});
+
+// ====================================================================
+// Phase 8 Task 2 — the plan's AI-credit allowance
+// ====================================================================
+describe('included AI credits', () => {
+  it('lists each plan’s allowance', async () => {
+    await open();
+
+    expect(screen.getByTestId('plan-credits-starter').textContent).toBe('0');
+    expect(screen.getByTestId('plan-credits-business').textContent).toBe('2000');
+  });
+
+  it('sends only a changed allowance', async () => {
+    const user = userEvent.setup();
+    await openEdit(user, 'business');
+
+    expect((screen.getByTestId('plan-included-credits') as HTMLInputElement).value).toBe('2000');
+    await user.clear(screen.getByTestId('plan-included-credits'));
+    await user.type(screen.getByTestId('plan-included-credits'), '3500');
+    await user.click(screen.getByTestId('plan-save'));
+
+    await waitFor(() => expect(plans.update).toHaveBeenCalled());
+    expect(plans.update.mock.calls[0]).toEqual(['business', { included_credits: 3500 }]);
+  });
+
+  it('shows the backend’s refusal of credits on a plan without ai', async () => {
+    plans.update.mockRejectedValue({
+      response: { status: 422, data: { errors: { included_credits: ['A plan can include credits only if it also includes the "ai" capability.'] } } },
+    });
+    const user = userEvent.setup();
+    await openEdit(user, 'starter');
+
+    await user.clear(screen.getByTestId('plan-included-credits'));
+    await user.type(screen.getByTestId('plan-included-credits'), '100');
+    await user.click(screen.getByTestId('plan-save'));
+
+    expect((await screen.findByTestId('field-error-included_credits')).textContent).toContain('only if it also includes the "ai" capability');
   });
 });

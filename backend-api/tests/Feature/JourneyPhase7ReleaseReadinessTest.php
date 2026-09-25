@@ -410,18 +410,29 @@ class JourneyPhase7ReleaseReadinessTest extends TestCase
         $this->assertSame(['A'], $this->sent($account, '919800000001'));
     }
 
-    public function test_a_customer_waiting_session_stays_legitimately_open_indefinitely(): void
+    /**
+     * P5-7 contract change (was "stays open indefinitely"): a session
+     * awaiting the customer's answer is legitimately open for the whole
+     * reply window, and closes (reply_timeout) once it has passed.
+     */
+    public function test_a_customer_waiting_session_stays_open_for_the_reply_window_then_expires(): void
     {
         $account = $this->account();
         $this->flow($account, [$this->q('q'), $this->text('a', 'A')]);
         $this->inbound($account, 'go');
         Subscription::where('account_id', $account->id)->update(['expires_at' => now()->addYears(2)]);
-        $this->travel(365)->days();
+        $this->travel(WhatsAppJourneyEngine::QUESTION_REPLY_TTL_SECONDS - 60)->seconds();
 
         $this->schedulerTick();
         $this->assertSame(WhatsAppFlowSession::STATUS_ACTIVE, $this->flowSession($account)->status);
-        $this->inbound($account, 'finally');
+        $this->inbound($account, 'in time');
         $this->assertSame(['Q?', 'A'], $this->sent($account));
+
+        $this->flow($account, [$this->q('q2'), $this->text('b', 'B')], 'again');
+        $this->inbound($account, 'again');
+        $this->travel(365)->days();
+        $this->schedulerTick();
+        $this->assertSame(WhatsAppFlowSession::STATUS_EXPIRED, $this->flowSession($account)->status);
     }
 
     // ==================================================================

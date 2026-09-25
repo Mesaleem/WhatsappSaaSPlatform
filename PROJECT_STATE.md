@@ -7,11 +7,11 @@
 
 | | |
 |---|---|
-| **Last updated** | 2026-09-24 |
-| **Last completed work** | **P5-5 CLOSED** — payment fulfilment exactly-once, now also serialized per account (`InvoiceCreditService` locks the invoice owner's account row); proven on MariaDB by `tests/Probes/payment_fulfillment_concurrency_probe.php` · **Phase 7 CLOSED** (Task 10 release-readiness audit; 2 cross-task regressions fixed — see §8.1 Phase 7 closure record) · Phase 7 Task 9 — Journey production hardening: one session state machine (`WhatsAppFlowSession::TRANSITIONS`, terminal saves refused), guarded checkpoint, recovery of interrupted immediate runs (run lease + `recoverInterruptedRuns()` in `journeys:resume-due`), manual test serialized and replaces every open session, race-free restore events; MariaDB cross-process + deploy probes (`tests/Probes/`) · Phase 7 Task 8 — one quota/entitlement classification for every Journey send (`JourneySendGate`; quota exhausted/plan expired → retried `quota_failure`, suspended/no subscription → failed `entitlement_blocked`; node capability via `JourneyNodeAuthorizer::runtimeDenialFor`) · Phase 7 Task 7 — Journey observability: durable `journey_execution_events` history, failure categories, retry visibility, read-only `GET /whatsapp/flows/{id}/sessions/{sessionId}`, opt-in `journeys:prune-history` · Phase 7 Task 6 — palette `text`/`image`/`video`/`document`/`audio` nodes executed; one completion/terminal contract (`transition()` compare-and-set: ended sessions are never rewritten) · Phase 7 Task 5 — Journey action execution hardening (`JourneyActionConfig`, checkpoint per node, immediate-path failures retried via the Task 1 model) · Phase 7 Task 4 — Journey condition/branching hardening (`JourneyConditionEvaluator`; `conditional` node executed) · P5-4 — orders fulfilled from plan terms captured on the invoice at checkout · P5-3 — group jobs: atomic claim, failure settlement from recipient rows, bounded slices, stale-batch recovery · P5-2 — Social Inbox lead reply now goes through `DirectMessageDispatcher` (quota + dispatch log) · Phase 7 Task 3 — durable inbound idempotency (`inbound_message_events`) + per-conversation lease · Task 2 Journey versions · P5-1 · Tasks 1–1.6 |
-| **Backend test suite** | **1958 passed, 0 failures** (MariaDB, authoritative) · 1953 + 5 skipped (SQLite) · frontend 549 passed (unchanged) |
-| **Migrations** | 120 (120th = `2026_09_24_170000` journey execution events (Phase 7 T7); 119th = `2026_09_24_160000` invoice plan-terms snapshot (P5-4); 118th = `2026_09_24_150000` group-batch claim columns (P5-3); 117th = `2026_09_24_140000` inbound events + conversation locks; 115th/116th = journey versions + backfill; 114th = `group_dispatch_recipients`; 113th = `qr → journey_automation`; 112th = temporal columns; 111th = platform CRM account) — 111th–120th **not yet run on the real DB** |
-| **Next up** | **Phase 8** (not yet specified). Phase 7 is closed in code; its production rollout (10 pending migrations, sequence in §8.1 Phase 7 closure record) is an owner action and has NOT been performed. Owner decisions open: (1) run migration 120 on the real DB; (2) whether to schedule `journeys:prune-history --force` (dry run by default, not scheduled). Owner decisions pending from Task 1 — see §8.1 "Journey (Phase 7)". CRM Notes are backlog (§8.4). |
+| **Last updated** | 2026-09-25 |
+| **Last completed work** | **Phase 8 Task 3 CLOSED — Credit Ledger, Reservation & Consumption**: `CreditConsumptionService` is the one spending contract (reserve · partial consume · settle · release · direct spend), account-bound (`tenant_mismatch` / `reservation_not_found`), every movement still a `CreditService` ledger operation under the credit-account lock; direct spend = a reservation created already consumed (a consumption always references a reservation); partial consumption keeps a reservation open until nothing remains; optional product gate (`CreditSpendGate`, AI = `CreditEntitlementService`) evaluated under the lock after the idempotency lookup; caller-set reservation `expires_at` + scheduled `credits:release-expired-reservations`; stable failure codes; verified on MariaDB 10.11.14 and MySQL 8.0.46 — see §5 "Credit spending (Phase 8 Task 3)" · **Phase 8 Task 2 CLOSED — Credit Plans, Entitlements & Limits**: `plans.included_credits` (explicit 0 for every existing plan — owner decision), captured on the invoice at order time, allocated once per paid period (`plan_allocation` ledger type, key `plan-allocation:{subscription}:{invoice}`, period row in `usage_quotas`) inside payment fulfilment; `ai` capability vs credits kept as two checks (`CreditEntitlementService`); plan API/UI edit the allowance; `credits:backfill-plan-allocation` (dry-run, repeat-safe); verified on MariaDB 10.11.14 AND MySQL 8.0.46 — see §5 "Credit plans (Phase 8 Task 2)" · **Phase 8 Task 1 CLOSED — Credit System Foundation**: per-account `credit_accounts` (integer balance/reserved), append-only `credit_ledger_entries`, `credit_reservations` (reserved → consumed \| released), `App\Services\Credits\CreditService` as the only writer (row-locked transaction per operation, DB-enforced idempotency), Super Admin grant/adjust/refund API, tenant read API; proven on MariaDB by `tests/Probes/credit_concurrency_probe.php`; plan integration deferred to Task 2 — see §5 "Credits (Phase 8 Task 1)" · **P5-8 CLOSED** — entitlement audit logging: every allow/deny decision at the entitlement boundaries (capability/module guards incl. API-key siblings, route permission refusals, Agent target-account refusals, Journey save/publish/activate node authorization, cross-tenant journey access, Journey runtime node / runtime-entitlement / send-gate decisions) recorded in the existing `activity_logs` trail via `EntitlementAuditLogger` (module "Entitlement Authorization", action_type `allowed`/`denied`, allow-listed payload, never throws) — see §4 and §8.1 P5-8 · **P5-6 + P5-7 CLOSED** — P5-6: `api`-node credential headers/query values encrypted at rest (`JourneySecrets`, Laravel `Crypt`), masked in every journey response and audit row, kept on update via the mask, refused in URLs · P5-7: backend runtime truth (`JourneyNodeCatalog::RUNTIME_EXECUTABLE_TYPES`), publish/activate refused for non-executable or malformed graphs (422 `JOURNEY_NOT_PUBLISHABLE`, drafts still save), run-time node re-authorization for every catalog node, first-node permanent failure no longer consumes the message, `default` journeys step aside for specific chatbot rules, deterministic trigger selection, question sessions expire after 24 h (`reply_timeout`) — see §8.1 P5-6 / P5-7 · **P5-5 CLOSED** — payment fulfilment exactly-once, now also serialized per account (`InvoiceCreditService` locks the invoice owner's account row); proven on MariaDB by `tests/Probes/payment_fulfillment_concurrency_probe.php` · **Phase 7 CLOSED** (Task 10 release-readiness audit; 2 cross-task regressions fixed — see §8.1 Phase 7 closure record) · Phase 7 Task 9 — Journey production hardening: one session state machine (`WhatsAppFlowSession::TRANSITIONS`, terminal saves refused), guarded checkpoint, recovery of interrupted immediate runs (run lease + `recoverInterruptedRuns()` in `journeys:resume-due`), manual test serialized and replaces every open session, race-free restore events; MariaDB cross-process + deploy probes (`tests/Probes/`) · Phase 7 Task 8 — one quota/entitlement classification for every Journey send (`JourneySendGate`; quota exhausted/plan expired → retried `quota_failure`, suspended/no subscription → failed `entitlement_blocked`; node capability via `JourneyNodeAuthorizer::runtimeDenialFor`) · Phase 7 Task 7 — Journey observability: durable `journey_execution_events` history, failure categories, retry visibility, read-only `GET /whatsapp/flows/{id}/sessions/{sessionId}`, opt-in `journeys:prune-history` · Phase 7 Task 6 — palette `text`/`image`/`video`/`document`/`audio` nodes executed; one completion/terminal contract (`transition()` compare-and-set: ended sessions are never rewritten) · Phase 7 Task 5 — Journey action execution hardening (`JourneyActionConfig`, checkpoint per node, immediate-path failures retried via the Task 1 model) · Phase 7 Task 4 — Journey condition/branching hardening (`JourneyConditionEvaluator`; `conditional` node executed) · P5-4 — orders fulfilled from plan terms captured on the invoice at checkout · P5-3 — group jobs: atomic claim, failure settlement from recipient rows, bounded slices, stale-batch recovery · P5-2 — Social Inbox lead reply now goes through `DirectMessageDispatcher` (quota + dispatch log) · Phase 7 Task 3 — durable inbound idempotency (`inbound_message_events`) + per-conversation lease · Task 2 Journey versions · P5-1 · Tasks 1–1.6 |
+| **Backend test suite** | **2055 passed, 0 failures** (MariaDB, authoritative) · 2048 + 7 skipped (SQLite) · MySQL 8.0.46: 2052 passed, 3 pre-existing JSON key-order failures (§8.4) · frontend 560 passed |
+| **Migrations** | 123 (123rd = `2026_09_25_120000_add_credit_reservation_expiry` (Phase 8 T3, additive: nullable `credit_reservations.expires_at` + index; CHECK consumed ≤ amount on MySQL/MariaDB); 122nd = `2026_09_25_110000_add_plan_credit_allocation` (Phase 8 T2, additive: `plans.included_credits`, `invoices.plan_included_credits`, 4 columns on `usage_quotas`); 121st = `2026_09_25_100000_create_credit_system_tables` (Phase 8 T1, additive: 3 new tables); 120th = `2026_09_24_170000` journey execution events (Phase 7 T7); 119th = `2026_09_24_160000` invoice plan-terms snapshot (P5-4); 118th = `2026_09_24_150000` group-batch claim columns (P5-3); 117th = `2026_09_24_140000` inbound events + conversation locks; 115th/116th = journey versions + backfill; 114th = `group_dispatch_recipients`; 113th = `qr → journey_automation`; 112th = temporal columns; 111th = platform CRM account) — 111th–123rd **not yet run on the real DB** |
+| **Next up** | **Phase 8 Task 4** (not started — not specified here; AI provider/usage/pricing remain unbuilt) · owner: set real `included_credits` values, then `credits:backfill-plan-allocation --dry-run` · remaining Phase 5 audit items (P5-9 … P5-11) and P6-1 … P6-3, then **Phase 8** (not yet specified). Phase 7 is closed in code; its production rollout (10 pending migrations, sequence in §8.1 Phase 7 closure record) is an owner action and has NOT been performed. Owner decisions open: (1) run migration 120 on the real DB; (2) whether to schedule `journeys:prune-history --force` (dry run by default, not scheduled). Owner decisions pending from Task 1 — see §8.1 "Journey (Phase 7)". CRM Notes are backlog (§8.4). |
 
 ---
 
@@ -39,15 +39,16 @@ Three deployable services:
 
 1. **The execution track (LIVE — this is what the team actually works to).**
    Phase 1 Foundation → Phase 2/3 Developer API → Phase 4 Meta provider → Phase 5 Journey &
-   plan management → **Phase 6 CRM** (current). Tasks are issued as
-   "Phase 6 Task N" and each is a self-contained spec.
+   plan management → Phase 6 CRM → Phase 7 Journey hardening → **Phase 8 AI / Credit**
+   (current: Task 1 Credit System Foundation done). Tasks are issued as
+   "Phase N Task M" and each is a self-contained spec.
 
 2. **The architecture report's roadmap** in
    `Claude outputs/wa-saas-platform-architecture-report.md` §27 — Phases 0–10, where
    **Phase 5 = CRM and Phase 6 = AI Platform**. This is the long-range plan, still useful
    for *what is left to build*, but its **numbers are not the ones in use**.
 
-When a task says "Phase 6", it means **CRM**. Section 8 below maps both.
+When a task says "Phase 6", it means **CRM**; "Phase 8" means **AI / Credit** (the report's "Phase 6 AI Platform"). Section 8 below maps both.
 
 ---
 
@@ -148,7 +149,7 @@ Module-off means **backend-blocked**, not merely UI-hidden.
 
 ## 4. Database
 
-**119 migrations**, **57 Eloquent models**. Grouped by domain:
+**123 migrations**, **61 Eloquent models**. Grouped by domain:
 
 | Domain | Key tables |
 |---|---|
@@ -161,6 +162,7 @@ Module-off means **backend-blocked**, not merely UI-hidden.
 | **CRM** | `contacts`, `crm_leads`, `crm_capture_link_failures`, `crm_tags`, `crm_lead_tags` |
 | Social & ads | `social_accounts`, `social_provider_configs`, `leads`, `ad_campaigns`, `ad_campaign_daily_metrics`, `organic_posts`, `comment_automation_rules`, `comment_automation_events` |
 | Developer API | `api_keys`, `api_request_logs`, `api_idempotency_keys`, `webhook_subscriptions`, `webhook_deliveries` |
+| **Credits** (Phase 8 T1, T3) | `credit_accounts`, `credit_ledger_entries` (append-only), `credit_reservations` (T3: `expires_at`, partial `consumed_amount`) |
 | Chatbot & notifications | `chatbot_rules`, `chatbot_logs`, `notification_templates`, `notification_broadcasts`, `in_app_notifications`, `mail_settings`, `mail_logs` |
 
 **Schema invariants that must not be violated:**
@@ -235,6 +237,66 @@ Module-off means **backend-blocked**, not merely UI-hidden.
   condition FAILS the session (`last_error`, `current_node_id` = node) and sends nothing; the save
   API refuses the same definitions (drafts with empty rules still save). The 25-step limit now
   records `last_error`. Do not add operators or context sources outside the evaluator.
+- **Journey secrets are encrypted and never leave the server** (P5-6, `App\Support\JourneySecrets`).
+  Secret = a credential-named (`isSensitiveName()`: auth/token/secret/password/api-key/cookie/…)
+  pair in an `api` node's `data.headers` / `data.query`; nothing else in a graph is treated as
+  secret (`credentialRef`/`gatewayRef`/`agentId` are references, not secrets). Stored as
+  `enc:v1:` + `Crypt::encryptString()` by the `MasksJourneySecrets` model trait (`saving`, both
+  `whatsapp_flows` and `whatsapp_flow_versions`), serialized as `JourneySecrets::MASK` +
+  `masked: true`, audited masked (`WhatsAppFlow::auditableAttributes`). A client sends the mask
+  back to keep the stored value (same node id + field + name), else 422; credentials in the
+  `api` URL are 422. Read plaintext only via `JourneySecrets::reveal()` (no runtime needs it yet).
+- **Runtime truth** (P5-7). `JourneyNodeCatalog::RUNTIME_EXECUTABLE_TYPES` (12: the 5 legacy +
+  delay, conditional, text, image, video, document, audio) is the ONLY definition of "executable";
+  the frontend `RUNTIME_EXECUTABLE_NODE_TYPES` mirrors it (asserted by `JourneyRuntimeSafetyTest`).
+  Publishing (create/update with `publish` true, `versions/{id}/publish`) and activating (toggle
+  on, or update switching `is_active` on) require `JourneyPublishValidator` to pass: executable
+  types only, unique ids, edges between existing nodes, complete action/branch configuration —
+  else 422 `JOURNEY_NOT_PUBLISHABLE`, for the Super Admin too. Draft saves (`publish: false`) keep
+  the permissive save-time validation. At run time every node is checked against the list
+  (`unsupported_node`) and, for catalog nodes, re-authorized (`runtimeDenialFor`) before it runs.
+- **Journey trigger / consumption rules** (P5-7). Trigger tiers ctwa (specific ad, then catch-all)
+  > keyword > default, lowest flow id first in every tier. A `default` journey is taken only if
+  no chatbot rule other than a `fallback` rule matches (`ChatbotEngineService::specificRuleMatches`,
+  lazy). A run that ends failed/expired at its first node with no node succeeded returns
+  "not consumed" and the chatbot answers the message; a transient first-node failure parked for
+  retry still consumes it. A session paused at a question expires after
+  `WhatsAppJourneyEngine::QUESTION_REPLY_TTL_SECONDS` (24 h, from `last_interaction_at`):
+  inline on the next inbound message and by `journeys:resume-due` (`expireUnansweredQuestions()`),
+  category `reply_timeout`; an expired question never captures a message.
+- **Entitlement decisions are audited in `activity_logs`** (P5-8, `App\Services\Access\EntitlementAuditLogger`).
+  `module_name` = "Entitlement Authorization", `action_type` = `allowed` | `denied`, `user_id` = actor
+  (NULL on webhook/scheduler/API-key paths), `account_id` = the tenant the decision is about, ALWAYS
+  resolved server-side — a refused cross-tenant / foreign `?account_id=` attempt is recorded on the
+  ACTOR's account, the other account only as `target_account_id` in the payload. `new_values` is a
+  closed allow-list (decision, action, category, reason, source, resource_type/id, node_type/id,
+  module, capability/capabilities, provider/providers, permission, actor/target account, session_id,
+  flow_version_id, inbound_event_id, error_code, http_status) — never bodies, graphs, headers, keys.
+  Categories: allowed `entitled` / `no_requirement` / `super_admin_bypass`; denied
+  `capability_not_entitled` / `module_disabled` / `provider_not_supported` / `account_suspended` /
+  `no_active_subscription` / `missing_permission` / `cross_tenant` / `unauthorized_target_account` /
+  `unsupported_node` / `invalid_configuration`. Recorded at: `capability.guard`, `module.guard`,
+  `capability.apikey`, `module.apikey` (denials), spatie `permission:`/`role:` refusals (exception
+  render hook, response unchanged), `TenantIsolationMiddleware` Agent target refusal, Journey
+  save/publish/activate (one row per governed node type, allowed and denied; publishability refusals
+  keep their own category), cross-tenant journey ids, Journey runtime (node decisions once per node
+  type per run; runtime-entitlement block/start refusal/restore; send-gate suspended/no-subscription).
+  Legacy node types and control-flow nodes check nothing and record nothing; quota refusals are usage,
+  not entitlement, and are not recorded. A failed audit write is `Log::warning` (no payload) and never
+  changes the decision. Readable only through `/api/admin/activity-logs` (`view-activity-logs`,
+  Super Admin), now filterable by `action_type=allowed|denied`. `JourneyNodeAuthorizer::decide()` is
+  the structured form of `denialFor()`/`runtimeDenialFor()` (thin wrappers — the audited decision is
+  the enforced one).
+- **Credits change only through `App\Services\Credits\CreditService`** (Phase 8 T1). One transaction per
+  operation, starting with `SELECT … FOR UPDATE` on the account's `credit_accounts` row (lock order:
+  credit_accounts → credit_reservations → insert); every change of `balance`/`reserved` writes a
+  `credit_ledger_entries` row with signed deltas and the resulting `balance_after`/`reserved_after`.
+  `reserved <= balance` always (service + CHECK on MariaDB/MySQL); ledger rows and reservation rows are
+  immutable through the models (update/delete throw); a reservation changes state only via the
+  service's guarded UPDATE `WHERE status='reserved'`. Idempotency = unique(credit_account_id,
+  idempotency_key) on the ledger (and reservations). Never write these tables from anywhere else.
+  **Spending (Phase 8 T3) goes through `CreditConsumptionService`** (account-bound wrapper over
+  `CreditService`); never call it with an account the caller did not resolve through the tenant rules.
 - **Every inbound WhatsApp message passes `InboundEventGate`** (Phase 7 Task 3, inside
   `ChatbotEngineService::handleInboundMessage`): (1) take the (account, phone) lease in
   `journey_conversation_locks` (conditional UPDATE; 120 s lease; waits ≤ 10 s); (2) claim the event in
@@ -461,6 +523,232 @@ graph), `POST /{id}/versions/{versionId}/publish` (edit permission; re-checks no
 also the rollback path). A new session pins the PUBLISHED version; the manual Test pins the LATEST
 saved one. Running/waiting sessions never change version.
 
+### Credits (Phase 8 Task 1) — Credit System Foundation
+
+**Existing structures reused / not reused (audited first).** Billing today is message quota on
+`subscriptions` (`MessageQuotaService`, lock-then-increment) plus `invoices`; `usage_quotas`
+(Phase 1, per-capability allocated/used per period) exists but is unused and has no ledger or
+idempotency, so it was not stretched into a financial ledger — it remains the natural place for a
+Task 2+ per-period allocation if needed. The `ai` capability exists (Phase 1) and is not wired to
+credits yet (Task 2). `api_idempotency_keys` is the `/v1` request-replay store, not a financial
+guarantee, so credit idempotency lives in the ledger's own unique index.
+
+**Model.** One `credit_accounts` row per account (unique `account_id`, created at balance 0 on first
+use, race-safe `INSERT … IGNORE`): `balance` (credits owned) and `reserved` (held by open
+reservations), UNSIGNED BIGINT; `available = balance − reserved`. No balance column on `accounts`.
+
+**Ledger** (`credit_ledger_entries`, append-only, no `updated_at`): credit_account_id + account_id
+(composite FK → credit_accounts(id, account_id), CASCADE — a row cannot mix tenants), `type`,
+`amount` (> 0), `balance_delta`, `reserved_delta`, `balance_after`, `reserved_after`,
+`idempotency_key` (unique per credit account), `request_hash` (hidden), `reservation_id`,
+`refund_of_entry_id`, `reference_type`/`reference_id`, `reason`, `metadata`, `source`
+(`system` | `admin_api`), `actor_user_id`, `created_at`. The rows of one account, in id order,
+reproduce its balance and reserved exactly.
+
+| type | balance | reserved | rule |
+|---|---|---|---|
+| `grant` / `purchase` | +a | 0 | purchase is recorded only (payment wiring = Task 2) |
+| `adjustment` | ±a | 0 | a negative adjustment only takes AVAILABLE credits |
+| `reservation` | 0 | +a | a ≤ available |
+| `reservation_release` | 0 | −a | release, or the unused remainder of a partial consume |
+| `consumption` | −a | −a | only of a reservation; 1 ≤ a ≤ reserved amount |
+| `refund` | +a | 0 | of a `consumption` of the same account; Σ refunds ≤ consumed |
+
+**Reservations**: `reserved → consumed` or `reserved → released`, both terminal. Consuming a released
+or releasing a consumed reservation → `invalid_reservation_state`; consuming/releasing it again →
+replay of the original entry (keys `consume:{id}` / `release:{id}`). ~~No automatic cleanup of stale
+reservations~~ — Phase 8 T3: caller-set `expires_at` + `credits:release-expired-reservations`.
+
+**Idempotency.** Every operation takes a key; replays return the original entry (`replayed`), a key
+reused with different parameters → `idempotency_conflict`. Enforced by the unique index (a racing
+duplicate that reaches INSERT is answered as a replay). Key convention `{origin}:{operation}:{ref}`;
+the admin API stores `admin:{grant|adjust|refund}:{client key}`.
+
+**Concurrency** (real MariaDB, `tests/Probes/credit_concurrency_probe.php`, run by
+`CreditSystemFoundationTest` on MariaDB; 24/24 over 3 rounds): 20 simultaneous grants; 20
+reservations racing for 100 credits (exactly 10 win); 20 consumes of 10 reservations (each once);
+consume vs release (one wins); 12 duplicate grants / reservations on one key (one effect); 8
+simultaneous HTTP grants on one `Idempotency-Key` (one 201, seven 200 replays); 24 mixed operations
+— ledger always reproduces the balance.
+
+**API** (no mutation endpoint for reserve/consume/release — service only):
+
+| Route | Who | |
+|---|---|---|
+| `GET /api/billing/credits` | tenant (billing group: tenant.isolation + manage-subscriptions + module billing) | resolved account's balance/reserved/available |
+| `GET /api/billing/credits/ledger` | same | its ledger, newest first, `?type=` |
+| `GET /api/admin/accounts/{id}/credits` | Super Admin (any) · Agent (own sub-clients, else 404) | balance + ledger |
+| `POST /api/admin/accounts/{id}/credits/grant` | **Super Admin only** (403 otherwise) | `amount`, `reason`, `reference?`, `idempotency_key` (or `Idempotency-Key` header) |
+| `POST …/credits/adjust` | Super Admin only | signed non-zero `amount` |
+| `POST …/credits/refund` | Super Admin only | `amount`, `consumption_entry_id` (same account) |
+
+201 applied · 200 `replayed: true` (and an `activity_logs` row, module `Credits`, action_type `replay`)
+· 409 `IDEMPOTENCY_CONFLICT` · 422 `INSUFFICIENT_CREDITS` / `INVALID_OPERATION` / validation. The target
+is always the path `{id}` (or the tenant.isolation-resolved account); body/query `account_id` is
+never trusted. Clients have no write path; Agents read only.
+
+**Known limitations (Task 1):** ~~no plan ↔ credit link~~ (Task 2); no rollover / expiry, no pricing,
+no AI usage (Task 3+); `purchase` is not wired to payments; no reservation expiry / cleanup; Agents
+cannot grant credits (reselling needs pricing); no credits screen for tenants; the CHECK constraints
+exist on MySQL/MariaDB only (SQLite relies on the service). Verified on MariaDB 10.11.14 and (Task 2)
+MySQL 8.0.46 — the closest 8.0 build reachable from the sandbox; 8.0.41 itself was not available.
+
+**Task 2 fix to Task 1:** `CreditService::creditAccountFor()` now creates the row with an UPSERT
+(`INSERT … ON DUPLICATE KEY UPDATE`) and re-reads it with a LOCKING read. Found by the new
+plan-allocation probe: inside a caller's transaction, INSERT IGNORE left shared locks that deadlocked
+racing FOR UPDATEs, and a plain read used the caller's older REPEATABLE-READ snapshot and missed the
+row another process had just committed.
+
+### Credit plans (Phase 8 Task 2) — plans, periods, AI capability vs credits
+
+**Audit (existing structures).** A plan is a `plans` row (price, duration, engine, billing model,
+message quota) + its `plan_entitlements` bundle; `plan_entitlements.usage_limit` carries the message
+quota for `whatsapp_send` and NULL (= unbounded / n.a.) elsewhere — NOT reused for credits, because
+NULL-means-unbounded is the wrong default for money-like credits and it would tie credits to a
+capability row. Subscriptions have NO plan column: an account has ONE subscription row that every paid
+plan invoice mutates (`InvoiceCreditService::markPaidAndCreditQuota`: renewal/upgrade/downgrade while
+active STACK a new `duration_days` period on the current expiry; new/lapsed start one now; message
+quota is additive). The current plan = the latest paid invoice's `plan_key`
+(`PlanEntitlementReconciliationService::currentPlanSlug`). Super-Admin-provisioned subscriptions
+(`AccountController::store/updateSubscription`) are custom (no plan) and top-up invoices use
+`plan_key = quota_topup` (no plan row). There is NO cancellation flow — status is
+active/expired/exhausted; suspension is the account's `status`. `usage_quotas` (Phase 1) was unused.
+
+**Plan → credits.** `plans.included_credits` (UNSIGNED BIGINT, NOT NULL, DEFAULT 0): AI credits per
+purchased period. Seeded explicitly — starter 0 · growth 0 · business 0 (owner decision; nothing is
+granted until a Super Admin sets a value). The seeder writes it only when it CREATES a plan row, so
+re-seeding never resets an administrator's value (`PlanCatalog` carries the same 0s). Plan management
+(`/api/admin/plans-management`, Super Admin only): `included_credits` in index/store/update
+(0 … 1,000,000,000); a plan may include credits ONLY if its bundle includes `ai` (422 otherwise,
+also when removing `ai` from a plan with credits). A change applies to orders placed afterwards.
+
+**When credits are allocated** (the billing period IS the paid plan invoice):
+
+| Event | Credits |
+|---|---|
+| new subscription / activation (first paid plan invoice) | the invoice's captured `plan_included_credits`, period [now, now+duration) |
+| renewal while active | again, for the stacked period [current expiry, +duration) |
+| upgrade / downgrade (paid invoice of another plan) | the NEW plan's captured amount for its period; nothing already held is removed |
+| reactivation after a lapse | a fresh period from now |
+| expired subscription | nothing allocated or removed; credits kept, not usable (see below) |
+| suspended account | nothing removed; a paid invoice still allocates (payment-backed); not usable |
+| cancellation | no such flow exists; nothing to do |
+| Super-Admin custom subscription / top-up invoice | no plan → no plan credits (Super Admin can grant manually, Task 1) |
+| pre-Task-2 orders (terms captured without credits) | 0 — they bought no credits (backfill is the owner's tool) |
+
+Allocation runs INSIDE the payment-fulfilment transaction (after the subscription is saved), so it
+is exactly-once per paid invoice (invoice lock + `isPaid()` + the ledger key) and rolls back with the
+payment. Amount = `Invoice::purchasedIncludedCredits()` (P5-4 principle: fulfilled with the terms it
+was ordered with). Ledger type **`plan_allocation`** (distinct from grant / purchase / adjustment /
+refund), `reference_type = invoice`, metadata {plan, subscription_id, invoice_id, period_start,
+period_end, origin payment|backfill}. **Idempotency key `plan-allocation:{subscription_id}:{invoice_id}`**
+(unique per credit account — duplicate webhook, retried job, backfill after the live path, and
+concurrent processing all yield ONE allocation; a different amount for the same key → conflict).
+Each period also gets a `usage_quotas` row (capability `ai`, allocated, used 0, period start/end,
+subscription_id, invoice_id, source `plan_allocation`, `credit_ledger_entry_id` UNIQUE) — old
+periods stay auditable and every one is reconstructable from the ledger alone. **No rollover, no
+credit expiry** (not in the product definition → deferred; credits never silently expire or change
+type). Credits granted at payment are available at once, also for a stacked future period (as the
+message quota is).
+
+**AI capability vs credits** (`CreditEntitlementService`): capability `ai` (account_entitlements,
+`canTenant`) = MAY the account use AI; credit balance = HAS it credits. Both required, never merged:
+credits without `ai` (manual grant, or kept after a downgrade that revoked `ai`) are not usable; `ai`
+with zero credits is not usable. `usable()` / `status()` additionally require an administratively
+active account and a CURRENT (unexpired) subscription — an exhausted MESSAGE quota does NOT block AI
+credits. `status().reason` ∈ ai_capability_missing · account_suspended · subscription_inactive ·
+no_available_credits · null. Nothing consumes credits yet (Task 3+).
+
+**Ownership.** Credits belong to the account that paid the invoice / owns the subscription
+(`PlanCreditAllocator` refuses any other account) — an Agent's own account, its Client, a Client, the
+Super Admin's platform account: each its own credit account; no pooling; an Agent never receives a
+client's allocation.
+
+**Visibility.** `GET /api/billing/credits` (and the admin `GET /api/admin/accounts/{id}/credits`) now
+return balance / reserved / available + `plan` {slug, label, included_credits} + `subscription`
+{status, starts_at, expires_at} + `current_period` {starts_at, ends_at, allocated} + `ai_capability`,
+`can_use_ai_credits`, `reason` — no ledger internals.
+
+**Backfill** (owner-run, never scheduled): `php artisan credits:backfill-plan-allocation --dry-run`
+then without `--dry-run` (`--account=ID` to limit). Per active account with an active subscription
+and a paid plan invoice: allocates the LATEST paid plan invoice's period [expires_at − duration,
+expires_at) with the captured amount, else the plan's CURRENT `included_credits`; same key as the live
+path → repeat-safe and never doubles a live allocation; additive (manual/purchased/adjusted/refunded
+credits and earlier periods untouched). Skips (reported): suspended accounts, expired subscriptions,
+no paid plan invoice, zero-credit plans. With every plan at 0 today it allocates nothing.
+
+**Verified**: `CreditPlanEntitlementTest` (21); `credit_concurrency_probe.php` now 13 checks (+5
+plan-allocation races: 8 fulfilments of one invoice, 8 re-allocations, 8 first allocations of one
+period, 2 invoices of one account, 4 backfills after a live allocation) — 39/39 over 3 rounds on
+MariaDB 10.11.14 (×3 runs) and on MySQL 8.0.46; migrations fresh / upgrade-with-legacy-data /
+rollback / re-apply on both engines.
+
+**Known limitations (Task 2):** real per-plan credit values are an open owner decision (all 0);
+the backfill allocates only the latest purchased period per account (older stacked periods are not
+reconstructed); a payment refund/reversal does not claw back credits (same as message quota —
+product decision needed); no rollover/expiry; no credit consumption or pricing (Task 3+); MySQL
+verification used 8.0.46, not 8.0.41 exactly.
+
+### Credit spending (Phase 8 Task 3) — reservation & consumption
+
+**Contract** — `App\Services\Credits\CreditConsumptionService` (the only spending API; no HTTP
+endpoint — service-only; every call names the paying account, already resolved by the caller through
+the tenant rules; reservations are addressed by id and must belong to it):
+
+| Call | Effect | Ledger rows | Key |
+|---|---|---|---|
+| `reserve(acct, a, key, ctx, ?gate)` | hold a ≤ available; `ctx.expires_at` optional | `reservation` (0, +a) | caller |
+| `consume(acct, rid, a, key)` | partial consumption, 1 ≤ a ≤ remaining; reservation stays open until nothing remains (→ `consumed`) | `consumption` (−a, −a) | caller |
+| `settle(acct, rid, ?a)` | Task 1 `consume`: take a (default: all remaining), release the rest; → `consumed` | `consumption` [+ `reservation_release` `:remainder`] | `consume:{rid}` |
+| `release(acct, rid, ?a)` | give the remaining hold back (a, if given, must equal it); → `released`; allowed after expiry | `reservation_release` (0, −remaining) | `release:{rid}` |
+| `spend(acct, a, key, ctx, ?gate)` | direct consumption of available credits | `reservation` (`:hold`) + `consumption` — the reservation row is created already `consumed` | caller |
+
+Reservation: `amount`, `consumed_amount` (accumulates), remaining = amount − consumed while open; the
+terminal status names the closing action; terminal rows are never mutated (guarded compare-and-set on
+status + consumed_amount, under the credit-account lock). `consumption` still always references a
+reservation, so refunds are unchanged. `consume:`/`release:` prefixes are refused as caller keys (also
+for grant/adjust/refund). Key namespace suggestion `ai:reservation:<id>`, `ai:consume:<id>:<n>`,
+`ai:request:<id>`.
+
+**Idempotency**: same key + same parameters → original entry (`replayed`), nothing written; different
+parameters → `idempotency_conflict` (409 in any future API). `expires_at` is not a parameter (a retry
+recomputing now+ttl replays). Enforced by the ledger's unique index; racing duplicates → one effect.
+
+**Product gate**: `CreditSpendGate::assertMaySpend()` — optional on reserve/spend, run INSIDE the lock
+after the idempotency lookup (a retry of an applied request replays even if the account was blocked
+since). `CreditEntitlementService` implements it for AI (capability → `entitlement_blocked`; suspended
+account / non-current subscription → `account_blocked`; exhausted message quota is not a block). The
+balance check stays in `CreditService` (`insufficient_credits`). Settle/release are never gated.
+`CreditService` itself stays generic (no AI knowledge).
+
+**Failure codes** (`CreditException::$reason`): `insufficient_credits`, `invalid_amount`,
+`reservation_not_found`, `tenant_mismatch`, `reservation_already_terminal` (Task 1's
+`invalid_reservation_state`, renamed — constant `RESERVATION_STATE` kept as alias), `invalid_reservation`
+(expired), `idempotency_conflict`, `entitlement_blocked`, `account_blocked`, `invalid_operation`. Task 1's
+amount errors moved from `invalid_operation` to `invalid_amount` (admin API validates amounts first, so
+its responses are unchanged). Refused operations write nothing.
+
+**Expiry** (infrastructure only, no product TTL): `credit_reservations.expires_at` NULL = never (all
+existing rows). Past it: consume/settle → `invalid_reservation`; release only. `credits:release-expired-reservations
+[--dry-run] [--limit=500]`, scheduled every 5 min `withoutOverlapping()`; each release is the normal
+`release:{id}` operation, so it is idempotent and safe against a racing owner. Not credit expiry/rollover.
+
+**Metadata hygiene**: flat scalar map, ≤ 20 keys, strings ≤ 191 chars (identifiers, never prompts/content).
+
+**Concurrency** (`credit_concurrency_probe.php`, +7 checks, 20 per round): 20 direct spends of 10 vs 100
+(exactly 10); 20 partial consumes of 10 on one reservation of 100 (exactly 10); partial consumes racing
+releases of one reservation (one terminal transition); duplicate spend/consume/settle/release keys (one
+effect each); 30 mixed grant/reserve/consume/release/settle/spend/refund/adjust; expiry cleanup ×4 racing
+owner releases; spends inside callers' own transactions (holding an `accounts` lock) racing a plan
+payment on the same account (no deadlock). 60/60 over 3 rounds: MariaDB 10.11.14 ×3 runs, MySQL 8.0.46 ×2.
+
+**Known limitations (Task 3):** no spending HTTP endpoint and no reservation read endpoint (the ledger
+endpoint shows reservation/consumption rows); no AI provider, pricing or cost model (later tasks); the
+product gate reads account/subscription without locking them (a suspension committed during an
+in-flight reserve may let that one reserve through — settle/release are unaffected); expiry TTL is the
+caller's choice; `expires_at` is dropped by a rollback of the Task 3 migration; MySQL verified on
+8.0.46, not 8.0.41.
+
 ### Developer API (`/api/v1/...`) — public, API-key authenticated
 
 Separate surface with its own key auth, per-key capability gating
@@ -489,19 +777,19 @@ identical 404s. Writes need an active subscription; reads do not. API-key writes
 
 ## 6. Test Suite
 
-**64 feature test files** + 2 unit files (+ `tests/Probes/`: 3 MariaDB-only probe scripts, not PHPUnit), run with `php artisan test`.
+**70 feature test files** + 2 unit files (+ `tests/Probes/`: 4 MariaDB/MySQL-only probe scripts, not PHPUnit), run with `php artisan test`.
 
-| | SQLite (secondary) | **MariaDB (authoritative)** |
-|---|---|---|
-| Tests | 1953 passed, 5 skipped | **1958 passed** |
-| Assertions | 9449 | 9468 |
-| Failures | 0 | **0** |
+| | SQLite (secondary) | **MariaDB 10.11.14 (authoritative)** | MySQL 8.0.46 (Phase 8 T2, T3) |
+|---|---|---|---|
+| Tests | 2070 passed, 8 skipped | **2078 passed** | 2075 passed |
+| Assertions | 11218 | 11262 | 11259 |
+| Failures | 0 | **0** | 3 — pre-existing JSON key-order test assumptions, fail identically on the original baseline (§8.4) |
 
 The 5 SQLite skips: 4 foreign-key tests SQLite cannot express + P5-5's real-concurrency test (needs MariaDB; it runs the payment probe against `wa_throwaway_probe`). **MariaDB is authoritative —
 a green SQLite run does not compensate for a MariaDB failure.**
 
-**Frontend** (`frontend-app`, vitest + Testing Library): **18 test files, 549 tests, 0
-failures** (+2 Phase 7 Task 4, +2 Task 5) after the manual-source lock (417 before Task 8; +87 Task 8, +19 Task 9; Task 10 none; +1 Task 11; +11 Task 12; +7 Add-lead fix; +2 own-CRM fix; +1 source lock). `npm run build` (tsc -b + vite build)
+**Frontend** (`frontend-app`, vitest + Testing Library): **19 test files, 560 tests, 0
+failures** (+3 Phase 8 T2, +2 P5-8, +6 P5-6/P5-7; previously 549) (+2 Phase 7 Task 4, +2 Task 5) after the manual-source lock (417 before Task 8; +87 Task 8, +19 Task 9; Task 10 none; +1 Task 11; +11 Task 12; +7 Add-lead fix; +2 own-CRM fix; +1 source lock). `npm run build` (tsc -b + vite build)
 clean; `npm run lint` (oxlint) 64 warnings / 0 errors — all 64 pre-existing, none in CRM files.
 
 Running the suite needs `JOURNEY_REGISTRY_PATH` pointed at
@@ -656,7 +944,19 @@ P6-1…P6-3). Fixes are applied one item per task:
 | P5-2 | Social Inbox `lead:` reply (`SocialInboxController::sendToLead()`) sends through `DirectMessageDispatcher` instead of its own driver call — quota-gated, one `MessageQuotaService::consume()` on a confirmed send, `message_dispatch_logs` row with `source = social_inbox`. `SocialInboxLeadReplyDispatchTest` (17) | ✅ closed | none | **1495** (MariaDB) · 1491 + 4 skipped (SQLite) |
 | P5-3 | Group jobs: atomic claim (`claim_token`/`claimed_at`), heartbeat before every send, `failed()` + caught exceptions settle from recipient rows (refund = reserved − delivered, once), `$timeout` 85 s + `failOnTimeout`, 50 s slices with continuation jobs, `group-dispatch:recover-stale` every 5 min. `GroupDispatchReliabilityTest` (49); MariaDB multi-process race + kill -9 + real `queue:work` slicing verified outside PHPUnit | ✅ closed | `2026_09_24_150000` (2 nullable columns + index) | **1544** (MariaDB) · 1540 + 4 skipped (SQLite) |
 | P5-4 | Invoice snapshots the purchased plan terms at order creation (`plan_engine_type`, `plan_billing_model`, `plan_rate_per_message`, `plan_total_allocated_messages`, `plan_duration_days`, `plan_terms_captured_at`); fulfilment uses them, not the live plan; not fillable, hidden, immutable. `InvoicePlanTermsSnapshotTest` (24) | ✅ closed | `2026_09_24_160000` (6 nullable columns) | **1568** (MariaDB) · 1564 + 4 skipped (SQLite) |
+| P5-6 | Journey secret / configuration protection. Only the `api` node's credential-named `headers`/`query` pairs carry secrets; they were stored and returned in plaintext (flow, versions, list/show/version responses, `activity_logs`). Now encrypted at rest (`JourneySecrets` + `MasksJourneySecrets`, Laravel `Crypt`), masked in every response and audit row, kept on update via the mask (unresolvable mask → 422), credentials in the URL refused (422). Frontend: masked value never displayed (password field, "Saved — type to replace"). `JourneySecretProtectionTest` (10). Existing plaintext rows are masked on read but NOT rewritten (data mutation — owner decision) | ✅ **CLOSED** | none | **1992** (MariaDB) · 1987 + 5 skipped (SQLite) · frontend 555 |
+| P5-7 | Journey runtime execution & safety: backend runtime truth (`RUNTIME_EXECUTABLE_TYPES`); publish/activate validation (`JourneyPublishValidator`, 422 `JOURNEY_NOT_PUBLISHABLE`); run-time re-authorization of every catalog node; first-node permanent failure not consumed; default trigger no longer swallows chatbot-rule messages; deterministic trigger order; 24 h question expiry (`reply_timeout`, inline + `journeys:resume-due`); delay already non-blocking (Phase 7 T1) and duplicate inbound already de-duplicated (Phase 7 T3) — both re-verified. Frontend: palette marks the 20 non-executable nodes "Draft only", "Save draft" button, publish refused client-side with the blocking node names. `JourneyRuntimeSafetyTest` (24). 12 existing tests adapted to the new contract (drafts now sent with `publish: false`; two "question never expires" tests rewritten to the 24 h rule) | ✅ **CLOSED** | none | **1992** (MariaDB) · 1987 + 5 skipped (SQLite) · frontend 555 · probes: concurrency 8/8, deploy 13/13 |
+| P5-8 | Entitlement audit logging. Gap: entitlement/authorization decisions were enforced but left no trace — `activity_logs` only recorded model mutations (LogsActivity), `journey_execution_events` only session history; a 403 at a capability/module/permission gate, a Journey node denied at save or run time, a cross-tenant id or a refused Agent target left nothing auditable. Now recorded through `EntitlementAuditLogger` into the existing `activity_logs` (see §4). No migration; no authorization rule changed (`JourneyNodeAuthorizer::decide()` backs the existing string methods). Frontend: Activity Logs page filters/badges for `allowed`/`denied`. `EntitlementAuditLoggingTest` (19) + `ActivityLogsPage.test.tsx` (2) | ✅ **CLOSED** | none | **2011** (MariaDB) · 2006 + 5 skipped (SQLite) · frontend 557 · probes: concurrency 8/8, deploy 13/13 |
 | P5-5 | Payment fulfilment exactly-once — same-invoice duplicates were already safe (invoice row lock + `isPaid()`), but two different invoices of one account fulfilled at once rolled one back (entitlement unique-key clash, then an FK-lock deadlock): a paid order stayed pending. Fixed by locking the owner's account row (before the invoice write) and the current subscription. | ✅ **CLOSED** | none | **1958** (MariaDB) · 1953 + 5 skipped (SQLite) · payment probe 18/18 ×3 |
+
+#### AI / Credit (Phase 8) task-by-task
+
+| # | Task | Status | Migration | Suite total after |
+|---|---|---|---|---|
+| 1 | Credit System Foundation (accounts, immutable ledger, reservations, idempotency, Super Admin ops, RBAC) — `CreditSystemFoundationTest` (23) + `credit_concurrency_probe.php` | ✅ **CLOSED** | `2026_09_25_100000_create_credit_system_tables` (additive; fresh / upgrade-with-data / rollback / re-apply verified on throwaway MariaDB) — **not run on the real DB** | **2034** (MariaDB) · 2027 + 7 skipped (SQLite) · frontend 557 · probes: credit 24/24 (×3 rounds), journey concurrency 8/8, deploy 14/14, payment 6/6 |
+| 2 | Credit Plans, Entitlements & Limits — `CreditPlanEntitlementTest` (21) + 5 plan-allocation probe checks | ✅ **CLOSED** | `2026_09_25_110000_add_plan_credit_allocation` (additive; fresh / upgrade-with-data / rollback / re-apply on MariaDB 10.11.14 and MySQL 8.0.46) — **not run on the real DB** | **2055** (MariaDB) · 2048 + 7 skipped (SQLite) · MySQL 8.0.46 2052 + 3 pre-existing · frontend 560 · probes: credit 39/39 ×3 rounds (MariaDB and MySQL 8.0.46) |
+| 3 | Credit Ledger, Reservation & Consumption — `CreditConsumptionService`, partial consumption, direct spend, `CreditSpendGate`, failure codes, reservation expiry + cleanup — `CreditConsumptionTest` (23) + 7 spending probe checks | ✅ **CLOSED** | `2026_09_25_120000_add_credit_reservation_expiry` (additive; fresh / upgrade from pre-Phase-8 / upgrade from T2 schema with credit data / rollback / re-apply / no-op re-migrate on MariaDB 10.11.14 and MySQL 8.0.46) — **not run on the real DB** | **2078** (MariaDB) · 2070 + 8 skipped (SQLite) · MySQL 8.0.46 2075 + 3 pre-existing · frontend 560 (unchanged, no frontend change) · probes: credit 60/60 ×3 rounds (MariaDB ×3, MySQL 8.0.46 ×2) |
+| 4 | (not specified) | ⏳ not started | — | — |
 
 #### Journey (Phase 7) task-by-task
 
@@ -693,7 +993,7 @@ capability.guard:journey_automation → permission (manage-chatbot | whatsapp.vi
 
 **Executable nodes (12)**: trigger, message, question, condition, save_lead (legacy, grandfathered —
 no `whatsapp_send` check) · delay, conditional, text, image, video, document, audio (palette).
-The other 20 palette types persist but end a run as `expired` / `unsupported_node`.
+The other 20 palette types persist (as drafts — P5-7 refuses to publish/activate them) and end a run as `expired` / `unsupported_node` if one is reached in legacy data.
 
 **State machine**: `WhatsAppFlowSession::TRANSITIONS` (see §4). Open: active, waiting, blocked. Terminal
 (immutable; Eloquent save refused; every engine write is a guarded conditional UPDATE): completed,
@@ -732,17 +1032,22 @@ completion message can repeat. History is written after the fact (a crash can lo
 3. `php artisan migrate --force` — the 10 pending migrations, in order: `2026_09_23_130000` (platform CRM
    account), `2026_09_24_100000` (temporal columns), `110000` (qr → journey_automation), `120000` (group
    recipients, P5-1), `130000` + `130001` (versions + backfill), `140000` (inbound events + locks),
-   `150000` (group claim, P5-3), `160000` (invoice plan terms, P5-4), `170000` (execution history).
+   `150000` (group claim, P5-3), `160000` (invoice plan terms, P5-4), `170000` (execution history)
+   — **now 13**: plus `2026_09_25_100000` (credit system tables, Phase 8 Task 1), `110000` (plan
+   credit allocation, Phase 8 Task 2) and `120000` (reservation expiry, Phase 8 Task 3); all additive, no data step. `migrate:rollback --step=13` for
+   all of them. After migrating: set real `included_credits` per plan (all 0 today), then
+   `php artisan credits:backfill-plan-allocation --dry-run` → review → run without `--dry-run`.
    Proven on MariaDB 10.11.14 by `tests/Probes/journey_deploy_probe.php` (fresh; upgrade from the
    110-migration schema with legacy journeys/sessions/leads; rollback; re-apply; idempotent backfills).
    All ten have `down()` (`130001`'s is intentionally a no-op — the backfilled versions go with `130000`'s
-   drop); roll back with `migrate:rollback --step=10` only from a backup-verified state.
+   drop); roll back with `migrate:rollback --step=13` (10 + the three Phase 8 migrations) only from a backup-verified state.
 4. `php artisan entitlements:backfill-plan --dry-run` (review).
 5. `php artisan entitlements:backfill-plan` (idempotent).
 6. Restart: queue workers (`php artisan queue:restart`), qr-engine-service (sends `message_id`, Task 3),
    PHP-FPM/opcache.
 7. Verify the scheduler (`php artisan schedule:list` shows `journeys:resume-due` and the
-   `queue:work database --queue=journeys` entry every minute) and that `schedule:run` is in cron.
+   `queue:work database --queue=journeys` entry every minute, plus `credits:release-expired-reservations`
+   every 5 minutes — Phase 8 T3) and that `schedule:run` is in cron.
 8. Smoke test: a test journey (keyword → text → delay 1 min → text) via the Test button; session
    completes after ≥1 scheduler minute.
 9. QR: send a message to a QR number; `inbound_message_events` row with the Baileys `message_id`.
@@ -762,9 +1067,9 @@ completion message can repeat. History is written after the fact (a crash can lo
 Monitoring: watch `whatsapp_flow_sessions` for `waiting` rows with `wait_until` far in the past (scheduler
 or worker down) and `failed` counts by `journey_execution_events.error_category`.
 
-**Known intentional limitations**: at-least-once provider delivery; no expiry for sessions awaiting a
-reply; immediate runs check journey entitlement at start, resumed runs before every node; legacy nodes
-are grandfathered from `whatsapp_send`; 20 palette node types are not executable; subscription.guard
+**Known intentional limitations**: at-least-once provider delivery; ~~no expiry for sessions awaiting a
+reply~~ (P5-7: they expire after 24 h, `reply_timeout`); immediate runs check journey entitlement at start, resumed runs before every node; legacy nodes
+are grandfathered from `whatsapp_send`; 20 palette node types are not executable (P5-7: draft-only — a journey containing one cannot be published or activated); subscription.guard
 refuses Journey writes (incl. cancel) while the plan is not active; history pruning is manual.
 
 ~~Task 7 finding: palette text/media nodes failed permanently on an exhausted quota while `message`
@@ -792,7 +1097,7 @@ the Baileys message id).
 | 3 — Meta messaging suite | WABA embedded signup, broadcast parity, unified inbox, Flows/catalog | 🟡 Partial — Flows tables exist; embedded signup and full parity **not** built |
 | 4 — Automation engine | `delay`/`wait` node, recurring triggers, paused-execution persistence | 🟡 Partial — **durable delay execution built (Phase 7 Task 1)** on `whatsapp_flow_sessions` (waiting + `wait_until`, scheduler + database queue, retry, cancel). Recurring triggers and flow versioning **not** built |
 | 5 — CRM *(= execution Phase 6)* | Contact/Lead/**Deal/Pipeline/Stage/Task/Note/Tag** | 🟡 Contacts, Leads, a status-based pipeline and tenant-scoped lead **tags** exist. **No `deals`, `crm_tasks` or `crm_notes` tables** |
-| 6 — AI Platform | Content generation + append-only credit ledger | ❌ **NOT BUILT** — no `ai_credit_transactions` table |
+| 6 — AI Platform *(= execution Phase 8)* | Content generation + append-only credit ledger | 🟡 **Credit ledger, plan credits and spending layer built** (Phase 8 Tasks 1–3: `credit_ledger_entries`, not `ai_credit_transactions`; `CreditConsumptionService`); AI provider / usage / pricing not built |
 | 7 — Social media | LinkedIn OAuth, organic scheduling/analytics | 🟡 Meta only. `SocialOAuthProviderFactory` **throws** for `linkedin` and `google` |
 | 8 — Catalog/ecommerce | Commerce capability | ❌ Capability seeded; no implementation |
 | 9 — Ads + attribution | Full ad → deal → conversion chain | ❌ Blocked on a Deal model existing |
@@ -827,11 +1132,18 @@ the Baileys message id).
 | **CRM Notes** (per-lead / per-contact free-text notes) | Descoped from Phase 6 at closure | Would need its own table, tenant-safe composite FKs, API under the CRM gates, UI on lead/contact detail, audit via LogsActivity. Not started. |
 | CRM Deals / Tasks | Roadmap §27 (CRM) | Not started. |
 | CTWA `source` backfill (`whatsapp` → `meta_ad` for pre-Task-10 leads) | Task 10 | Optional data update; needs owner authorization. |
-| Journey JSON round-trip tests on MySQL 8 | Phase 6 closure MySQL run | Test assumption (key order), outside Phase 6. |
-- **No AI credit ledger.**
+| Journey JSON round-trip tests on MySQL 8 | Phase 6 closure MySQL run; re-confirmed Phase 8 T2 on MySQL 8.0.46 | Test assumption (MySQL's JSON type reorders object keys): `JourneyNodeEntitlementTest::test_a_legacy_journey_round_trips_unchanged_through_update`, `JourneyNodePaletteTest::test_a_node_configuration_round_trips_unchanged`, `JourneyObservabilityTest::test_the_recorder_keeps_rows_bounded_and_categories_normalised` — content equal, order differs; fail identically on the pre-Phase-8 baseline. (The P5-6/P5-8 tests with the same assumption were made key-order-neutral in Phase 8 T2.) |
+- ~~No AI credit ledger~~ — **closed by Phase 8 Task 1** (Credit System Foundation); plan credits Task 2; spending/reservation layer Task 3. AI provider execution and pricing are still not built.
 - ~~No durable journey-execution persistence~~ — **closed by Phase 7 Task 1** (waiting sessions,
-  resume scheduler). Still open: no flow versioning; no expiry sweep for sessions stuck at a
-  question (pre-existing disclosed gap); immediate-path send failures are retried/failed since Phase 7 Task 5.
+  resume scheduler). ~~No flow versioning~~ — closed by Phase 7 Task 2. ~~No expiry sweep for
+  sessions stuck at a question~~ — closed by P5-7 (24 h `reply_timeout`). Immediate-path send
+  failures are retried/failed since Phase 7 Task 5.
+- **P5-6 follow-ups (owner decisions, not done):** journeys stored BEFORE P5-6 may still hold
+  plaintext credential values in `whatsapp_flows`, `whatsapp_flow_versions` (immutable) and
+  historical `activity_logs` rows. They are masked in every API response, and a flow row is
+  encrypted on its next save; rewriting the stored rows is a data mutation that needs explicit
+  authorization. The `code` node's `code` and the `api` node's `body` are free text and are NOT
+  treated as secret (a credential typed there is stored as typed; neither node can run).
 - **No soft deletes anywhere.**
 - **LinkedIn / Google OAuth unimplemented** — the factory throws by design.
 - **`POST /api/roles` is broken** by the Spatie guard mismatch (§7).

@@ -57,29 +57,7 @@ class JourneyNodeAuthorizer
      */
     public function denialFor(Account $account, string $nodeType): ?string
     {
-        $requirements = JourneyNodeCatalog::requirementsFor($nodeType);
-
-        // Unknown types are validateFlow()'s 422, not an authorization
-        // failure; legacy executable types are grandfathered. Neither is
-        // this service's business — see JourneyNodeCatalog's docblock.
-        if ($requirements === null) {
-            return null;
-        }
-
-        if ($requirements['capabilities'] === [] && $this->providerAllowed($account, $requirements['providers'])) {
-            // Pure control flow on a compatible provider: nothing to check.
-            return null;
-        }
-
-        if (! $account->isAdministrativelyActive()) {
-            return 'This account is suspended.';
-        }
-
-        if (! $account->hasActiveSubscription()) {
-            return 'This account has no active subscription.';
-        }
-
-        return $this->capabilityDenial($account, $nodeType, $requirements);
+        return $this->decide($account, $nodeType)['reason'];
     }
 
     /**
@@ -93,33 +71,98 @@ class JourneyNodeAuthorizer
      */
     public function runtimeDenialFor(Account $account, string $nodeType): ?string
     {
-        $requirements = JourneyNodeCatalog::requirementsFor($nodeType);
+        return $this->decide($account, $nodeType, runtime: true)['reason'];
+    }
 
-        return $requirements === null ? null : $this->capabilityDenial($account, $nodeType, $requirements);
+    /**
+     * P5-8 — the same decision as denialFor() / runtimeDenialFor(), in a
+     * structured, machine-readable form for the entitlement audit trail
+     * (EntitlementAuditLogger). The two string methods above are thin
+     * wrappers over this, so the audited decision is — by construction —
+     * the decision that was enforced.
+     *
+     *   governed    false for a type this catalog does not govern (legacy /
+     *               unknown): nothing was checked, nothing to audit.
+     *   allowed     the decision.
+     *   category    'entitled' | 'no_requirement' (allowed), or one of
+     *               EntitlementAuditLogger::CATEGORY_* (denied).
+     *   capability  the capability that failed (denied) / null.
+     *   capabilities / providers  what the node requires.
+     *   provider    the account's resolved provider (its own subscription).
+     *   reason      the human-readable denial (null when allowed) — the
+     *               exact string denialFor()/runtimeDenialFor() return.
+     *
+     * @return array{governed: bool, allowed: bool, category: string, capability: ?string, capabilities: array<int, string>, providers: array<int, string>, provider: string, reason: ?string}
+     */
+    public function decide(Account $account, string $nodeType, bool $runtime = false): array
+    {
+        $requirements = JourneyNodeCatalog::requirementsFor($nodeType);
+        $provider = $this->providerFor($account);
+        $decision = [
+            'governed' => $requirements !== null,
+            'allowed' => true,
+            'category' => 'entitled',
+            'capability' => null,
+            'capabilities' => $requirements['capabilities'] ?? [],
+            'providers' => $requirements['providers'] ?? [],
+            'provider' => $provider,
+            'reason' => null,
+        ];
+
+        // Unknown types are validateFlow()'s 422, not an authorization
+        // failure; legacy executable types are grandfathered. Neither is
+        // this service's business — see JourneyNodeCatalog's docblock.
+        if ($requirements === null) {
+            return ['category' => 'no_requirement'] + $decision;
+        }
+
+        if (! $runtime) {
+            if ($requirements['capabilities'] === [] && $this->providerAllowed($account, $requirements['providers'])) {
+                // Pure control flow on a compatible provider: nothing to check.
+                return ['category' => 'no_requirement'] + $decision;
+            }
+
+            if (! $account->isAdministrativelyActive()) {
+                return ['allowed' => false, 'category' => 'account_suspended', 'reason' => 'This account is suspended.'] + $decision;
+            }
+
+            if (! $account->hasActiveSubscription()) {
+                return ['allowed' => false, 'category' => 'no_active_subscription', 'reason' => 'This account has no active subscription.'] + $decision;
+            }
+        }
+
+        $denial = $this->capabilityDenial($account, $nodeType, $requirements);
+
+        if ($denial === null) {
+            return ($requirements['capabilities'] === [] ? ['category' => 'no_requirement'] : []) + $decision;
+        }
+
+        return ['allowed' => false, 'category' => $denial['category'], 'capability' => $denial['capability'], 'reason' => $denial['reason']] + $decision;
     }
 
     /**
      * @param  array{capabilities: array<int, string>, providers: array<int, string>}  $requirements
+     * @return array{category: string, capability: ?string, reason: string}|null
      */
-    private function capabilityDenial(Account $account, string $nodeType, array $requirements): ?string
+    private function capabilityDenial(Account $account, string $nodeType, array $requirements): ?array
     {
         $provider = $this->providerFor($account);
 
         if (! $this->providerAllowed($account, $requirements['providers'])) {
-            return sprintf(
+            return ['category' => 'provider_not_supported', 'capability' => null, 'reason' => sprintf(
                 "The '%s' node is not available on your WhatsApp provider (%s).",
                 $nodeType,
                 $provider
-            );
+            )];
         }
 
         foreach ($requirements['capabilities'] as $capability) {
             if (! $this->accessControl->canTenant($account, $capability)) {
-                return sprintf(
+                return ['category' => 'capability_not_entitled', 'capability' => $capability, 'reason' => sprintf(
                     "The '%s' node requires the '%s' capability, which this account does not hold.",
                     $nodeType,
                     $capability
-                );
+                )];
             }
 
             // The tenant holds the entitlement, but their provider may
@@ -128,11 +171,11 @@ class JourneyNodeAuthorizer
             // rather than supports(): only an explicit `false` row blocks,
             // so an unstated pairing does not invent a restriction.
             if ($this->providerCapabilities->supportsOrNull($provider, $capability) === false) {
-                return sprintf(
+                return ['category' => 'provider_not_supported', 'capability' => $capability, 'reason' => sprintf(
                     "The '%s' capability is not supported on your WhatsApp provider (%s).",
                     $capability,
                     $provider
-                );
+                )];
             }
         }
 
@@ -166,6 +209,35 @@ class JourneyNodeAuthorizer
         }
 
         return $denials;
+    }
+
+    /**
+     * P5-8 — one structured decision per distinct GOVERNED node type in this
+     * graph (legacy/unknown types are skipped: nothing is checked for them),
+     * as [type => decide()]. denialsForNodes() is exactly the denied subset.
+     *
+     * @param array<int, array<string, mixed>> $nodes
+     * @return array<string, array<string, mixed>>
+     */
+    public function decisionsForNodes(Account $account, array $nodes): array
+    {
+        $decisions = [];
+
+        foreach ($nodes as $node) {
+            $type = is_array($node) ? ($node['type'] ?? null) : null;
+
+            if (! is_string($type) || isset($decisions[$type])) {
+                continue;
+            }
+
+            $decision = $this->decide($account, $type);
+
+            if ($decision['governed']) {
+                $decisions[$type] = $decision;
+            }
+        }
+
+        return $decisions;
     }
 
     /**

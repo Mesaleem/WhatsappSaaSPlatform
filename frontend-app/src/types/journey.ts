@@ -147,6 +147,12 @@ export interface SaveFlowPayload {
   trigger_value: string | null;
   graph_data: JourneyGraph;
   is_active?: boolean;
+  /**
+   * Phase 7 Task 2 / P5-7 — true (the server default) publishes the saved
+   * graph for new sessions and requires every node to be runtime-executable;
+   * false saves a draft version.
+   */
+  publish?: boolean;
 }
 
 /** 'waiting' / 'failed' / 'cancelled' — Phase 7 Task 1 temporal backbone; 'blocked' — Task 1.6 (account lost Journey entitlement; state kept). */

@@ -415,20 +415,32 @@ class JourneyProductionHardeningTest extends TestCase
         $this->assertSame('provider_failure', Ev::where('session_id', $s->id)->where('event', Ev::SESSION_FAILED)->value('error_category'));
     }
 
-    public function test_a_session_awaiting_a_reply_is_never_treated_as_stuck_however_old(): void
+    /**
+     * P5-7 contract change: a question session is never mistaken for an
+     * interrupted run (Task 9 guarantee, kept), but it no longer waits
+     * forever — past WhatsAppJourneyEngine::QUESTION_REPLY_TTL_SECONDS it
+     * expires (reply_timeout) instead of capturing a much later message.
+     */
+    public function test_a_session_awaiting_a_reply_is_never_treated_as_stuck_and_expires_only_after_the_reply_window(): void
     {
         $account = $this->account();
         $this->flow($account, [$this->q('q'), $this->text('x', 'X')]);
         $this->inbound($account, 'go');
         Subscription::where('account_id', $account->id)->update(['expires_at' => now()->addYear()]);
-        $this->travel(90)->days();
+        $this->travel(WhatsAppJourneyEngine::QUESTION_REPLY_TTL_SECONDS - 60)->seconds();
 
         $this->artisan('journeys:resume-due')->assertSuccessful();
 
         $s = $this->flowSession($account);
         $this->assertSame([WhatsAppFlowSession::STATUS_ACTIVE, 'q'], [$s->status, $s->current_node_id]);
+
+        $this->travel(90)->days();
+        $this->artisan('journeys:resume-due')->assertSuccessful();
+
+        $s = $this->flowSession($account);
+        $this->assertSame([WhatsAppFlowSession::STATUS_EXPIRED, 'q', null], [$s->status, $s->current_node_id, $s->wait_until], 'expired, never parked as an interrupted run');
         $this->inbound($account, 'still here');
-        $this->assertSame(['Q?', 'X'], $this->sent($account));
+        $this->assertSame(['Q?'], $this->sent($account), 'the late message is not captured as the answer');
     }
 
     public function test_recovery_is_bounded_per_run(): void

@@ -136,6 +136,9 @@ class JourneyNodePaletteTest extends TestCase
         }
 
         return [
+            // P5-7 — palette nodes without a runtime are persistable as DRAFTS
+            // only; publishing requires an executable graph (JourneyRuntimeSafetyTest).
+            'publish' => false,
             'name' => $name,
             'trigger_type' => 'keyword',
             'trigger_value' => 'start',

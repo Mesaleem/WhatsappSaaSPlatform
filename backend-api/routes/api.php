@@ -18,6 +18,8 @@ use App\Http\Controllers\Api\PaymentGatewayController;
 use App\Http\Controllers\Api\PlanManagementController;
 use App\Http\Controllers\Api\PaymentWebhookController;
 use App\Http\Controllers\Api\BillingController;
+use App\Http\Controllers\Api\CreditController;
+use App\Http\Controllers\Api\AdminCreditController;
 use App\Http\Controllers\Api\Admin\GatewaySettingsController;
 use App\Http\Controllers\Api\Admin\MailSettingsController;
 use App\Http\Controllers\Api\ApiKeyController;
@@ -224,6 +226,10 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/create-order', [PaymentGatewayController::class, 'createOrder']);
         Route::post('/verify-payment', [PaymentGatewayController::class, 'verifyPayment']);
         Route::get('/invoices', [BillingController::class, 'index']);
+        // Phase 8 Task 1 — the resolved account's OWN credits (read-only;
+        // credits change only through CreditService). See CreditController.
+        Route::get('/credits', [CreditController::class, 'balance']);
+        Route::get('/credits/ledger', [CreditController::class, 'ledger']);
         Route::get('/invoices/{id}/pdf', [BillingController::class, 'pdf']);
         // Billing & Plans Module Overhaul — Super Admin Billing Overview.
         Route::get('/client-summary', [BillingController::class, 'clientSummary']);
@@ -1027,6 +1033,14 @@ Route::middleware('auth:sanctum')->group(function () {
         // an explicit isSuperAdmin() check inside the controller (see
         // AccountController::setCommissionRule()).
         Route::put('/accounts/{id}/commission-rule', [AccountController::class, 'setCommissionRule']);
+
+        // Phase 8 Task 1 — Credit System Foundation. Reads: Super Admin
+        // (any account) or an Agent (its own sub-clients). Writes: Super
+        // Admin only, idempotency key required — see AdminCreditController.
+        Route::get('/accounts/{id}/credits', [AdminCreditController::class, 'show'])->whereNumber('id');
+        Route::post('/accounts/{id}/credits/grant', [AdminCreditController::class, 'grant'])->whereNumber('id');
+        Route::post('/accounts/{id}/credits/adjust', [AdminCreditController::class, 'adjust'])->whereNumber('id');
+        Route::post('/accounts/{id}/credits/refund', [AdminCreditController::class, 'refund'])->whereNumber('id');
 
         // Absolute Super Admin Control — Password Override. Same
         // permission:manage-accounts gate as the rest of this group, PLUS

@@ -124,6 +124,9 @@ class AccountEntitlementVisibilityTest extends TestCase
     private function journeyPayload(array $nodes): array
     {
         return [
+            // P5-7 — palette nodes without a runtime are persistable as DRAFTS
+            // only; publishing requires an executable graph (JourneyRuntimeSafetyTest).
+            'publish' => false,
             'name' => 'Journey',
             'trigger_type' => 'keyword',
             'trigger_value' => 'start',

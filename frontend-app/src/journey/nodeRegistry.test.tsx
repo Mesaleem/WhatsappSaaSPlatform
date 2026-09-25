@@ -6,11 +6,14 @@ import {
   JOURNEY_NODE_DEFINITIONS,
   JOURNEY_PALETTE_NODES,
   JOURNEY_PALETTE_NODE_TYPES,
+  RUNTIME_EXECUTABLE_NODE_TYPES,
   extractTemplateVariables,
   getJourneyNode,
   isHttpUrl,
   isKnownJourneyNodeType,
+  isRuntimeExecutableNodeType,
   journeyNodesByCategory,
+  nonExecutableNodeTypes,
   validateJourneyGraph,
   validateJourneyNodeConfig,
 } from './nodeRegistry';
@@ -628,5 +631,24 @@ describe('helpers', () => {
       'name',
       'order_id',
     ]);
+  });
+});
+
+// P5-7 — "in the palette" is not "executable": the runtime list is a strict
+// subset of the registry (the backend asserts it equals its own list).
+describe('runtime-executable node types', () => {
+  it('lists only registered types, the five legacy ones included', () => {
+    for (const type of RUNTIME_EXECUTABLE_NODE_TYPES) {
+      expect(isKnownJourneyNodeType(type), type).toBe(true);
+    }
+    for (const legacy of ['trigger', 'message', 'question', 'condition', 'save_lead']) {
+      expect(isRuntimeExecutableNodeType(legacy)).toBe(true);
+    }
+    expect(ALL_JOURNEY_NODE_TYPES.filter((t) => !isRuntimeExecutableNodeType(t))).toHaveLength(20);
+  });
+
+  it('reports each blocking type of a graph once', () => {
+    expect(nonExecutableNodeTypes([{ type: 'trigger' }, { type: 'api' }, { type: 'text' }, { type: 'api' }, { type: 'email' }])).toEqual(['api', 'email']);
+    expect(nonExecutableNodeTypes([{ type: 'trigger' }, { type: 'delay' }])).toEqual([]);
   });
 });

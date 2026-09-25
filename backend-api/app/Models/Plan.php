@@ -23,6 +23,8 @@ class Plan extends Model
         'billing_model',
         'rate_per_message',
         'total_allocated_messages',
+        // Phase 8 Task 2 — AI credits allocated per purchased period (0 = none).
+        'included_credits',
         'is_active',
     ];
 
@@ -33,6 +35,7 @@ class Plan extends Model
             'duration_days' => 'integer',
             'rate_per_message' => 'decimal:4',
             'total_allocated_messages' => 'integer',
+            'included_credits' => 'integer',
             'is_active' => 'boolean',
         ];
     }

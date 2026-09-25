@@ -24,7 +24,9 @@ use Illuminate\Validation\Rule;
  */
 class ActivityLogController extends Controller
 {
-    private const ACTION_TYPES = ['create', 'update', 'delete', 'toggle'];
+    /** P5-8 — 'allowed' / 'denied' are entitlement-authorization decisions (EntitlementAuditLogger). */
+    /** Phase 8 Task 1 — 'replay': a retried credit operation that changed nothing (AdminCreditController). */
+    private const ACTION_TYPES = ['create', 'update', 'delete', 'toggle', 'allowed', 'denied', 'replay'];
 
     public function index(Request $request): JsonResponse
     {

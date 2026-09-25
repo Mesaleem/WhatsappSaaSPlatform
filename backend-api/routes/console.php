@@ -63,3 +63,13 @@ Schedule::command('queue:work database --queue=journeys --stop-when-empty --max-
 Schedule::command('group-dispatch:recover-stale')
     ->everyFiveMinutes()
     ->withoutOverlapping();
+
+// Phase 8 Task 3 — releases credit reservations whose caller-set expires_at
+// has passed, so a caller that died between reserve and settle cannot
+// strand credits. Reservations without an expiry are never touched; each
+// release is an idempotent CreditService release under the credit-account
+// lock, so an overlapping or repeated run is harmless. Same external
+// `schedule:run` cron assumption as every entry above.
+Schedule::command('credits:release-expired-reservations')
+    ->everyFiveMinutes()
+    ->withoutOverlapping();

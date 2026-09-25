@@ -12,6 +12,7 @@ use App\Models\Subscription;
 use App\Services\Access\PlanEntitlementReconciliationService;
 use App\Services\Access\ProviderCapabilityService;
 use App\Services\Billing\PlanRepository;
+use App\Services\Credits\PlanCreditAllocator;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
@@ -184,6 +185,24 @@ class InvoiceCreditService
             $subscription->expires_at = $baseExpiry->copy()->addDays($terms['duration_days']);
             $subscription->status = 'active';
             $subscription->save();
+
+            // Phase 8 Task 2 — the plan's AI credits for the period this
+            // invoice bought ([the expiry it extended, the new expiry)),
+            // in this SAME transaction: exactly once per paid invoice (the
+            // invoice lock + isPaid() above, and the allocation's own
+            // ledger idempotency key underneath), rolled back with the
+            // payment if anything fails. The amount is the one captured on
+            // the invoice at order time (0 for pre-Task-2 orders / terms
+            // captured before credits existed). Additive only — nothing
+            // already on the account is touched.
+            app(PlanCreditAllocator::class)->allocate(
+                $account,
+                $subscription,
+                $invoice,
+                $invoice->purchasedIncludedCredits(),
+                $baseExpiry->copy(),
+                $subscription->expires_at->copy(),
+            );
 
             // Phase 1 Foundation — Plan -> Entitlement auto-grant, inside
             // this SAME transaction: a payment can never be marked

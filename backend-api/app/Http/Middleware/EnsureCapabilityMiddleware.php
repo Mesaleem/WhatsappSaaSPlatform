@@ -4,6 +4,7 @@ namespace App\Http\Middleware;
 
 use App\Models\Account;
 use App\Services\Access\AccessControlService;
+use App\Services\Access\EntitlementAuditLogger;
 use Closure;
 use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\Response;
@@ -92,6 +93,13 @@ class EnsureCapabilityMiddleware
         $account = Account::findCached((int) $accountId);
 
         if ($account && ! $this->accessControl->canTenant($account, $capability)) {
+            // P5-8 — the denial is audited on the RESOLVED tenant (never a request value).
+            app(EntitlementAuditLogger::class)->record($account, false, [
+                'action' => 'route.access', 'resource_type' => 'route', 'source' => 'api',
+                'category' => 'capability_not_entitled', 'capability' => $capability,
+                'error_code' => 'CAPABILITY_NOT_ENTITLED', 'http_status' => 403,
+            ]);
+
             return response()->json([
                 'success' => false,
                 'message' => 'Your current plan does not include this feature. Please upgrade your subscription to unlock it.',

@@ -80,7 +80,11 @@ class ChatbotEngineService
                 $eventKey,
                 function (?int $inboundEventId = null) use ($accountId, $senderPhone, $incomingMessage, $referral) {
                     // Phase 7 Task 7 — the inbound claim id correlates the journey's execution history.
-                    if (app(WhatsAppJourneyEngine::class)->handleInboundMessage($accountId, $senderPhone, $incomingMessage, $referral, $inboundEventId)) {
+                    // P5-7 — a `default` journey only takes a message no specific
+                    // chatbot rule answers (evaluated lazily, only if one exists).
+                    $ruleMatches = fn (): bool => $this->specificRuleMatches($accountId, $incomingMessage);
+
+                    if (app(WhatsAppJourneyEngine::class)->handleInboundMessage($accountId, $senderPhone, $incomingMessage, $referral, $inboundEventId, $ruleMatches)) {
                         // Consumed by a Journey — no ChatbotLog row is created for
                         // it (flows do not yet have their own log table, a
                         // disclosed scope gap — see WhatsAppJourneyEngine::send()).
@@ -200,6 +204,18 @@ class ChatbotEngineService
      * number would otherwise place it in the list — and is returned only
      * if nothing else matched.
      */
+    /**
+     * P5-7 — does a chatbot rule OTHER than a fallback rule match this
+     * message? The same evaluation process() runs (findMatchingRule()); a
+     * default-trigger Journey steps aside for such a message.
+     */
+    private function specificRuleMatches(int $accountId, string $incomingMessage): bool
+    {
+        $rule = $this->findMatchingRule($accountId, $incomingMessage);
+
+        return $rule !== null && $rule->match_type !== 'fallback';
+    }
+
     private function findMatchingRule(int $accountId, string $incomingMessage): ?ChatbotRule
     {
         $rules = ChatbotRule::activeInEvaluationOrder($accountId)->get();

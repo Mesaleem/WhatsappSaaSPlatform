@@ -39,6 +39,10 @@ class ResumeDueJourneySessions extends Command
         // resumes them in this same run (bounded by --limit).
         $recovered = app(WhatsAppJourneyEngine::class)->recoverInterruptedRuns($limit);
 
+        // P5-7 — questions left unanswered past the reply window are closed
+        // (the inbound path already refuses to let them capture a message).
+        $expired = app(WhatsAppJourneyEngine::class)->expireUnansweredQuestions($limit);
+
         $ids = WhatsAppFlowSession::query()
             ->where('status', WhatsAppFlowSession::STATUS_WAITING)
             ->whereNotNull('wait_until')
@@ -52,7 +56,7 @@ class ResumeDueJourneySessions extends Command
             ResumeJourneySessionJob::dispatch((int) $id)->onConnection('database')->onQueue('journeys');
         }
 
-        $this->info("Restored {$restored} blocked, recovered {$recovered} interrupted and dispatched {$ids->count()} due journey session(s).");
+        $this->info("Restored {$restored} blocked, recovered {$recovered} interrupted, expired {$expired} unanswered and dispatched {$ids->count()} due journey session(s).");
 
         return self::SUCCESS;
     }

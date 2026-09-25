@@ -3,6 +3,7 @@
 namespace App\Http\Middleware;
 
 use App\Models\Account;
+use App\Services\Access\EntitlementAuditLogger;
 use Closure;
 use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\Response;
@@ -37,6 +38,13 @@ class EnsureApiKeyModule
         }
 
         if (! $account->hasModuleEnabled($module)) {
+            // P5-8 — audited like the UI module guard; the key's own account.
+            app(EntitlementAuditLogger::class)->record($account, false, [
+                'action' => 'route.access', 'resource_type' => 'route', 'source' => 'api_key',
+                'category' => 'module_disabled', 'module' => $module,
+                'error_code' => 'MODULE_DISABLED', 'http_status' => 403,
+            ]);
+
             return response()->json([
                 'success' => false,
                 'message' => 'This feature has been disabled for your account by the Super Admin.',

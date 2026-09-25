@@ -39,6 +39,8 @@ class PlanCatalog
             'billing_model' => 'flat_quota',
             'rate_per_message' => null,
             'total_allocated_messages' => 500,
+            // Phase 8 Task 2 — AI credits per period (owner decision: 0 for every existing plan).
+            'included_credits' => 0,
             'price' => 499.00,
             'duration_days' => 30,
             'description' => '500 messages/month over the QR (Baileys) engine.',
@@ -49,6 +51,8 @@ class PlanCatalog
             'billing_model' => 'flat_quota',
             'rate_per_message' => null,
             'total_allocated_messages' => 2500,
+            // Phase 8 Task 2 — AI credits per period (owner decision: 0 for every existing plan).
+            'included_credits' => 0,
             'price' => 1999.00,
             'duration_days' => 30,
             'description' => '2,500 messages/month over the QR (Baileys) engine.',
@@ -59,6 +63,8 @@ class PlanCatalog
             'billing_model' => 'flat_quota',
             'rate_per_message' => null,
             'total_allocated_messages' => 10000,
+            // Phase 8 Task 2 — AI credits per period (owner decision: 0 for every existing plan).
+            'included_credits' => 0,
             'price' => 7999.00,
             'duration_days' => 30,
             'description' => '10,000 messages/month over the official Meta Cloud API.',

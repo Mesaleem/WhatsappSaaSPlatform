@@ -536,8 +536,8 @@ const ADVANCED_NODES: JourneyNodeDefinition[] = [
     configSchema: [
       { key: 'method', label: 'Method', type: 'select', required: true, options: [{ value: 'GET', label: 'GET' }, { value: 'POST', label: 'POST' }] },
       { key: 'url', label: 'URL', type: 'url', required: true, placeholder: 'https://api.example.com/v1/thing' },
-      { key: 'headers', label: 'Headers', type: 'keyvalue', help: 'Never put a token or secret here — it is stored in plain text. Use a server-side credential reference.' },
-      { key: 'query', label: 'Query parameters', type: 'keyvalue' },
+      { key: 'headers', label: 'Headers', type: 'keyvalue', help: 'Values of credential-like headers (e.g. Authorization) are encrypted on save and never shown again — leave a saved value blank to keep it.' },
+      { key: 'query', label: 'Query parameters', type: 'keyvalue', help: 'Values of credential-like parameters are encrypted on save and never shown again.' },
       { key: 'body', label: 'Request body', type: 'textarea' },
       { key: 'credentialRef', label: 'Server credential', type: 'text', help: 'Names a credential configured on the server. The secret itself never reaches this form.' },
       { key: 'responseMapping', label: 'Response mapping', type: 'keyvalue', help: 'variable = json.path' },
@@ -1057,6 +1057,28 @@ export function journeyNodesByCategory(category: JourneyNodeCategory): JourneyNo
 
 /** Every type string the backend must accept. */
 export const ALL_JOURNEY_NODE_TYPES: string[] = JOURNEY_NODE_DEFINITIONS.map((d) => d.type);
+
+/**
+ * P5-7 — RUNTIME TRUTH, mirrored from the backend's authoritative
+ * JourneyNodeCatalog::RUNTIME_EXECUTABLE_TYPES (JourneyRuntimeSafetyTest
+ * fails on any disagreement). "Exists in the palette" is not "can run":
+ * a node outside this list can be placed and saved as a DRAFT, but a
+ * journey containing it cannot be published or switched on — the server
+ * answers 422 JOURNEY_NOT_PUBLISHABLE whatever this list says. UX only.
+ */
+export const RUNTIME_EXECUTABLE_NODE_TYPES: readonly string[] = [
+  'trigger', 'message', 'question', 'condition', 'save_lead',
+  'delay', 'conditional', 'text', 'image', 'video', 'document', 'audio',
+];
+
+export function isRuntimeExecutableNodeType(type: string): boolean {
+  return RUNTIME_EXECUTABLE_NODE_TYPES.includes(type);
+}
+
+/** Distinct node types in a graph that the runtime cannot execute yet. */
+export function nonExecutableNodeTypes(nodes: ReadonlyArray<{ type: string }>): string[] {
+  return [...new Set(nodes.map((n) => n.type).filter((type) => !isRuntimeExecutableNodeType(type)))];
+}
 
 export const JOURNEY_PALETTE_NODE_TYPES: JourneyPaletteNodeType[] = JOURNEY_PALETTE_NODES.map(
   (d) => d.type as JourneyPaletteNodeType,

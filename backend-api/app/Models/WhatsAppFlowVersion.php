@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Models\Concerns\HasJourneyGraph;
+use App\Models\Concerns\MasksJourneySecrets;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -22,6 +23,7 @@ use LogicException;
 class WhatsAppFlowVersion extends Model
 {
     use HasJourneyGraph;
+    use MasksJourneySecrets;
 
     protected $table = 'whatsapp_flow_versions';
 

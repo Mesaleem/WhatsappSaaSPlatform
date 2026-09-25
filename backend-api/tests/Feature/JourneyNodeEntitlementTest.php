@@ -150,6 +150,9 @@ class JourneyNodeEntitlementTest extends TestCase
             : [['id' => 'e0', 'source' => 'n_trigger', 'target' => $nodes[0]['id']]];
 
         return array_merge([
+            // P5-7 — palette nodes without a runtime are persistable as DRAFTS
+            // only; publishing requires an executable graph (JourneyRuntimeSafetyTest).
+            'publish' => false,
             'name' => 'Journey',
             'trigger_type' => 'keyword',
             'trigger_value' => 'start',

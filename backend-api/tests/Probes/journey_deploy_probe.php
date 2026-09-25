@@ -27,13 +27,19 @@ $step = function (string $name, bool $pass, string $d = '') use (&$out, &$ok) { 
 
 $PHASE7 = ['2026_09_23_130000_create_super_admin_platform_crm_account', '2026_09_24_100000_add_temporal_state_to_whatsapp_flow_sessions_table', '2026_09_24_110000_support_journey_automation_on_qr_provider', '2026_09_24_120000_create_group_dispatch_recipients_table', '2026_09_24_130000_create_whatsapp_flow_versions_table', '2026_09_24_130001_backfill_whatsapp_flow_versions', '2026_09_24_140000_create_inbound_message_events_and_conversation_locks_tables', '2026_09_24_150000_add_claim_columns_to_message_dispatch_logs_table', '2026_09_24_160000_add_plan_terms_snapshot_to_invoices_table', '2026_09_24_170000_create_journey_execution_events_table'];
 
+// Phase 8 Task 1 — the migration count is read from disk (it was hard-coded
+// 120; the credit-system migration made it 121). The real DB sits at the
+// 110-migration schema, so everything after it is "pending".
+$TOTAL = count(glob(database_path('migrations/*.php')));
+$PENDING = $TOTAL - 110;
+
 // 1. fresh install
 Artisan::call('migrate:fresh', ['--force' => true]);
-$step('fresh: all 120 migrations ran', DB::table('migrations')->count() === 120);
+$step("fresh: all {$TOTAL} migrations ran", DB::table('migrations')->count() === $TOTAL);
 
-// 2. back to the pre-Phase-7 schema (the real DB has 110 of 120 per PROJECT_STATE)
-Artisan::call('migrate:rollback', ['--step' => 10, '--force' => true]);
-$step('rollback of the 10 pending migrations', ! Schema::hasTable('journey_execution_events') && ! Schema::hasTable('whatsapp_flow_versions') && ! Schema::hasColumn('whatsapp_flow_sessions', 'wait_until'));
+// 2. back to the pre-Phase-7 schema (the real DB has 110 migrations per PROJECT_STATE)
+Artisan::call('migrate:rollback', ['--step' => $PENDING, '--force' => true]);
+$step("rollback of the {$PENDING} pending migrations", ! Schema::hasTable('journey_execution_events') && ! Schema::hasTable('whatsapp_flow_versions') && ! Schema::hasColumn('whatsapp_flow_sessions', 'wait_until'));
 Artisan::call('db:seed', ['--class' => 'RolePermissionSeeder', '--force' => true]);
 Artisan::call('db:seed', ['--class' => 'Phase1FoundationSeeder', '--force' => true]);
 
@@ -51,6 +57,7 @@ $leadId = DB::table('leads')->insertGetId(['account_id' => $acc->id, 'provider' 
 Artisan::call('migrate', ['--force' => true]);
 $ran = DB::table('migrations')->whereIn('migration', $PHASE7)->orderBy('id')->pluck('migration')->all();
 $step('upgrade ran the 10 pending migrations in filename order', $ran === $PHASE7, json_encode($ran));
+$step('upgrade also created the Phase 8 Task 1 credit tables', Schema::hasTable('credit_accounts') && Schema::hasTable('credit_reservations') && Schema::hasTable('credit_ledger_entries'));
 $flow = WhatsAppFlow::find($flowId);
 $s = WhatsAppFlowSession::find($open);
 $step('backfill: legacy journey has v1 published, open + ended sessions pinned', $flow->published_version_id !== null && $s->flow_version_id === $flow->published_version_id && WhatsAppFlowSession::find($done)->flow_version_id === $flow->published_version_id);
@@ -68,13 +75,13 @@ $step('a pre-upgrade session answered after the upgrade completes on its pinned 
 $step('and it has execution history with the inbound id', Ev::where('session_id', $s->id)->whereNotNull('inbound_event_id')->exists());
 $step('the ended pre-upgrade session was not revived', WhatsAppFlowSession::find($done)->status === 'completed');
 
-// 4. idempotency: rollback all 10 again and re-apply; data survives what it should
-Artisan::call('migrate:rollback', ['--step' => 10, '--force' => true]);
+// 4. idempotency: rollback all pending migrations again and re-apply; data survives what it should
+Artisan::call('migrate:rollback', ['--step' => $PENDING, '--force' => true]);
 $step('second rollback clean', ! Schema::hasTable('journey_execution_events') && DB::table('whatsapp_flows')->where('id', $flowId)->exists());
 Artisan::call('migrate', ['--force' => true]);
 $step('re-apply clean; journey re-backfilled with exactly one version', DB::table('whatsapp_flow_versions')->where('flow_id', $flowId)->count() === 1 && WhatsAppFlow::find($flowId)->published_version_id !== null);
 Artisan::call('migrate', ['--force' => true]);
-$step('migrate again is a no-op', DB::table('migrations')->count() === 120);
+$step('migrate again is a no-op', DB::table('migrations')->count() === $TOTAL);
 
 echo implode("\n", $out)."\nMariaDB ".DB::selectOne('select version() v')->v."\n";
 exit($ok ? 0 : 1);
