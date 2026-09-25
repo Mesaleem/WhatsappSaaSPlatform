@@ -127,22 +127,6 @@ class TemplateMessageDispatcher
 
         $renderedMessage = TemplateRenderer::render($template->template_body, $renderVariables);
 
-        $normalizedPhone = PhoneNumberNormalizer::normalize($recipientPhone);
-        if ($normalizedPhone === '') {
-            $msg = "Recipient phone number '{$recipientPhone}' is not a valid number after normalization.";
-            MessageDispatchLog::record($accountId, $source, $recipientPhone, success: false, errorReason: $msg, apiKeyId: $apiKeyId, referenceType: 'template', referenceId: $template->id, templateName: $template->title, messagePreview: $renderedMessage);
-
-            return ['status' => 'failed', 'message' => $msg];
-        }
-
-        try {
-            $driver = WhatsAppEngineFactory::make($account);
-        } catch (RuntimeException $e) {
-            MessageDispatchLog::record($accountId, $source, $normalizedPhone, success: false, errorReason: $e->getMessage(), apiKeyId: $apiKeyId, referenceType: 'template', referenceId: $template->id, templateName: $template->title, messagePreview: $renderedMessage);
-
-            return ['status' => 'failed', 'message' => $e->getMessage()];
-        }
-
         // [Bug fix, disclosed]: resolved once and reused below for the
         // success MessageDispatchLog::record() call's $hasMedia flag --
         // previously this dispatcher built media metadata and actually
@@ -150,7 +134,31 @@ class TemplateMessageDispatcher
         // attached, so Message Logs' "Media Attachment" column read "No"
         // even for a real Media Template send (see record()'s own
         // docblock for the full root cause).
+        // Moved up (it is a pure function) so the historical snapshot
+        // below can record the media that was actually attached.
         $mediaMetaData = self::resolveMediaMetaData($template, $account, $mediaUrl);
+
+        // Message Log "View Message": frozen copy of exactly what this
+        // send used, so the log never has to guess from the CURRENT
+        // (possibly since-edited) template definition.
+        $snapshot = self::buildSnapshot($template, $account, $renderVariables, $renderedMessage, $mediaMetaData);
+
+        $normalizedPhone = PhoneNumberNormalizer::normalize($recipientPhone);
+        if ($normalizedPhone === '') {
+            $msg = "Recipient phone number '{$recipientPhone}' is not a valid number after normalization.";
+            MessageDispatchLog::record($accountId, $source, $recipientPhone, success: false, errorReason: $msg, apiKeyId: $apiKeyId, referenceType: 'template', referenceId: $template->id, templateName: $template->title, messagePreview: $renderedMessage, templateSnapshot: $snapshot);
+
+            return ['status' => 'failed', 'message' => $msg];
+        }
+
+        try {
+            $driver = WhatsAppEngineFactory::make($account);
+        } catch (RuntimeException $e) {
+            MessageDispatchLog::record($accountId, $source, $normalizedPhone, success: false, errorReason: $e->getMessage(), apiKeyId: $apiKeyId, referenceType: 'template', referenceId: $template->id, templateName: $template->title, messagePreview: $renderedMessage, templateSnapshot: $snapshot);
+
+            return ['status' => 'failed', 'message' => $e->getMessage()];
+        }
+
         $metaData = [
             'template_id' => $template->id,
             ...$mediaMetaData,
@@ -160,7 +168,7 @@ class TemplateMessageDispatcher
 
         if (empty($result['success'])) {
             $msg = $result['error'] ?? 'The WhatsApp engine rejected the message.';
-            MessageDispatchLog::record($accountId, $source, $normalizedPhone, success: false, errorReason: $msg, apiKeyId: $apiKeyId, referenceType: 'template', referenceId: $template->id, templateName: $template->title, messagePreview: $renderedMessage);
+            MessageDispatchLog::record($accountId, $source, $normalizedPhone, success: false, errorReason: $msg, apiKeyId: $apiKeyId, referenceType: 'template', referenceId: $template->id, templateName: $template->title, messagePreview: $renderedMessage, templateSnapshot: $snapshot);
 
             return ['status' => 'failed', 'message' => $msg];
         }
@@ -204,9 +212,85 @@ class TemplateMessageDispatcher
         // (the new /v1/send-message individual-recipient path) is the
         // first caller that actually reads it, to return it as this
         // endpoint's own dispatch_id.
-        $log = MessageDispatchLog::record($accountId, $source, $normalizedPhone, success: true, apiKeyId: $apiKeyId, referenceType: 'template', referenceId: $template->id, templateName: $template->title, messagePreview: $renderedMessage, gatewayMessageId: $result['message_id'] ?? null, hasMedia: array_key_exists('media_url', $mediaMetaData), mediaUrl: $mediaMetaData['media_url'] ?? null);
+        $log = MessageDispatchLog::record($accountId, $source, $normalizedPhone, success: true, apiKeyId: $apiKeyId, referenceType: 'template', referenceId: $template->id, templateName: $template->title, messagePreview: $renderedMessage, gatewayMessageId: $result['message_id'] ?? null, hasMedia: array_key_exists('media_url', $mediaMetaData), mediaUrl: $mediaMetaData['media_url'] ?? null, templateSnapshot: $snapshot);
 
         return ['status' => 'sent', 'rendered_message' => $renderedMessage, 'dispatch_log_id' => $log->id];
+    }
+
+    /**
+     * Message Log "View Message" -- the historical snapshot stored on the
+     * MessageDispatchLog row (template_snapshot). Everything here is what
+     * THIS send actually used; nothing is re-read later from
+     * message_templates.
+     *
+     * $renderedMessage is the full outgoing text for an individual send.
+     * For a group dispatch it is null, because each member's text is only
+     * rendered later inside ProcessGroupDispatchJob (see
+     * GroupMessageDispatcher); scope 'group' plus a preview says so.
+     *
+     * This app's templates are its own text templates (the WhatsApp
+     * drivers send plain text, plus an attachment on the QR engine), so
+     * there is no language, category, namespace, footer or button data to
+     * capture; those fields are deliberately absent, not faked.
+     *
+     * @param  array<string, mixed>  $variables  the exact values rendered with
+     * @param  array{media_type?: string, media_url?: string, filename?: string}  $mediaMetaData
+     * @return array<string, mixed>
+     */
+    public static function buildSnapshot(
+        MessageTemplate $template,
+        Account $account,
+        array $variables,
+        ?string $renderedMessage,
+        array $mediaMetaData = [],
+        string $scope = 'individual',
+        ?string $groupPreview = null,
+    ): array {
+        $parameters = [];
+        $seen = [];
+        foreach ($template->effectiveVariablesSchema() as $field) {
+            $key = $field['key'];
+            $seen[$key] = true;
+            $parameters[] = [
+                'key' => $key,
+                'label' => $field['label'] ?? $key,
+                'value' => array_key_exists($key, $variables) ? self::snapshotValue($variables[$key]) : null,
+            ];
+        }
+        // Values the caller sent that the schema doesn't list are still
+        // part of what was rendered with, so keep them too.
+        foreach ($variables as $key => $value) {
+            if (! isset($seen[$key]) && is_scalar($value)) {
+                $parameters[] = ['key' => (string) $key, 'label' => (string) $key, 'value' => (string) $value];
+            }
+        }
+
+        return [
+            'version' => 1,
+            'scope' => $scope,
+            'template_id' => $template->id,
+            'template_code' => $template->template_code,
+            'template_title' => $template->title,
+            'template_body' => $template->template_body,
+            'header_type' => $template->header_type,
+            'parameters' => $parameters,
+            'rendered_message' => $renderedMessage,
+            'group_preview' => $groupPreview,
+            'engine' => $account->currentSubscription?->engine_type,
+            'media' => array_key_exists('media_url', $mediaMetaData)
+                ? [
+                    'type' => $mediaMetaData['media_type'] ?? null,
+                    'url' => $mediaMetaData['media_url'],
+                    'filename' => $mediaMetaData['filename'] ?? null,
+                ]
+                : null,
+            'captured_at' => now()->toIso8601String(),
+        ];
+    }
+
+    private static function snapshotValue(mixed $value): string
+    {
+        return is_scalar($value) || $value === null ? (string) $value : (string) json_encode($value);
     }
 
     /**

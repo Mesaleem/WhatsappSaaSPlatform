@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AxiosError } from 'axios';
-import { ClipboardList, RefreshCw, Users } from 'lucide-react';
+import { ClipboardList, Eye, RefreshCw, Users } from 'lucide-react';
 import messageLogsService from '../../services/messageLogsService';
 import type {
   MessageDispatchLog,
@@ -14,6 +14,7 @@ import { PageHeader, PageShell } from '../../components/common/PageShell';
 import { TableCard } from '../../components/common/Card';
 import { ClearFiltersButton, Pagination, SearchInput, StatusFilterSelect } from '../../components/common/DataTableControls';
 import { TableSkeletonRows } from '../../components/common/Skeleton';
+import TemplateMessageDetailModal from '../../components/templates/TemplateMessageDetailModal';
 
 /** Same pattern as AuditLogsPage.tsx's extractMessage() — surfaces the backend's real error (e.g. a missing-table 500 before the message_dispatch_logs migration has run) instead of a fixed generic string. */
 function extractMessage(err: unknown, fallback: string): string {
@@ -32,6 +33,7 @@ const STATUS_OPTIONS: { value: MessageDispatchStatus; label: string }[] = [
 const SOURCE_OPTIONS: { value: MessageDispatchSource; label: string }[] = [
   { value: 'web_ui', label: 'Web (Send Alert)' },
   { value: 'web_template', label: 'Web (Template)' },
+  { value: 'web_template_bulk', label: 'Web (Bulk Template)' },
   { value: 'api', label: 'Developer API' },
   { value: 'chatbot', label: 'Chatbot' },
   { value: 'journey', label: 'Journey Builder' },
@@ -46,10 +48,20 @@ const RECIPIENT_TYPE_OPTIONS: { value: MessageDispatchRecipientType; label: stri
 const SOURCE_BADGE: Record<MessageDispatchSource, { label: string; className: string }> = {
   web_ui: { label: 'Web', className: 'bg-indigo-50 text-indigo-700 ring-indigo-600/20' },
   web_template: { label: 'Template', className: 'bg-violet-50 text-violet-700 ring-violet-600/20' },
+  // Written by SendWhatsAppTemplateJob (queue 'whatsapp-bulk'). Was missing
+  // here, so SOURCE_BADGE[log.source] was undefined for bulk rows and
+  // `.className` threw during render, unmounting the whole React tree.
+  web_template_bulk: { label: 'Bulk Template', className: 'bg-purple-50 text-purple-700 ring-purple-600/20' },
   api: { label: 'API', className: 'bg-amber-50 text-amber-700 ring-amber-600/20' },
   chatbot: { label: 'Chatbot', className: 'bg-cyan-50 text-cyan-700 ring-cyan-600/20' },
   journey: { label: 'Journey', className: 'bg-fuchsia-50 text-fuchsia-700 ring-fuchsia-600/20' },
 };
+
+/** Unknown/future source strings must degrade to a neutral badge, never crash the grid. */
+const UNKNOWN_SOURCE_BADGE = { label: 'Other', className: 'bg-slate-50 text-slate-700 ring-slate-600/20' };
+function sourceBadge(source: string): { label: string; className: string } {
+  return SOURCE_BADGE[source as MessageDispatchSource] ?? UNKNOWN_SOURCE_BADGE;
+}
 
 const STATUS_BADGE: Record<MessageDispatchStatus, string> = {
   sent: 'bg-emerald-50 text-emerald-700 ring-emerald-600/20',
@@ -59,6 +71,11 @@ const STATUS_BADGE: Record<MessageDispatchStatus, string> = {
 
 const filterInputClass =
   'rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100';
+
+/** Same rule as the backend's MessageDispatchLog::isTemplateMessage() for rows the list can see. */
+function isTemplateLog(log: MessageDispatchLog): boolean {
+  return log.template_name !== null || log.reference_type === 'template';
+}
 
 function formatDateTime(value: string | null): string {
   if (!value) return '—';
@@ -96,6 +113,8 @@ export default function MessageLogsPage() {
   const [to, setTo] = useState('');
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Message Log "View Message": id of the row whose full template content is open.
+  const [viewingLogId, setViewingLogId] = useState<number | null>(null);
 
   const filters: MessageDispatchLogFilters = useMemo(
     () => ({ search, status, source, recipient_type: recipientType, from, to }),
@@ -247,9 +266,9 @@ export default function MessageLogsPage() {
                   </td>
                   <td className="px-4 py-3">
                     <span
-                      className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${SOURCE_BADGE[log.source].className}`}
+                      className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${sourceBadge(log.source).className}`}
                     >
-                      {SOURCE_BADGE[log.source].label}
+                      {sourceBadge(log.source).label}
                     </span>
                   </td>
                   <td className="px-4 py-3 max-w-xs">
@@ -257,6 +276,17 @@ export default function MessageLogsPage() {
                       <div className="truncate text-xs font-semibold text-slate-800">{log.template_name}</div>
                     )}
                     <div className="truncate text-xs text-slate-500">{log.message_preview ?? '—'}</div>
+                    {isTemplateLog(log) && (
+                      <button
+                        type="button"
+                        onClick={() => setViewingLogId(log.id)}
+                        className="mt-1 inline-flex items-center gap-1 text-xs font-medium text-indigo-600 hover:text-indigo-800"
+                        aria-label={`View message ${log.id}`}
+                      >
+                        <Eye className="h-3.5 w-3.5" />
+                        View message
+                      </button>
+                    )}
                   </td>
                   <td className="px-4 py-3 text-slate-600">{log.has_media ? 'Yes' : 'No'}</td>
                   <td className="px-4 py-3">
@@ -282,6 +312,10 @@ export default function MessageLogsPage() {
           onPerPageChange={(pp) => setPerPage(pp)}
         />
       </TableCard>
+
+      {viewingLogId !== null && (
+        <TemplateMessageDetailModal logId={viewingLogId} onClose={() => setViewingLogId(null)} />
+      )}
     </PageShell>
   );
 }

@@ -71,6 +71,7 @@ const STATUS_BADGE: Record<MessageDispatchStatus, string> = {
 const SOURCE_LABEL: Record<MessageDispatchSource, string> = {
   web_ui: 'Web',
   web_template: 'Template',
+  web_template_bulk: 'Bulk Template',
   api: 'API',
   chatbot: 'Chatbot',
   journey: 'Journey',
@@ -1072,7 +1073,7 @@ function TenantDashboard({ impersonatedAccountName }: { impersonatedAccountName?
                         {log.recipient_phone}
                       </td>
                       <td className="px-5 py-2.5" style={{ color: indigo.ink }}>
-                        <div className="text-xs font-semibold">{SOURCE_LABEL[log.source]}</div>
+                        <div className="text-xs font-semibold">{SOURCE_LABEL[log.source] ?? 'Other'}</div>
                         {log.template_name && (
                           <div className="text-xs" style={{ color: indigo.muted }}>{log.template_name}</div>
                         )}

@@ -9,6 +9,7 @@ use App\Models\ContactGroupMember;
 use App\Models\MessageDispatchLog;
 use App\Models\MessageTemplate;
 use App\Services\PaymentAlerts\PaymentAlertDispatcher;
+use App\Services\Templates\TemplateMessageDispatcher;
 use App\Support\TemplateRenderer;
 use Illuminate\Support\Facades\DB;
 
@@ -157,7 +158,7 @@ class GroupMessageDispatcher
         // transaction as the reservation, so a caller can never observe
         // used_messages having moved without a corresponding audit row
         // (or vice versa).
-        $reservation = DB::transaction(function () use ($subscription, $recipientCount, $accountId, $group, $template, $variables, $source, $apiKeyId) {
+        $reservation = DB::transaction(function () use ($subscription, $recipientCount, $accountId, $account, $group, $template, $variables, $source, $apiKeyId) {
             $locked = $subscription->newQuery()->lockForUpdate()->find($subscription->id);
 
             if (! $locked->hasQuotaFor($recipientCount)) {
@@ -190,6 +191,18 @@ class GroupMessageDispatcher
                 $preview,
                 $source,
                 $apiKeyId,
+                // Message Log "View Message": group-level snapshot. No
+                // single rendered text exists (each member's is rendered
+                // later), so rendered_message stays null and the preview
+                // is labelled as such.
+                templateSnapshot: TemplateMessageDispatcher::buildSnapshot(
+                    $template,
+                    $account,
+                    $variables,
+                    null,
+                    scope: 'group',
+                    groupPreview: $preview,
+                ),
             );
 
             return ['status' => 'queued', 'dispatch_id' => $log->id];

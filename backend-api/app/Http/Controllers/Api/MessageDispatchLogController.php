@@ -36,7 +36,10 @@ class MessageDispatchLogController extends Controller
     // this grid needs to be able to select it like any other status.
     private const VALID_STATUSES = ['sent', 'failed', 'queued'];
 
-    private const VALID_SOURCES = ['web_ui', 'web_template', 'api', 'chatbot', 'journey'];
+    // 'web_template_bulk' = SendWhatsAppTemplateJob (queue 'whatsapp-bulk').
+    // Public so SourceWhitelistTest can assert every source a dispatcher
+    // writes is filterable here and known to the frontend.
+    public const VALID_SOURCES = ['web_ui', 'web_template', 'web_template_bulk', 'api', 'chatbot', 'journey'];
 
     // Group Messaging Phase 5 — Dashboard Analytics Upgrade. Matches
     // the recipient_type column's own DB default ('individual', see
@@ -64,6 +67,93 @@ class MessageDispatchLogController extends Controller
         $logs = $query->latest('id')->paginate($perPage)->withQueryString();
 
         return response()->json($logs->toArray() + ['scope' => $account ? 'account' : 'global']);
+    }
+
+    /**
+     * GET /api/message-logs/{id}/template — "View Message" detail for one
+     * template send: exactly what went out at the time.
+     *
+     * Access is identical to index(): same route group (auth, tenant
+     * isolation, permission:view-logs, module.guard:message_logs) and the
+     * same account scoping. The account comes from TenantIsolationMiddleware
+     * (a tenant user's own account; a Super Admin's or Agent's validated
+     * ?account_id= selection), never from a raw client value. A row from
+     * another account is a 404 via forAccount()->findOrFail(), the same
+     * convention as MessageLogController::show(), so another tenant's IDs
+     * can't even be confirmed to exist. A Super Admin with no client
+     * selected sees every tenant, as in index().
+     *
+     * Historical accuracy: content comes ONLY from the row itself
+     * (template_snapshot, or the legacy truncated message_preview). The
+     * current message_templates row is never read, because it may have
+     * been edited after the send. Rows sent before the snapshot migration
+     * return snapshot_available=false with whatever the row itself holds.
+     */
+    public function template(Request $request, int $id): JsonResponse
+    {
+        $account = $this->resolveAccount($request);
+
+        $log = $account
+            ? MessageDispatchLog::forAccount($account->id)->findOrFail($id)
+            : MessageDispatchLog::with('account:id,company_name')->findOrFail($id);
+
+        if (! $log->isTemplateMessage()) {
+            return response()->json([
+                'message' => 'This log entry is not a template message.',
+                'error_code' => 'NOT_A_TEMPLATE_MESSAGE',
+            ], 422);
+        }
+
+        $snapshot = is_array($log->template_snapshot) ? $log->template_snapshot : null;
+        $media = $snapshot['media'] ?? null;
+        $preview = $log->message_preview;
+
+        return response()->json([
+            'id' => $log->id,
+            'account' => $account ? null : $log->account?->only(['id', 'company_name']),
+            'source' => $log->source,
+            'status' => $log->status,
+            'error_reason' => $log->error_reason,
+            'recipient_type' => $log->recipient_type ?? 'individual',
+            'recipient' => $log->recipient_phone,
+            'group_name' => $log->group_name,
+            'recipient_count' => $log->recipient_count,
+            'sent_at' => $log->sent_at?->toIso8601String(),
+            'created_at' => $log->created_at?->toIso8601String(),
+            'provider' => $snapshot['engine'] ?? null,
+            'provider_message_id' => $log->gateway_message_id,
+
+            'snapshot_available' => $snapshot !== null,
+            'snapshot_scope' => $snapshot['scope'] ?? null,
+            'captured_at' => $snapshot['captured_at'] ?? null,
+
+            'template' => [
+                'id' => $snapshot['template_id'] ?? ($log->reference_type === 'template' ? $log->reference_id : null),
+                'name' => $snapshot['template_title'] ?? $log->template_name,
+                'code' => $snapshot['template_code'] ?? null,
+                'header_type' => $snapshot['header_type'] ?? null,
+                'body' => $snapshot['template_body'] ?? null,
+            ],
+            'parameters' => $snapshot['parameters'] ?? [],
+            'rendered_content' => $snapshot['rendered_message'] ?? null,
+            'group_preview' => $snapshot['group_preview'] ?? null,
+            // Always the row's own stored snippet (max 160 chars). Flagged
+            // so the UI can say it may be cut short when no full rendered
+            // content exists.
+            'message_preview' => $preview,
+            'message_preview_possibly_truncated' => $preview !== null && mb_strlen($preview) >= 160,
+            'media' => [
+                'has_media' => (bool) $log->has_media,
+                'type' => $media['type'] ?? null,
+                'url' => $media['url'] ?? $log->media_url,
+                'filename' => $media['filename'] ?? null,
+            ],
+            // This app's templates are its own text templates, sent as plain
+            // text (plus an attachment on the QR engine). They have no
+            // language, category, namespace, text header, footer or buttons,
+            // so none of that exists to return. Listed so it is explicit.
+            'not_applicable' => ['template_language', 'template_category', 'template_namespace', 'header_text', 'footer', 'buttons'],
+        ]);
     }
 
     /**

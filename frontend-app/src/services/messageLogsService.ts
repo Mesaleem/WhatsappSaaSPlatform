@@ -1,5 +1,5 @@
 import axiosInstance from '../core/api/axiosInstance';
-import type { MessageDispatchLogFilters, MessageDispatchLogsResponse } from '../types/messageLog';
+import type { MessageDispatchLogFilters, MessageDispatchLogsResponse, TemplateMessageDetail } from '../types/messageLog';
 
 /**
  * [New feature, disclosed]. CSV/PDF export is deliberately NOT included
@@ -26,6 +26,13 @@ const messageLogsService = {
       .get<MessageDispatchLogsResponse>('/message-logs', {
         params: { page, per_page: perPage, ...cleanFilters(filters) },
       })
+      .then((res) => res.data);
+  },
+
+  /** GET /api/message-logs/{id}/template — exact historical content of one template send. */
+  getTemplateDetail(id: number) {
+    return axiosInstance
+      .get<TemplateMessageDetail>(`/message-logs/${id}/template`)
       .then((res) => res.data);
   },
 };

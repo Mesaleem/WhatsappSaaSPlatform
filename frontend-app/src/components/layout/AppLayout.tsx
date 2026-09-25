@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type ComponentType } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
+import RouteErrorBoundary from '../common/RouteErrorBoundary';
 import {
   BarChart3,
   Bot,
@@ -411,7 +412,10 @@ export default function AppLayout() {
         <Header pageTitle={pageTitle} />
 
         <main className="flex-1 overflow-y-auto">
-          <Outlet />
+          {/* Keyed by pathname so an error on one page resets on navigation. */}
+          <RouteErrorBoundary key={location.pathname}>
+            <Outlet />
+          </RouteErrorBoundary>
         </main>
       </div>
     </div>

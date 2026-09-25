@@ -21,7 +21,7 @@ import type { PaginatedResponse } from './account';
 export type MessageDispatchStatus = 'sent' | 'failed' | 'queued';
 
 /** Matches every source string a dispatcher currently writes — see TemplateMessageDispatcher/PaymentAlertDispatcher/ChatbotEngineService/WhatsAppJourneyEngine. */
-export type MessageDispatchSource = 'web_ui' | 'web_template' | 'api' | 'chatbot' | 'journey';
+export type MessageDispatchSource = 'web_ui' | 'web_template' | 'web_template_bulk' | 'api' | 'chatbot' | 'journey';
 
 /** Group Messaging Phase 5 — matches recipient_type's DB default ('individual', see the migration adding it) plus the one other value recordGroupDispatchQueued() ever writes ('group'). */
 export type MessageDispatchRecipientType = 'individual' | 'group';
@@ -84,4 +84,62 @@ export interface MessageDispatchLogFilters {
   recipient_type?: MessageDispatchRecipientType | '';
   from?: string;
   to?: string;
+}
+
+/** One variable as actually rendered into a template send (from the send-time snapshot). */
+export interface TemplateMessageParameter {
+  key: string;
+  label: string;
+  /** null when the template declared the variable but the send supplied no value. */
+  value: string | null;
+}
+
+/**
+ * GET /api/message-logs/{id}/template — see MessageDispatchLogController::template().
+ * Everything here comes from the log row's own send-time snapshot; the
+ * current template definition is never used. For sends made before the
+ * snapshot existed, snapshot_available is false and only the stored
+ * (possibly truncated) message_preview is available.
+ */
+export interface TemplateMessageDetail {
+  id: number;
+  account: { id: number; company_name: string } | null;
+  source: string;
+  status: string;
+  error_reason: string | null;
+  recipient_type: MessageDispatchRecipientType;
+  recipient: string;
+  group_name: string | null;
+  recipient_count: number | null;
+  sent_at: string | null;
+  created_at: string | null;
+  /** Engine at send time ('qr' | 'meta'), null when not captured. */
+  provider: string | null;
+  provider_message_id: string | null;
+  snapshot_available: boolean;
+  snapshot_scope: 'individual' | 'group' | null;
+  captured_at: string | null;
+  template: {
+    id: number | null;
+    name: string | null;
+    code: string | null;
+    header_type: string | null;
+    /** Template body exactly as it was at send time (with {{placeholders}}). */
+    body: string | null;
+  };
+  parameters: TemplateMessageParameter[];
+  /** Full outgoing text for an individual send. null for group rows and pre-snapshot rows. */
+  rendered_content: string | null;
+  /** Group rows only: the text with group-level values filled in; per-member values were filled later. */
+  group_preview: string | null;
+  message_preview: string | null;
+  message_preview_possibly_truncated: boolean;
+  media: {
+    has_media: boolean;
+    type: string | null;
+    url: string | null;
+    filename: string | null;
+  };
+  /** Fields that don't exist for this app's templates (language, footer, buttons, ...). */
+  not_applicable: string[];
 }

@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Support\Facades\Schema;
 
 /**
  * [New feature, disclosed] — see the creating migration's docblock for
@@ -34,6 +35,11 @@ class MessageDispatchLog extends Model
         // rationale and the pending-authorization note.
         'template_name',
         'message_preview',
+        // [Bug fix, 2026-09-25]: record() has always written this, but it
+        // was missing here, so mass assignment silently dropped it and the
+        // provider message id was never stored (and MetaWebhookController::
+        // correlateFailedStatus() could never find a row by WAMID).
+        'gateway_message_id',
         // Group Messaging Step 1 — schema-only: these four columns
         // exist and are mass-assignable now, but nothing yet writes them
         // (record() below is unchanged) — that's the group-dispatch
@@ -50,7 +56,18 @@ class MessageDispatchLog extends Model
         // column on this model already follows).
         'success_count',
         'failure_count',
+        // Message Log "View Message": frozen copy of what a template send
+        // actually used (body, variables, full rendered text, media,
+        // engine). See 2026_09_25_120000_add_template_snapshot_... .
+        'template_snapshot',
     ];
+
+    /**
+     * Kept out of JSON serialisation so GET /api/message-logs (which returns
+     * whole rows) stays exactly as it was. Only the dedicated detail
+     * endpoint, MessageDispatchLogController::template(), reads it.
+     */
+    protected $hidden = ['template_snapshot'];
 
     protected function casts(): array
     {
@@ -61,6 +78,7 @@ class MessageDispatchLog extends Model
             'recipient_count' => 'integer',
             'success_count' => 'integer',
             'failure_count' => 'integer',
+            'template_snapshot' => 'array',
         ];
     }
 
@@ -97,6 +115,41 @@ class MessageDispatchLog extends Model
 
     /** message_preview is stored as a short snippet, not the full outgoing text — see record()'s own truncation. */
     private const PREVIEW_MAX_LENGTH = 160;
+
+    /** Memoised per PHP process; see snapshotColumnExists(). */
+    private static ?bool $snapshotColumnExists = null;
+
+    /**
+     * True once the template_snapshot migration has run. Checked so that
+     * deploying this code BEFORE running `php artisan migrate` never
+     * breaks sending: the snapshot is simply not stored until the column
+     * exists. Memoised per process (schema state only, no tenant or user
+     * data); the scheduled whatsapp-bulk worker restarts every minute.
+     */
+    public static function snapshotColumnExists(): bool
+    {
+        return self::$snapshotColumnExists ??= Schema::hasColumn('message_dispatch_logs', 'template_snapshot');
+    }
+
+    /** @param  array<string, mixed>|null  $snapshot */
+    private static function snapshotAttributes(?array $snapshot): array
+    {
+        return $snapshot !== null && self::snapshotColumnExists()
+            ? ['template_snapshot' => $snapshot]
+            : [];
+    }
+
+    /**
+     * True when this row is a template send. template_snapshot exists only
+     * for sends made after the snapshot migration; reference_type/
+     * template_name also cover older individual and group template rows.
+     */
+    public function isTemplateMessage(): bool
+    {
+        return $this->template_snapshot !== null
+            || $this->reference_type === 'template'
+            || $this->template_name !== null;
+    }
 
     /**
      * Single write path so every dispatch pathway logs with the exact
@@ -153,8 +206,11 @@ class MessageDispatchLog extends Model
         // ever confirms "media was attached" without the underlying
         // URL, though every current caller supplies both together.
         ?string $mediaUrl = null,
+        // Message Log "View Message": see snapshotAttributes(). Trailing
+        // and optional, so every existing call site is unaffected.
+        ?array $templateSnapshot = null,
     ): self {
-        return self::create([
+        return self::create(self::snapshotAttributes($templateSnapshot) + [
             'account_id' => $accountId,
             'source' => $source,
             'api_key_id' => $apiKeyId,
@@ -212,8 +268,9 @@ class MessageDispatchLog extends Model
         ?string $messagePreview,
         string $source,
         ?int $apiKeyId,
+        ?array $templateSnapshot = null,
     ): self {
-        return self::create([
+        return self::create(self::snapshotAttributes($templateSnapshot) + [
             'account_id' => $accountId,
             'source' => $source,
             'api_key_id' => $apiKeyId,

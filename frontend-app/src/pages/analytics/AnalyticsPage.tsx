@@ -53,10 +53,20 @@ const STATUS_BADGE: Record<MessageDispatchStatus, string> = {
 const SOURCE_BADGE: Record<MessageDispatchSource, { label: string; className: string }> = {
   web_ui: { label: 'Web', className: 'bg-indigo-50 text-indigo-700 ring-indigo-600/20' },
   web_template: { label: 'Template', className: 'bg-violet-50 text-violet-700 ring-violet-600/20' },
+  // Written by SendWhatsAppTemplateJob (queue 'whatsapp-bulk'). Was missing
+  // here, so SOURCE_BADGE[log.source] was undefined for bulk rows and
+  // `.className` threw during render, unmounting the whole React tree.
+  web_template_bulk: { label: 'Bulk Template', className: 'bg-purple-50 text-purple-700 ring-purple-600/20' },
   api: { label: 'API', className: 'bg-amber-50 text-amber-700 ring-amber-600/20' },
   chatbot: { label: 'Chatbot', className: 'bg-cyan-50 text-cyan-700 ring-cyan-600/20' },
   journey: { label: 'Journey', className: 'bg-fuchsia-50 text-fuchsia-700 ring-fuchsia-600/20' },
 };
+
+/** Unknown/future source strings must degrade to a neutral badge, never crash the grid. */
+const UNKNOWN_SOURCE_BADGE = { label: 'Other', className: 'bg-slate-50 text-slate-700 ring-slate-600/20' };
+function sourceBadge(source: string): { label: string; className: string } {
+  return SOURCE_BADGE[source as MessageDispatchSource] ?? UNKNOWN_SOURCE_BADGE;
+}
 
 const ENGINE_COLOR: Record<EngineType, string> = {
   qr: '#3b82f6',
@@ -843,9 +853,9 @@ function LogsSection({ resolvedRange }: { resolvedRange: DateRange }) {
                   </td>
                   <td className="px-4 py-2.5 max-w-xs">
                     <span
-                      className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${SOURCE_BADGE[log.source].className}`}
+                      className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${sourceBadge(log.source).className}`}
                     >
-                      {SOURCE_BADGE[log.source].label}
+                      {sourceBadge(log.source).label}
                     </span>
                     {log.template_name && (
                       <div className="mt-1 truncate text-xs text-slate-500">{log.template_name}</div>

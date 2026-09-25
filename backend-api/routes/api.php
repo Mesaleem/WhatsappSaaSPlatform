@@ -650,6 +650,12 @@ Route::middleware('auth:sanctum')->group(function () {
             // matches this route's own frontend module gate (App.tsx /
             // AppLayout.tsx) exactly.
             Route::middleware('module.guard:message_logs')->get('/message-logs', [MessageDispatchLogController::class, 'index']);
+            // Message Log "View Message": exact historical template content
+            // for one row. Same permission + module gate and same tenant
+            // scoping as the list above (see MessageDispatchLogController::template()).
+            Route::middleware('module.guard:message_logs')
+                ->get('/message-logs/{id}/template', [MessageDispatchLogController::class, 'template'])
+                ->whereNumber('id');
         });
 
         // Role-Based Login Audit Logging Architecture — held by ALL three
