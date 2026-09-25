@@ -28,7 +28,13 @@ class WhatsAppController extends Controller
 
         $session = WhatsAppSession::firstWhere('account_id', $account->id);
 
+        // account_id is echoed so qr-engine-service's Socket.IO auth
+        // (backendClient.verifyAccountAccess) can confirm WHICH account
+        // this 200 was resolved for: TenantIsolationMiddleware silently
+        // ignores ?account_id= for plain tenant users, so a 200 alone
+        // does not prove the caller may see the requested account.
         return response()->json([
+            'account_id' => $account->id,
             'status' => $session->status ?? 'disconnected',
             'last_connected_at' => $session?->last_connected_at,
         ]);
