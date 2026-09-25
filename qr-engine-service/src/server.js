@@ -135,7 +135,8 @@ io.use(async (socket, next) => {
     }
     socket.accountId = String(accountId);
     next();
-  } catch {
+  } catch (err) {
+    console.warn(`[socket] token verification failed for account_id=${accountId}: ${err.message}`);
     next(new Error('token verification failed'));
   }
 });
@@ -205,19 +206,52 @@ function requireInternalSecret(req, res, next) {
 
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
-app.post('/api/qr/start-session', requireInternalSecret, async (req, res) => {
+/**
+ * Acknowledges immediately and bootstraps Baileys in the background.
+ *
+ * This MUST NOT await startSession(): backend-api calls this route from
+ * inside its own HTTP request (WhatsAppController::forwardToQrEngine, 5 s
+ * timeout) while, at the same moment, the browser's Socket.IO handshake
+ * makes THIS service call backend-api back (io.use -> verifyAccountAccess).
+ * Under a single-worker PHP server (`php artisan serve` on Windows) that
+ * is a circular wait: backend-api is blocked here until the Baileys
+ * bootstrap (incl. the network call fetchLatestBaileysVersion()) finishes,
+ * so our auth call to it times out and the modal shows "Could not reach
+ * the WhatsApp engine service". Only a FRESH session hit this — an
+ * already-running one returns from startSession() at once — which is why
+ * it looked role-specific (Super Admin test device) when it was not.
+ *
+ * `startInFlight` dedupes concurrent starts for the same account: the
+ * session map entry is only created after the awaits inside
+ * startSession(), so without this a second click during bootstrap would
+ * spawn a second Baileys socket. Bootstrap failures are reported over the
+ * socket (`error` field, which QRScannerModal already renders) since the
+ * HTTP response has already gone out.
+ */
+const startInFlight = new Map();
+
+app.post('/api/qr/start-session', requireInternalSecret, (req, res) => {
   const accountId = req.body?.account_id;
   if (!accountId) {
     return res.status(422).json({ message: 'account_id is required.' });
   }
+  const id = String(accountId);
 
-  try {
-    const status = await startSession(accountId, broadcast);
-    res.status(202).json({ message: 'Session starting.', status });
-  } catch (err) {
-    console.error(`[server] start-session failed for account_id=${accountId}:`, err);
-    res.status(500).json({ message: 'Failed to start WhatsApp session.' });
+  if (!startInFlight.has(id)) {
+    const run = startSession(id, broadcast)
+      .catch((err) => {
+        console.error(`[server] start-session failed for account_id=${id}:`, err);
+        broadcast(id, { status: 'disconnected', qr: null, error: 'start_failed' });
+      })
+      .finally(() => startInFlight.delete(id));
+    startInFlight.set(id, run);
   }
+
+  const current = getStatus(id);
+  res.status(202).json({
+    message: 'Session starting.',
+    status: current === 'disconnected' ? 'connecting' : current,
+  });
 });
 
 app.post('/api/qr/logout', requireInternalSecret, async (req, res) => {

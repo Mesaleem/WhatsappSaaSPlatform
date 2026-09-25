@@ -99,5 +99,15 @@ export async function verifyAccountAccess(token, accountId) {
   if (tenant.status === 200 && Number(tenant.data?.account_id) === wanted) return true;
 
   const selfDevice = await backendHttp.get('/api/admin/whatsapp/self-device', opts);
-  return selfDevice.status === 200 && Number(selfDevice.data?.account_id) === wanted;
+  const allowed = selfDevice.status === 200 && Number(selfDevice.data?.account_id) === wanted;
+  if (!allowed) {
+    // Rejection diagnostics — never logs the token. Without this a socket
+    // auth failure is indistinguishable from the browser for every cause.
+    console.warn(
+      `[backendClient] socket auth denied for account_id=${wanted}: ` +
+        `/whatsapp/status -> ${tenant.status} (account_id=${tenant.data?.account_id ?? 'n/a'}), ` +
+        `/admin/whatsapp/self-device -> ${selfDevice.status} (account_id=${selfDevice.data?.account_id ?? 'n/a'})`,
+    );
+  }
+  return allowed;
 }

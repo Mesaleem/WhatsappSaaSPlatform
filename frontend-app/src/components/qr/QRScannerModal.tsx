@@ -55,7 +55,7 @@ export default function QRScannerModal({ accountId, onClose, onConnected, startS
       setSocketError(
         err.message === 'forbidden'
           ? "You aren't authorized to manage this account's WhatsApp connection."
-          : 'Could not reach the WhatsApp engine service.',
+          : `Could not reach the WhatsApp engine service (${err.message || 'connection error'}).`,
       );
     });
 
