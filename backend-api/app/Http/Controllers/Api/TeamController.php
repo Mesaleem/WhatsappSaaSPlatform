@@ -244,10 +244,16 @@ class TeamController extends Controller
         // stays exclusively Client Admin's — see this refactor's audit
         // report.
         $account = $this->requireAccount($request, 'Select a client/tenant account to manage its team (pass ?account_id=).');
+        $isSuperAdmin = (bool) $request->attributes->get('is_super_admin');
 
         $user = User::where('account_id', $account->id)->find($id);
         abort_if(! $user, 404, 'Team member not found.');
-        abort_if($account->owner?->id === $user->id, 422, "The account owner's access cannot be revoked here.");
+        // 2026-09-25: the account-owner guard protects a Client Admin /
+        // Agent from locking out their own tenant's primary Admin. It no
+        // longer applies to Super Admin, who must be able to deactivate
+        // any tenant's owner (previously blocked here, so Super Admin
+        // could not deactivate most rows in the global Team Users list).
+        abort_if(! $isSuperAdmin && $account->owner?->id === $user->id, 422, "The account owner's access cannot be revoked here.");
         // Admin Self-Preservation — a caller can never deactivate their
         // own row, preventing an accidental self-lockout (mirrors the
         // equivalent guard in destroy() below). Super Admin's own user
@@ -258,6 +264,14 @@ class TeamController extends Controller
         abort_if($request->user()->id === $user->id, 403, 'You cannot deactivate or remove your own account.');
 
         $user->forceFill(['is_active' => ! $user->is_active])->save();
+
+        // is_active is only checked at login (AuthController::login) and
+        // Sanctum tokens never expire (config/sanctum.php 'expiration' =>
+        // null), so without this a deactivated user stays logged in on
+        // every device they already have a token for.
+        if (! $user->is_active) {
+            $user->tokens()->delete();
+        }
 
         return response()->json(['message' => 'Team member status updated.', 'data' => $user->fresh()->load('roles:id,name')]);
     }
@@ -270,30 +284,29 @@ class TeamController extends Controller
      */
     public function destroy(Request $request, int $id): JsonResponse
     {
-        // Super Admin / Client Admin RBAC boundary refactor — Super Admin
-        // MUST NOT manage individual team members; that's exclusively
-        // Client Admin's (and 'social_marketer''s, per its own pre-existing
-        // manage-team grant) job now. Read-only oversight (GET /team/users)
-        // is unaffected.
-        if ($request->attributes->get('is_super_admin')) {
-            return response()->json([
-                'message' => 'Super Admin cannot manage individual team members directly. Ask the Client Admin to manage their own team.',
-            ], 403);
-        }
+        // 2026-09-25: Super Admin may now delete any tenant's user
+        // (previously rejected with 403 here), including the account
+        // owner. The delete is a SOFT delete (User uses SoftDeletes):
+        // the row is kept with deleted_at set, is excluded from every
+        // Eloquent query (so the user can no longer log in or be listed),
+        // and can be restored in the database if needed.
+        $isSuperAdmin = (bool) $request->attributes->get('is_super_admin');
 
         $account = $this->requireAccount($request, 'Select a client/tenant account to manage its team (pass ?account_id=).');
 
         $user = User::where('account_id', $account->id)->find($id);
         abort_if(! $user, 404, 'Team member not found.');
-        abort_if($account->owner?->id === $user->id, 422, 'The account owner cannot be removed.');
+        abort_if(! $isSuperAdmin && $account->owner?->id === $user->id, 422, 'The account owner cannot be removed.');
         // Admin Self-Preservation — 403 (was 422) and unified wording with
         // toggle()'s new self-guard; a self-lockout attempt is an
         // authorization failure, not a validation error.
         abort_if($request->user()->id === $user->id, 403, 'You cannot deactivate or remove your own account.');
 
+        // Revoke live sessions first — see toggle() for why.
+        $user->tokens()->delete();
         $user->delete();
 
-        return response()->json(['message' => 'Team member removed.']);
+        return response()->json(['message' => 'Team member deleted.']);
     }
 
     /**

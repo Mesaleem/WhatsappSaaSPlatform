@@ -104,6 +104,10 @@ export default function AccountsPage() {
   // this — see AccountController::index()), so this stays empty/unused
   // and the dropdown itself is hidden for them (see `superAdmin` below).
   const [agentFilter, setAgentFilter] = useState<number | ''>('');
+  // 2026-09-25: Super Admin "Type" filter. Agent accounts were previously
+  // never listed here (account_type was hard-coded to 'client'), so a newly
+  // created Agent had no row to view/edit/deactivate. '' = all types.
+  const [typeFilter, setTypeFilter] = useState<'' | 'client' | 'agent'>('');
   const [agents, setAgents] = useState<Account[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -132,7 +136,9 @@ export default function AccountsPage() {
           status: statusFilter || undefined,
           from: from || undefined,
           to: to || undefined,
-          account_type: 'client',
+          // Agent viewers stay on their own Sub-Clients only (server also
+          // forces this); Super Admin can list clients, agents, or both.
+          account_type: superAdmin ? typeFilter || undefined : 'client',
           agent_id: agentFilter || undefined,
         });
         setAccounts(res.data);
@@ -145,7 +151,7 @@ export default function AccountsPage() {
         setIsLoading(false);
       }
     },
-    [perPage, search, statusFilter, from, to, agentFilter],
+    [perPage, search, statusFilter, from, to, agentFilter, typeFilter, superAdmin],
   );
 
   useEffect(() => {
@@ -207,13 +213,15 @@ export default function AccountsPage() {
     }
   };
 
-  const hasActiveFilters = search !== '' || statusFilter !== '' || from !== '' || to !== '' || agentFilter !== '';
+  const hasActiveFilters =
+    search !== '' || statusFilter !== '' || from !== '' || to !== '' || agentFilter !== '' || typeFilter !== '';
   const clearFilters = () => {
     setSearch('');
     setStatusFilter('');
     setFrom('');
     setTo('');
     setAgentFilter('');
+    setTypeFilter('');
   };
 
   return (
@@ -222,7 +230,8 @@ export default function AccountsPage() {
         <div>
           <h1 className="text-xl font-semibold text-slate-900">Clients</h1>
           <p className="mt-1 text-sm text-slate-500">
-            {total} client{total === 1 ? '' : 's'} provisioned
+            {total} {superAdmin && typeFilter === '' ? 'account' : typeFilter === 'agent' ? 'agent' : 'client'}
+            {total === 1 ? '' : 's'} provisioned
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -252,6 +261,18 @@ export default function AccountsPage() {
           options={STATUS_OPTIONS}
           allLabel="All statuses"
         />
+        {superAdmin && (
+          <select
+            value={typeFilter}
+            onChange={(e) => setTypeFilter(e.target.value as '' | 'client' | 'agent')}
+            className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+            aria-label="Filter by account type"
+          >
+            <option value="">All types</option>
+            <option value="client">Clients</option>
+            <option value="agent">Agents</option>
+          </select>
+        )}
         {superAdmin && (
           <select
             value={agentFilter}
@@ -327,7 +348,14 @@ export default function AccountsPage() {
                 return (
                   <tr key={account.id} className="hover:bg-slate-50">
                     <td className="px-4 py-3">
-                      <div className="font-medium text-slate-900">{account.company_name}</div>
+                      <div className="font-medium text-slate-900">
+                        {account.company_name}
+                        {account.account_type === 'agent' && (
+                          <span className="ml-2 inline-flex items-center rounded-full bg-violet-50 px-2 py-0.5 text-xs font-medium text-violet-700 ring-1 ring-inset ring-violet-200">
+                            Agent
+                          </span>
+                        )}
+                      </div>
                       {account.owner && (
                         <div className="text-xs text-slate-500">{account.owner.email}</div>
                       )}

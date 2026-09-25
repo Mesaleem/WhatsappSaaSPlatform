@@ -657,7 +657,7 @@ export default function UsersPage() {
       await load();
       setPendingRemove(null);
     } catch (err) {
-      setError(extractMessage(err, 'Could not remove this team member.'));
+      setError(extractMessage(err, 'Could not delete this user.'));
       setPendingRemove(null);
     } finally {
       setBusyId(null);
@@ -907,18 +907,18 @@ export default function UsersPage() {
                                 {u.is_active ? 'Deactivate' : 'Activate'}
                               </button>
                             )}
-                            {/* Remove stays Client-Admin-only (Super Admin
-                                was not asked to gain this action here) and
-                                is fully hidden — not merely disabled — on
-                                the caller's own row. */}
-                            {!superAdmin && !isSelf && (
+                            {/* Delete (soft delete) — available to Super Admin
+                                (any tenant's user, incl. the account owner)
+                                and Client Admin (own team, owner excluded
+                                server-side). Hidden on the caller's own row. */}
+                            {!isSelf && (
                               <button
                                 onClick={() => handleRemove(u)}
                                 disabled={busyId === u.id}
                                 className="inline-flex items-center gap-1 text-xs font-medium text-red-600 hover:text-red-700 disabled:opacity-40"
                               >
                                 {busyId === u.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
-                                Remove
+                                Delete
                               </button>
                             )}
                           </div>
@@ -986,9 +986,9 @@ export default function UsersPage() {
 
       {pendingRemove && (
         <ConfirmModal
-          title="Remove team member"
-          message={`Remove ${pendingRemove.name} from the team? This cannot be undone.`}
-          confirmLabel="Remove"
+          title="Delete user"
+          message={`Delete ${pendingRemove.name}? They will be signed out and can no longer log in. The record is kept (soft delete) and can be restored by a database administrator.`}
+          confirmLabel="Delete"
           variant="danger"
           isLoading={busyId === pendingRemove.id}
           onConfirm={() => void confirmRemove()}
