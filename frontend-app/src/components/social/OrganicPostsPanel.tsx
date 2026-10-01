@@ -11,6 +11,7 @@ import { formatInsightValue } from '../../types/organicInsights';
 import type { InsightMetricKey, InsightsSummary, PostInsights } from '../../types/organicInsights';
 import { formatScheduledAt, ORGANIC_PLATFORM_LABELS, ORGANIC_STATUS_LABELS } from '../../types/organic';
 import type { OrganicPost, OrganicPostStatus } from '../../types/organic';
+import DismissibleAlert from '../common/DismissibleAlert';
 
 const STATUS_STYLES: Record<OrganicPostStatus, string> = {
   scheduled: 'bg-indigo-50 text-indigo-700',
@@ -144,10 +145,10 @@ export default function OrganicPostsPanel({
         </div>
       )}
       {error && (
-        <div className="mb-3 flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+        <DismissibleAlert className="mb-3 flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
           <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0" />
           {error}
-        </div>
+        </DismissibleAlert>
       )}
 
       {canViewInsights && summary && (

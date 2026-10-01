@@ -425,6 +425,84 @@ sudo supervisorctl start wa-saas-queue-worker:*
 
 Serve the app itself with **php-fpm + Nginx** (not `php artisan serve`, which is single-threaded and dev-only).
 
+### 7.1.1 Queue workers, scheduler and running more than one instance (Phase 12 Task 1)
+
+There are two supported ways to drain the queues. Pick one per deployment; both can coexist safely because a worker takes jobs through an atomic reservation.
+
+**A. Cron-only (the default, no extra processes).** `schedule:run` (§7.4) starts short-lived `queue:work … --stop-when-empty --max-time=55` workers every minute for the named queues (`whatsapp-bulk`, `journeys`, `knowledge`, `social`, `plan-reconciliation`) and runs the periodic commands. Jobs that go to the unnamed `default` queue (payment alerts, group sends, outbound webhooks, native group creation) have **no** scheduled drain — with `QUEUE_CONNECTION=database`/`redis` they need the persistent worker below, or they stay pending (§6).
+
+**B. Persistent workers under Supervisor / systemd (recommended once there is real traffic).** Keep the cron line for the scheduler; add long-lived workers so delivery is not tied to the one-minute tick.
+
+Which connection each queue must be drained on matters. A reserved job becomes available to *any* worker again after the connection's `retry_after`; a worker whose job outlives that window gets the job run a second time by another worker. Therefore:
+
+| Queue(s) | Worker connection | Why |
+|---|---|---|
+| `default` (on `QUEUE_CONNECTION`) | the default connection (`database` or `redis`) | jobs here finish within 85 s; `retry_after` is 90 s |
+| `whatsapp-bulk`, `journeys` | `database` | short jobs |
+| `knowledge`, `social` | `database_long` | knowledge documents run up to 600 s, publishing/insights up to 120 s |
+| `plan-reconciliation` | `database_long`, or `redis_long` when `QUEUE_CONNECTION=redis` | up to 900 s |
+
+`database_long` / `redis_long` are the same tables/queues as their base connection with a longer `retry_after` (`QUEUE_LONG_RETRY_AFTER`, default 960 s, must stay above the longest job timeout). Never run a worker for those queues on the 90 s connection, and never give a worker a `--timeout` at or above its connection's `retry_after`.
+
+Supervisor (`/etc/supervisor/conf.d/wa-saas-queues.conf`) — the `default`-queue program is the one from §7.1; add these for the named queues:
+
+```ini
+[program:wa-saas-queue-short]
+process_name=%(program_name)s_%(process_num)02d
+command=php /var/www/wa-saas-platform/backend-api/artisan queue:work database --queue=whatsapp-bulk,journeys --sleep=3 --max-time=3600
+directory=/var/www/wa-saas-platform/backend-api
+autostart=true
+autorestart=true
+stopasgroup=true
+killasgroup=true
+user=www-data
+numprocs=1
+redirect_stderr=true
+stdout_logfile=/var/www/wa-saas-platform/backend-api/storage/logs/queue-short.log
+stopwaitsecs=120
+
+[program:wa-saas-queue-long]
+process_name=%(program_name)s_%(process_num)02d
+command=php /var/www/wa-saas-platform/backend-api/artisan queue:work database_long --queue=knowledge,social,plan-reconciliation --sleep=3 --max-time=3600
+directory=/var/www/wa-saas-platform/backend-api
+autostart=true
+autorestart=true
+stopasgroup=true
+killasgroup=true
+user=www-data
+numprocs=1
+redirect_stderr=true
+stdout_logfile=/var/www/wa-saas-platform/backend-api/storage/logs/queue-long.log
+stopwaitsecs=960
+```
+
+systemd equivalent (one unit per program; `systemctl enable --now wa-saas-queue-long`):
+
+```ini
+# /etc/systemd/system/wa-saas-queue-long.service
+[Unit]
+Description=wa-saas queue worker (database_long)
+After=network.target mariadb.service
+
+[Service]
+User=www-data
+WorkingDirectory=/var/www/wa-saas-platform/backend-api
+ExecStart=/usr/bin/php artisan queue:work database_long --queue=knowledge,social,plan-reconciliation --sleep=3 --max-time=3600
+Restart=always
+RestartSec=3
+TimeoutStopSec=960
+KillSignal=SIGTERM
+
+[Install]
+WantedBy=multi-user.target
+```
+
+**Worker lifecycle.** A worker stops itself after `--max-time` (an hour) and Supervisor/systemd starts a fresh one, which also releases leaked memory. On `SIGTERM` it finishes the job in hand and exits, so `stopwaitsecs` / `TimeoutStopSec` must be at least the longest job (960 s for the long program). After every deploy run `php artisan queue:restart` — workers load code once, so they keep running the old code until told to exit; they then restart on their own. A job that was reserved by a worker that *died* is handed out again only after the connection's `retry_after` (90 s, or 960 s on the long connection) and, with `$tries = 1`, is then recorded as failed — those queues have their own recovery commands (`knowledge:recover-documents`, `social:publish-due`, `group-dispatch:recover-stale`). Failed jobs are listed with `php artisan queue:failed`; **do not blanket-`queue:retry`** — WhatsApp sends are not idempotent.
+
+**More than one app instance.** Run `schedule:run` from cron on every instance: the singleton commands carry `->onOneServer()`, so exactly one instance runs each per tick (the queue drains are deliberately free to run everywhere). That, rate limiting and unique-job locks only coordinate instances through a **shared cache store** — use `database` (the default) or `redis`; `file` and `array` are per-machine. Sessions likewise (`database`/`redis`/`cookie`). Social/ads creative uploads must also be on storage every instance can reach: set `SOCIAL_MEDIA_DISK` to a shared disk (an `s3` disk in `config/filesystems.php`, or a disk whose root is a volume mounted on every instance); the default `public` disk is this machine's `storage/app/public`. The **QR engine stays a single instance** (its sockets live in process memory and its credentials in a local `sessions/` directory) — any number of API/queue instances may point at the one engine, but never run two engines.
+
+**Check it.** `php artisan ops:check-topology` is read-only and reports, per setting, `ok`, `single-node-only` (fine today, wrong with several instances), `unsafe` (wrong even on one node, e.g. a job timeout at or above its connection's `retry_after`) or `info`. By default it judges the current single-node deployment and exits 0 unless something is `unsafe`; set `TOPOLOGY_MULTI_INSTANCE=true` (or pass `--multi-instance`) to judge for several instances — then every `single-node-only` finding fails the command (exit 1), which makes it usable as a pre-deploy gate. `--json` gives machine-readable output.
+
 ### 7.2 `qr-engine-service` — PM2
 
 ```bash
@@ -467,6 +545,8 @@ Serve `dist/` as static files (Nginx `root`, or any CDN/static host). Set `VITE_
 ```
 
 This single crontab line is also what any future scheduled command (subscription-expiry sweeps, webhook-delivery retries, etc.) will reuse without a further deploy step.
+
+The scheduler is also the **supported fallback** queue runner: with only this crontab line, the named queues are drained every minute by the scheduled `queue:work --stop-when-empty` entries (see §7.1.1); persistent workers are an optional upgrade, not a requirement. On several instances install the same crontab line on each — `onOneServer()` makes the singleton commands run once per tick (it needs the shared cache store described in §7.1.1).
 
 ### 7.5 SSL
 

@@ -33,6 +33,7 @@ import { PageHeader, PageShell } from '../../components/common/PageShell';
 import { ClearFiltersButton, Pagination, SearchInput, StatusFilterSelect } from '../../components/common/DataTableControls';
 import { TableSkeletonRows } from '../../components/common/Skeleton';
 import { describeApiError, extractErrorMessage as extractMessage } from '../../utils/apiError';
+import DismissibleAlert from '../../components/common/DismissibleAlert';
 
 type Tab = 'keys' | 'webhooks';
 
@@ -96,9 +97,9 @@ function OneTimeSecretReveal({ label, value }: { label: string; value: string })
           </button>
         </div>
         {copyFailed && (
-          <p role="alert" className="mt-1.5 text-xs text-red-600">
+          <DismissibleAlert as="p" role="alert" className="mt-1.5 text-xs text-red-600 flex items-start justify-between gap-2">
             Could not copy automatically. Select the value above and copy it manually before closing.
-          </p>
+          </DismissibleAlert>
         )}
       </div>
     </div>
@@ -114,9 +115,9 @@ function FieldError({ message }: { message?: string }) {
   if (!message) return null;
 
   return (
-    <p role="alert" className="mt-1.5 text-xs text-red-600">
+    <DismissibleAlert as="p" role="alert" className="mt-1.5 text-xs text-red-600 flex items-start justify-between gap-2">
       {message}
-    </p>
+    </DismissibleAlert>
   );
 }
 
@@ -342,10 +343,10 @@ function CreateApiKeyModal({
             </div>
 
             {error && (
-              <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+              <DismissibleAlert className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
                 <XCircle className="h-4 w-4 flex-shrink-0" />
                 {error}
-              </div>
+              </DismissibleAlert>
             )}
 
             <div className="flex justify-end gap-3">
@@ -593,10 +594,10 @@ function ApiKeysTab() {
       </div>
 
       {error && (
-        <div role="alert" className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+        <DismissibleAlert role="alert" className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
           <XCircle className="h-4 w-4 flex-shrink-0" />
           {error}
-        </div>
+        </DismissibleAlert>
       )}
 
       {success && (
@@ -938,10 +939,10 @@ function CreateWebhookModal({
             </div>
 
             {error && (
-              <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+              <DismissibleAlert className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
                 <XCircle className="h-4 w-4 flex-shrink-0" />
                 {error}
-              </div>
+              </DismissibleAlert>
             )}
 
             <div className="flex justify-end gap-3">
@@ -1109,7 +1110,7 @@ function WebhookRow({
       </div>
 
       {testResult && (
-        <div
+        <DismissibleAlert
           className={`mx-4 mb-3 flex items-center gap-2 rounded-lg border px-3 py-2 text-xs ${
             testResult.success
               ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
@@ -1118,7 +1119,7 @@ function WebhookRow({
         >
           {testResult.success ? <CheckCircle2 className="h-3.5 w-3.5 flex-shrink-0" /> : <XCircle className="h-3.5 w-3.5 flex-shrink-0" />}
           {testResult.message}
-        </div>
+        </DismissibleAlert>
       )}
 
       {isExpanded && (
@@ -1260,10 +1261,10 @@ function WebhooksTab() {
       </div>
 
       {error && (
-        <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+        <DismissibleAlert className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
           <XCircle className="h-4 w-4 flex-shrink-0" />
           {error}
-        </div>
+        </DismissibleAlert>
       )}
 
       {isLoading ? (

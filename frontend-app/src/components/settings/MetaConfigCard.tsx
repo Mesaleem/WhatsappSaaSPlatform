@@ -15,6 +15,7 @@ import whatsappService from '../../services/whatsappService';
 import type { ApiErrorResponse } from '../../types/auth';
 import type { MetaConfigResponse, TestMetaConnectionResult } from '../../types/whatsapp';
 import { describeApiError } from '../../utils/apiError';
+import DismissibleAlert from '../common/DismissibleAlert';
 
 const inputClass =
   'mt-1.5 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100';
@@ -33,9 +34,9 @@ function FieldError({ message }: { message?: string }) {
   if (!message) return null;
 
   return (
-    <p role="alert" className="mt-1.5 text-xs text-red-600">
+    <DismissibleAlert as="p" role="alert" className="mt-1.5 text-xs text-red-600 flex items-start justify-between gap-2">
       {message}
-    </p>
+    </DismissibleAlert>
   );
 }
 
@@ -231,10 +232,10 @@ export default function MetaConfigCard() {
   return (
     <div className="mt-6 border-t border-slate-200 pt-6">
       {loadError && (
-        <div className="mb-4 flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+        <DismissibleAlert className="mb-4 flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
           <XCircle className="h-4 w-4 flex-shrink-0" />
           {loadError}
-        </div>
+        </DismissibleAlert>
       )}
 
       <div className="flex items-center gap-2">
@@ -379,7 +380,7 @@ export default function MetaConfigCard() {
         </div>
 
         {testResult && (
-          <div
+          <DismissibleAlert
             className={`flex items-start gap-2 rounded-lg border px-4 py-3 text-sm ${
               testResult.success
                 ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
@@ -398,14 +399,14 @@ export default function MetaConfigCard() {
                   }.`
                 : testResult.error ?? 'Connection test failed.'}
             </span>
-          </div>
+          </DismissibleAlert>
         )}
 
         {saveError && (
-          <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          <DismissibleAlert className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
             <XCircle className="h-4 w-4 flex-shrink-0" />
             {saveError}
-          </div>
+          </DismissibleAlert>
         )}
 
         {saveSuccess && (

@@ -11,6 +11,7 @@ import { indigo, activeGradient } from '../../theme/signalIndigo';
 import { INBOX_PLATFORM_LABELS } from '../../types/inbox';
 import type { InboxConnectionIssue, InboxMessage, InboxPlatform, InboxThread } from '../../types/inbox';
 import { ClearFiltersButton, SearchInput, StatusFilterSelect } from '../../components/common/DataTableControls';
+import DismissibleAlert from '../../components/common/DismissibleAlert';
 
 /**
  * Global Table Filters refactor — Social Inbox had no filter controls at
@@ -207,10 +208,10 @@ export default function SocialInboxPage() {
                     <Loader2 className="h-5 w-5 animate-spin" style={{ color: indigo.muted }} />
                   </div>
                 ) : threadsError ? (
-                  <div className="m-3 flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+                  <DismissibleAlert className="m-3 flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
                     <AlertCircle className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
                     {threadsError}
-                  </div>
+                  </DismissibleAlert>
                 ) : filteredThreads.length === 0 ? (
                   <p className="px-4 py-8 text-center text-xs" style={{ color: indigo.muted }}>
                     {threads.length === 0 ? 'No conversations yet.' : 'No conversations match the current filters.'}
@@ -270,10 +271,10 @@ export default function SocialInboxPage() {
                         <Loader2 className="h-5 w-5 animate-spin" style={{ color: indigo.muted }} />
                       </div>
                     ) : messagesError ? (
-                      <div className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+                      <DismissibleAlert className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
                         <AlertCircle className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
                         {messagesError}
-                      </div>
+                      </DismissibleAlert>
                     ) : (
                       messages.map((m) => (
                         <div key={m.id} className={`flex ${m.from_me ? 'justify-end' : 'justify-start'}`}>

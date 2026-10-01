@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Services\Access\EntitlementAuditLogger;
 use App\Traits\LogsActivity;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
@@ -11,6 +12,15 @@ use Illuminate\Support\Facades\Cache;
 class AccountEntitlement extends Model
 {
     use LogsActivity;
+
+    /**
+     * Update rows name their entitlement (LogsActivity's opt-in identity),
+     * so a revoke/restore row is traceable to account + capability even
+     * though only the changed columns are in the diff.
+     *
+     * @var array<int, string>
+     */
+    protected array $auditIdentity = ['id', 'account_id', 'capability_id'];
 
     protected $fillable = [
         'account_id',
@@ -102,6 +112,20 @@ class AccountEntitlement extends Model
      * Account::findCached()'s 60-minute TTL. Mirrors Account.php's own
      * booted() hook rather than inventing a second caching convention.
      */
+    /**
+     * F-5.2 — LogsActivity skips every write that has no authenticated HTTP
+     * user (queue worker, artisan command, payment fulfilment), and an
+     * entitlement is authorization-impacting whoever changes it. The trait
+     * stays exactly as it is (and still drives this model's created/updated
+     * /deleted events); this model overrides only the WRITE step so the row
+     * is always recorded, with the actor/source made explicit.
+     * EntitlementAuditLogger::recordMutation() never throws.
+     */
+    protected function recordActivity(string $actionType, ?array $oldValues, ?array $newValues): void
+    {
+        app(EntitlementAuditLogger::class)->recordMutation($this, $actionType, $oldValues, $newValues);
+    }
+
     protected static function booted(): void
     {
         static::saved(fn (AccountEntitlement $e) => Cache::forget(Account::cacheKey($e->account_id)));

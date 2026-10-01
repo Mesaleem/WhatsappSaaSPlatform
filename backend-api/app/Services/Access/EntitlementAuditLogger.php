@@ -3,7 +3,10 @@
 namespace App\Services\Access;
 
 use App\Models\Account;
+use App\Models\AccountEntitlement;
 use App\Models\ActivityLog;
+use App\Models\Capability;
+use App\Support\EntitlementAuditContext;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Log;
 use Throwable;
@@ -90,6 +93,8 @@ class EntitlementAuditLogger
         'actor_account_id', 'target_account_id', 'account_id',
         'session_id', 'flow_version_id', 'inbound_event_id', 'error_code', 'http_status',
         'tool', // Phase 8 T11 — an AI agent tool id (a code-owned slug)
+        // F-5.2 — entitlement MUTATION rows (recordMutation()).
+        'actor_type', 'previous_state', 'new_state', 'entitlement_source', 'initiated_by_user_id', 'capability_id',
     ];
 
     /**
@@ -118,6 +123,88 @@ class EntitlementAuditLogger
         } catch (Throwable $e) {
             Log::warning('EntitlementAuditLogger: could not record an authorization decision.', [
                 'account_id' => $account?->id,
+                'exception' => class_basename($e),
+            ]);
+        }
+    }
+
+    /**
+     * F-5.2 — one audit row for one entitlement STATE MUTATION (grant,
+     * revoke, restore), whoever performs it: an HTTP user, a queue worker,
+     * a command, or a payment fulfilment. Called from AccountEntitlement's
+     * recordActivity() override, i.e. from the same Eloquent event
+     * LogsActivity already uses — so there is exactly ONE row per logical
+     * mutation, never one from LogsActivity plus a second from here.
+     *
+     * Same table and module name LogsActivity always used for this model
+     * (activity_logs / 'AccountEntitlement'), same old_values/new_values
+     * column diff (so existing readers keep working), plus an `audit`
+     * object inside new_values with the actor and the state transition:
+     * account, capability, action, previous/new state, actor type and
+     * source, and the authenticated user only when one genuinely exists
+     * (user_id = Auth::id(); never a placeholder user).
+     *
+     * Allow-listed fields only (see FIELDS) — the diff itself is the
+     * model's own columns (ids, source, revoked_at/reason: no secrets).
+     * Never throws and never alters the mutation: a failed audit write is
+     * logged (no payload) and the grant/revoke/restore stands exactly as it
+     * would have — authorization semantics do not depend on the audit.
+     *
+     * @param  array<string, mixed>|null  $oldValues  LogsActivity's column diff (before)
+     * @param  array<string, mixed>|null  $newValues  LogsActivity's column diff (after)
+     */
+    public function recordMutation(AccountEntitlement $entitlement, string $activityType, ?array $oldValues, ?array $newValues): void
+    {
+        try {
+            $account = Account::findCached((int) $entitlement->account_id);
+            $actor = EntitlementAuditContext::describe();
+
+            $wasRevoked = $activityType === 'create' ? null : $entitlement->getOriginal('revoked_at') !== null;
+            $isRevoked = $entitlement->revoked_at !== null;
+
+            $action = match (true) {
+                $activityType === 'create' => $isRevoked ? 'revoke' : 'grant',
+                $activityType === 'delete' => 'delete',
+                $isRevoked => 'revoke',
+                $wasRevoked === true => 'restore',
+                default => 'update',
+            };
+
+            $capabilitySlug = $entitlement->relationLoaded('capability') && $entitlement->capability
+                ? $entitlement->capability->slug
+                : Capability::query()->whereKey($entitlement->capability_id)->value('slug');
+
+            $audit = $this->sanitize([
+                'action' => 'entitlement.'.$action,
+                'source' => $actor['source'],
+                'actor_type' => $actor['actor_type'],
+                'initiated_by_user_id' => $actor['initiated_by_user_id'],
+                'resource_type' => 'account_entitlement',
+                'resource_id' => $entitlement->id,
+                'capability' => $capabilitySlug,
+                'capability_id' => $entitlement->capability_id,
+                'previous_state' => $wasRevoked === null ? 'none' : ($wasRevoked ? 'revoked' : 'held'),
+                'new_state' => $activityType === 'delete' ? 'none' : ($isRevoked ? 'revoked' : 'held'),
+                'entitlement_source' => $entitlement->source,
+                'reason' => $entitlement->revoked_reason,
+            ]) + ['account_id' => (int) $entitlement->account_id];
+
+            $request = app()->bound('request') && request()->route() !== null ? request() : null;
+
+            ActivityLog::create([
+                'user_id' => Auth::id(),
+                'account_id' => (int) $entitlement->account_id,
+                'agent_id' => $account?->agent_id,
+                'module_name' => class_basename($entitlement),
+                'action_type' => $activityType,
+                'route_path' => $request ? mb_substr($request->path(), 0, 255) : null,
+                'ip_address' => $request?->ip(),
+                'old_values' => $oldValues,
+                'new_values' => ($newValues ?? []) + ['audit' => $audit],
+            ]);
+        } catch (Throwable $e) {
+            Log::warning('EntitlementAuditLogger: could not record an entitlement mutation.', [
+                'account_id' => $entitlement->account_id,
                 'exception' => class_basename($e),
             ]);
         }

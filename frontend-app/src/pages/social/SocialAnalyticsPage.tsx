@@ -26,6 +26,7 @@ import type {
   TopPost,
   TrendPoint,
 } from '../../types/socialAnalytics';
+import DismissibleAlert from '../../components/common/DismissibleAlert';
 
 const RANGES: { value: AnalyticsRange; label: string }[] = [
   { value: '7d', label: 'Last 7 days' },
@@ -227,10 +228,10 @@ export default function SocialAnalyticsPage() {
           <>
             {customError && range === 'custom' && <p className="text-sm text-slate-500">{customError}</p>}
             {error && (
-              <div className="flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">
+              <DismissibleAlert className="flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">
                 <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0" />
                 {error}
-              </div>
+              </DismissibleAlert>
             )}
             {isLoading && !data && (
               <div className="flex items-center gap-2 text-sm text-slate-500">

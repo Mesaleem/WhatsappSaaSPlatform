@@ -4,6 +4,7 @@ import crmService from '../../services/crmService';
 import { inputClass } from '../common/Card';
 import { describeApiError } from '../../utils/apiError';
 import type { CrmContact } from '../../types/crm';
+import DismissibleAlert from '../common/DismissibleAlert';
 
 /**
  * Phase 6 — CRM Task 8. Create (POST /crm/contacts) or edit
@@ -79,7 +80,7 @@ export default function ContactFormModal({
             {field('email')}
           </label>
         </div>
-        {error && <p className="mt-3 text-sm text-red-600" role="alert">{error}</p>}
+        {error && <DismissibleAlert as="p" className="mt-3 text-sm text-red-600 flex items-start justify-between gap-2" role="alert">{error}</DismissibleAlert>}
         <div className="mt-5 flex justify-end gap-2">
           <button
             type="button"

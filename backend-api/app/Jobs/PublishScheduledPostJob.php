@@ -22,6 +22,9 @@ class PublishScheduledPostJob implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable;
 
+    /** Phase 12 Task 1 — 120 s timeout > the default connection's retry_after (90 s): long-retry connection. */
+    public const CONNECTION = 'database_long';
+
     public int $tries = 1;
 
     public int $timeout = 120;

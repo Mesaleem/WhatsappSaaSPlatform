@@ -11,6 +11,7 @@ import {
   type CrmLead,
   type CrmLeadStatus,
 } from '../../types/crm';
+import DismissibleAlert from '../common/DismissibleAlert';
 
 /**
  * Phase 6 — CRM Task 8. POST /api/crm/leads with exactly the fields
@@ -123,7 +124,7 @@ export default function CreateLeadModal({
           </label>
         </div>
 
-        {error && <p className="mt-3 text-sm text-red-600" role="alert">{error}</p>}
+        {error && <DismissibleAlert as="p" className="mt-3 text-sm text-red-600 flex items-start justify-between gap-2" role="alert">{error}</DismissibleAlert>}
 
         <div className="mt-5 flex justify-end gap-2">
           <button

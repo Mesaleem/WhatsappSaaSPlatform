@@ -174,7 +174,7 @@ class CrmEntitlementRbacApiTest extends TestCase
     public function test_every_tenant_crm_route_carries_the_full_gate_chain(): void
     {
         $routes = collect(Route::getRoutes()->getRoutes())->filter(fn ($r) => str_starts_with($r->uri(), 'api/crm'));
-        $this->assertCount(29, $routes, 'a CRM route was added or removed — re-check its gates'); // 29 since Task 12 (analytics)
+        $this->assertCount(31, $routes, 'a CRM route was added or removed — re-check its gates'); // 31 since Phase 10 Task 5 (+ GET/PATCH leads/{id}/conversion-value; both carry the full chain asserted below)
 
         foreach ($routes as $route) {
             $mw = $route->gatherMiddleware();

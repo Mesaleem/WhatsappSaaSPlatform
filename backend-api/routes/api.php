@@ -45,6 +45,7 @@ use App\Http\Controllers\Api\NotificationBroadcastController;
 use App\Http\Controllers\Api\SocialAuthController;
 use App\Http\Controllers\Api\AdAttributionController;
 use App\Http\Controllers\Api\AdCampaignController;
+use App\Http\Controllers\Api\AdConversionValueController;
 use App\Http\Controllers\Api\AdsDashboardController;
 use App\Http\Controllers\Api\OrganicPostController;
 use App\Http\Controllers\Api\OrganicPostInsightsController;
@@ -66,6 +67,12 @@ use App\Http\Controllers\Api\AICopywriterController;
 use App\Http\Controllers\Api\KnowledgeBaseController;
 use App\Http\Controllers\Api\AiAgentController;
 use App\Http\Controllers\Api\SocialMediaController;
+use App\Http\Controllers\Api\IndustryController;
+use App\Http\Controllers\Api\Industry\EducationAttendanceController;
+use App\Http\Controllers\Api\Industry\EducationFeeController;
+use App\Http\Controllers\Api\Industry\EducationGroupController;
+use App\Http\Controllers\Api\Industry\EducationStudentController;
+use App\Http\Controllers\Api\AccountIndustryController;
 use App\Http\Controllers\Api\SocialReportController;
 use App\Http\Controllers\Api\ContactGroupController;
 use Illuminate\Support\Facades\Route;
@@ -528,6 +535,60 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::get('/oauth/{provider}/redirect', [SocialAuthController::class, 'redirect']);
         });
 
+        // Phase 11 Task 1 — Industry Modules foundation (read-only). See config/industries.php and
+        // App\Services\Industry\IndustryAuthorizer. No target.account here on purpose: a Super Admin must
+        // pick a client (422) — the Platform-account fallback is a Social/Ads-only owner decision.
+        Route::get('/industries', [IndustryController::class, 'catalog']);
+        Route::middleware('permission:view-industry-modules')->prefix('industry')->group(function () {
+            Route::get('/context', [IndustryController::class, 'context']);
+            Route::middleware('industry.guard')->get('/{industry}/modules', [IndustryController::class, 'modules']);
+        });
+
+        // Phase 11 Task 2 — Education foundation. NO route-level `permission:` here: IndustryAuthorizer (via
+        // industry.guard) is the single decision — industry assigned, industry_modules module, industry_education
+        // capability, subscription (writes), and view-education (reads) / manage-education (writes).
+        // Students and Classes/Batches are separate registry modules, so each group names its own.
+        Route::prefix('industry/education')->group(function () {
+            Route::middleware('industry.guard:education,students')->prefix('students')->group(function () {
+                Route::get('/', [EducationStudentController::class, 'index']);
+                Route::post('/', [EducationStudentController::class, 'store']);
+                Route::get('/{id}', [EducationStudentController::class, 'show'])->whereNumber('id');
+                Route::patch('/{id}', [EducationStudentController::class, 'update'])->whereNumber('id');
+                Route::post('/{id}/guardians', [EducationStudentController::class, 'addGuardian'])->whereNumber('id');
+                Route::delete('/{id}/guardians/{linkId}', [EducationStudentController::class, 'removeGuardian'])->whereNumber(['id', 'linkId']);
+                Route::put('/{id}/groups', [EducationStudentController::class, 'syncGroups'])->whereNumber('id');
+            });
+            Route::middleware('industry.guard:education,batches')->prefix('groups')->group(function () {
+                Route::get('/', [EducationGroupController::class, 'index']);
+                Route::post('/', [EducationGroupController::class, 'store']);
+                Route::get('/{id}', [EducationGroupController::class, 'show'])->whereNumber('id');
+                Route::patch('/{id}', [EducationGroupController::class, 'update'])->whereNumber('id');
+            });
+            // Phase 11 Task 3 — attendance is its own registry module (same permissions: view-education / manage-education).
+            Route::middleware('industry.guard:education,attendance')->group(function () {
+                Route::get('/groups/{id}/attendance', [EducationAttendanceController::class, 'sheet'])->whereNumber('id');
+                Route::put('/groups/{id}/attendance', [EducationAttendanceController::class, 'save'])->whereNumber('id');
+                Route::get('/students/{id}/attendance', [EducationAttendanceController::class, 'studentHistory'])->whereNumber('id');
+            });
+
+            // Phase 11 Task 4 — fees: the Education adapter over the generic collections core. Same permissions
+            // (view-education / manage-education); the `fees` module also requires the `billing_collections` capability.
+            Route::middleware('industry.guard:education,fees')->group(function () {
+                Route::get('/fee-items', [EducationFeeController::class, 'items']);
+                Route::post('/fee-items', [EducationFeeController::class, 'storeItem']);
+                Route::get('/fee-items/{id}', [EducationFeeController::class, 'showItem'])->whereNumber('id');
+                Route::patch('/fee-items/{id}', [EducationFeeController::class, 'updateItem'])->whereNumber('id');
+                Route::get('/students/{id}/fees', [EducationFeeController::class, 'studentFees'])->whereNumber('id');
+                Route::post('/students/{id}/fees', [EducationFeeController::class, 'assign'])->whereNumber('id');
+                Route::put('/students/{id}/fees/{feeId}', [EducationFeeController::class, 'updateAssignment'])->whereNumber(['id', 'feeId']);
+                Route::post('/students/{id}/fees/{feeId}/payments', [EducationFeeController::class, 'pay'])->whereNumber(['id', 'feeId']);
+                Route::post('/students/{id}/fees/{feeId}/cancel', [EducationFeeController::class, 'cancel'])->whereNumber(['id', 'feeId']);
+                Route::post('/students/{id}/fees/{feeId}/reinstate', [EducationFeeController::class, 'reinstate'])->whereNumber(['id', 'feeId']);
+                Route::get('/students/{id}/fee-payments', [EducationFeeController::class, 'studentPayments'])->whereNumber('id');
+                Route::get('/fee-payments', [EducationFeeController::class, 'payments']);
+            });
+        });
+
         // Social Media Marketing & Meta Ads Automation Expansion (Phase 3).
         // Meta Ads Launcher & Auto-Budget Guard — separate permission tier
         // (launch-meta-ads) from manage-social-accounts above: connecting a
@@ -679,6 +740,12 @@ Route::middleware('auth:sanctum')->group(function () {
                     Route::post('/', [CrmLeadController::class, 'store']);
                     Route::get('/{id}', [CrmLeadController::class, 'show'])->whereNumber('id');
                     Route::match(['put', 'patch'], '/{id}', [CrmLeadController::class, 'update'])->whereNumber('id');
+                    // Phase 10 Task 5 — manual conversion value for a converted, ad-attributed lead. CRM gates
+                    // (this group) + the Ads permission here + the Ads entitlement of the target in the controller.
+                    Route::middleware('permission:launch-meta-ads|social_ads.view')->group(function () {
+                        Route::get('/{id}/conversion-value', [AdConversionValueController::class, 'show'])->whereNumber('id');
+                        Route::patch('/{id}/conversion-value', [AdConversionValueController::class, 'update'])->whereNumber('id');
+                    });
                     // Phase 6 Hardening (Issue 9). Never touches the
                     // Contact — see the controller action's docblock.
                     Route::delete('/{id}', [CrmLeadController::class, 'destroy'])->whereNumber('id');
@@ -847,11 +914,13 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::post('/{id}/retry', [OrganicPostController::class, 'retry'])->whereNumber('id');
         });
 
+        // Super Admin in Global View: target.account falls back to the Platform (Super Admin) account (the same
+        // rule as every other Social route) instead of a 422; with no Platform account the controller still answers 422.
         // Phase 9 Task 4 — organic post insights. Read tier: view-social-analytics
         // (the existing read-only social analytics permission) + the same module
         // and capability as publishing. The controller re-checks the TARGET
         // account (SocialTargetGate) and scopes every post to it.
-        Route::middleware(['module.guard:social_accounts', 'permission:view-social-analytics', 'capability.guard:social'])->prefix('social/organic-posts')->group(function () {
+        Route::middleware(['module.guard:social_accounts', 'permission:view-social-analytics', 'capability.guard:social', 'target.account:social_accounts'])->prefix('social/organic-posts')->group(function () {
             Route::get('/insights/summary', [OrganicPostInsightsController::class, 'summary']);
             Route::get('/{id}/insights', [OrganicPostInsightsController::class, 'show'])->whereNumber('id');
             Route::post('/{id}/insights/refresh', [OrganicPostInsightsController::class, 'refresh'])->whereNumber('id');
@@ -862,7 +931,7 @@ Route::middleware('auth:sanctum')->group(function () {
         // NOT manage-social-accounts, so view-only analytics users get it — plus
         // the social_accounts module and the `social` capability; the controller
         // re-checks the TARGET account (SocialTargetGate).
-        Route::middleware(['module.guard:social_accounts', 'permission:view-social-analytics', 'capability.guard:social'])->prefix('social/analytics')->group(function () {
+        Route::middleware(['module.guard:social_accounts', 'permission:view-social-analytics', 'capability.guard:social', 'target.account:social_accounts'])->prefix('social/analytics')->group(function () {
             Route::get('/dashboard', [SocialAnalyticsController::class, 'dashboard']);
             Route::get('/top-posts', [SocialAnalyticsController::class, 'topPosts']);
         });
@@ -1112,6 +1181,9 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::put('/accounts/{id}/quota', [AccountController::class, 'updateQuota']);
         // Absolute Super Admin Control — Dynamic Client Privilege Toggles.
         Route::patch('/accounts/{id}/permissions', [AccountController::class, 'updatePermissions']);
+        // Phase 11 Task 1 — assign industries to an account (Super Admin: any; Agent: own sub-clients).
+        Route::get('/accounts/{id}/industries', [AccountIndustryController::class, 'show']);
+        Route::put('/accounts/{id}/industries', [AccountIndustryController::class, 'update']);
 
         // Phase 1 Foundation, Task 7 — Capability entitlement grant/revoke,
         // write-time checked against ProviderCapabilityService::supports()

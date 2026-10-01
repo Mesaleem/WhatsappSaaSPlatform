@@ -8,6 +8,7 @@ import type { ClientApiKey } from '../../types/templates';
 import { indigo, activeGradient, cardShadow, ROLE_BADGE_CLASS, roleLabel } from '../../theme/signalIndigo';
 import { extractErrorMessage as extractMessage } from '../../utils/apiError';
 import ConfirmModal from '../common/ConfirmModal';
+import DismissibleAlert from '../common/DismissibleAlert';
 
 const inputClass =
   'mt-1.5 w-full rounded-lg border border-[#EAE8F7] px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-[#4F46E5] focus:ring-2 focus:ring-[#4F46E5]/20';
@@ -314,19 +315,19 @@ export default function ProfileModal({ onClose }: { onClose: () => void }) {
               )}
 
               {keyError && (
-                <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+                <DismissibleAlert className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
                   <XCircle className="h-3.5 w-3.5 flex-shrink-0" />
                   {keyError}
-                </div>
+                </DismissibleAlert>
               )}
             </div>
           )}
 
           {error && (
-            <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+            <DismissibleAlert className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
               <XCircle className="h-4 w-4 flex-shrink-0" />
               {error}
-            </div>
+            </DismissibleAlert>
           )}
           {success && !error && (
             <div className="rounded-lg border border-[#BFF0DE] bg-[#E6F8F1] px-3 py-2 text-sm font-medium text-[#0E9F6E]">

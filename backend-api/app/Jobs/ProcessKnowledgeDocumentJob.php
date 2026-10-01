@@ -23,6 +23,15 @@ class ProcessKnowledgeDocumentJob implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
+    /**
+     * Phase 12 Task 1 — the 600 s timeout exceeds the default `database` connection's retry_after (90 s), so
+     * this job runs on the long-retry connection (config/queue.php `database_long`, same table). Every
+     * dispatch site and the scheduled worker name it; same pattern as ProcessDeferredInboundMessageJob.
+     */
+    public const CONNECTION = 'database_long';
+
+    public const QUEUE = 'knowledge';
+
     public int $tries = 1;
 
     public int $timeout = 600;

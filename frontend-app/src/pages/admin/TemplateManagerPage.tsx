@@ -37,6 +37,7 @@ import { TableSkeletonRows } from '../../components/common/Skeleton';
 import { extractErrorCode, extractErrorMessage as extractMessage } from '../../utils/apiError';
 import ConfirmModal from '../../components/common/ConfirmModal';
 import PromptModal from '../../components/common/PromptModal';
+import DismissibleAlert from '../../components/common/DismissibleAlert';
 
 
 /**
@@ -807,10 +808,10 @@ function TemplateModal({
           )}
 
           {error && (
-            <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+            <DismissibleAlert className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
               <XCircle className="h-4 w-4 flex-shrink-0" />
               {error}
-            </div>
+            </DismissibleAlert>
           )}
 
           <div className="flex justify-end gap-3 border-t border-slate-100 pt-4">
@@ -962,7 +963,7 @@ function TestTemplateModal({
           )}
 
           {error && (
-            <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+            <DismissibleAlert className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
               <div className="flex items-center gap-2">
                 <AlertTriangle className="h-4 w-4 flex-shrink-0" />
                 {error}
@@ -975,7 +976,7 @@ function TestTemplateModal({
                   Go scan your WhatsApp test device →
                 </Link>
               )}
-            </div>
+            </DismissibleAlert>
           )}
           {success && (
             <div className="flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
@@ -1190,7 +1191,7 @@ export default function TemplateManagerPage() {
       </div>
 
       {error && (
-        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>
+        <DismissibleAlert className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</DismissibleAlert>
       )}
 
       <TableCard>

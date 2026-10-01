@@ -2,6 +2,29 @@
 
 return [
     /*
+    | Meta OAuth scopes beyond the core set (Pages, Ads). Meta rejects the whole login
+    | ("Invalid Scopes") for a scope that no use case on the platform Meta app grants, so each
+    | group is opt-in: add the use case in the Meta Developer Dashboard first, then enable it.
+    |   instagram_scopes → instagram_basic
+    |   messaging_scopes → pages_messaging, instagram_manage_messages
+    */
+    'meta_oauth' => [
+        'instagram_scopes' => (bool) env('META_OAUTH_INSTAGRAM_SCOPES', false),
+        'messaging_scopes' => (bool) env('META_OAUTH_MESSAGING_SCOPES', false),
+    ],
+
+    /*
+    | Phase 12 Task 1 — where social/ads creative uploads (POST /api/social/media/upload, served by
+    | GET /api/media/social/{path}) are stored. `public` = this server's storage/app/public, exactly as
+    | before. With several API instances, point it at a disk every instance shares (for example an s3 disk
+    | defined in config/filesystems.php, or a local-driver disk on a shared volume) — `php artisan
+    | ops:check-topology` flags the local default. Paths, URLs, validation and authorization do not change.
+    */
+    'media' => [
+        'disk' => env('SOCIAL_MEDIA_DISK', 'public'),
+    ],
+
+    /*
     | Phase 9 Task 2 — scheduled social connection health checks
     | (`social:check-connections`, see routes/console.php). A connection is
     | asked about at most once per interval, however often the command runs

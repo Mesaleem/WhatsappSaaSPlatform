@@ -8,6 +8,7 @@ import {
   ChevronsRight,
   ClipboardList,
   Columns3,
+  GraduationCap,
   PieChart,
   Code2,
   Contact,
@@ -37,6 +38,8 @@ import { useAuth } from '../../core/context/AuthContext';
 import type { AccountModule } from '../../types/account';
 import { indigo, NAV_TINTS, activeGradient, type Tint } from '../../theme/signalIndigo';
 import Header from './Header';
+import { hasIndustryModule } from './industryNav';
+import { useIndustryModuleKeys } from './useIndustryModuleKeys';
 
 interface NavItem {
   label: string;
@@ -86,6 +89,8 @@ interface NavItem {
    * `capability` prop; UX only, capability.guard is the boundary.
    */
   requiresCapability?: string;
+  /** Phase 11 Task 1 — "industry.module" key that must be in /auth/me `industry_modules` (Super Admin has no own account, so never sees these). */
+  requiresIndustryModule?: string;
   /**
    * Social Media Marketing & Meta Ads Automation Expansion (Phase 1).
    * Hides this item for the listed exact role slugs, regardless of
@@ -147,8 +152,6 @@ interface NavItem {
  */
 const NAV_ITEMS: NavItem[] = [
   { label: 'Dashboard', to: '/', icon: LayoutDashboard, tint: NAV_TINTS.dashboard },
-  { label: 'WhatsApp Setup', to: '/settings/whatsapp', icon: QrCode, tint: NAV_TINTS.whatsapp, requiresAccount: true, requiresModule: 'whatsapp_setup', hiddenForRoles: ['social_marketer'] },
-  { label: 'Send Alert', to: '/alerts/send', icon: Send, tint: NAV_TINTS.send, permission: 'send-messages', requiresModule: 'send_alert', hiddenForSuperAdmin: true },
   { label: 'Analytics', to: '/analytics', icon: BarChart3, tint: NAV_TINTS.analytics, permission: 'view-analytics', requiresModule: 'analytics' },
   // [New feature, disclosed]: "view-logs" (row-level recipient PII), not
   // "view-analytics" — see App.tsx's route comment for the full
@@ -158,11 +161,14 @@ const NAV_ITEMS: NavItem[] = [
   // now its own 'message_logs' slug under WHATSAPP_SUITE_MODULES, so a
   // Super Admin can toggle it independently in "Module & Feature Access".
   { label: 'Message Logs', to: '/message-logs', icon: ClipboardList, tint: NAV_TINTS.analytics, permission: 'view-logs', requiresModule: 'message_logs' },
-  { label: 'Chatbot Rules', to: '/chatbot', icon: Bot, tint: NAV_TINTS.chatbot, permission: 'manage-chatbot', requiresModule: 'chatbot' },
-  // Module 5 — No-Code WhatsApp Journey Builder. Same permission/module
-  // tier as Chatbot Rules directly above (see routes/api.php's docblock
-  // for why this reuses that tier rather than a new permission slug).
-  { label: 'Journey Builder', to: '/chatbot/journeys', icon: Target, tint: NAV_TINTS.chatbot, permission: 'manage-chatbot', requiresModule: 'chatbot' },
+  // Advanced Broadcast Engine + Mail Template Manager — super_admin
+  // (via PERMISSIONS) and admin only.
+  { label: 'Notifications', to: '/notifications', icon: Megaphone, tint: NAV_TINTS.chatbot, permission: 'manage-notifications', requiresModule: 'notifications' },
+  { label: 'Manage Clients', to: '/admin/accounts', icon: Building2, tint: NAV_TINTS.accounts, superAdminOnly: true },
+  { label: 'My Clients', to: '/admin/accounts', icon: Building2, tint: NAV_TINTS.accounts, agentOnly: true },
+  { label: 'Team Users', to: '/users', icon: Users, tint: NAV_TINTS.team, permission: 'manage-team', requiresModule: 'team_management' },
+  { label: 'WhatsApp Setup', to: '/settings/whatsapp', icon: QrCode, tint: NAV_TINTS.whatsapp, requiresAccount: true, requiresModule: 'whatsapp_setup', hiddenForRoles: ['social_marketer'] },
+  { label: 'Send Alert', to: '/alerts/send', icon: Send, tint: NAV_TINTS.send, permission: 'send-messages', requiresModule: 'send_alert', hiddenForSuperAdmin: true },
   // Group Messaging — Module-to-UI Sync architecture rule (explicit
   // instruction): gated by requiresModule: 'contact_groups' like every
   // other module-backed item in this list. [Disclosed, superseded
@@ -180,38 +186,6 @@ const NAV_ITEMS: NavItem[] = [
   // uses the Users icon; reusing it here would make two different
   // sidebar items visually identical.
   { label: 'Contact Groups', to: '/contact-groups', icon: Contact, tint: NAV_TINTS.whatsapp, permission: 'send-messages', requiresModule: 'contact_groups' },
-  { label: 'Billing & Plans', to: '/billing', icon: CreditCard, tint: NAV_TINTS.billing, permission: 'manage-subscriptions', requiresModule: 'billing' },
-  { label: 'Developer API', to: '/developer', icon: Code2, tint: NAV_TINTS.developer, permission: 'manage-developer-settings', requiresModule: 'developer_api' },
-  { label: 'Team Users', to: '/users', icon: Users, tint: NAV_TINTS.team, permission: 'manage-team', requiresModule: 'team_management' },
-  // Social Media Marketing & Meta Ads Automation Expansion (Phase 1).
-  // "Module & Feature Access" modal reorganization: 'social_accounts' is
-  // now a real ACCOUNT_MODULES slug (Social Media Suite), closing the
-  // gap disclosed in an earlier task — this nav item is gated the same
-  // way every other module-backed item above it is.
-  // Phase 9 Task 1 — the connection routes now require the existing `social` capability (capability.guard:social); the nav mirrors it.
-  { label: 'Social Accounts', to: '/social/accounts', icon: Share2, tint: NAV_TINTS.social, permission: 'manage-social-accounts', requiresModule: 'social_accounts', requiresCapability: 'social' },
-  // Social Media Marketing & Meta Ads Automation Expansion (Phase 3).
-  { label: 'Meta Ads Launcher', to: '/social/ads', icon: Rocket, tint: NAV_TINTS.social, anyPermission: ['launch-meta-ads', 'social_ads.view'], requiresModule: 'meta_ads', requiresCapability: 'ads' },
-  { label: 'Ads Dashboard', to: '/social/ads/dashboard', icon: BarChart3, tint: NAV_TINTS.social, anyPermission: ['launch-meta-ads', 'social_ads.view'], requiresModule: 'meta_ads', requiresCapability: 'ads' },
-  // Social Media Marketing & Meta Ads Automation Expansion (Phase 4).
-  { label: 'Social Inbox', to: '/social/inbox', icon: Inbox, tint: NAV_TINTS.social, permission: 'manage-social-leads', requiresModule: 'social_inbox' },
-  { label: 'Comment Rules', to: '/social/comment-rules', icon: MessageSquare, tint: NAV_TINTS.social, permission: 'manage-comment-automation', requiresModule: 'comment_automation' },
-  // Social Media Marketing & Meta Ads Automation Expansion — Final Phase.
-  // Phase 6 CRM Task 8 — the CRM frontend. Same three gates the backend
-  // puts on every /api/crm/* route: manage-crm + lead_crm module + crm
-  // capability.
-  { label: 'CRM Leads', to: '/crm/leads', icon: UserSearch, tint: NAV_TINTS.social, permission: 'manage-crm', requiresModule: 'lead_crm', requiresCapability: 'crm' },
-  { label: 'CRM Pipeline', to: '/crm/pipeline', icon: Columns3, tint: NAV_TINTS.social, permission: 'manage-crm', requiresModule: 'lead_crm', requiresCapability: 'crm' },
-  { label: 'CRM Contacts', to: '/crm/contacts', icon: Contact, tint: NAV_TINTS.social, permission: 'manage-crm', requiresModule: 'lead_crm', requiresCapability: 'crm' },
-  { label: 'CRM Tags', to: '/crm/tags', icon: Tags, tint: NAV_TINTS.social, permission: 'manage-crm', requiresModule: 'lead_crm', requiresCapability: 'crm' },
-  // Phase 6 CRM Task 12 — same three gates; the API is GET /api/crm/analytics.
-  { label: 'CRM Analytics', to: '/crm/analytics', icon: PieChart, tint: NAV_TINTS.social, permission: 'manage-crm', requiresModule: 'lead_crm', requiresCapability: 'crm' },
-  { label: 'Instant Lead CRM', to: '/social/leads', icon: UserSearch, tint: NAV_TINTS.social, permission: 'manage-social-leads', requiresModule: 'lead_crm' },
-  // Phase 9 Task 5 — same gates as /api/social/analytics/* (view-only analytics users see it too).
-  { label: 'Social Analytics', to: '/social/analytics', icon: PieChart, tint: NAV_TINTS.social, permission: 'view-social-analytics', requiresModule: 'social_accounts', requiresCapability: 'social' },
-  { label: 'Social Reports', to: '/social/reports', icon: FileBarChart, tint: NAV_TINTS.social, permission: 'view-social-analytics', requiresModule: 'reports' },
-  { label: 'Manage Clients', to: '/admin/accounts', icon: Building2, tint: NAV_TINTS.accounts, superAdminOnly: true },
-  { label: 'My Clients', to: '/admin/accounts', icon: Building2, tint: NAV_TINTS.accounts, agentOnly: true },
   // Dynamic Templates & Variables System — Template Designer & Approval
   // Panel. Tiered Template Approval Workflow for 3-Tier Hierarchy widened
   // this from Super-Admin-only to also an Agent (Reseller) reviewing
@@ -223,18 +197,63 @@ const NAV_ITEMS: NavItem[] = [
   // stays in lockstep with the backend's own Super-Admin-or-Agent gate
   // (MessageTemplateController) without a second flag to keep in sync.
   { label: 'Template Manager', to: '/admin/templates', icon: Sparkles, tint: NAV_TINTS.accounts, permission: 'manage-templates' },
-  { label: 'Admin Gateway Settings', to: '/admin/billing/gateway-settings', icon: Settings, tint: NAV_TINTS.gateway, superAdminOnly: true },
+  { label: 'Chatbot Rules', to: '/chatbot', icon: Bot, tint: NAV_TINTS.chatbot, permission: 'manage-chatbot', requiresModule: 'chatbot' },
+  // Module 5 — No-Code WhatsApp Journey Builder. Same permission/module
+  // tier as Chatbot Rules directly above (see routes/api.php's docblock
+  // for why this reuses that tier rather than a new permission slug).
+  { label: 'Journey Builder', to: '/chatbot/journeys', icon: Target, tint: NAV_TINTS.chatbot, permission: 'manage-chatbot', requiresModule: 'chatbot' },
+  { label: 'Developer API', to: '/developer', icon: Code2, tint: NAV_TINTS.developer, permission: 'manage-developer-settings', requiresModule: 'developer_api' },
+  // Social Media Marketing & Meta Ads Automation Expansion (Phase 1).
+  // "Module & Feature Access" modal reorganization: 'social_accounts' is
+  // now a real ACCOUNT_MODULES slug (Social Media Suite), closing the
+  // gap disclosed in an earlier task — this nav item is gated the same
+  // way every other module-backed item above it is.
+  // Phase 9 Task 1 — the connection routes now require the existing `social` capability (capability.guard:social); the nav mirrors it.
+  { label: 'Social Accounts', to: '/social/accounts', icon: Share2, tint: NAV_TINTS.social, permission: 'manage-social-accounts', requiresModule: 'social_accounts', requiresCapability: 'social' },
+  // Social Media Marketing & Meta Ads Automation Expansion (Phase 4).
+  { label: 'Social Inbox', to: '/social/inbox', icon: Inbox, tint: NAV_TINTS.social, permission: 'manage-social-leads', requiresModule: 'social_inbox' },
+  { label: 'Comment Rules', to: '/social/comment-rules', icon: MessageSquare, tint: NAV_TINTS.social, permission: 'manage-comment-automation', requiresModule: 'comment_automation' },
+  // Phase 9 Task 5 — same gates as /api/social/analytics/* (view-only analytics users see it too).
+  { label: 'Social Analytics', to: '/social/analytics', icon: PieChart, tint: NAV_TINTS.social, permission: 'view-social-analytics', requiresModule: 'social_accounts', requiresCapability: 'social' },
+  { label: 'Social Reports', to: '/social/reports', icon: FileBarChart, tint: NAV_TINTS.social, permission: 'view-social-analytics', requiresModule: 'reports' },
+  // Social Media Marketing & Meta Ads Automation Expansion (Phase 3).
+  { label: 'Meta Ads Launcher', to: '/social/ads', icon: Rocket, tint: NAV_TINTS.social, anyPermission: ['launch-meta-ads', 'social_ads.view'], requiresModule: 'meta_ads', requiresCapability: 'ads' },
+  { label: 'Ads Dashboard', to: '/social/ads/dashboard', icon: BarChart3, tint: NAV_TINTS.social, anyPermission: ['launch-meta-ads', 'social_ads.view'], requiresModule: 'meta_ads', requiresCapability: 'ads' },
+  { label: 'Instant Lead CRM', to: '/social/leads', icon: UserSearch, tint: NAV_TINTS.social, permission: 'manage-social-leads', requiresModule: 'lead_crm' },
+  // Social Media Marketing & Meta Ads Automation Expansion — Final Phase.
+  // Phase 6 CRM Task 8 — the CRM frontend. Same three gates the backend
+  // puts on every /api/crm/* route: manage-crm + lead_crm module + crm
+  // capability.
+  { label: 'CRM Leads', to: '/crm/leads', icon: UserSearch, tint: NAV_TINTS.social, permission: 'manage-crm', requiresModule: 'lead_crm', requiresCapability: 'crm' },
+  { label: 'CRM Pipeline', to: '/crm/pipeline', icon: Columns3, tint: NAV_TINTS.social, permission: 'manage-crm', requiresModule: 'lead_crm', requiresCapability: 'crm' },
+  { label: 'CRM Contacts', to: '/crm/contacts', icon: Contact, tint: NAV_TINTS.social, permission: 'manage-crm', requiresModule: 'lead_crm', requiresCapability: 'crm' },
+  { label: 'CRM Tags', to: '/crm/tags', icon: Tags, tint: NAV_TINTS.social, permission: 'manage-crm', requiresModule: 'lead_crm', requiresCapability: 'crm' },
+  // Phase 6 CRM Task 12 — same three gates; the API is GET /api/crm/analytics.
+  { label: 'CRM Analytics', to: '/crm/analytics', icon: PieChart, tint: NAV_TINTS.social, permission: 'manage-crm', requiresModule: 'lead_crm', requiresCapability: 'crm' },
+  // Phase 11 — the "Industry" group sits HERE (after CRM, before Administration/Billing). Each shipped industry
+  // module adds one item with `requiresIndustryModule: '<industry>.<module>'` plus its own permission.
+  // Education (Task 2): Students and Classes/Batches are one landing page, gated by the students module key.
+  { label: 'Education', to: '/education', icon: GraduationCap, tint: NAV_TINTS.social, permission: 'view-education', requiresIndustryModule: 'education.students' },
+  { label: 'Billing & Plans', to: '/billing', icon: CreditCard, tint: NAV_TINTS.billing, permission: 'manage-subscriptions', requiresModule: 'billing' },
   // BUILD: Fully Dynamic Categorized Route Master & Nested Permission
   // Matrix UI — Super-Admin-only, same tier as the other platform-admin
   // nav items above/below it.
   // Phase 5 Task 12 — plan management, Super Admin only.
   { label: 'Plans', to: '/admin/plans', icon: Layers, tint: NAV_TINTS.gateway, superAdminOnly: true },
+  { label: 'Admin Gateway Settings', to: '/admin/billing/gateway-settings', icon: Settings, tint: NAV_TINTS.gateway, superAdminOnly: true },
+  // Social Media Marketing & Meta Ads Automation Expansion (Phase 2).
+  { label: 'Social Gateway Settings', to: '/admin/social-settings', icon: Settings, tint: NAV_TINTS.social, superAdminOnly: true },
+  // Super Admin WhatsApp Device Integration — link/view/disconnect/reconnect any client's device from one screen.
+  { label: 'Device Settings', to: '/admin/device-settings', icon: Smartphone, tint: NAV_TINTS.whatsapp, superAdminOnly: true },
   { label: 'Route Master', to: '/admin/route-master', icon: Layers, tint: NAV_TINTS.gateway, superAdminOnly: true },
   // IMPLEMENT: Dynamic Route Master with Super-Admin Bypass & Global
   // Audit Tracking — requirement 4. Labeled 'Activity Logs' (not 'Audit
   // Logs', which already exists below for login history) so the two
   // distinct audit surfaces are never confused in the sidebar.
   { label: 'Activity Logs', to: '/admin/audit-logs', icon: Activity, tint: NAV_TINTS.gateway, superAdminOnly: true },
+  // Role-Based Login Audit Logging Architecture — held by all three
+  // default roles (RolePermissionSeeder), scoped per-role server-side.
+  { label: 'Audit Logs', to: '/audit-logs', icon: History, tint: NAV_TINTS.gateway, permission: 'view-audit-logs' },
   // Quota Exhaustion Request Workflow & Custom Invoice Generation —
   // Agent-Routed Quota Top-Up Requests widened this from Super-Admin-only
   // to also an Agent reviewing its own Sub-Clients' requests. permission
@@ -245,16 +264,6 @@ const NAV_ITEMS: NavItem[] = [
   // stays in lockstep with the backend's own Super-Admin-or-owning-Agent
   // gate (QuotaRequestController) without a second flag to keep in sync.
   { label: 'Quota Top-Up Requests', to: '/admin/quota-requests', icon: Zap, tint: NAV_TINTS.billing, permission: 'manage-accounts' },
-  // Social Media Marketing & Meta Ads Automation Expansion (Phase 2).
-  { label: 'Social Gateway Settings', to: '/admin/social-settings', icon: Settings, tint: NAV_TINTS.social, superAdminOnly: true },
-  // Super Admin WhatsApp Device Integration — link/view/disconnect/reconnect any client's device from one screen.
-  { label: 'Device Settings', to: '/admin/device-settings', icon: Smartphone, tint: NAV_TINTS.whatsapp, superAdminOnly: true },
-  // Role-Based Login Audit Logging Architecture — held by all three
-  // default roles (RolePermissionSeeder), scoped per-role server-side.
-  { label: 'Audit Logs', to: '/audit-logs', icon: History, tint: NAV_TINTS.gateway, permission: 'view-audit-logs' },
-  // Advanced Broadcast Engine + Mail Template Manager — super_admin
-  // (via PERMISSIONS) and admin only.
-  { label: 'Notifications', to: '/notifications', icon: Megaphone, tint: NAV_TINTS.chatbot, permission: 'manage-notifications', requiresModule: 'notifications' },
 ];
 
 /**
@@ -291,6 +300,7 @@ function isNavItemVisible(
     hasModule: (m: AccountModule) => boolean;
     hasRole: (roleName: string) => boolean;
     hasCapability: (slug: string) => boolean;
+    hasIndustryModule?: (key: string) => boolean;
   },
 ): boolean {
   if (item.superAdminOnly) return opts.isSuperAdmin;
@@ -302,6 +312,7 @@ function isNavItemVisible(
   if (item.anyPermission && !opts.isSuperAdmin && !item.anyPermission.some((p) => opts.hasPermission(p))) return false;
   if (item.requiresModule && !opts.isSuperAdmin && !opts.hasModule(item.requiresModule)) return false;
   if (item.requiresCapability && !opts.isSuperAdmin && !opts.hasCapability(item.requiresCapability)) return false;
+  if (item.requiresIndustryModule && !(opts.hasIndustryModule?.(item.requiresIndustryModule) ?? false)) return false;
   return true;
 }
 
@@ -334,12 +345,16 @@ export default function AppLayout() {
     [capabilities],
   );
 
+  // Phase 11 — usable "industry.module" keys for the account being viewed (own account, or the selected client).
+  const { keys: industryKeys } = useIndustryModuleKeys();
+  const hasIndustryModuleKey = useCallback((key: string) => hasIndustryModule(industryKeys, key), [industryKeys]);
+
   const visibleItems = useMemo(
     () =>
       NAV_ITEMS.filter((item) =>
-        isNavItemVisible(item, { isSuperAdmin: superAdmin, isAgent, hasAccount, hasPermission, hasModule, hasRole, hasCapability }),
+        isNavItemVisible(item, { isSuperAdmin: superAdmin, isAgent, hasAccount, hasPermission, hasModule, hasRole, hasCapability, hasIndustryModule: hasIndustryModuleKey }),
       ),
-    [superAdmin, isAgent, hasAccount, hasPermission, hasModule, hasRole, hasCapability],
+    [superAdmin, isAgent, hasAccount, hasPermission, hasModule, hasRole, hasCapability, hasIndustryModuleKey],
   );
 
   // Session Re-hydration & Refresh (Module-to-UI Sync architecture

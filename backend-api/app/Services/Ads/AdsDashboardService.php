@@ -82,7 +82,10 @@ class AdsDashboardService
                 COUNT(flow_session_id) as journeys,
                 COUNT(converted_at) as conversions,
                 SUM(conversion_value) as conversion_value,
-                COUNT(conversion_value) as valued_conversions')
+                COUNT(conversion_value) as valued_conversions,
+                COUNT(DISTINCT conversion_currency) as value_currencies,
+                MIN(conversion_currency) as value_currency,
+                SUM(CASE WHEN conversion_value IS NOT NULL AND conversion_currency IS NULL THEN 1 ELSE 0 END) as valued_without_currency')
             ->groupBy('ad_campaign_id')
             ->get()->keyBy(fn ($row) => $row->ad_campaign_id === null ? 'unlinked' : (int) $row->ad_campaign_id);
 
@@ -96,14 +99,32 @@ class AdsDashboardService
                 COUNT(flow_session_id) as journeys,
                 COUNT(converted_at) as conversions,
                 SUM(conversion_value) as conversion_value,
-                COUNT(conversion_value) as valued_conversions')
+                COUNT(conversion_value) as valued_conversions,
+                COUNT(DISTINCT conversion_currency) as value_currencies,
+                MIN(conversion_currency) as value_currency,
+                SUM(CASE WHEN conversion_value IS NOT NULL AND conversion_currency IS NULL THEN 1 ELSE 0 END) as valued_without_currency')
             ->first();
+
+        // 5b. Daily conversions / conversion value, by the DAY THE CONVERSION WAS RECORDED
+        //     (converted_at) — a commercial view; the funnel above counts referral cohorts.
+        $dailyConversions = AdAttribution::query()->forAccount($accountId)
+            ->whereNotNull('converted_at')
+            ->whereBetween('converted_at', [$fromAt, $toAt])
+            ->selectRaw('DATE(converted_at) as day,
+                COUNT(*) as conversions,
+                SUM(conversion_value) as conversion_value,
+                COUNT(conversion_value) as valued_conversions,
+                COUNT(DISTINCT conversion_currency) as value_currencies,
+                MIN(conversion_currency) as value_currency,
+                SUM(CASE WHEN conversion_value IS NOT NULL AND conversion_currency IS NULL THEN 1 ELSE 0 END) as valued_without_currency')
+            ->groupBy(DB::raw('DATE(converted_at)'))
+            ->get()->keyBy(fn ($row) => substr((string) $row->day, 0, 10));
 
         // 6. Campaign rows (bounded) — one query.
         $campaignRows = AdCampaign::query()->forAccount($accountId)
             ->orderByDesc('id')
             ->limit(self::MAX_CAMPAIGN_ROWS + 1)
-            ->get(['id', 'name', 'objective', 'status', 'meta_campaign_id', 'meta_ad_id', 'daily_budget', 'last_checked_at', 'created_at']);
+            ->get(['id', 'name', 'objective', 'status', 'currency', 'meta_campaign_id', 'meta_ad_id', 'daily_budget', 'last_checked_at', 'created_at']);
         $truncated = $campaignRows->count() > self::MAX_CAMPAIGN_ROWS;
         $campaignRows = $campaignRows->take(self::MAX_CAMPAIGN_ROWS);
 
@@ -119,19 +140,25 @@ class AdsDashboardService
         $linkedWithSpend = $attributionByCampaign->filter(fn ($row, $id) => $id !== 'unlinked' && $spendByCampaign->has($id));
         $linkedSpend = $linkedWithSpend->isEmpty() ? null : round((float) $linkedWithSpend->keys()->sum(fn ($id) => (float) $spendByCampaign[$id]->spend), 2);
         $linkedLeads = (int) $linkedWithSpend->sum('leads');
-        $linkedValue = $this->value($linkedWithSpend->sum('valued_conversions'), $linkedWithSpend->sum('conversion_value'));
+        $linkedConversions = (int) $linkedWithSpend->sum('conversions');
+        $linkedCurrency = $this->currencyState($linkedWithSpend->all());
+        $linkedValue = $linkedCurrency['mixed'] ? null : $this->value($linkedWithSpend->sum('valued_conversions'), $linkedWithSpend->sum('conversion_value'));
 
         $referrals = (int) $funnel->referrals;
         $conversions = (int) $funnel->conversions;
-        $conversionValue = $this->value($funnel->valued_conversions, $funnel->conversion_value);
+        $valueCurrency = $this->currencyState([$funnel]);
+        $conversionValue = $valueCurrency['mixed'] ? null : $this->value($funnel->valued_conversions, $funnel->conversion_value);
 
         // Owner request (2026-09-30): the ad account currency stored at launch —
         // one currency across the tenant's campaigns, or null (unknown / mixed).
         $currencies = AdCampaign::query()->forAccount($accountId)->whereNotNull('currency')->distinct()->limit(2)->pluck('currency');
+        $adCurrency = $currencies->count() === 1 ? $currencies->first() : null;
+        // A value in another currency than the spend must never be divided by it.
+        $roasMismatch = $linkedValue !== null && $adCurrency !== null && $linkedCurrency['currency'] !== null && $linkedCurrency['currency'] !== $adCurrency;
 
         return [
             'range' => ['from' => $fromDate, 'to' => $toDate, 'days' => $from->diffInDays($to) + 1],
-            'currency' => $currencies->count() === 1 ? $currencies->first() : null,
+            'currency' => $adCurrency,
             'campaigns_summary' => [
                 'total' => $campaignTotal,
                 'active' => $statusCounts->get(AdCampaign::STATUS_ACTIVE, 0),
@@ -159,10 +186,18 @@ class AdsDashboardService
                 'conversions' => $conversions,
                 'conversion_rate' => $this->metric($referrals > 0 ? round($conversions / $referrals, 4) : null, $referrals > 0 ? self::AVAILABLE : self::NOT_APPLICABLE),
                 'conversion_value' => $this->metric($conversionValue, $conversionValue !== null ? self::AVAILABLE : self::UNAVAILABLE),
+                // Phase 10 Task 5 — additive: how many conversions carry a recorded value (0 is a value), its currency,
+                // and why a value is withheld (mixed currencies are never added together).
+                'valued_conversions' => (int) $funnel->valued_conversions,
+                'conversion_value_currency' => $valueCurrency['mixed'] ? null : $valueCurrency['currency'],
+                'conversion_value_issue' => $valueCurrency['mixed'] ? 'mixed_currency' : null,
+                'cost_per_conversion' => $this->ratio($linkedSpend, $linkedConversions, 2, $linkedSpend === null ? self::NOT_FETCHED : null),
                 'unlinked_referrals' => (int) ($attributionByCampaign->get('unlinked')?->referrals ?? 0),
                 'cost_per_lead' => $this->ratio($linkedSpend, $linkedLeads, 2, $linkedSpend === null ? self::NOT_FETCHED : null),
-                'roas' => $this->roas($linkedSpend, $linkedValue),
+                'roas' => $roasMismatch ? $this->metric(null, self::UNAVAILABLE) : $this->roas($linkedSpend, $linkedValue),
+                'roas_issue' => $roasMismatch ? 'currency_mismatch' : null,
             ],
+            'conversion_daily' => $this->conversionSeries($from, $to, $dailyConversions),
             'funnel' => [
                 ['stage' => 'ads', 'label' => 'Ads', 'count' => (int) $funnel->ads],
                 ['stage' => 'referrals', 'label' => 'Referrals', 'count' => $referrals],
@@ -179,7 +214,8 @@ class AdsDashboardService
                 'campaign_status' => 'Campaign counts show each campaign\'s current status, not the status during the period.',
                 'funnel' => 'The funnel counts click-to-WhatsApp referrals received in the period and how far each has got; each stage is counted on its own.',
                 'conversion' => 'A conversion is an attributed CRM lead currently in status "converted".',
-                'conversion_value' => 'No conversion value is captured, so value and ROAS stay unavailable unless one is recorded.',
+                'conversion_value' => 'A conversion value exists only where one was recorded on a converted lead (0 is a valid value); unknown stays unavailable and ROAS needs both a value and stored spend.',
+                'conversion_daily' => 'Daily conversions are counted on the day the conversion was recorded, so they can differ from the funnel, which follows the referrals received in the period.',
                 'cost_per_lead' => 'Cost per lead and ROAS use only referrals from launcher campaigns that have stored spend in the period.',
             ],
         ];
@@ -200,7 +236,9 @@ class AdsDashboardService
         $referrals = (int) ($attribution->referrals ?? 0);
         $leads = (int) ($attribution->leads ?? 0);
         $conversions = (int) ($attribution->conversions ?? 0);
-        $value = $attribution ? $this->value($attribution->valued_conversions, $attribution->conversion_value) : null;
+        $cur = $attribution ? $this->currencyState([$attribution]) : ['currency' => null, 'mixed' => false];
+        $value = $attribution && ! $cur['mixed'] ? $this->value($attribution->valued_conversions, $attribution->conversion_value) : null;
+        $mismatch = $value !== null && $c->currency !== null && $cur['currency'] !== null && $cur['currency'] !== $c->currency;
 
         return [
             'id' => $c->id,
@@ -218,7 +256,13 @@ class AdsDashboardService
             'conversion_rate' => $referrals > 0 ? round($conversions / $referrals, 4) : null,
             'cost_per_lead' => $spendValue !== null && $leads > 0 ? round($spendValue / $leads, 2) : null,
             'conversion_value' => $value,
-            'roas' => $spendValue !== null && $spendValue > 0 && $value !== null ? round($value / $spendValue, 4) : null,
+            'roas' => ! $mismatch && $spendValue !== null && $spendValue > 0 && $value !== null ? round($value / $spendValue, 4) : null,
+            // Phase 10 Task 5 — additive campaign-comparison fields (facts only, no ranking).
+            'currency' => $c->currency,
+            'cost_per_conversion' => $spendValue !== null && $conversions > 0 ? round($spendValue / $conversions, 2) : null,
+            'valued_conversions' => (int) ($attribution->valued_conversions ?? 0),
+            'conversion_value_currency' => $cur['mixed'] ? null : $cur['currency'],
+            'conversion_value_issue' => $cur['mixed'] ? 'mixed_currency' : ($mismatch ? 'currency_mismatch' : null),
             'last_checked_at' => $c->last_checked_at?->toIso8601String(),
         ];
     }
@@ -230,6 +274,55 @@ class AdsDashboardService
         for ($day = $from; $day->lte($to); $day = $day->addDay()) {
             $date = $day->toDateString();
             $points[] = ['date' => $date, 'spend' => $daily->has($date) ? $daily[$date] : null];
+        }
+
+        return $points;
+    }
+
+    /**
+     * @param  iterable<object>  $rows  aggregate rows carrying value_currencies / value_currency / valued_without_currency
+     * @return array{currency: ?string, mixed: bool}
+     *
+     * Values are only ever added together in ONE currency. Rows recorded before a currency
+     * was captured (currency NULL) are compatible only with other NULL-currency rows.
+     */
+    private function currencyState(iterable $rows): array
+    {
+        $currencies = [];
+        $withoutCurrency = 0;
+        $mixed = false;
+
+        foreach ($rows as $row) {
+            if ((int) ($row->value_currencies ?? 0) > 1) {
+                $mixed = true;
+            }
+            if (($row->value_currency ?? null) !== null) {
+                $currencies[$row->value_currency] = true;
+            }
+            $withoutCurrency += (int) ($row->valued_without_currency ?? 0);
+        }
+
+        $mixed = $mixed || count($currencies) > 1 || (count($currencies) === 1 && $withoutCurrency > 0);
+
+        return ['currency' => count($currencies) === 1 && ! $mixed ? (string) array_key_first($currencies) : null, 'mixed' => $mixed];
+    }
+
+    /** @return list<array{date: string, conversions: int, valued_conversions: int, conversion_value: float|null}> */
+    private function conversionSeries(CarbonImmutable $from, CarbonImmutable $to, Collection $daily): array
+    {
+        $points = [];
+        for ($day = $from; $day->lte($to); $day = $day->addDay()) {
+            $date = $day->toDateString();
+            $row = $daily->get($date);
+            $mixed = $row ? $this->currencyState([$row])['mixed'] : false;
+            $points[] = [
+                'date' => $date,
+                // First-party records: a day without conversions is a known zero.
+                'conversions' => (int) ($row->conversions ?? 0),
+                'valued_conversions' => (int) ($row->valued_conversions ?? 0),
+                // NULL (not 0) when no conversion that day carries a value, or the currencies differ.
+                'conversion_value' => $row && ! $mixed ? $this->value($row->valued_conversions, $row->conversion_value) : null,
+            ];
         }
 
         return $points;

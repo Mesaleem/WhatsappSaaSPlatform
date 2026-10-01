@@ -4,6 +4,7 @@ import accountService from '../../services/accountService';
 import type { Account } from '../../types/account';
 import type { ExpiringSoonAccount } from '../../types/analytics';
 import CreateAccountModal from './CreateAccountModal';
+import DismissibleAlert from '../common/DismissibleAlert';
 
 function extractMessage(err: unknown, fallback: string): string {
   return err instanceof Error ? err.message : fallback;
@@ -88,10 +89,10 @@ export default function ExpiringSoonModal({ onClose }: { onClose: () => void }) 
 
         <div className="px-6 py-4">
           {error && (
-            <div className="mb-4 flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+            <DismissibleAlert className="mb-4 flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
               <XCircle className="h-4 w-4 flex-shrink-0" />
               {error}
-            </div>
+            </DismissibleAlert>
           )}
 
           {isLoading ? (

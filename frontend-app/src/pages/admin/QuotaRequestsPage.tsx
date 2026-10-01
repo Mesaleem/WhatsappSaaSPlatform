@@ -8,6 +8,7 @@ import { PageHeader, PageShell } from '../../components/common/PageShell';
 import { TableCard } from '../../components/common/Card';
 import { ClearFiltersButton, Pagination, StatusFilterSelect } from '../../components/common/DataTableControls';
 import { TableSkeletonRows } from '../../components/common/Skeleton';
+import DismissibleAlert from '../../components/common/DismissibleAlert';
 
 function extractMessage(err: unknown, fallback: string): string {
   const axiosErr = err as AxiosError<ApiErrorResponse>;
@@ -139,10 +140,10 @@ export default function QuotaRequestsPage() {
         </div>
       )}
       {error && (
-        <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+        <DismissibleAlert className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
           <XCircle className="h-4 w-4 flex-shrink-0" />
           {error}
-        </div>
+        </DismissibleAlert>
       )}
 
       <TableCard>

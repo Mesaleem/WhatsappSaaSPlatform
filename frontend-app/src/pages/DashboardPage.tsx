@@ -53,6 +53,7 @@ import type { MessageDispatchLog, MessageDispatchSource, MessageDispatchStatus }
 import type { SocialReportSummary } from '../types/reports';
 import type { EngineType, Subscription } from '../types/subscription';
 import ExpiringSoonModal from '../components/admin/ExpiringSoonModal';
+import DismissibleAlert from '../components/common/DismissibleAlert';
 
 const ENGINE_LABEL: Record<EngineType, string> = { qr: 'QR (Baileys)', meta: 'Meta Cloud API' };
 
@@ -699,10 +700,10 @@ function AgentSubClientsOverview() {
         Your Sub-Clients
       </h3>
       {error && (
-        <div className="mb-3 flex items-center gap-2 rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+        <DismissibleAlert className="mb-3 flex items-center gap-2 rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
           <XCircle className="h-4 w-4 flex-shrink-0" />
           {error}
-        </div>
+        </DismissibleAlert>
       )}
       <div className="grid gap-4 sm:grid-cols-3">
         <StatCard
@@ -871,10 +872,10 @@ function TenantDashboard({ impersonatedAccountName }: { impersonatedAccountName?
         {user?.account?.account_type === 'agent' && <AgentSubClientsOverview />}
 
         {summaryError && (
-          <div className="flex items-center gap-2 rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+          <DismissibleAlert className="flex items-center gap-2 rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
             <XCircle className="h-4 w-4 flex-shrink-0" />
             {summaryError}
-          </div>
+          </DismissibleAlert>
         )}
 
         {/* Dynamic Permission & Module-Based Dashboard — WhatsApp Only / Both. Every card here is WhatsApp message/engine/quota data, hidden entirely for a 'social_media' client. */}
@@ -1178,10 +1179,10 @@ function SuperAdminDashboard() {
         </div>
 
         {error && (
-          <div className="flex items-center gap-2 rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+          <DismissibleAlert className="flex items-center gap-2 rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
             <XCircle className="h-4 w-4 flex-shrink-0" />
             {error}
-          </div>
+          </DismissibleAlert>
         )}
 
         <div>

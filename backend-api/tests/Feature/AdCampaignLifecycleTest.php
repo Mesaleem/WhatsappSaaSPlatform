@@ -246,8 +246,9 @@ class AdCampaignLifecycleTest extends TestCase
         $user = $this->user($account);
 
         $this->actingAs($user)->getJson('/api/social/ads')->assertOk();
-        // Phase 10 Task 1's attribution contract (kept unchanged): the target check denies an expired subscription on reads too.
-        $this->actingAs($user)->getJson('/api/social/ads/attribution/summary')->assertForbidden()->assertJsonPath('error_code', 'SUBSCRIPTION_EXPIRED');
+        // Phase 10 Task 6: attribution reads now follow the same contract as the list and the dashboard — a lapsed subscription still reads.
+        $this->actingAs($user)->getJson('/api/social/ads/attribution/summary')->assertOk();
+        $this->actingAs($user)->getJson('/api/social/ads/attribution')->assertOk();
         $this->launch($user)->assertForbidden()->assertJsonPath('error_code', 'SUBSCRIPTION_EXPIRED');
         $this->actingAs($user)->postJson("/api/social/ads/{$campaign->id}/pause")->assertForbidden()->assertJsonPath('error_code', 'SUBSCRIPTION_EXPIRED');
         $this->actingAs($user)->patchJson("/api/social/ads/{$campaign->id}/cpl-threshold", ['cpl_threshold' => 1])->assertForbidden();

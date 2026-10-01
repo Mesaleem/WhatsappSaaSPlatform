@@ -35,6 +35,7 @@ import {
 } from '../../types/account';
 import type { BillingModel, EngineType, PaymentMode, UpdateSubscriptionPayload } from '../../types/subscription';
 import { extractErrorMessage } from '../../utils/apiError';
+import DismissibleAlert from '../common/DismissibleAlert';
 
 interface CreateAccountModalProps {
   /** null = create mode. A populated Account = edit mode. */
@@ -452,13 +453,13 @@ export default function CreateAccountModal({ account, onClose, onSaved }: Create
 
         <form onSubmit={handleSubmit} className="space-y-8 px-6 py-6" noValidate>
           {formError && (
-            <div
+            <DismissibleAlert
               role="alert"
               className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"
             >
               <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
               <span>{formError}</span>
-            </div>
+            </DismissibleAlert>
           )}
 
           {/* Section 1 — Client Organization Details (Account model; no password field lives here — see AccountController::store()'s docblock and this refactor's audit report). */}
@@ -854,13 +855,13 @@ export default function CreateAccountModal({ account, onClose, onSaved }: Create
             )}
 
             {modulesError && (
-              <div
+              <DismissibleAlert
                 role="alert"
                 className="mt-3 flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"
               >
                 <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
                 <span>{modulesError}</span>
-              </div>
+              </DismissibleAlert>
             )}
 
             {/* Quick Plan Preset Buttons */}

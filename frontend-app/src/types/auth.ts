@@ -51,6 +51,8 @@ export interface User {
    * src/journey/nodeEntitlement.ts.
    */
   capabilities?: Record<string, boolean>;
+  /** Phase 11 Task 1 — usable "industry.module" keys (see components/layout/industryNav.ts). UX only. */
+  industry_modules?: string[];
   /**
    * CRM — the Super Admin's own CRM account ("Platform (Super Admin)"),
    * the CRM target when no client is selected. Null/absent for every other

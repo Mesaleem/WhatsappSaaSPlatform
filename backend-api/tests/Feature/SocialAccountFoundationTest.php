@@ -58,7 +58,7 @@ class SocialAccountFoundationTest extends TestCase
         config(['services.frontend.url' => 'https://app.example.test']);
         SocialProviderConfig::create(['provider' => 'meta', 'client_id' => 'app-id', 'client_secret' => 'app-secret', 'redirect_uri' => 'https://api.example.test/api/social/callback/meta', 'is_active' => true]);
 
-        $this->graph = ['me' => [200, ['id' => '1']], 'code_fails' => false, 'long_fails' => false];
+        $this->graph = ['me' => [200, ['id' => '1']], 'code_fails' => false, 'long_fails' => false, 'ig_expansion_fails' => false, 'pages_fail' => false];
         Http::fake(function (HttpRequest $request) {
             $url = $request->url();
             parse_str((string) parse_url($url, PHP_URL_QUERY), $query);
@@ -74,7 +74,16 @@ class SocialAccountFoundationTest extends TestCase
             }
 
             if (str_contains($url, '/me/accounts')) {
-                return Http::response(['data' => [['id' => 'page-1', 'name' => 'Acme Page', 'instagram_business_account' => ['id' => 'ig-1', 'username' => 'acme']]]]);
+                if ($this->graph['pages_fail'] || ($this->graph['ig_expansion_fails'] && str_contains($url, 'instagram_business_account'))) {
+                    return Http::response(['error' => ['message' => '(#10) This endpoint requires the permission.', 'code' => 10]], 400);
+                }
+
+                $page = ['id' => 'page-1', 'name' => 'Acme Page'];
+                if (str_contains($url, 'instagram_business_account')) {
+                    $page['instagram_business_account'] = ['id' => 'ig-1', 'username' => 'acme'];
+                }
+
+                return Http::response(['data' => [$page]]);
             }
 
             if (str_contains($url, '/me/adaccounts')) {
@@ -435,5 +444,84 @@ class SocialAccountFoundationTest extends TestCase
 
         $this->assertStringNotContainsString($flow['state']['nonce'], $html);
         $this->assertStringContainsString('var targetOrigin = null', $html);
+    }
+
+    // ------------------------------------------------------------------ Meta OAuth scopes
+
+    /** @return array<string, string> */
+    private function authorizationQuery(User $admin): array
+    {
+        $url = $this->actingAs($admin)->getJson('/api/social/oauth/meta/redirect')->assertOk()->json('url');
+        parse_str((string) parse_url($url, PHP_URL_QUERY), $query);
+
+        return $query;
+    }
+
+    public function test_the_default_authorization_url_requests_only_the_core_scopes_meta_accepts(): void
+    {
+        $admin = $this->user($this->tenant());
+
+        $query = $this->authorizationQuery($admin);
+
+        $this->assertSame(['pages_show_list', 'pages_read_engagement', 'ads_read', 'ads_management', 'business_management'], explode(',', $query['scope']));
+        foreach (['instagram_basic', 'pages_messaging', 'instagram_manage_messages'] as $invalid) {
+            $this->assertStringNotContainsString($invalid, $query['scope'], "{$invalid} needs a Meta use case and is opt-in");
+        }
+        $this->assertSame(['app-id', 'https://api.example.test/api/social/callback/meta', 'code'], [$query['client_id'], $query['redirect_uri'], $query['response_type']]);
+        $this->assertNotEmpty($query['state']);
+    }
+
+    public function test_the_optional_scope_groups_are_added_only_when_the_platform_owner_enables_them(): void
+    {
+        $admin = $this->user($this->tenant());
+
+        config(['social.meta_oauth.instagram_scopes' => true]);
+        $this->assertSame(['pages_show_list', 'pages_read_engagement', 'ads_read', 'ads_management', 'business_management', 'instagram_basic'], explode(',', $this->authorizationQuery($admin)['scope']));
+
+        config(['social.meta_oauth.instagram_scopes' => false, 'social.meta_oauth.messaging_scopes' => true]);
+        $this->assertSame(['pages_show_list', 'pages_read_engagement', 'ads_read', 'ads_management', 'business_management', 'pages_messaging', 'instagram_manage_messages'], explode(',', $this->authorizationQuery($admin)['scope']));
+
+        config(['social.meta_oauth.instagram_scopes' => true]);
+        $all = explode(',', $this->authorizationQuery($admin)['scope']);
+        $this->assertCount(8, $all);
+        $this->assertSame($all, array_values(array_unique($all)));
+    }
+
+    public function test_the_callback_still_verifies_state_and_exchanges_the_code_with_the_default_scopes(): void
+    {
+        $admin = $this->user($this->tenant());
+        $flow = $this->startConnect($admin);
+
+        $this->assertSame('social-oauth-error', $this->popup(['code' => 'c', 'state' => $flow['raw'].'x'])['type']);
+        Http::assertNotSent(fn (HttpRequest $r) => str_contains($r->url(), '/oauth/access_token'));
+
+        $payload = $this->popup(['code' => 'auth-code-9', 'state' => $flow['raw']]);
+
+        $this->assertSame('social-oauth-success', $payload['type']);
+        Http::assertSent(fn (HttpRequest $r) => str_contains($r->url(), '/oauth/access_token') && str_contains($r->url(), 'code=auth-code-9') && str_contains($r->url(), 'client_secret=app-secret'));
+    }
+
+    public function test_pages_and_ad_accounts_are_still_discovered_when_the_instagram_expansion_is_not_permitted(): void
+    {
+        $admin = $this->user($this->tenant());
+        $this->graph['ig_expansion_fails'] = true;
+        $flow = $this->startConnect($admin);
+
+        $payload = $this->popup(['code' => 'auth-code', 'state' => $flow['raw']]);
+
+        $this->assertSame('social-oauth-success', $payload['type']);
+        $this->assertSame(['facebook_page', 'meta_ad_account'], array_column($payload['assets'], 'asset_type'), 'no Instagram without its permission, but nothing else is lost');
+    }
+
+    public function test_a_genuine_pages_failure_still_fails_the_connection(): void
+    {
+        $admin = $this->user($this->tenant());
+        $this->graph['pages_fail'] = true;
+        $flow = $this->startConnect($admin);
+
+        $payload = $this->popup(['code' => 'auth-code', 'state' => $flow['raw']]);
+
+        $this->assertSame('social-oauth-error', $payload['type']);
+        $this->assertNull(Cache::get('social_oauth_pending:'.$flow['state']['nonce']));
     }
 }

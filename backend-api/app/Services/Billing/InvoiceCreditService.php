@@ -10,6 +10,7 @@ use App\Models\Invoice;
 use App\Models\Plan;
 use App\Models\Subscription;
 use App\Services\Access\PlanEntitlementReconciliationService;
+use App\Support\EntitlementAuditContext;
 use App\Services\Access\ProviderCapabilityService;
 use App\Services\Billing\PlanRepository;
 use App\Services\Credits\PlanCreditAllocator;
@@ -268,7 +269,11 @@ class InvoiceCreditService
          * from its latest PAID invoice, which this method's caller has
          * just written.
          */
-        $result = $this->reconciler->reconcile($account->fresh());
+        // F-5.2 — a payment (gateway webhook OR the customer's own verify
+        // callback) changes entitlements; label the audit rows as payment-
+        // driven. The authenticated user is recorded only if the request
+        // genuinely has one (the webhook has none).
+        $result = EntitlementAuditContext::run('payment_fulfilment', fn () => $this->reconciler->reconcile($account->fresh()));
 
         if ($result['reason'] === 'unknown_plan') {
             // Unchanged tolerance: a plan_key with no Plan row is a

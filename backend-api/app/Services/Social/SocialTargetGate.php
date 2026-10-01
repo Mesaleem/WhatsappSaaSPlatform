@@ -53,7 +53,7 @@ class SocialTargetGate
      * @param  array<string, string>  $messages  optional overrides for MODULE_DISABLED / CAPABILITY_NOT_ENTITLED
      * @return array{code: string, message: string}|null
      */
-    public function denialFor(Account $account, string $module, string $capability, string $action, array $messages = [], ?bool $superAdmin = null): ?array
+    public function denialFor(Account $account, string $module, string $capability, string $action, array $messages = [], ?bool $superAdmin = null, bool $read = false): ?array
     {
         $target = Account::query()->with('currentSubscription')->find($account->id);
 
@@ -68,7 +68,7 @@ class SocialTargetGate
 
         return match (true) {
             ! $target || ! $target->isAdministrativelyActive() => ['code' => 'CLIENT_ACCOUNT_SUSPENDED', 'message' => "This account is suspended. It cannot {$action}."],
-            ! $platform && ! $superAdmin && ! $target->hasActiveSubscription() => ['code' => 'SUBSCRIPTION_EXPIRED', 'message' => "This account's subscription is not active. Renew it to {$action}."],
+            ! $read && ! $platform && ! $superAdmin && ! $target->hasActiveSubscription() => ['code' => 'SUBSCRIPTION_EXPIRED', 'message' => "This account's subscription is not active. Renew it to {$action}."],
             ! $target->hasModuleEnabled($module) => ['code' => 'MODULE_DISABLED', 'message' => $messages['MODULE_DISABLED'] ?? 'This feature is switched off for this account.'],
             ! $platform && ! $superAdmin && ! $this->access->canTenant($target, $capability) => ['code' => 'CAPABILITY_NOT_ENTITLED', 'message' => $messages['CAPABILITY_NOT_ENTITLED'] ?? 'Your current plan does not include this feature. Please upgrade your subscription to unlock it.'],
             default => null,

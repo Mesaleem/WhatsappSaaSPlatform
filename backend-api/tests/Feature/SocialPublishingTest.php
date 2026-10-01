@@ -285,7 +285,7 @@ class SocialPublishingTest extends TestCase
         $this->artisan('social:publish-due')->assertSuccessful();
 
         Queue::assertPushed(PublishScheduledPostJob::class, 1);
-        Queue::assertPushed(PublishScheduledPostJob::class, fn ($job) => $job->organicPostId === $due->id && $job->queue === 'social' && $job->connection === 'database');
+        Queue::assertPushed(PublishScheduledPostJob::class, fn ($job) => $job->organicPostId === $due->id && $job->queue === 'social' && $job->connection === 'database_long');
         $this->assertSame(OrganicPost::STATUS_PUBLISHING, $due->fresh()->status);
         $this->assertSame(OrganicPost::STATUS_SCHEDULED, $later->fresh()->status);
         Http::assertNothingSent(); // the provider call happens in the job, not the scheduler

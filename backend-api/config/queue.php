@@ -43,6 +43,31 @@ return [
             'after_commit' => false,
         ],
 
+        /*
+        | Phase 12 Task 1 — dedicated LONG-running connection (same `jobs` table and DB connection as
+        | `database`; only the visibility window differs).
+        |
+        | `retry_after` is how long a reserved job may stay reserved before ANY worker may take it again.
+        | It has to exceed the longest job timeout that runs on the connection, otherwise a second worker
+        | re-reserves a job that is still running and it executes twice. The default `database` connection's
+        | 90 s is deliberately tuned for the group-send jobs (85 s timeout, MessageDispatchLog::
+        | GROUP_JOB_TIMEOUT_SECONDS) and stays as it is. Jobs that run longer declare this connection:
+        |   ProcessKnowledgeDocumentJob 600 s · ReconcilePlanAccountsJob 900 s (database_long | redis_long
+        |   by the default driver) · PublishScheduledPostJob 120 s · RefreshPostInsightsJob 90 s.
+        | Default 960 s = the longest timeout (900 s) + a minute. tests/Feature/QueueRetrySafetyTest fails
+        | when any job timeout reaches the retry_after of the connection it runs on.
+        | Trade-off: a job that was reserved by a worker that then DIED is redelivered (and, with $tries = 1,
+        | failed) after this window instead of after 90 s; those queues have their own recovery commands.
+        */
+        'database_long' => [
+            'driver' => 'database',
+            'connection' => env('DB_QUEUE_CONNECTION'),
+            'table' => env('DB_QUEUE_TABLE', 'jobs'),
+            'queue' => env('DB_QUEUE', 'default'),
+            'retry_after' => (int) env('QUEUE_LONG_RETRY_AFTER', 960),
+            'after_commit' => false,
+        ],
+
         'beanstalkd' => [
             'driver' => 'beanstalkd',
             'host' => env('BEANSTALKD_QUEUE_HOST', 'localhost'),
@@ -68,6 +93,17 @@ return [
             'connection' => env('REDIS_QUEUE_CONNECTION', 'default'),
             'queue' => env('REDIS_QUEUE', 'default'),
             'retry_after' => (int) env('REDIS_QUEUE_RETRY_AFTER', 90),
+            'block_for' => null,
+            'after_commit' => false,
+        ],
+
+        // Phase 12 Task 1 — see `database_long`. Defined so a Redis deployment gets the same protection;
+        // nothing selects it unless QUEUE_CONNECTION=redis. Does not require Redis to be installed.
+        'redis_long' => [
+            'driver' => 'redis',
+            'connection' => env('REDIS_QUEUE_CONNECTION', 'default'),
+            'queue' => env('REDIS_QUEUE', 'default'),
+            'retry_after' => (int) env('QUEUE_LONG_RETRY_AFTER', 960),
             'block_for' => null,
             'after_commit' => false,
         ],

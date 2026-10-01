@@ -443,11 +443,16 @@ class EntitlementAuditLoggingTest extends TestCase
         $user = $this->user($mine);
         $this->setCapability($mine, 'whatsapp_send', false);
 
+        // F-5.2 — entitlement MUTATIONS are now audited from any actor, so the
+        // fixture's own grants for `theirs` are rows too. The invariant is that
+        // the forged REQUEST adds none: compare against the count before it.
+        $theirsBefore = ActivityLog::where('account_id', $theirs->id)->count();
+
         // A tenant (non-agent) user's ?account_id= / body account_id are ignored.
         $this->actingAs($user)->postJson(self::FLOWS."?account_id={$theirs->id}", $this->payload([$this->text()]) + ['account_id' => $theirs->id, 'tenant_id' => $theirs->id])
             ->assertStatus(403);
 
-        $this->assertSame(0, ActivityLog::where('account_id', $theirs->id)->count());
+        $this->assertSame($theirsBefore, ActivityLog::where('account_id', $theirs->id)->count());
         $this->assertSame($mine->id, $this->one(['node_type' => 'text'])->account_id);
     }
 

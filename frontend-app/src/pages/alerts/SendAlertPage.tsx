@@ -11,6 +11,7 @@ import whatsappService from '../../services/whatsappService';
 import type { ContactGroup } from '../../types/contactGroup';
 import type { AvailableTemplate } from '../../types/templates';
 import { extractCooldownRemainingSeconds, extractErrorMessage } from '../../utils/apiError';
+import DismissibleAlert from '../../components/common/DismissibleAlert';
 
 /**
  * Client-side mirror of the backend's TemplateRenderer::render(), as
@@ -659,10 +660,10 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
 
   if (loadError) {
     return (
-      <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+      <DismissibleAlert className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
         <XCircle className="h-4 w-4 flex-shrink-0" />
         {loadError}
-      </div>
+      </DismissibleAlert>
     );
   }
 
@@ -849,11 +850,11 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
                 {csvError && <span className="text-xs text-red-600">{csvError}</span>}
               </div>
               {exceedsMaxRecipients && (
-                <div className="mt-2 flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-medium text-red-700">
+                <DismissibleAlert className="mt-2 flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-medium text-red-700">
                   <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0" />
                   Maximum {MAX_BULK_RECIPIENTS} contacts allowed per batch. For larger lists, create a Group or
                   upgrade your plan.
-                </div>
+                </DismissibleAlert>
               )}
             </div>
             <div>
@@ -973,10 +974,10 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
         )}
 
         {sendError && (
-          <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          <DismissibleAlert className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
             <XCircle className="h-4 w-4 flex-shrink-0" />
             {sendError}
-          </div>
+          </DismissibleAlert>
         )}
         {sendSuccess && (
           <div className="flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">

@@ -103,22 +103,43 @@ class MetaOAuthProvider implements SocialOAuthProviderInterface
      * Connect Meta Account again) before MetaAdsService::launch()/pause()/
      * resume() will succeed for them; see the Phase 3 audit report.
      */
-    private const SCOPES = [
+    private const CORE_SCOPES = [
         'pages_show_list',
         'pages_read_engagement',
-        'instagram_basic',
         'ads_read',
         'ads_management',
         'business_management',
-        // Phase 4 — Unified Social Inbox (SocialInboxController) and Ad
-        // Comment Auto-Responder (CommentAutomationService: public
-        // replies use pages_read_engagement/instagram_basic already
-        // above, but private_replies and inbox conversations need these).
-        // Same re-auth consequence as `ads_management` in Phase 3: a
-        // tenant connected before this change must reconnect.
-        'pages_messaging',
-        'instagram_manage_messages',
     ];
+
+    /**
+     * Permissions that Meta only grants through a use case on the platform Meta app
+     * ("Manage messaging & content on Instagram", "Engage with customers on Messenger from Meta").
+     * Meta rejects the WHOLE login with "Invalid Scopes: …" when any requested scope is not granted
+     * by a use case configured on the app, so they are requested only when the platform owner has
+     * enabled them (config/social.php → meta_oauth, env META_OAUTH_INSTAGRAM_SCOPES /
+     * META_OAUTH_MESSAGING_SCOPES) after adding the use case in the Meta Developer Dashboard.
+     * A tenant connected before a group was enabled must reconnect to grant it.
+     */
+    private const OPTIONAL_SCOPE_GROUPS = [
+        // Instagram Business account profile/media through the linked Page.
+        'instagram_scopes' => ['instagram_basic'],
+        // Phase 4 — Unified Social Inbox (Messenger / Instagram DMs) and private replies to comments.
+        'messaging_scopes' => ['pages_messaging', 'instagram_manage_messages'],
+    ];
+
+    /** @return list<string> the scopes sent to Meta on connect */
+    public function scopes(): array
+    {
+        $scopes = self::CORE_SCOPES;
+
+        foreach (self::OPTIONAL_SCOPE_GROUPS as $flag => $group) {
+            if ((bool) config("social.meta_oauth.{$flag}", false)) {
+                array_push($scopes, ...$group);
+            }
+        }
+
+        return $scopes;
+    }
 
     public function buildAuthorizationUrl(SocialProviderConfig $config, string $state): string
     {
@@ -126,7 +147,7 @@ class MetaOAuthProvider implements SocialOAuthProviderInterface
             'client_id' => $config->client_id,
             'redirect_uri' => $config->redirect_uri,
             'state' => $state,
-            'scope' => implode(',', self::SCOPES),
+            'scope' => implode(',', $this->scopes()),
             'response_type' => 'code',
         ]);
 
@@ -335,13 +356,23 @@ class MetaOAuthProvider implements SocialOAuthProviderInterface
     {
         $assets = [];
 
-        try {
-            $pages = Http::withToken($accessToken)->timeout(15)->get(
-                'https://graph.facebook.com/'.self::API_VERSION.'/me/accounts',
-                ['fields' => 'id,name,picture,instagram_business_account{id,username,profile_picture_url}']
-            );
-        } catch (Throwable $e) {
-            throw new RuntimeException('Could not reach Meta to list Facebook Pages.', previous: $e);
+        // The linked Instagram Business account is read through the Page, which Meta ties to
+        // `instagram_basic`. If the app was not granted it, a failing expansion must not block
+        // the Facebook Pages and Ad Accounts: retry once without it.
+        $pages = null;
+        foreach (['id,name,picture,instagram_business_account{id,username,profile_picture_url}', 'id,name,picture'] as $fields) {
+            try {
+                $pages = Http::withToken($accessToken)->timeout(15)->get(
+                    'https://graph.facebook.com/'.self::API_VERSION.'/me/accounts',
+                    ['fields' => $fields]
+                );
+            } catch (Throwable $e) {
+                throw new RuntimeException('Could not reach Meta to list Facebook Pages.', previous: $e);
+            }
+
+            if (! $pages->failed()) {
+                break;
+            }
         }
 
         if ($pages->failed()) {

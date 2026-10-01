@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react';
 import { useLocation, useNavigate, type Location } from 'react-router-dom';
 import { AlertCircle, Eye, EyeOff, Lock, Mail, MessageSquare, Loader2 } from 'lucide-react';
 import { useAuth } from '../../core/context/AuthContext';
+import DismissibleAlert from '../../components/common/DismissibleAlert';
 
 interface LocationState {
   from?: Location;
@@ -88,13 +89,13 @@ export default function LoginPage() {
           </p>
 
           {formError && (
-            <div
+            <DismissibleAlert
               role="alert"
               className="mt-6 flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"
             >
               <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
               <span>{formError}</span>
-            </div>
+            </DismissibleAlert>
           )}
 
           <form className="mt-8 space-y-5" onSubmit={handleSubmit} noValidate>

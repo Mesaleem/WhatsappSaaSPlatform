@@ -10,6 +10,7 @@ import ConfirmModal from '../../components/common/ConfirmModal';
 import { extractErrorMessage } from '../../utils/apiError';
 import { indigo, activeGradient } from '../../theme/signalIndigo';
 import type { CommentAutomationRule, CommentAutomationRulePayload } from '../../types/commentRules';
+import DismissibleAlert from '../../components/common/DismissibleAlert';
 
 const EMPTY_FORM: CommentAutomationRulePayload = {
   keyword: '',
@@ -103,10 +104,10 @@ function RuleFormModal({
 
         <div className="mt-4 space-y-4">
           {error && (
-            <div className="flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+            <DismissibleAlert className="flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
               <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0" />
               {error}
-            </div>
+            </DismissibleAlert>
           )}
 
           <label className="block text-sm font-medium text-slate-700">
@@ -289,10 +290,10 @@ export default function CommentRulesPage() {
         ) : (
           <>
             {pageError && (
-              <div className="mb-4 flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+              <DismissibleAlert className="mb-4 flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
                 <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0" />
                 {pageError}
-              </div>
+              </DismissibleAlert>
             )}
 
             {!isLoading && rules.length === 0 ? (

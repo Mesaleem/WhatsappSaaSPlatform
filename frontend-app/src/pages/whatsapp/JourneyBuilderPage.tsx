@@ -52,6 +52,7 @@ import type {
   SaveFlowPayload,
   WhatsAppFlow,
 } from '../../types/journey';
+import DismissibleAlert from '../../components/common/DismissibleAlert';
 
 /**
  * Module 5 — No-Code WhatsApp Journey Builder.
@@ -810,10 +811,10 @@ function JourneyCanvasEditor({
       </div>
 
       {saveError && (
-        <div className="mb-3 flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+        <DismissibleAlert className="mb-3 flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
           <XCircle className="mt-0.5 h-4 w-4 flex-shrink-0" />
           {saveError}
-        </div>
+        </DismissibleAlert>
       )}
 
       <div className="mb-3 flex flex-wrap items-center gap-2">
@@ -1508,10 +1509,10 @@ export default function JourneyBuilderPage() {
   return (
     <>
       {pageError && (
-        <div className="mx-6 mt-6 flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+        <DismissibleAlert className="mx-6 mt-6 flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
           <XCircle className="mt-0.5 h-4 w-4 flex-shrink-0" />
           {pageError}
-        </div>
+        </DismissibleAlert>
       )}
       {testingFlow && <TestTriggerModal flow={testingFlow} onClose={() => setTestingFlow(null)} />}
       <FlowsListView

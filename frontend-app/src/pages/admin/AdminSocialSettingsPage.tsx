@@ -13,6 +13,7 @@ import {
 import socialGatewayService from '../../services/socialGatewayService';
 import type { SocialProvider, SocialProviderConfigRow } from '../../types/social';
 import { extractErrorMessage } from '../../utils/apiError';
+import DismissibleAlert from '../../components/common/DismissibleAlert';
 
 const inputClass =
   'mt-1.5 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100';
@@ -264,10 +265,10 @@ function ProviderCard({ config, onSaved }: ProviderCardProps) {
       </div>
 
       {error && (
-        <div className="mt-4 flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+        <DismissibleAlert className="mt-4 flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
           <XCircle className="h-4 w-4 flex-shrink-0" />
           {error}
-        </div>
+        </DismissibleAlert>
       )}
       {success && (
         <div className="mt-4 flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
@@ -343,10 +344,10 @@ export default function AdminSocialSettingsPage() {
         </div>
 
         {loadError && (
-          <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          <DismissibleAlert className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
             <XCircle className="h-4 w-4 flex-shrink-0" />
             {loadError}
-          </div>
+          </DismissibleAlert>
         )}
 
         {isLoading ? (

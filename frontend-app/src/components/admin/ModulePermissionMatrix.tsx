@@ -4,6 +4,7 @@ import { AlertCircle, Loader2, ShieldCheck } from 'lucide-react';
 import routeMasterService from '../../services/routeMasterService';
 import type { PermissionsTreeCategory, PermissionsTreeRoute } from '../../types/routeMaster';
 import { extractErrorMessage } from '../../utils/apiError';
+import DismissibleAlert from '../common/DismissibleAlert';
 
 type LucideIconComponent = ComponentType<{ className?: string }>;
 
@@ -202,13 +203,13 @@ export default function ModulePermissionMatrix({
 
   if (error) {
     return (
-      <div
+      <DismissibleAlert
         role="alert"
         className="mt-3 flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"
       >
         <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
         <span>{error}</span>
-      </div>
+      </DismissibleAlert>
     );
   }
 

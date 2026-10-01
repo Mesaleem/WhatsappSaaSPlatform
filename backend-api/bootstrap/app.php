@@ -48,6 +48,8 @@ return Application::configure(basePath: dirname(__DIR__))
             // Phase 9 Task 6 — a Super Admin acting on a selected client is checked
             // like that client's own users (active, module, subscription for writes).
             'target.account' => \App\Http\Middleware\EnsureTargetAccountMiddleware::class,
+            // Phase 11 Task 1 — industry module routes (see its docblock).
+            'industry.guard' => \App\Http\Middleware\EnsureIndustryAccessMiddleware::class,
             // Phase 6 CRM Hardening Round 2 — the same capability check
             // for the external Developer API, reading the account from
             // the presented API key instead of TenantIsolationMiddleware

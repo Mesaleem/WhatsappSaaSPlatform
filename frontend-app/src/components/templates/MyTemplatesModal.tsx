@@ -3,6 +3,7 @@ import { AlertCircle, Check, Copy, FileText, Loader2, XCircle } from 'lucide-rea
 import templateService from '../../services/templateService';
 import type { MessageTemplateStatus, MyTemplateSummary } from '../../types/templates';
 import { extractErrorMessage } from '../../utils/apiError';
+import DismissibleAlert from '../common/DismissibleAlert';
 
 /**
  * "My Templates" — a plain Client Admin/User's own view of every
@@ -93,10 +94,10 @@ export default function MyTemplatesModal({ onClose }: { onClose: () => void }) {
           )}
 
           {error && (
-            <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+            <DismissibleAlert className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
               <AlertCircle className="h-4 w-4 flex-shrink-0" />
               {error}
-            </div>
+            </DismissibleAlert>
           )}
 
           {templates !== null && templates.length === 0 && (

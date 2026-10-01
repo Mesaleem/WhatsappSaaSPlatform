@@ -30,6 +30,7 @@ import {
   type CrmLeadSource,
   type CrmLeadStatus,
 } from '../../types/crm';
+import DismissibleAlert from '../../components/common/DismissibleAlert';
 
 /**
  * Phase 6 — CRM Task 8. One contact — GET /api/crm/contacts/{id} — and its
@@ -390,9 +391,9 @@ function MergeContactModal({
           </label>
         )}
         {(error ?? candidates.error) && (
-          <p className="mt-3 text-sm text-red-600" role="alert">
+          <DismissibleAlert as="p" className="mt-3 text-sm text-red-600 flex items-start justify-between gap-2" role="alert">
             {error ?? candidates.error}
-          </p>
+          </DismissibleAlert>
         )}
         <div className="mt-5 flex justify-end gap-2">
           <button

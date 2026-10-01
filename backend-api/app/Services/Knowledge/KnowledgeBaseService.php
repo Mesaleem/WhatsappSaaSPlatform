@@ -174,6 +174,6 @@ class KnowledgeBaseService
     public function dispatch(KnowledgeDocument $document): void
     {
         ProcessKnowledgeDocumentJob::dispatch((int) $document->id, (int) $document->version)
-            ->onConnection('database')->onQueue('knowledge')->afterCommit();
+            ->onConnection(ProcessKnowledgeDocumentJob::CONNECTION)->onQueue(ProcessKnowledgeDocumentJob::QUEUE)->afterCommit();
     }
 }

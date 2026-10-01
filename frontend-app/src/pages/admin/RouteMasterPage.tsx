@@ -7,6 +7,7 @@ import { Card, TableCard, inputClass } from '../../components/common/Card';
 import { ClearFiltersButton, Pagination, SearchInput, StatusFilterSelect } from '../../components/common/DataTableControls';
 import { TableSkeletonRows } from '../../components/common/Skeleton';
 import { extractErrorMessage } from '../../utils/apiError';
+import DismissibleAlert from '../../components/common/DismissibleAlert';
 
 /**
  * BUILD: Fully Dynamic Categorized Route Master & Nested Permission
@@ -212,10 +213,10 @@ export default function RouteMasterPage() {
       />
 
       {error && (
-        <div role="alert" className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+        <DismissibleAlert role="alert" className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
           <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
           <span>{error}</span>
-        </div>
+        </DismissibleAlert>
       )}
 
       <>
@@ -439,10 +440,10 @@ function CategoryFormModal({ category, onClose, onSaved }: { category: RouteCate
     <ModalShell title={isEditMode ? 'Edit Category' : 'New Category'} onClose={onClose}>
       <form onSubmit={(event) => void handleSubmit(event)} className="space-y-4">
         {error && (
-          <div role="alert" className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          <DismissibleAlert role="alert" className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
             <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
             <span>{error}</span>
-          </div>
+          </DismissibleAlert>
         )}
         <label className="block text-sm font-medium text-slate-700">
           Category Name
@@ -531,10 +532,10 @@ function RouteFormModal({
     <ModalShell title={isEditMode ? 'Edit Route' : 'New Route'} onClose={onClose}>
       <form onSubmit={(event) => void handleSubmit(event)} className="space-y-4">
         {error && (
-          <div role="alert" className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          <DismissibleAlert role="alert" className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
             <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
             <span>{error}</span>
-          </div>
+          </DismissibleAlert>
         )}
         <label className="block text-sm font-medium text-slate-700">
           Category

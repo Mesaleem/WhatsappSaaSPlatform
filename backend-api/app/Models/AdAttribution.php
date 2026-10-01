@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use App\Traits\LogsActivity;
 use LogicException;
 
 /**
@@ -18,6 +19,15 @@ use LogicException;
  */
 class AdAttribution extends Model
 {
+    // Phase 10 Task 5 — conversion value edits by a signed-in user are audited (actor, time, old/new).
+    // Webhook / journey / console writes have no actor and are not logged (see LogsActivity).
+    use LogsActivity;
+
+    protected string $auditModuleName = 'Ads Attribution';
+
+    /** @var list<string> */
+    protected array $auditIdentity = ['id', 'crm_lead_id'];
+
     public const PROVIDER_META = 'meta';
 
     public const CHANNEL_WHATSAPP_CTWA = 'whatsapp_ctwa';
@@ -80,5 +90,19 @@ class AdAttribution extends Model
     public function crmLead(): BelongsTo
     {
         return $this->belongsTo(CrmLead::class);
+    }
+
+    /** Derived (not stored): converted | ambiguous | attributed | unresolved. */
+    public function diagnosticStatus(): string
+    {
+        if ($this->converted_at !== null) {
+            return 'converted';
+        }
+
+        if (($this->metadata['match']['status'] ?? null) === 'ambiguous') {
+            return 'ambiguous';
+        }
+
+        return $this->ad_campaign_id !== null || $this->crm_lead_id !== null || $this->flow_session_id !== null ? 'attributed' : 'unresolved';
     }
 }

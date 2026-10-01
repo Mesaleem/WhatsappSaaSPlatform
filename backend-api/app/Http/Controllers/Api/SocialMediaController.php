@@ -8,7 +8,6 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
-use Symfony\Component\HttpFoundation\BinaryFileResponse;
 
 /**
  * Social/Ads Launcher Overhaul — Step 2 (Multipart Media Upload API).
@@ -21,7 +20,8 @@ use Symfony\Component\HttpFoundation\BinaryFileResponse;
  * externally-hosted image URL a tenant might have pasted before.
  *
  * DISCLOSED STORAGE/SERVING DECISION: files are written to the `public`
- * disk (storage/app/public/...) regardless of this app's FILESYSTEM_DISK
+ * disk by default (storage/app/public/...; configurable since Phase 12
+ * Task 1 via social.media.disk / SOCIAL_MEDIA_DISK) regardless of this app's FILESYSTEM_DISK
  * default (which is `local`, i.e. NOT web-servable — see config/
  * filesystems.php), but they are served through this controller's own
  * show() action rather than through Laravel's conventional `storage:link`
@@ -80,7 +80,7 @@ class SocialMediaController extends Controller
         $filename = Str::uuid()->toString().'.'.$extension;
         $directory = "social-media/{$account->id}";
 
-        $path = $file->storeAs($directory, $filename, 'public');
+        $path = $file->storeAs($directory, $filename, $this->mediaDiskName());
 
         return response()->json([
             'data' => [
@@ -114,7 +114,7 @@ class SocialMediaController extends Controller
      * serves are creative assets the tenant explicitly uploaded to make
      * public in an ad/post in the first place — not private records.
      */
-    public function show(string $path): BinaryFileResponse
+    public function show(string $path): \Symfony\Component\HttpFoundation\Response
     {
         // Laravel's {path}->where('path', '.*') already URL-decodes the
         // parameter; reject any attempt to escape the intended directory
@@ -122,12 +122,30 @@ class SocialMediaController extends Controller
         // normalizes '..' segments, this is a second, explicit check).
         abort_if(str_contains($path, '..'), 404);
         abort_unless(str_starts_with($path, 'social-media/'), 404);
-        abort_unless(Storage::disk('public')->exists($path), 404);
+        $diskName = $this->mediaDiskName();
+        $disk = Storage::disk($diskName);
+        abort_unless($disk->exists($path), 404);
 
-        // response()->file() (a Symfony BinaryFileResponse) rather than
-        // Storage::response() — guarantees standard HTTP Range-request
-        // support out of the box, so a video creative can be scrubbed/
-        // seeked in AdPreview.tsx instead of only played from byte 0.
-        return response()->file(Storage::disk('public')->path($path));
+        // Local-driver disk (the default `public`): response()->file() (a Symfony BinaryFileResponse) rather
+        // than Storage::response() — guarantees standard HTTP Range-request support out of the box, so a
+        // video creative can be scrubbed/seeked in AdPreview.tsx instead of only played from byte 0.
+        // Unchanged from before the disk became configurable.
+        if (config("filesystems.disks.{$diskName}.driver") === 'local') {
+            return response()->file($disk->path($path));
+        }
+
+        // Phase 12 Task 1 — a shared (non-local) disk has no filesystem path; stream it through the
+        // disk. The URL, the authorization model and the path layout are the same.
+        return $disk->response($path);
+    }
+
+    /**
+     * Phase 12 Task 1 — the disk social uploads live on: `social.media.disk` (env SOCIAL_MEDIA_DISK),
+     * default `public`, so nothing changes until an operator points it at a shared disk (for example an
+     * s3 disk, or a `local`-driver disk on a volume every instance mounts). Never a request value.
+     */
+    private function mediaDiskName(): string
+    {
+        return (string) config('social.media.disk', 'public');
     }
 }

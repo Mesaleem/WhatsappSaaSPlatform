@@ -80,6 +80,9 @@ export const ACCOUNT_MODULES = [
   'message_logs',
   // Group Messaging Step 1 — Custom Contact Groups, a paid addon.
   'contact_groups',
+  // Phase 11 Task 1 — Industry Modules foundation (the account-level switch for ALL industry features;
+  // which industry/module is usable is decided per industry by the backend IndustryAuthorizer).
+  'industry_modules',
 ] as const;
 
 export type AccountModule = (typeof ACCOUNT_MODULES)[number];
@@ -117,6 +120,7 @@ export const ACCOUNT_MODULE_LABELS: Record<AccountModule, string> = {
   social_accounts: 'Social Accounts',
   message_logs: 'Message Logs & Audit Trail',
   contact_groups: 'Custom Contact Groups (Paid Addon)',
+  industry_modules: 'Industry Modules',
 };
 
 /**

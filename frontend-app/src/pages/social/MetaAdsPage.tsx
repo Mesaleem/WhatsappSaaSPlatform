@@ -38,6 +38,7 @@ import AdLocationPicker from '../../components/social/AdLocationPicker';
 import { AD_COPY_TONES, TARGET_GOAL_LABELS } from '../../types/ai';
 import type { AdCopyTone, AdCopyVariant, TargetGoal } from '../../types/ai';
 import type { MediaType } from '../../types/media';
+import DismissibleAlert from '../../components/common/DismissibleAlert';
 
 const STATUS_BADGE: Record<AdCampaign['status'], string> = {
   LAUNCHING: 'bg-sky-50 text-sky-700 ring-sky-600/20',
@@ -442,16 +443,16 @@ function LaunchWizardModal({
 
         <div className="mt-6 space-y-4">
           {stepError && (
-            <div className="flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">
+            <DismissibleAlert className="flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">
               <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0" />
               {stepError}
-            </div>
+            </DismissibleAlert>
           )}
 
           {connectionError && <SocialReconnectNotice info={connectionError} canManageSocialAccounts={canManageSocialAccounts} />}
 
           {submitError && (
-            <div className="flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700" role="alert" data-testid="launch-submit-error">
+            <DismissibleAlert className="flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700" role="alert" data-testid="launch-submit-error">
               <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0" />
               <div>
                 <p>{submitError}</p>
@@ -463,7 +464,7 @@ function LaunchWizardModal({
                   </ul>
                 )}
               </div>
-            </div>
+            </DismissibleAlert>
           )}
 
           {step === 0 && (
@@ -705,10 +706,10 @@ function LaunchWizardModal({
                   </button>
 
                   {aiError && (
-                    <div className="mt-3 flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+                    <DismissibleAlert className="mt-3 flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
                       <AlertCircle className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
                       {aiError}
-                    </div>
+                    </DismissibleAlert>
                   )}
 
                   {aiVariants.length > 0 && (
@@ -965,9 +966,12 @@ interface LaunchNotice {
  * (module, permission, tenant, provider state) and its error is still shown.
  */
 export default function MetaAdsPage() {
-  const { user, isSuperAdmin, hasPermission, hasModule } = useAuth();
+  const { user, isSuperAdmin, hasPermission, hasModule, isReadOnly } = useAuth();
   const { selectedAccountId } = useTenant();
   const superAdmin = isSuperAdmin();
+  // Phase 10 Task 6 — a suspended account / lapsed subscription keeps read access, but the backend
+  // (SocialTargetGate) rejects every Ads write, so the write controls are not offered.
+  const readOnly = typeof isReadOnly === 'function' && isReadOnly();
   // Owner request (2026-09-30): with its own Platform account a Super Admin needs no client here.
   const noTenantSelected = superAdmin && selectedAccountId === null && !user?.platform_crm_account;
   const { guard, openPicker, picker } = useClientGate({ platformFallback: true });
@@ -980,9 +984,9 @@ export default function MetaAdsPage() {
   const canManageSocialAccounts = superAdmin || (hasPermission('manage-social-accounts') && hasModule('social_accounts') && hasSocialCapability);
   // Phase 10 Task 3 — the page is open to social_ads.view (read-only) as well; each action
   // follows its own backend permission (routes/api.php, social/ads group).
-  const canLaunchAds = superAdmin || hasPermission('launch-meta-ads') || hasPermission('social_ads.launch');
-  const canToggleAds = superAdmin || hasPermission('launch-meta-ads');
-  const canEditBudget = superAdmin || hasPermission('launch-meta-ads') || hasPermission('social_ads.edit_budget');
+  const canLaunchAds = !readOnly && (superAdmin || hasPermission('launch-meta-ads') || hasPermission('social_ads.launch'));
+  const canToggleAds = !readOnly && (superAdmin || hasPermission('launch-meta-ads'));
+  const canEditBudget = !readOnly && (superAdmin || hasPermission('launch-meta-ads') || hasPermission('social_ads.edit_budget'));
   const canPostOrganic = superAdmin || hasPermission('launch-meta-ads') || canManageSocialAccounts;
   // Phase 9 Task 4 — insights: view-social-analytics + social_accounts module + social capability
   // (absent capability map = no invented denial, same as ProtectedRoute). The backend re-checks all of it.
@@ -1280,10 +1284,10 @@ export default function MetaAdsPage() {
         ) : (
           <>
             {pageError && (
-              <div className="mb-4 flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+              <DismissibleAlert className="mb-4 flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
                 <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0" />
                 {pageError}
-              </div>
+              </DismissibleAlert>
             )}
 
             {hasCampaigns && (

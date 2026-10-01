@@ -31,7 +31,7 @@ class RecoverKnowledgeDocuments extends Command
             ->orderBy('id')->limit($limit)->get(['id', 'version']);
 
         foreach ($documents as $document) {
-            ProcessKnowledgeDocumentJob::dispatch((int) $document->id, (int) $document->version)->onConnection('database')->onQueue('knowledge');
+            ProcessKnowledgeDocumentJob::dispatch((int) $document->id, (int) $document->version)->onConnection(ProcessKnowledgeDocumentJob::CONNECTION)->onQueue(ProcessKnowledgeDocumentJob::QUEUE);
         }
 
         $this->info("Dispatched {$documents->count()} knowledge document(s).");

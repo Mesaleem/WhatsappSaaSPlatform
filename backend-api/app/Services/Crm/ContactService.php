@@ -186,7 +186,13 @@ class ContactService
             ]);
         }
 
-        return DB::transaction(function () use ($source, $target): Contact {
+        // Phase 11 Task 2 — refuse (422) before anything moves if Education rows could not follow.
+        $education = app(\App\Services\Education\EducationContactReferences::class);
+        $education->assertMergeable($source, $target);
+
+        return DB::transaction(function () use ($source, $target, $education): Contact {
+            $education->repoint($source, $target);
+
             CrmLead::query()
                 ->where('contact_id', $source->getKey())
                 ->chunkById(200, function ($leads) use ($target): void {

@@ -8,10 +8,12 @@ import { SelectClientNotice } from '../../components/common/ActionGate';
 import { useClientGate } from '../../components/common/actionGateHooks';
 import { TableCard, inputClass } from '../../components/common/Card';
 import { useCrmQuery } from '../../components/crm/crmHooks';
+import AdsConversionValues from './AdsConversionValues';
 import adsDashboardService from '../../services/adsDashboardService';
 import { indigo } from '../../theme/signalIndigo';
 import { AD_OBJECTIVE_LABELS, formatAdMoney } from '../../types/ads';
 import type { AdsDashboard, AdsDashboardQuery, AdsMetric, AdsMetricStatus, AdsRange } from '../../types/adsDashboard';
+import DismissibleAlert from '../../components/common/DismissibleAlert';
 
 /**
  * Phase 10 Task 3 — Ads Dashboard. Account-level Ads reporting from stored
@@ -108,12 +110,17 @@ const SPEND_REASON: Record<AdsMetricStatus, string> = {
 };
 
 export default function AdsDashboardPage() {
-  const { user, isSuperAdmin } = useAuth();
+  const { user, isSuperAdmin, hasPermission, hasModule, isReadOnly } = useAuth();
   const { selectedAccountId } = useTenant();
   const superAdmin = isSuperAdmin();
   // Owner request (2026-09-30): with its own Platform account a Super Admin needs no client here.
   const noTenantSelected = superAdmin && selectedAccountId === null && !user?.platform_crm_account;
   const { openPicker, picker } = useClientGate({ platformFallback: true });
+  // Phase 10 Task 5 — recording a conversion value needs CRM access on top of Ads (the backend re-checks both);
+  // the route is also behind the lead_crm module; a Super Admin must have a client selected. An absent capability map is not an invented denial (same as ProtectedRoute).
+  const hasCrmCapability = user?.capabilities ? Boolean(user.capabilities.crm) : true;
+  const readOnly = typeof isReadOnly === 'function' && isReadOnly();
+  const canEditValues = !readOnly && (superAdmin ? selectedAccountId !== null : hasPermission('manage-crm') && hasModule('lead_crm') && hasCrmCapability);
 
   const [range, setRange] = useState<AdsRange>('30d');
   const [customFrom, setCustomFrom] = useState('');
@@ -132,7 +139,7 @@ export default function AdsDashboardPage() {
   );
 
   const key = noTenantSelected || !query ? null : JSON.stringify({ account: selectedAccountId, query });
-  const { data, error, isLoading } = useCrmQuery<AdsDashboard>(key, () => adsDashboardService.dashboard(query as AdsDashboardQuery), 'Failed to load the Ads dashboard.');
+  const { data, error, isLoading, reload } = useCrmQuery<AdsDashboard>(key, () => adsDashboardService.dashboard(query as AdsDashboardQuery), 'Failed to load the Ads dashboard.');
 
   const hasSpend = data !== null && data.spend.daily.some((d) => d.spend !== null);
   const nothingYet = data !== null && data.campaigns_summary.total === 0 && data.attribution.referrals === 0;
@@ -184,10 +191,10 @@ export default function AdsDashboardPage() {
           <>
             {customError && <p className="text-sm text-slate-500">{customError}</p>}
             {error && (
-              <div className="flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">
+              <DismissibleAlert className="flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">
                 <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0" />
                 {error}
-              </div>
+              </DismissibleAlert>
             )}
             {isLoading && (
               <div className="flex items-center gap-2 text-sm text-slate-500" data-testid="ads-dashboard-loading">
@@ -235,10 +242,27 @@ export default function AdsDashboardPage() {
                   <Card label="Cost per lead" testId="card-cpl">
                     <MetricValue metric={a.cost_per_lead} format={money} />
                   </Card>
-                  <Card label="Conversion value" testId="card-value">
-                    <MetricValue metric={a.conversion_value} format={money} />
+                  <Card
+                    label="Cost per conversion"
+                    testId="card-cpc"
+                    sub={a.cost_per_conversion?.status === 'not_applicable' ? 'No conversions in the period' : undefined}
+                  >
+                    <MetricValue metric={a.cost_per_conversion ?? { value: null, status: 'unavailable' }} format={money} />
                   </Card>
-                  <Card label="ROAS" testId="card-roas">
+                  <Card
+                    label="Conversion value"
+                    testId="card-value"
+                    sub={
+                      a.conversion_value_issue === 'mixed_currency'
+                        ? 'Recorded in different currencies — not added together'
+                        : a.valued_conversions !== undefined && a.conversions > 0
+                          ? `${a.valued_conversions} of ${a.conversions} conversion(s) have a value`
+                          : undefined
+                    }
+                  >
+                    <MetricValue metric={a.conversion_value} format={(v) => formatAdMoney(v, a.conversion_value_currency ?? data.currency)} />
+                  </Card>
+                  <Card label="ROAS" testId="card-roas" sub={a.roas_issue === 'currency_mismatch' ? 'Value and spend are in different currencies' : undefined}>
                     <MetricValue metric={a.roas} format={times} />
                   </Card>
                 </section>
@@ -296,7 +320,7 @@ export default function AdsDashboardPage() {
                     <table className="min-w-full divide-y divide-slate-200 text-sm" data-testid="ads-campaign-table">
                       <thead className="bg-slate-50">
                         <tr>
-                          {['Campaign', 'Status', 'Spend', 'Referrals', 'Conversations', 'Leads', 'Journeys', 'Conversions', 'Conv. rate', 'Cost / lead', 'Conv. value', 'ROAS'].map((h) => (
+                          {['Campaign', 'Status', 'Spend', 'Impressions', 'Referrals', 'Conversations', 'Leads', 'Journeys', 'Conversions', 'Conv. rate', 'Cost / lead', 'Cost / conv.', 'Conv. value', 'ROAS'].map((h) => (
                             <th key={h} className="whitespace-nowrap px-4 py-3 text-left font-semibold text-slate-600">
                               {h}
                             </th>
@@ -306,7 +330,7 @@ export default function AdsDashboardPage() {
                       <tbody className="divide-y divide-slate-100">
                         {data.campaigns.length === 0 ? (
                           <tr>
-                            <td colSpan={12} className="px-4 py-8 text-center text-slate-500" data-testid="ads-campaigns-empty">
+                            <td colSpan={14} className="px-4 py-8 text-center text-slate-500" data-testid="ads-campaigns-empty">
                               No campaigns yet.
                             </td>
                           </tr>
@@ -321,6 +345,7 @@ export default function AdsDashboardPage() {
                               <td className="px-4 py-3 text-slate-700">
                                 {c.spend !== null ? money(c.spend) : <span className="text-xs text-slate-400" title={SPEND_REASON[c.spend_status]}>{STATUS_TEXT[c.spend_status === 'available' ? 'unavailable' : c.spend_status]}</span>}
                               </td>
+                              <td className="px-4 py-3 tabular-nums text-slate-700"><Cell value={c.impressions} format={(v) => v.toLocaleString()} reason="No insights stored for this campaign in the period" /></td>
                               <td className="px-4 py-3 tabular-nums text-slate-700">{c.referrals}</td>
                               <td className="px-4 py-3 tabular-nums text-slate-700">{c.conversations}</td>
                               <td className="px-4 py-3 tabular-nums text-slate-700">{c.leads}</td>
@@ -328,8 +353,21 @@ export default function AdsDashboardPage() {
                               <td className="px-4 py-3 tabular-nums text-slate-700">{c.conversions}</td>
                               <td className="px-4 py-3 text-slate-700"><Cell value={c.conversion_rate} format={percent} reason="No referrals in the period" /></td>
                               <td className="px-4 py-3 text-slate-700"><Cell value={c.cost_per_lead} format={money} reason="Needs stored spend and at least one lead" /></td>
-                              <td className="px-4 py-3 text-slate-700"><Cell value={c.conversion_value} format={money} reason="No conversion value recorded" /></td>
-                              <td className="px-4 py-3 text-slate-700"><Cell value={c.roas} format={times} reason="Needs stored spend and a recorded conversion value" /></td>
+                              <td className="px-4 py-3 text-slate-700"><Cell value={c.cost_per_conversion ?? null} format={money} reason="Needs stored spend and at least one conversion" /></td>
+                              <td className="px-4 py-3 text-slate-700">
+                                <Cell
+                                  value={c.conversion_value}
+                                  format={(v) => formatAdMoney(v, c.conversion_value_currency ?? data.currency)}
+                                  reason={c.conversion_value_issue === 'mixed_currency' ? 'Recorded in different currencies — not added together' : 'No conversion value recorded'}
+                                />
+                              </td>
+                              <td className="px-4 py-3 text-slate-700">
+                                <Cell
+                                  value={c.roas}
+                                  format={times}
+                                  reason={c.conversion_value_issue === 'currency_mismatch' ? 'Value and spend are in different currencies' : 'Needs stored spend and a recorded conversion value'}
+                                />
+                              </td>
                             </tr>
                           ))
                         )}
@@ -339,8 +377,44 @@ export default function AdsDashboardPage() {
                   {data.campaigns_truncated && <p className="mt-2 text-xs text-slate-500">Showing the {data.campaigns.length} most recent campaigns; totals above include all of them.</p>}
                 </section>
 
+                <section>
+                  <h2 className="mb-2 text-base font-semibold text-slate-900">Daily conversions</h2>
+                  <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm" data-testid="ads-conversion-daily">
+                    {(data.conversion_daily ?? []).some((d) => d.conversions > 0) ? (
+                      <table className="min-w-full text-sm">
+                        <thead>
+                          <tr className="text-left text-xs uppercase tracking-wide text-slate-500">
+                            <th className="py-1 pr-4">Day</th>
+                            <th className="py-1 pr-4">Conversions</th>
+                            <th className="py-1">Value</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {(data.conversion_daily ?? [])
+                            .filter((d) => d.conversions > 0)
+                            .map((d) => (
+                              <tr key={d.date} data-testid={`conversion-day-${d.date}`}>
+                                <td className="py-1 pr-4 text-slate-700">{d.date}</td>
+                                <td className="py-1 pr-4 tabular-nums text-slate-700">{d.conversions}</td>
+                                <td className="py-1 tabular-nums text-slate-700">
+                                  <Cell value={d.conversion_value} format={(v) => formatAdMoney(v, a.conversion_value_currency ?? data.currency)} reason="No conversion value recorded for this day" />
+                                </td>
+                              </tr>
+                            ))}
+                        </tbody>
+                      </table>
+                    ) : (
+                      <p className="py-4 text-center text-sm text-slate-500" data-testid="ads-conversion-daily-empty">
+                        No conversions recorded in this period.
+                      </p>
+                    )}
+                  </div>
+                </section>
+
+                {canEditValues && <AdsConversionValues key={selectedAccountId ?? 'own'} accountKey={selectedAccountId} canEdit defaultCurrency={data.currency ?? null} onChanged={reload} />}
+
                 <ul className="list-disc space-y-1 pl-5 text-xs text-slate-500" data-testid="ads-notes">
-                  {['campaign_status', 'spend', 'conversion', 'conversion_value', 'cost_per_lead'].map((k) => (data.notes[k] ? <li key={k}>{data.notes[k]}</li> : null))}
+                  {['campaign_status', 'spend', 'conversion', 'conversion_value', 'conversion_daily', 'cost_per_lead'].map((k) => (data.notes[k] ? <li key={k}>{data.notes[k]}</li> : null))}
                 </ul>
               </>
             )}

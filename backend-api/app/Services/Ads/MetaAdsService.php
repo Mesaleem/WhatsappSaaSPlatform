@@ -608,7 +608,10 @@ class MetaAdsService
     }
 
     /**
-     * @return array{spend: float, impressions: int, leads: int, cpl: float|null}
+     * `leads` = Meta Lead Ads form actions; `conversations` = Meta messaging conversations
+     * started (the result of Click-to-WhatsApp / Messages campaigns) — Phase 10 Task 6.
+     *
+     * @return array{spend: float, impressions: int, leads: int, conversations: int, cpl: float|null}
      */
     public function fetchInsights(AdCampaign $campaign): array
     {
@@ -652,14 +655,22 @@ class MetaAdsService
             // No spend yet today (e.g. a campaign that just launched) —
             // Meta's Insights API returns an empty data set rather than a
             // zeroed row in this case, not an error.
-            return ['spend' => 0.0, 'impressions' => 0, 'leads' => 0, 'cpl' => null];
+            return ['spend' => 0.0, 'impressions' => 0, 'leads' => 0, 'conversations' => 0, 'cpl' => null];
         }
 
         $spend = (float) ($row['spend'] ?? 0);
         $impressions = (int) ($row['impressions'] ?? 0);
 
         $leads = 0;
+        $conversations = 0;
         foreach ($row['actions'] ?? [] as $action) {
+            // [Hypothesis]: 'onsite_conversion.messaging_conversation_started_7d' is Meta's documented action_type
+            // for a messaging conversation started from an ad; matched by substring so a renamed attribution
+            // window suffix is still counted.
+            if (str_contains((string) ($action['action_type'] ?? ''), 'messaging_conversation_started')) {
+                $conversations += (int) ($action['value'] ?? 0);
+            }
+
             // [Hypothesis]: 'leadgen.other' / 'onsite_conversion.lead_grouped'
             // are Meta's documented action_type values for Lead Ads form
             // submissions; matched by substring so either naming variant
@@ -672,7 +683,7 @@ class MetaAdsService
 
         $cpl = $leads > 0 ? round($spend / $leads, 2) : null;
 
-        return ['spend' => $spend, 'impressions' => $impressions, 'leads' => $leads, 'cpl' => $cpl];
+        return ['spend' => $spend, 'impressions' => $impressions, 'leads' => $leads, 'conversations' => $conversations, 'cpl' => $cpl];
     }
 
     /**

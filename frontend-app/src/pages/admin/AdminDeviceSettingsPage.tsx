@@ -6,6 +6,7 @@ import { Card, TableCard } from '../../components/common/Card';
 import { TableSkeletonRows } from '../../components/common/Skeleton';
 import { extractErrorMessage } from '../../utils/apiError';
 import type { AdminWhatsAppDevice, WhatsAppStatus } from '../../types/whatsapp';
+import DismissibleAlert from '../../components/common/DismissibleAlert';
 
 const STATUS_BADGE: Record<WhatsAppStatus, string> = {
   connected: 'bg-emerald-50 text-emerald-700 ring-emerald-600/20',
@@ -154,7 +155,7 @@ function SuperAdminTestDeviceCard() {
       </p>
 
       {loadError && !isLoading && (
-        <div className="mt-3 flex items-start justify-between gap-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+        <DismissibleAlert className="mt-3 flex items-start justify-between gap-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
           <span className="flex items-start gap-1.5">
             <AlertCircle className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
             {loadError}
@@ -162,7 +163,7 @@ function SuperAdminTestDeviceCard() {
           <button type="button" onClick={() => void load()} className="flex-shrink-0 font-semibold underline hover:no-underline">
             Retry
           </button>
-        </div>
+        </DismissibleAlert>
       )}
 
       {isModalOpen && accountId !== null && (
@@ -250,14 +251,14 @@ export default function AdminDeviceSettingsPage() {
         </div>
 
         {error && (
-          <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          <DismissibleAlert className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
             {error}
-          </div>
+          </DismissibleAlert>
         )}
         {actionError && (
-          <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          <DismissibleAlert className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
             {actionError}
-          </div>
+          </DismissibleAlert>
         )}
 
         <div className="mt-6">

@@ -10,6 +10,7 @@ import { ClearFiltersButton, Pagination, SearchInput } from '../../components/co
 import { extractErrorMessage } from '../../utils/apiError';
 import { indigo } from '../../theme/signalIndigo';
 import type { Lead, LeadDetail, LeadPlatform } from '../../types/leads';
+import DismissibleAlert from '../../components/common/DismissibleAlert';
 
 const PLATFORM_ICON: Record<LeadPlatform, typeof MessageSquare> = {
   facebook: MessageSquare,
@@ -85,10 +86,10 @@ function LeadDetailModal({ leadId, onClose }: { leadId: number; onClose: () => v
               <Loader2 className="h-5 w-5 animate-spin" style={{ color: indigo.muted }} />
             </div>
           ) : error ? (
-            <div className="flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+            <DismissibleAlert className="flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
               <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0" />
               {error}
-            </div>
+            </DismissibleAlert>
           ) : lead ? (
             <div className="space-y-3 text-sm">
               <div>
@@ -198,10 +199,10 @@ export default function LeadsPage() {
             </div>
 
             {pageError && (
-              <div className="mb-4 flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+              <DismissibleAlert className="mb-4 flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
                 <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0" />
                 {pageError}
-              </div>
+              </DismissibleAlert>
             )}
 
             <TableCard>

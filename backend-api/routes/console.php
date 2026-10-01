@@ -1,8 +1,31 @@
 <?php
 
+use App\Jobs\ProcessKnowledgeDocumentJob;
+use App\Jobs\PublishScheduledPostJob;
+use App\Jobs\ReconcilePlanAccountsJob;
 use Illuminate\Foundation\Inspiring;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Schedule;
+
+/*
+ * Phase 12 Task 1 — multi-instance scheduler rules.
+ *
+ * `schedule:run` may run on SEVERAL app instances at once (each has the crontab line). Two kinds of entry:
+ *
+ *  1. Singleton operations — a dispatcher, a sweeper, a settler, a provider poller. Running one on two
+ *     instances in the same minute is wasted work at best and a double provider call / double alert at
+ *     worst. These carry ->onOneServer(): one instance wins an atomic cache lock per tick. That needs a
+ *     cache store that is SHARED by the instances and supports locks (`database`, `redis`, …) — NOT
+ *     `array`/`file`; `php artisan ops:check-topology` reports it. ->withoutOverlapping() stays: it guards a
+ *     slow run against the NEXT tick, onOneServer guards against another INSTANCE in the same tick.
+ *
+ *  2. Queue drains (`queue:work … --stop-when-empty --max-time=55`) — deliberately NOT onOneServer. A
+ *     worker takes jobs through an atomic reservation, so any number of workers is safe by design and more
+ *     than one is welcome; withoutOverlapping() merely avoids stacking a new minute-worker on a still-
+ *     running one. Each names the connection whose retry_after outlives the longest job on that queue
+ *     (config/queue.php `database_long`); see tests/Feature/QueueRetrySafetyTest and
+ *     tests/Feature/SchedulerTopologyTest, which fail when either rule is broken by a new entry.
+ */
 
 Artisan::command('inspire', function () {
     $this->comment(Inspiring::quote());
@@ -17,9 +40,12 @@ Artisan::command('inspire', function () {
 // framework's own replacement location for schedule registration.
 // withoutOverlapping() guards against a slow Meta API response on one
 // run still executing when the next 15-minute tick fires.
+// Phase 10 Task 6 — the overlap mutex expires after 30 minutes (two ticks). The default is 24 HOURS: a
+// run killed mid-way (deploy, OOM, container restart) would otherwise leave the guard switched off for a day.
 Schedule::command('ads:check-performance-rules')
     ->everyFifteenMinutes()
-    ->withoutOverlapping();
+    ->onOneServer()
+    ->withoutOverlapping(30);
 
 // Anti-Spam Bulk Dispatch -- SendWhatsAppTemplateJob is enqueued onto
 // the 'database' connection's 'whatsapp-bulk' queue (never the app's
@@ -49,6 +75,7 @@ Schedule::command('queue:work database --queue=whatsapp-bulk --stop-when-empty -
 // step twice.
 Schedule::command('journeys:resume-due')
     ->everyMinute()
+    ->onOneServer()
     ->withoutOverlapping();
 
 Schedule::command('queue:work database --queue=journeys --stop-when-empty --max-time=55')
@@ -62,6 +89,7 @@ Schedule::command('queue:work database --queue=journeys --stop-when-empty --max-
 // so an overlapping or repeated run is harmless.
 Schedule::command('group-dispatch:recover-stale')
     ->everyFiveMinutes()
+    ->onOneServer()
     ->withoutOverlapping();
 
 // Phase 8 Task 3 — releases credit reservations whose caller-set expires_at
@@ -72,6 +100,7 @@ Schedule::command('group-dispatch:recover-stale')
 // `schedule:run` cron assumption as every entry above.
 Schedule::command('credits:release-expired-reservations')
     ->everyFiveMinutes()
+    ->onOneServer()
     ->withoutOverlapping();
 
 // Phase 8 Task 5 — completes AI usage charges whose ledger write failed
@@ -80,6 +109,7 @@ Schedule::command('credits:release-expired-reservations')
 // status updates); same `schedule:run` cron assumption as above.
 Schedule::command('ai:settle-operations')
     ->everyFiveMinutes()
+    ->onOneServer()
     ->withoutOverlapping();
 
 // Phase 8 Task 9 — knowledge-base document processing. Jobs are queued on
@@ -87,12 +117,13 @@ Schedule::command('ai:settle-operations')
 // (same external `schedule:run` cron assumption as every entry above), and
 // knowledge:recover-documents re-dispatches a lost job or a document whose
 // worker died. Every job claims its document row atomically.
-Schedule::command('queue:work database --queue=knowledge --stop-when-empty --max-time=55')
+Schedule::command('queue:work '.ProcessKnowledgeDocumentJob::CONNECTION.' --queue=knowledge --stop-when-empty --max-time=55')
     ->everyMinute()
     ->withoutOverlapping();
 
 Schedule::command('knowledge:recover-documents')
     ->everyFiveMinutes()
+    ->onOneServer()
     ->withoutOverlapping();
 
 // Phase 9 Task 2 — social connection health. social:check-connections
@@ -106,6 +137,7 @@ Schedule::command('knowledge:recover-documents')
 // within the interval.
 Schedule::command('social:check-connections')
     ->everyFifteenMinutes()
+    ->onOneServer()
     ->withoutOverlapping();
 
 // Phase 9 Task 3 — scheduled organic publishing. social:publish-due claims
@@ -114,6 +146,7 @@ Schedule::command('social:check-connections')
 // database:social, drained by the worker below.
 Schedule::command('social:publish-due')
     ->everyMinute()
+    ->onOneServer()
     ->withoutOverlapping();
 
 // Phase 9 Task 4 — organic post insights. social:refresh-insights queues
@@ -121,8 +154,22 @@ Schedule::command('social:publish-due')
 // snapshot is missing or due; pages only read the stored snapshot.
 Schedule::command('social:refresh-insights')
     ->everyThirtyMinutes()
+    ->onOneServer()
     ->withoutOverlapping();
 
-Schedule::command('queue:work database --queue=social --stop-when-empty --max-time=55')
+Schedule::command('queue:work '.PublishScheduledPostJob::CONNECTION.' --queue=social --stop-when-empty --max-time=55')
     ->everyMinute()
     ->withoutOverlapping();
+
+// F-5.1 — plan-bundle reconciliation. PlanManagementService::modify()
+// queues ReconcilePlanAccountsJob on the named queue `plan-reconciliation`
+// (default connection) whenever a plan's capability bundle changes; this
+// worker drains it, same external `schedule:run` cron assumption as every
+// entry above. No connection argument on purpose: it follows
+// QUEUE_CONNECTION, like the dispatch does. Skipped under the `sync`
+// driver (local development / tests), where the job already ran inline
+// and there is nothing to drain.
+Schedule::command('queue:work '.ReconcilePlanAccountsJob::resolveConnection().' --queue=plan-reconciliation --stop-when-empty --max-time=55')
+    ->everyMinute()
+    ->withoutOverlapping()
+    ->when(fn (): bool => config('queue.default') !== 'sync');

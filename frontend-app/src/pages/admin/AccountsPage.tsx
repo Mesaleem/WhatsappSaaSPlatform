@@ -13,6 +13,7 @@ import { ClearFiltersButton, Pagination, SearchInput, StatusFilterSelect } from 
 import { extractErrorMessage } from '../../utils/apiError';
 import { TableSkeletonRows } from '../../components/common/Skeleton';
 import ConfirmModal from '../../components/common/ConfirmModal';
+import DismissibleAlert from '../../components/common/DismissibleAlert';
 
 const ENGINE_BADGE: Record<EngineType, string> = {
   qr: 'bg-blue-50 text-blue-700 ring-blue-600/20',
@@ -277,9 +278,9 @@ export default function AccountsPage() {
       </div>
 
       {error && (
-        <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+        <DismissibleAlert className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
           {error}
-        </div>
+        </DismissibleAlert>
       )}
 
       <div className="mt-6">

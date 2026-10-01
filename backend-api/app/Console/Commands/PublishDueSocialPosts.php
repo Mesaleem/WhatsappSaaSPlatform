@@ -33,7 +33,7 @@ class PublishDueSocialPosts extends Command
 
         foreach ($service->claimDue($limit) as $claim) {
             try {
-                PublishScheduledPostJob::dispatch($claim['id'], $claim['token'])->onConnection('database')->onQueue('social');
+                PublishScheduledPostJob::dispatch($claim['id'], $claim['token'])->onConnection(PublishScheduledPostJob::CONNECTION)->onQueue('social');
                 $queued++;
             } catch (Throwable $e) {
                 Log::warning("social:publish-due could not queue OrganicPost #{$claim['id']}.", ['exception' => class_basename($e)]);

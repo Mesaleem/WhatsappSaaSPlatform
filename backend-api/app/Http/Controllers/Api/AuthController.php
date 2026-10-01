@@ -254,6 +254,11 @@ class AuthController extends Controller
             // alongside effective_modules/allowed_modules above; neither
             // is replaced in Phase 1.
             'capabilities' => $this->accessControl->capabilityMap($user),
+            // Phase 11 Task 1 — "industry.module" keys this user may use right now (navigation gating).
+            // Empty for a Super Admin (no own account) and for any account with no usable industry module.
+            'industry_modules' => $user->account && $user->account->hasModuleEnabled(config('industries.module'))
+                ? app(\App\Services\Industry\IndustryModuleResolver::class)->usableKeys($user->account, $user)
+                : [],
             'created_at' => $user->created_at,
         ];
     }

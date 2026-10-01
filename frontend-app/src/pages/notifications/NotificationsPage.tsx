@@ -22,6 +22,7 @@ import { ClearFiltersButton, Pagination, SearchInput, StatusFilterSelect } from 
 import { TableSkeletonRows } from '../../components/common/Skeleton';
 import RichTextEditor from '../../components/common/RichTextEditor';
 import ConfirmModal from '../../components/common/ConfirmModal';
+import DismissibleAlert from '../../components/common/DismissibleAlert';
 
 type Tab = 'compose' | 'templates' | 'history' | 'mail-logs';
 
@@ -326,7 +327,7 @@ function ComposeTab({
         </div>
 
         {sendError && (
-          <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{sendError}</div>
+          <DismissibleAlert className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{sendError}</DismissibleAlert>
         )}
         {sendResult && (
           <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
@@ -432,7 +433,7 @@ function TemplatesTab() {
       </div>
 
       {error && (
-        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>
+        <DismissibleAlert className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</DismissibleAlert>
       )}
 
       <TableCard>
@@ -584,7 +585,7 @@ function TemplateModal({
             </div>
 
             {error && (
-              <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>
+              <DismissibleAlert className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</DismissibleAlert>
             )}
 
             <div className="flex justify-end gap-2 pt-2">
@@ -713,7 +714,7 @@ function HistoryTab() {
       </div>
 
       {error && (
-        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>
+        <DismissibleAlert className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</DismissibleAlert>
       )}
       <TableCard>
         <table className="w-full min-w-[880px] divide-y divide-slate-200 text-sm">
@@ -865,10 +866,10 @@ function MailLogsTab() {
       </div>
 
       {error && (
-        <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+        <DismissibleAlert className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
           <XCircle className="h-4 w-4 flex-shrink-0" />
           {error}
-        </div>
+        </DismissibleAlert>
       )}
 
       <TableCard>

@@ -496,6 +496,26 @@ class SocialAnalyticsDashboardTest extends TestCase
         $this->dashboard($admin, '?account_id=999999')->assertNotFound();
     }
 
+    public function test_super_admin_in_global_view_uses_the_platform_account_instead_of_a_422(): void
+    {
+        $admin = $this->superAdmin();
+        $client = $this->tenant();
+        $this->published($client, 'facebook', '2026-09-20 10:00:00', ['reach' => 11]);
+
+        // Same rule as every other Social route: Global View = the Platform (Super Admin) account, never a client.
+        $platform = app(\App\Services\Crm\PlatformCrmAccount::class)->ensure()['account'];
+        $this->dashboard($admin)->assertOk()->assertJsonPath('data.summary.metrics.reach.status', 'no_data');
+        $this->actingAs($admin)->getJson('/api/social/analytics/top-posts')->assertOk()->assertJsonPath('data.posts', []);
+        $this->actingAs($admin)->getJson('/api/social/organic-posts/insights/summary')->assertOk();
+
+        // The client's data is not leaked into the platform view, and an explicit selection still wins.
+        $this->dashboard($admin, "?account_id={$client->id}")->assertOk()->assertJsonPath('data.summary.metrics.reach.value', 11);
+
+        // A suspended Platform account is refused like any suspended target.
+        $platform->forceFill(['status' => 'suspended'])->save();
+        $this->dashboard($admin)->assertForbidden()->assertJsonPath('error_code', 'CLIENT_ACCOUNT_SUSPENDED');
+    }
+
     public function test_the_analytics_code_makes_no_provider_calls(): void
     {
         foreach (['Services/Social/Insights/SocialAnalyticsService.php', 'Http/Controllers/Api/SocialAnalyticsController.php'] as $relative) {

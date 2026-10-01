@@ -13,6 +13,7 @@ import {
   type MatrixPermission,
   type TeamMemberPermissions,
 } from '../../types/permissions';
+import DismissibleAlert from '../../components/common/DismissibleAlert';
 
 const inputClass =
   'mt-1.5 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100';
@@ -236,10 +237,10 @@ export default function TeamPermissionsPage() {
         </div>
 
         {listError && (
-          <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          <DismissibleAlert className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
             <AlertCircle className="h-4 w-4 flex-shrink-0" />
             {listError}
-          </div>
+          </DismissibleAlert>
         )}
 
         <div>
@@ -283,10 +284,10 @@ export default function TeamPermissionsPage() {
             <Loader2 className="h-5 w-5 animate-spin text-slate-400" />
           </div>
         ) : permError ? (
-          <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          <DismissibleAlert className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
             <AlertCircle className="h-4 w-4 flex-shrink-0" />
             {permError}
-          </div>
+          </DismissibleAlert>
         ) : permissions ? (
           <>
             {whatsappModuleAvailable && (

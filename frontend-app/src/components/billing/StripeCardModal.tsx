@@ -7,6 +7,7 @@ import {
   useStripe,
 } from '@stripe/react-stripe-js';
 import { Loader2, ShieldCheck, XCircle } from 'lucide-react';
+import DismissibleAlert from '../common/DismissibleAlert';
 
 interface StripeCardModalProps {
   /** Publishable key (CreateOrderResponse.key_id) — safe for the browser. */
@@ -91,10 +92,10 @@ function CardForm({ planLabel, amountDisplay, onSuccess, onClose, clientSecret }
         </div>
 
         {error && (
-          <div className="mt-3 flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+          <DismissibleAlert className="mt-3 flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
             <XCircle className="mt-0.5 h-4 w-4 flex-shrink-0" />
             {error}
-          </div>
+          </DismissibleAlert>
         )}
 
         <div className="mt-5 flex items-center justify-end gap-3">

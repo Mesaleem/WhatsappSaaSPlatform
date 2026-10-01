@@ -10,6 +10,7 @@ import { TableCard, inputClass } from '../../components/common/Card';
 import { extractErrorMessage } from '../../utils/apiError';
 import { indigo } from '../../theme/signalIndigo';
 import type { SocialReportSummary } from '../../types/reports';
+import DismissibleAlert from '../../components/common/DismissibleAlert';
 
 function currentMonthValue(): string {
   const now = new Date();
@@ -138,16 +139,16 @@ export default function SocialReportsPage() {
         ) : (
           <>
             {downloadError && (
-              <div className="mb-4 flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+              <DismissibleAlert className="mb-4 flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
                 <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0" />
                 {downloadError}
-              </div>
+              </DismissibleAlert>
             )}
             {pageError && (
-              <div className="mb-4 flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+              <DismissibleAlert className="mb-4 flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
                 <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0" />
                 {pageError}
-              </div>
+              </DismissibleAlert>
             )}
 
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">

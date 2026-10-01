@@ -39,6 +39,20 @@ export interface AdsCampaignReportRow {
   conversion_value: number | null;
   roas: number | null;
   last_checked_at: string | null;
+  /** Phase 10 Task 5 — facts for comparing campaigns (no ranking). All optional: an older backend omits them. */
+  currency?: string | null;
+  cost_per_conversion?: number | null;
+  valued_conversions?: number;
+  conversion_value_currency?: string | null;
+  conversion_value_issue?: 'mixed_currency' | 'currency_mismatch' | null;
+}
+
+/** Daily conversions, counted on the day the conversion was recorded. conversion_value null = no valued conversion that day (0 is a value). */
+export interface AdsConversionDay {
+  date: string;
+  conversions: number;
+  valued_conversions: number;
+  conversion_value: number | null;
 }
 
 export interface AdsDashboard {
@@ -72,7 +86,14 @@ export interface AdsDashboard {
     unlinked_referrals: number;
     cost_per_lead: AdsMetric;
     roas: AdsMetric;
+    /** Phase 10 Task 5 (optional for older backends). */
+    valued_conversions?: number;
+    conversion_value_currency?: string | null;
+    conversion_value_issue?: 'mixed_currency' | null;
+    cost_per_conversion?: AdsMetric;
+    roas_issue?: 'currency_mismatch' | null;
   };
+  conversion_daily?: AdsConversionDay[];
   funnel: AdsFunnelStage[];
   campaigns: AdsCampaignReportRow[];
   campaigns_truncated: boolean;

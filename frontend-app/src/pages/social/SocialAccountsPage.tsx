@@ -19,6 +19,7 @@ import {
   type SocialAssetType,
   type SocialConnectionStatus,
 } from '../../types/social';
+import DismissibleAlert from '../../components/common/DismissibleAlert';
 
 const ASSET_ICON: Record<SocialAssetType, typeof Globe> = {
   facebook_page: Globe,
@@ -410,10 +411,10 @@ export default function SocialAccountsPage() {
         ) : (
           <>
             {pageError && (
-              <div className="mb-4 flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+              <DismissibleAlert className="mb-4 flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
                 <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0" />
                 {pageError}
-              </div>
+              </DismissibleAlert>
             )}
 
             {isConnecting && (
@@ -424,7 +425,7 @@ export default function SocialAccountsPage() {
             )}
 
             {phase === 'failed' && phaseMessage && (
-              <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700" data-testid="social-connect-failed">
+              <DismissibleAlert className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700" data-testid="social-connect-failed">
                 <span className="flex items-start gap-2">
                   <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0" />
                   {phaseMessage}
@@ -432,7 +433,7 @@ export default function SocialAccountsPage() {
                 <button type="button" onClick={startConnect} className="rounded-lg border border-red-300 bg-white px-3 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-100">
                   Try again
                 </button>
-              </div>
+              </DismissibleAlert>
             )}
 
             {phase === 'cancelled' && phaseMessage && (

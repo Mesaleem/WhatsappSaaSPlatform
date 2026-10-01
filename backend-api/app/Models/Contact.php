@@ -149,6 +149,7 @@ class Contact extends Model
         return array_filter([
             'crm_leads' => $this->crmLeads()->count(),
             'group_memberships' => $this->groupMemberships()->count(),
-        ]);
+            // Phase 11 Task 2 — a student / parent / guardian profile hangs off this contact.
+        ] + app(\App\Services\Education\EducationContactReferences::class)->blocking($this));
     }
 }

@@ -10,6 +10,7 @@ import SocialReconnectNotice from './SocialReconnectNotice';
 import { formatScheduledAt, LINKEDIN_UNAVAILABLE_NOTE, ORGANIC_PLATFORM_LABELS } from '../../types/organic';
 import type { OrganicPlatform, OrganicPost } from '../../types/organic';
 import type { MediaType } from '../../types/media';
+import DismissibleAlert from '../common/DismissibleAlert';
 
 /** P5-9 — an Instagram video is published in the background once Meta finishes processing it. */
 const PENDING_PUBLISH_NOTE = 'Processing — Instagram is still preparing the video; it will be published automatically.';
@@ -200,10 +201,10 @@ export default function OrganicPostModal({
           {connectionError && <SocialReconnectNotice info={connectionError} canManageSocialAccounts={canManageSocialAccounts} />}
 
           {formError && (
-            <div className="flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+            <DismissibleAlert className="flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
               <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0" />
               {formError}
-            </div>
+            </DismissibleAlert>
           )}
 
           {results ? (

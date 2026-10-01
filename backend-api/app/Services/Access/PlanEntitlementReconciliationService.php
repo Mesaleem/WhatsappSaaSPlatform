@@ -6,6 +6,7 @@ use App\Models\Account;
 use App\Models\AccountEntitlement;
 use App\Models\Invoice;
 use App\Models\Plan;
+use App\Support\EntitlementAuditContext;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 
@@ -223,7 +224,11 @@ class PlanEntitlementReconciliationService
             return $result;
         }
 
-        DB::transaction(function () use ($account, $toGrant, $toRestore, $toRevoke, $actorUserId) {
+        // F-5.2 — every mutation below goes through the model, so each writes
+        // its own audit row (AccountEntitlement::recordActivity). This only
+        // labels WHO is acting when no outer caller already did (payment
+        // fulfilment and the queue job/commands set their own, which win).
+        EntitlementAuditContext::runDefault('plan_reconciliation', fn () => DB::transaction(function () use ($account, $toGrant, $toRestore, $toRevoke, $actorUserId) {
             foreach ($toGrant as $capabilityId) {
                 // firstOrCreate on the unique (account_id, capability_id)
                 // index — the same idiom every other grant path uses.
@@ -261,7 +266,7 @@ class PlanEntitlementReconciliationService
                     'revoked_reason' => AccountEntitlement::REVOKED_PLAN_DOWNGRADE,
                 ])->save();
             }
-        });
+        }), $actorUserId);
 
         Cache::forget(Account::cacheKey($account->id));
 

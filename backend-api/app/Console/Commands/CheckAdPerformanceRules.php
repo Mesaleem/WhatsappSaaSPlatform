@@ -2,6 +2,7 @@
 
 namespace App\Console\Commands;
 
+use App\Models\AdAttribution;
 use App\Models\AdCampaign;
 use App\Models\AdCampaignDailyMetric;
 use App\Services\Ads\MetaAdsService;
@@ -95,8 +96,23 @@ class CheckAdPerformanceRules extends Command
         $dailyBudget = (float) $campaign->daily_budget;
         $threshold = $campaign->cpl_threshold !== null ? (float) $campaign->cpl_threshold : null;
 
-        $zeroConversionOverBudget = $insights['spend'] > $dailyBudget && $insights['leads'] === 0;
-        $cplExceeded = $threshold !== null && $insights['cpl'] !== null && $insights['cpl'] > $threshold;
+        // Phase 10 Task 6 — what counts as a "conversion" depends on the campaign's goal. A Click-to-WhatsApp /
+        // Messages campaign produces messaging conversations, never Meta Lead Ads form leads, so judging it by
+        // `lead` actions alone paused healthy CTWA campaigns as "zero conversions". For those objectives the
+        // result is Meta's messaging conversations (same window as spend) and — for the zero-conversion rule
+        // only, as a conservative guard — CTWA referrals stored for THIS campaign in the last 24 h. Every other
+        // objective keeps the original Lead Ads rule unchanged.
+        $messaging = in_array($campaign->objective, ['CLICK_TO_WHATSAPP', 'MESSAGES'], true);
+        $results = $messaging ? max($insights['leads'], $insights['conversations']) : $insights['leads'];
+        $cpl = $messaging ? ($results > 0 ? round($insights['spend'] / $results, 2) : null) : $insights['cpl'];
+        $insights['cpl'] = $cpl;
+        $recentReferrals = $messaging && $results === 0
+            ? AdAttribution::query()->forAccount((int) $campaign->account_id)->where('ad_campaign_id', $campaign->id)
+                ->where('referral_received_at', '>=', now()->subDay())->exists()
+            : false;
+
+        $zeroConversionOverBudget = $insights['spend'] > $dailyBudget && $results === 0 && ! $recentReferrals;
+        $cplExceeded = $threshold !== null && $cpl !== null && $cpl > $threshold;
 
         if (! $zeroConversionOverBudget && ! $cplExceeded) {
             return;
@@ -104,7 +120,7 @@ class CheckAdPerformanceRules extends Command
 
         $reason = $zeroConversionOverBudget
             ? sprintf('Zero conversions after $%.2f spend (daily budget $%.2f).', $insights['spend'], $dailyBudget)
-            : sprintf('CPL $%.2f exceeded the $%.2f threshold.', (float) $insights['cpl'], $threshold);
+            : sprintf('CPL $%.2f exceeded the $%.2f threshold.', (float) $cpl, $threshold);
 
         // Pause on Meta FIRST — only record the local PAUSED status once
         // Meta has actually confirmed it. If this throws, the campaign
@@ -126,7 +142,7 @@ class CheckAdPerformanceRules extends Command
     }
 
     /**
-     * @param array{spend: float, impressions: int, leads: int, cpl: float|null} $insights
+     * @param array{spend: float, impressions: int, leads: int, conversations: int, cpl: float|null} $insights
      */
     private function sendAlert(AdCampaign $campaign, array $insights, bool $zeroConversionOverBudget, ?float $threshold): void
     {

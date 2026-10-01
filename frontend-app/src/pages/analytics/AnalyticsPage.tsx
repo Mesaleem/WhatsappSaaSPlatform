@@ -27,6 +27,7 @@ import type { ApiErrorResponse } from '../../types/auth';
 import type { AnalyticsChartsResponse, AnalyticsSummary, ChartRange, DateRange } from '../../types/analytics';
 import type { EngineType } from '../../types/subscription';
 import type { MessageDispatchLog, MessageDispatchLogFilters, MessageDispatchSource, MessageDispatchStatus } from '../../types/messageLog';
+import DismissibleAlert from '../../components/common/DismissibleAlert';
 
 // Analytics/Dashboard Log Source Discrepancy Fix: same MessageDispatchStatus-
 // keyed status vocabulary MessageLogsPage.tsx and DashboardPage.tsx's
@@ -225,10 +226,10 @@ function SummarySection({ resolvedRange }: { resolvedRange: DateRange }) {
 
   if (error) {
     return (
-      <div className="flex items-center gap-2 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+      <DismissibleAlert className="flex items-center gap-2 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
         <XCircle className="h-4 w-4 flex-shrink-0" />
         {error}
-      </div>
+      </DismissibleAlert>
     );
   }
 
@@ -793,10 +794,10 @@ function LogsSection({ resolvedRange }: { resolvedRange: DateRange }) {
       </div>
 
       {error && (
-        <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+        <DismissibleAlert className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
           <XCircle className="h-4 w-4 flex-shrink-0" />
           {error}
-        </div>
+        </DismissibleAlert>
       )}
 
       <TableCard>

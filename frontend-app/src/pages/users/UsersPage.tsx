@@ -13,6 +13,7 @@ import { ClearFiltersButton, Pagination, SearchInput, StatusFilterSelect } from 
 import { TableSkeletonRows } from '../../components/common/Skeleton';
 import { extractErrorMessage as extractMessage } from '../../utils/apiError';
 import ConfirmModal from '../../components/common/ConfirmModal';
+import DismissibleAlert from '../../components/common/DismissibleAlert';
 
 /**
  * Corrected Unified Client & Admin User Creation — Auto-Generate option
@@ -279,10 +280,10 @@ function InviteUserModal({
           </div>
 
           {error && (
-            <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+            <DismissibleAlert className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
               <XCircle className="h-4 w-4 flex-shrink-0" />
               {error}
-            </div>
+            </DismissibleAlert>
           )}
 
           <div className="flex justify-end gap-3">
@@ -396,10 +397,10 @@ function EditUserModal({
           </div>
 
           {error && (
-            <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+            <DismissibleAlert className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
               <XCircle className="h-4 w-4 flex-shrink-0" />
               {error}
-            </div>
+            </DismissibleAlert>
           )}
 
           <div className="flex justify-end gap-3">
@@ -490,10 +491,10 @@ function ResetPasswordModal({
           </div>
 
           {error && (
-            <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+            <DismissibleAlert className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
               <XCircle className="h-4 w-4 flex-shrink-0" />
               {error}
-            </div>
+            </DismissibleAlert>
           )}
 
           <div className="flex justify-end gap-3">
@@ -755,10 +756,10 @@ export default function UsersPage() {
         </div>
 
         {error && (
-          <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          <DismissibleAlert className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
             <XCircle className="h-4 w-4 flex-shrink-0" />
             {error}
-          </div>
+          </DismissibleAlert>
         )}
 
         {reachedUserLimit && (

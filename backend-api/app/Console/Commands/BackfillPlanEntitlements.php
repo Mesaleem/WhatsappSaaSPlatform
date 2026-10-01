@@ -4,6 +4,7 @@ namespace App\Console\Commands;
 
 use App\Models\Account;
 use App\Models\AccountEntitlement;
+use App\Support\EntitlementAuditContext;
 use App\Models\Invoice;
 use App\Models\Plan;
 use App\Services\Access\ProviderCapabilityService;
@@ -187,7 +188,9 @@ class BackfillPlanEntitlements extends Command
             return;
         }
 
-        DB::transaction(function () use ($account, $toCreate) {
+        // F-5.2 — each created row writes its own audit row; this labels the
+        // acting process (a command has no authenticated user).
+        EntitlementAuditContext::run('command:entitlements:backfill-plan', fn () => DB::transaction(function () use ($account, $toCreate) {
             foreach ($toCreate as $capabilityId) {
                 // firstOrCreate, matching grantPlanEntitlements()'s own
                 // idiom, on top of unique(account_id, capability_id).
@@ -196,7 +199,7 @@ class BackfillPlanEntitlements extends Command
                     ['source' => 'plan', 'granted_by_account_id' => null],
                 );
             }
-        });
+        }));
 
         Cache::forget(Account::cacheKey($account->id));
     }

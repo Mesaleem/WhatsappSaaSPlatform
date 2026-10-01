@@ -4,6 +4,7 @@ import { Loader2, XCircle, Zap } from 'lucide-react';
 import { useAuth } from '../../core/context/AuthContext';
 import quotaRequestService from '../../services/quotaRequestService';
 import type { ApiErrorResponse } from '../../types/auth';
+import DismissibleAlert from '../common/DismissibleAlert';
 
 function extractMessage(err: unknown, fallback: string): string {
   const axiosErr = err as AxiosError<ApiErrorResponse>;
@@ -151,10 +152,10 @@ export default function QuotaTopUpModal({
         </div>
 
         {error && (
-          <div className="mt-4 flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+          <DismissibleAlert className="mt-4 flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
             <XCircle className="h-4 w-4 flex-shrink-0" />
             {error}
-          </div>
+          </DismissibleAlert>
         )}
 
         <div className="mt-5 flex justify-end gap-2">

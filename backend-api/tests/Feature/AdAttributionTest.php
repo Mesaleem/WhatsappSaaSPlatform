@@ -418,7 +418,8 @@ class AdAttributionTest extends TestCase
 
         $expired = $this->tenant(self::PHONE_ID);
         Subscription::where('account_id', $expired->id)->update(['expires_at' => now()->subDay()]);
-        $this->actingAs($this->user($expired))->getJson('/api/social/ads/attribution')->assertForbidden()->assertJsonPath('error_code', 'SUBSCRIPTION_EXPIRED');
+        // Phase 10 Task 6: reads follow the launcher list / dashboard contract — a lapsed subscription still reads (writes stay blocked, see AdCampaignLifecycleTest).
+        $this->actingAs($this->user($expired))->getJson('/api/social/ads/attribution')->assertOk();
         // Owner decision (2026-09-30): a lapsed subscription does not stop a Super Admin (suspension and module switches still do).
         $this->actingAs($admin)->getJson("/api/social/ads/attribution?account_id={$expired->id}")->assertOk();
 

@@ -48,11 +48,13 @@ class AdAttributionController extends Controller
         $data = $request->validate([
             'source_id' => ['nullable', 'string', 'max:191'],
             'per_page' => ['nullable', 'integer', 'min:1', 'max:100'],
+            'converted' => ['nullable', 'boolean'],
         ]);
 
         $page = AdAttribution::query()
             ->forAccount($account->id)
             ->when($data['source_id'] ?? null, fn ($q, $sourceId) => $q->where('source_id', $sourceId))
+            ->when($request->boolean('converted'), fn ($q) => $q->whereNotNull('converted_at'))
             ->with('adCampaign:id,name,meta_campaign_id,meta_adset_id,meta_ad_id')
             ->orderByDesc('referral_received_at')
             ->orderByDesc('id')
@@ -93,7 +95,7 @@ class AdAttributionController extends Controller
         if ($denial = app(SocialTargetGate::class)->denialFor($account, self::MODULE, self::CAPABILITY, 'view ad attribution', [
             'MODULE_DISABLED' => 'Meta Ads is switched off for this account.',
             'CAPABILITY_NOT_ENTITLED' => 'Your current plan does not include Ads. Please upgrade your subscription to unlock it.',
-        ])) {
+        ], null, true)) { // read: a lapsed subscription still reads, like the launcher list and the dashboard (Phase 10 Task 6)
             throw new HttpResponseException(PublishingDenied::target($denial)->render());
         }
 
@@ -124,6 +126,9 @@ class AdAttributionController extends Controller
             'conversion_value' => $a->conversion_value !== null ? (float) $a->conversion_value : null,
             'conversion_currency' => $a->conversion_currency,
             'headline' => $a->metadata['headline'] ?? null,
+            'status' => $a->diagnosticStatus(),
+            'match' => $a->metadata['match'] ?? null,
+            'campaign_match' => $a->metadata['campaign_match'] ?? null,
         ];
     }
 }

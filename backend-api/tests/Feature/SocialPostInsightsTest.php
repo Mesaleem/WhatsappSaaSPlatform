@@ -587,7 +587,7 @@ class SocialPostInsightsTest extends TestCase
         $this->artisan('social:refresh-insights')->assertSuccessful();
 
         Queue::assertPushed(RefreshPostInsightsJob::class, 1);
-        Queue::assertPushed(RefreshPostInsightsJob::class, fn ($job) => $job->organicPostId === $due->id && $job->queue === 'social' && $job->connection === 'database');
+        Queue::assertPushed(RefreshPostInsightsJob::class, fn ($job) => $job->organicPostId === $due->id && $job->queue === 'social' && $job->connection === 'database_long');
         Http::assertNothingSent();
 
         $job = Queue::pushed(RefreshPostInsightsJob::class)->sole();

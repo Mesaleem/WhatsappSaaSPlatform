@@ -235,7 +235,10 @@ class CrmLead extends Model
         // Phase 10 Task 1 — keep ad attribution's conversion in step with the
         // lead's status, whichever path (manual, bulk, API, automation) changed it.
         static::saved(function (CrmLead $lead): void {
-            if ($lead->wasRecentlyCreated ? $lead->status === self::STATUS_CONVERTED : $lead->wasChanged('status')) {
+            // `wasRecentlyCreated` stays true for the life of the instance, so the
+            // insert itself is detected via the primary key change instead (a later
+            // status change on the same instance must still sync).
+            if ($lead->wasChanged('status') && ($lead->status === self::STATUS_CONVERTED || ! $lead->wasChanged('id'))) {
                 \App\Services\Ads\AdAttributionService::quietly('conversion', (int) $lead->account_id, fn () => app(\App\Services\Ads\AdAttributionService::class)->syncConversion($lead));
             }
         });

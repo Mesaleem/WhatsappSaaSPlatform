@@ -4,6 +4,7 @@ namespace App\Services\Crm;
 
 use App\Models\Account;
 use App\Models\AccountEntitlement;
+use App\Support\EntitlementAuditContext;
 use App\Models\Capability;
 
 /**
@@ -62,12 +63,13 @@ class PlatformCrmAccount
         $capability = Capability::where('slug', 'crm')->first();
 
         if ($capability && ! AccountEntitlement::where('account_id', $account->id)->where('capability_id', $capability->id)->exists()) {
-            AccountEntitlement::create([
+            // F-5.2 — created by a command / data migration, never an HTTP user.
+            EntitlementAuditContext::runDefault('system:platform_crm_account', fn () => AccountEntitlement::create([
                 'account_id' => $account->id,
                 'capability_id' => $capability->id,
                 'source' => AccountEntitlement::SOURCE_MANUAL_GRANT,
                 'granted_by_account_id' => null,
-            ]);
+            ]));
             $crmGranted = true;
         }
 

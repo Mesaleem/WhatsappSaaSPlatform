@@ -4,6 +4,7 @@ namespace App\Console\Commands;
 
 use App\Models\Account;
 use App\Services\Access\PlanEntitlementReconciliationService;
+use App\Support\EntitlementAuditContext;
 use Illuminate\Console\Command;
 use Throwable;
 
@@ -65,7 +66,11 @@ class ReconcilePlanEntitlements extends Command
         $query->chunkById(100, function ($accounts) use ($reconciler, $dryRun, &$stats) {
             foreach ($accounts as $account) {
                 try {
-                    $result = $reconciler->reconcile($account, null, $dryRun);
+                    // F-5.2 — label the audit rows with this command (no user).
+                    $result = EntitlementAuditContext::run(
+                        'command:entitlements:reconcile-plan',
+                        fn () => $reconciler->reconcile($account, null, $dryRun),
+                    );
 
                     match ($result['reason']) {
                         'no_paid_invoice' => $stats['accounts_skipped_no_paid_invoice']++,

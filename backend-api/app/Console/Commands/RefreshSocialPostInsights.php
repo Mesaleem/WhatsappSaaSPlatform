@@ -25,7 +25,7 @@ class RefreshSocialPostInsights extends Command
         $ids = $insights->dueForRefresh($limit);
 
         foreach ($ids as $id) {
-            RefreshPostInsightsJob::dispatch($id)->onConnection('database')->onQueue('social');
+            RefreshPostInsightsJob::dispatch($id)->onConnection(RefreshPostInsightsJob::CONNECTION)->onQueue('social');
         }
 
         $this->info('Queued '.count($ids).' insights refresh(es).');

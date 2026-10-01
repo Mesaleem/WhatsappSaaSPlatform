@@ -189,6 +189,9 @@ class Account extends Model
         // creating migrations; also under WHATSAPP_SUITE_MODULES in
         // frontend-app's types/account.ts.
         'contact_groups',
+        // Phase 11 Task 1 — the switch for the whole Industry Modules area (per-industry
+        // access additionally needs the industry's capability and an assignment).
+        'industry_modules',
     ];
 
     protected $fillable = [
@@ -550,6 +553,12 @@ class Account extends Model
         }
 
         return array_values(array_intersect($own, $agentOwnModules));
+    }
+
+    /** Phase 11 Task 1 — the industries this account operates in. */
+    public function industries(): \Illuminate\Database\Eloquent\Relations\HasMany
+    {
+        return $this->hasMany(AccountIndustry::class);
     }
 
     /**

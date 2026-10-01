@@ -42,6 +42,8 @@ import CrmContactsPage from './pages/crm/CrmContactsPage';
 import CrmContactDetailPage from './pages/crm/CrmContactDetailPage';
 import CrmTagsPage from './pages/crm/CrmTagsPage';
 import CrmAnalyticsPage from './pages/crm/CrmAnalyticsPage';
+import EducationPage from './pages/education/EducationPage';
+import { IndustryModuleRoute } from './core/guards/IndustryModuleRoute';
 import SubscriptionExpiredPage from './pages/errors/SubscriptionExpiredPage';
 import UnauthorizedPage from './pages/errors/UnauthorizedPage';
 
@@ -478,6 +480,18 @@ export default function App() {
               element={
                 <ProtectedRoute permission="manage-crm" module="lead_crm" capability="crm">
                   <CrmAnalyticsPage />
+                </ProtectedRoute>
+              }
+            />
+            {/* Phase 11 Task 2 — Education. Permission here; industry assigned + capability + module + shipped come
+                from the backend's industry_modules keys (IndustryModuleRoute). API calls are re-authorized by industry.guard. */}
+            <Route
+              path="/education"
+              element={
+                <ProtectedRoute permission="view-education">
+                  <IndustryModuleRoute moduleKey="education.students">
+                    <EducationPage />
+                  </IndustryModuleRoute>
                 </ProtectedRoute>
               }
             />

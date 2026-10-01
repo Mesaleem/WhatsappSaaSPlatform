@@ -20,6 +20,7 @@ import { formatDate } from '../../components/crm/crmFilters';
 import { useCrmAssignees, useCrmContext, useCrmQuery, useCrmToast } from '../../components/crm/crmHooks';
 import { describeApiError } from '../../utils/apiError';
 import { crmSourceLabel, type CrmContact, type CrmLead } from '../../types/crm';
+import DismissibleAlert from '../../components/common/DismissibleAlert';
 
 /**
  * Phase 6 — CRM Task 8. One CRM lead — GET /api/crm/leads/{id}.
@@ -306,7 +307,7 @@ function ReassignContactModal({
         <div className="mt-4">
           <SearchInput value={search} onChange={setSearch} placeholder="Search contacts…" />
         </div>
-        {(error ?? loadError) && <p className="mt-3 text-sm text-red-600" role="alert">{error ?? loadError}</p>}
+        {(error ?? loadError) && <DismissibleAlert as="p" className="mt-3 text-sm text-red-600 flex items-start justify-between gap-2" role="alert">{error ?? loadError}</DismissibleAlert>}
         <div className="mt-3 max-h-72 space-y-1 overflow-y-auto">
           {loading ? (
             <Spinner />

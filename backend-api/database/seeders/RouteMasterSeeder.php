@@ -96,6 +96,15 @@ class RouteMasterSeeder extends Seeder
                 ['key' => 'developer_api', 'title' => 'Developer API', 'path' => '/developer'],
             ],
         ],
+        // Phase 11 Task 1 — the switch for the Industry Modules area.
+        [
+            'code' => 'industry',
+            'name' => 'Industry Modules',
+            'icon' => 'Briefcase',
+            'modules' => [
+                ['key' => 'industry_modules', 'title' => 'Industry Modules', 'path' => null],
+            ],
+        ],
     ];
 
     public function run(): void

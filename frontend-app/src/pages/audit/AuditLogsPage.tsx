@@ -9,6 +9,7 @@ import { PageHeader, PageShell } from '../../components/common/PageShell';
 import { TableCard } from '../../components/common/Card';
 import { ClearFiltersButton, Pagination, SearchInput, StatusFilterSelect } from '../../components/common/DataTableControls';
 import { TableSkeletonRows } from '../../components/common/Skeleton';
+import DismissibleAlert from '../../components/common/DismissibleAlert';
 
 /**
  * Surfaces the backend's real error message (e.g. a missing-table 500
@@ -209,7 +210,7 @@ export default function AuditLogsPage() {
       </div>
 
       {error && (
-        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>
+        <DismissibleAlert className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</DismissibleAlert>
       )}
 
       <TableCard>

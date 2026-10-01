@@ -1395,12 +1395,24 @@ class WhatsAppJourneyEngine
         // Phase 10 Task 1 — a journey started from an ad referral: link it to
         // the referral's attribution row (same account). Best-effort.
         if ($referral !== null) {
-            \App\Services\Ads\AdAttributionService::quietly('journey_start', $accountId, fn () => app(\App\Services\Ads\AdAttributionService::class)->journeyStarted($accountId, $senderPhone, $referral, $session));
+            \App\Services\Ads\AdAttributionService::quietly('journey_start', $accountId, fn () => app(\App\Services\Ads\AdAttributionService::class)->journeyStarted($accountId, $senderPhone, $referral, $session, $this->inboundReferralMessageId($accountId)));
         }
 
         $this->runImmediate($account, $flow, $session, (string) $firstEdge['target']);
 
         return $this->consumedByStart($session);
+    }
+
+    /** Provider message id (`wamid:` event key) of the inbound message being processed, within this account. */
+    private function inboundReferralMessageId(int $accountId): ?string
+    {
+        if ($this->inboundEventId === null) {
+            return null;
+        }
+
+        $key = \App\Models\InboundMessageEvent::query()->where('account_id', $accountId)->whereKey($this->inboundEventId)->value('event_key');
+
+        return is_string($key) && str_starts_with($key, 'wamid:') ? substr($key, 6) : null;
     }
 
     /**

@@ -32,6 +32,7 @@ import type {
   PaymentGateway,
   RazorpaySuccessResponse,
 } from '../../types/billing';
+import DismissibleAlert from '../../components/common/DismissibleAlert';
 
 const badgeClass: Record<string, string> = {
   active: 'bg-emerald-50 text-emerald-700 border-emerald-200',
@@ -343,10 +344,10 @@ export default function BillingPage() {
         )}
 
         {loadError && (
-          <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          <DismissibleAlert className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
             <XCircle className="h-4 w-4 flex-shrink-0" />
             {loadError}
-          </div>
+          </DismissibleAlert>
         )}
 
         {/* Current plan status */}
@@ -432,10 +433,10 @@ export default function BillingPage() {
           </div>
         )}
         {checkoutError && (
-          <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          <DismissibleAlert className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
             <XCircle className="h-4 w-4 flex-shrink-0" />
             {checkoutError}
-          </div>
+          </DismissibleAlert>
         )}
 
         {/* Plans */}

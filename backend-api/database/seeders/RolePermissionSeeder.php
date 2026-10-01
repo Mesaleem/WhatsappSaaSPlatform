@@ -88,6 +88,11 @@ class RolePermissionSeeder extends Seeder
         // tenant's Page/Instagram automatically) from day-to-day lead/
         // inbox management, so a Super Admin can grant them separately.
         'manage-comment-automation',
+        // Phase 11 Task 1 — read access to the Industry Modules area (see config/industries.php).
+        'view-industry-modules',
+        // Phase 11 Task 2 — Education (read / write). The only two permissions the module needs.
+        'view-education',
+        'manage-education',
         // Client Admin Granular Permission Matrix — see
         // TeamController::MANAGED_PERMISSIONS' docblock for the full
         // design rationale (why these are granted as DIRECT per-user
@@ -163,6 +168,9 @@ class RolePermissionSeeder extends Seeder
             'manage-crm',
             'view-social-analytics',
             'manage-comment-automation',
+            'view-industry-modules',
+            'view-education',
+            'manage-education',
         ],
         // Standard staff member.
         'user' => [

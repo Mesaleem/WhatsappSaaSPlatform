@@ -23,6 +23,7 @@ import type { ApiErrorResponse } from '../../types/auth';
 import { PageHeader, PageShell } from '../../components/common/PageShell';
 import { Card, TableCard, inputClass } from '../../components/common/Card';
 import ConfirmModal from '../../components/common/ConfirmModal';
+import DismissibleAlert from '../../components/common/DismissibleAlert';
 
 /** Same pattern as MessageLogsPage.tsx's extractMessage() — surfaces the backend's real error (e.g. GROUP_MODULE_DISABLED's exact copy) instead of a fixed generic string. */
 function extractMessage(err: unknown, fallback: string): string {
@@ -189,7 +190,7 @@ export default function ContactGroupsPage() {
       ) : (
         <>
           {error && (
-            <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>
+            <DismissibleAlert className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</DismissibleAlert>
           )}
 
           <TableCard>
@@ -655,9 +656,9 @@ function CreateGroupModal({ onClose, onCreated }: { onClose: () => void; onCreat
                       <Loader2 className="h-4 w-4 animate-spin" /> Looking up your WhatsApp groups…
                     </p>
                   ) : availableError ? (
-                    <p className="mt-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+                    <DismissibleAlert as="p" className="mt-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
                       {availableError}
-                    </p>
+                    </DismissibleAlert>
                   ) : availableGroups.length === 0 ? (
                     <p className="mt-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500">
                       No importable WhatsApp groups found — either you have none yet, or every group your connected

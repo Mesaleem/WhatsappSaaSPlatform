@@ -7,6 +7,7 @@ import { TableCard } from '../common/Card';
 import { ClearFiltersButton, Pagination, SearchInput, StatusFilterSelect } from '../common/DataTableControls';
 import { TableSkeletonRows } from '../common/Skeleton';
 import type { ClientBillingSummaryRow, ClientPaymentStatus } from '../../types/billing';
+import DismissibleAlert from '../common/DismissibleAlert';
 
 function formatMoney(amount: string | null): string {
   if (amount === null) return '—';
@@ -150,10 +151,10 @@ export default function ClientBillingSummaryTable() {
       </div>
 
       {error && (
-        <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+        <DismissibleAlert className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
           <XCircle className="h-4 w-4 flex-shrink-0" />
           {error}
-        </div>
+        </DismissibleAlert>
       )}
 
       <TableCard>

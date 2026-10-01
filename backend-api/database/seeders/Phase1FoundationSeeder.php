@@ -68,6 +68,16 @@ class Phase1FoundationSeeder extends Seeder
         'external_api' => ['label' => 'External API Calls', 'category' => 'platform'],
         'custom_code' => ['label' => 'Custom Code', 'category' => 'platform'],
         'email' => ['label' => 'Email', 'category' => 'platform'],
+        // Phase 11 Task 1 — one capability per industry (see config/industries.php). Not part of any
+        // plan bundle below: a plan or an account gets one only when a Super Admin / Agent grants it.
+        'industry_education' => ['label' => 'Industry: Education', 'category' => 'industry'],
+        'industry_healthcare' => ['label' => 'Industry: Healthcare', 'category' => 'industry'],
+        'industry_ecommerce' => ['label' => 'Industry: Ecommerce', 'category' => 'industry'],
+        'industry_real_estate' => ['label' => 'Industry: Real Estate', 'category' => 'industry'],
+        'industry_financial_services' => ['label' => 'Industry: Money Transfer & Financial Services', 'category' => 'industry'],
+        // Phase 11 Task 4 — the generic Billing & Collections core (charges, payments, balances). Industry-agnostic:
+        // a module that needs it names it in config/industries.php `requires_capability`. Not part of any plan.
+        'billing_collections' => ['label' => 'Billing & Collections', 'category' => 'platform'],
     ];
 
     private const PROVIDERS = [
@@ -140,6 +150,12 @@ class Phase1FoundationSeeder extends Seeder
         ['none', 'external_api', true, 'An outbound HTTP call is a platform capability and needs no WhatsApp engine.'],
         ['none', 'custom_code', true, 'Server-side code execution is a platform capability and needs no WhatsApp engine.'],
         ['none', 'email', true, 'Email is delivered through the platform mail configuration (MailSetting), not a WhatsApp engine.'],
+        ['none', 'industry_education', true, 'Industry modules are a platform capability: no WhatsApp engine is required to be entitled to one.'],
+        ['none', 'industry_healthcare', true, 'Industry modules are a platform capability: no WhatsApp engine is required to be entitled to one.'],
+        ['none', 'industry_ecommerce', true, 'Industry modules are a platform capability: no WhatsApp engine is required to be entitled to one.'],
+        ['none', 'industry_real_estate', true, 'Industry modules are a platform capability: no WhatsApp engine is required to be entitled to one.'],
+        ['none', 'industry_financial_services', true, 'Industry modules are a platform capability: no WhatsApp engine is required to be entitled to one.'],
+        ['none', 'billing_collections', true, 'Billing & Collections is a platform capability: no WhatsApp engine is required to be entitled to it.'],
     ];
 
     /**

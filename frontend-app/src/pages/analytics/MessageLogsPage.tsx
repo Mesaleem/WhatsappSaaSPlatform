@@ -14,6 +14,7 @@ import { PageHeader, PageShell } from '../../components/common/PageShell';
 import { TableCard } from '../../components/common/Card';
 import { ClearFiltersButton, Pagination, SearchInput, StatusFilterSelect } from '../../components/common/DataTableControls';
 import { TableSkeletonRows } from '../../components/common/Skeleton';
+import DismissibleAlert from '../../components/common/DismissibleAlert';
 
 /** Same pattern as AuditLogsPage.tsx's extractMessage() — surfaces the backend's real error (e.g. a missing-table 500 before the message_dispatch_logs migration has run) instead of a fixed generic string. */
 function extractMessage(err: unknown, fallback: string): string {
@@ -202,7 +203,7 @@ export default function MessageLogsPage() {
       </div>
 
       {error && (
-        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>
+        <DismissibleAlert className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</DismissibleAlert>
       )}
 
       <TableCard>

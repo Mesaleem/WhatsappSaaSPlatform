@@ -12,6 +12,7 @@ import { formatDate } from '../../components/crm/crmFilters';
 import { useCrmContext, useCrmQuery, useCrmToast } from '../../components/crm/crmHooks';
 import { describeApiError } from '../../utils/apiError';
 import type { CrmTag } from '../../types/crm';
+import DismissibleAlert from '../../components/common/DismissibleAlert';
 
 /** CrmTag::NAME_MAX — mirrored only as an input maxLength hint; the server validates. */
 const TAG_NAME_MAX = 50;
@@ -138,7 +139,7 @@ export default function CrmTagsPage() {
                   disabled={readOnly}
                   className={inputClass.replace('mt-1.5 ', '')}
                 />
-                {createError && <p className="mt-1 text-xs text-red-600" role="alert">{createError}</p>}
+                {createError && <DismissibleAlert as="p" className="mt-1 text-xs text-red-600 flex items-start justify-between gap-2" role="alert">{createError}</DismissibleAlert>}
               </div>
               <button
                 type="submit"

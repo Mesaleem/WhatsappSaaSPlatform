@@ -53,6 +53,24 @@ axiosInstance.interceptors.request.use((config: InternalAxiosRequestConfig) => {
   return config;
 });
 
+/**
+ * Super Admin in "All Clients (Global View)": a handful of endpoints belong to exactly one client's data
+ * (WhatsApp session, chatbot, journeys, groups, education, billing…) and the server answers 422 with a
+ * developer-flavoured sentence ("… pass ?account_id="). Nothing is wrong — the Super Admin just has not
+ * picked a client — so say that in plain words. Only the wording changes: status, error_code and the
+ * request outcome are untouched, and a selected client never reaches this branch.
+ */
+export const NEEDS_CLIENT_MESSAGE = 'Select a client from the switcher at the top of the page to use this section. It works on one client at a time.';
+const NEEDS_CLIENT_PATTERN = /select a client|selected tenant account|no tenant account|requires a selected tenant/i;
+
+export function friendlyNeedsClientError(error: AxiosError<ApiErrorResponse>, hasSelectedClient: boolean): AxiosError<ApiErrorResponse> {
+  const data = error.response?.data;
+  if (!hasSelectedClient && error.response?.status === 422 && data && typeof data.message === 'string' && NEEDS_CLIENT_PATTERN.test(data.message)) {
+    data.message = NEEDS_CLIENT_MESSAGE;
+  }
+  return error;
+}
+
 axiosInstance.interceptors.response.use(
   (response) => response,
   (error: AxiosError<ApiErrorResponse>) => {
@@ -67,7 +85,7 @@ axiosInstance.interceptors.response.use(
       window.dispatchEvent(new CustomEvent(AUTH_EVENT_UNAUTHORIZED));
     }
 
-    return Promise.reject(error);
+    return Promise.reject(friendlyNeedsClientError(error, selectedAccountId !== null || error.config?.params?.account_id != null));
   },
 );
 

@@ -3,6 +3,7 @@ import { AlertCircle, Gauge, Loader2, X } from 'lucide-react';
 import accountService from '../../services/accountService';
 import type { Account, AccountDetail } from '../../types/account';
 import { extractErrorMessage } from '../../utils/apiError';
+import DismissibleAlert from '../common/DismissibleAlert';
 
 const inputClass =
   'mt-1.5 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100';
@@ -124,13 +125,13 @@ export default function UpdateQuotaModal({
             <Loader2 className="h-5 w-5 animate-spin" />
           </div>
         ) : loadError ? (
-          <div
+          <DismissibleAlert
             role="alert"
             className="mt-4 flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"
           >
             <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
             <span>{loadError}</span>
-          </div>
+          </DismissibleAlert>
         ) : isUnlimited ? (
           <p className="mt-4 text-sm text-slate-500">
             This client's plan is Unlimited — there is no numeric message quota to allocate. Change its billing
@@ -174,13 +175,13 @@ export default function UpdateQuotaModal({
             </div>
 
             {formError && (
-              <div
+              <DismissibleAlert
                 role="alert"
                 className="mt-4 flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"
               >
                 <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
                 <span>{formError}</span>
-              </div>
+              </DismissibleAlert>
             )}
           </>
         )}

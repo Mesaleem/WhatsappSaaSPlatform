@@ -13,6 +13,7 @@ import {
   type CrmTag,
   type CrmTagRef,
 } from '../../types/crm';
+import DismissibleAlert from '../common/DismissibleAlert';
 
 /**
  * Phase 6 — CRM Task 8. Small presentational building blocks shared by the
@@ -107,10 +108,10 @@ export function NoClientSelected({ what }: { what: string }) {
 
 export function ErrorBanner({ message }: { message: string }) {
   return (
-    <div role="alert" className="flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+    <DismissibleAlert role="alert" className="flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
       <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0" />
       {message}
-    </div>
+    </DismissibleAlert>
   );
 }
 
