@@ -3,6 +3,14 @@
 /**
  * Phase 5 Task 4 -- test-suite pacing override.
  *
+ * [P5-9 note]: INERT since Phase 5 fix P5-9 — no App\Jobs class calls
+ * sleep() any more (anti-ban pacing is a queue delay; phpunit.xml turns it
+ * off with MESSAGING_PACING_MAX_SECONDS=0, see config/messaging.php). Kept
+ * only so the existing require_once lines stay valid. Because it would
+ * still hide a re-introduced sleep() in App\Jobs from TIMING assertions,
+ * BlockingWaitRemovalTest guards that with a token scan of app/ instead.
+ * The history below describes the pre-P5-9 code.
+ *
  * ProcessGroupDispatchJob / ProcessGroupDirectMessageJob call
  * sleep(random_int(3, 8)) between consecutive recipients as anti-ban
  * jitter. That pacing is REQUIRED production behaviour and is deliberately

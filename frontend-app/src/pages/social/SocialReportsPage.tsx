@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { AlertCircle, Building2, Download, Loader2 } from 'lucide-react';
+import { AlertCircle, Download, Loader2 } from 'lucide-react';
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { useAuth } from '../../core/context/AuthContext';
 import { useTenant } from '../../core/context/TenantContext';
+import { SelectClientNotice } from '../../components/common/ActionGate';
+import { useClientGate } from '../../components/common/actionGateHooks';
 import reportsService from '../../services/reportsService';
 import { TableCard, inputClass } from '../../components/common/Card';
 import { extractErrorMessage } from '../../utils/apiError';
@@ -44,10 +46,12 @@ function KpiCard({ label, value, sub }: { label: string; value: string; sub?: st
  * accent color — is attached server-side by SimplePdfWriter::renderBrandedReport()).
  */
 export default function SocialReportsPage() {
-  const { isSuperAdmin } = useAuth();
+  const { user, isSuperAdmin } = useAuth();
   const { selectedAccountId } = useTenant();
   const superAdmin = isSuperAdmin();
-  const noTenantSelected = superAdmin && selectedAccountId === null;
+  // Owner request (2026-09-30): with its own Platform account a Super Admin needs no client here.
+  const noTenantSelected = superAdmin && selectedAccountId === null && !user?.platform_crm_account;
+  const { openPicker, picker } = useClientGate({ platformFallback: true });
 
   const [month, setMonth] = useState(currentMonthValue());
   const [summary, setSummary] = useState<SocialReportSummary | null>(null);
@@ -128,11 +132,9 @@ export default function SocialReportsPage() {
           )}
         </div>
 
+        {picker}
         {noTenantSelected ? (
-          <div className="flex items-start gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm" style={{ color: indigo.muted }}>
-            <Building2 className="mt-0.5 h-4 w-4 flex-shrink-0" />
-            Select a client from the switcher at the top of the page to view their report.
-          </div>
+          <SelectClientNotice message="Reports belong to a client. Select one to view their report." onSelect={() => openPicker('view the report')} />
         ) : (
           <>
             {downloadError && (

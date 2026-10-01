@@ -742,7 +742,9 @@ export default function UsersPage() {
                   ? 'Action disabled: Subscription expired.'
                   : reachedUserLimit
                     ? 'User limit reached. Contact Super Admin to upgrade.'
-                    : undefined
+                    : roles.length === 0 && !isLoading
+                      ? 'No roles can be assigned from this account, so no member can be invited. Contact Super Admin.'
+                      : undefined
               }
               className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:opacity-60"
             >

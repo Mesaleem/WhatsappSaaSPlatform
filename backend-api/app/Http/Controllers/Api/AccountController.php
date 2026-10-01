@@ -15,6 +15,7 @@ use App\Models\Subscription;
 use App\Models\User;
 use App\Services\AccountService;
 use App\Services\Access\AccessControlService;
+use App\Services\Access\EntitlementAuditLogger;
 use App\Services\Access\ProviderCapabilityService;
 use App\Services\QuotaService;
 use Illuminate\Http\JsonResponse;
@@ -838,6 +839,31 @@ class AccountController extends Controller
             abort_unless($isAuthorizedToSell, 403, "You are not authorized to sell/grant the '{$capability->slug}' capability.");
         }
 
+        // P5-11 — a revocation the Agent did not make itself (a Super Admin's,
+        // or one with no Agent-side author) cannot be undone by an Agent
+        // re-grant. Resolved from the stored row only (this account's own
+        // entitlement for this capability, after the ownership guard above);
+        // nothing in the request can point it elsewhere.
+        if (! $isSuperAdmin) {
+            $existing = $account->entitlements()->where('capability_id', $capability->id)->with('revokedBy')->first();
+
+            if ($existing && $this->revocationProtectedFromAgent($existing, (int) $agentScopeId)) {
+                app(EntitlementAuditLogger::class)->record($account, false, [
+                    'action' => 'entitlement.grant', 'source' => 'api', 'category' => 'revoked_by_super_admin',
+                    'reason' => 'The capability was revoked by a Super Admin; an Agent cannot re-grant it.',
+                    'capability' => $capability->slug, 'resource_type' => 'account_entitlement', 'resource_id' => $existing->id,
+                    'actor_account_id' => $agentScopeId, 'target_account_id' => $account->id,
+                    'error_code' => 'ENTITLEMENT_REVOKED_BY_SUPER_ADMIN', 'http_status' => 403,
+                ]);
+
+                return response()->json([
+                    'success' => false,
+                    'message' => "The '{$capability->slug}' capability was revoked by a Super Admin and cannot be re-granted by an Agent.",
+                    'error_code' => 'ENTITLEMENT_REVOKED_BY_SUPER_ADMIN',
+                ], 403);
+            }
+        }
+
         $providerSlug = $account->currentSubscription?->engine_type ?? 'none';
 
         if (! $this->providerCapabilities->supports($providerSlug, $capability->slug)) {
@@ -867,6 +893,25 @@ class AccountController extends Controller
         );
 
         return response()->json(['message' => 'Capability granted.', 'data' => $entitlement->load('capability')]);
+    }
+
+    /**
+     * P5-11 — may an Agent (account $agentAccountId) NOT undo this row's
+     * revocation? A manual revocation (isManuallyRevoked(): anything but a
+     * plan downgrade, unknown reasons included) is the Agent's to undo only
+     * when a user of the Agent's OWN account made it; a Super Admin's, one
+     * whose author is gone/unknown, or one made by another account is
+     * protected. A plan-downgrade revocation stays re-grantable (unchanged).
+     */
+    private function revocationProtectedFromAgent(AccountEntitlement $entitlement, int $agentAccountId): bool
+    {
+        if (! $entitlement->isManuallyRevoked()) {
+            return false;
+        }
+
+        $revoker = $entitlement->revokedBy;
+
+        return ! $revoker || $revoker->isSuperAdmin() || (int) $revoker->account_id !== $agentAccountId;
     }
 
     /**
@@ -920,6 +965,19 @@ class AccountController extends Controller
             ->active()
             ->whereHas('capability', fn ($q) => $q->where('slug', $capability))
             ->get();
+
+        // P5-11 — a Super Admin's revocation also claims a row that is
+        // ALREADY revoked by someone else (an Agent, or a plan downgrade):
+        // the row becomes a Super Admin revocation, so neither the Agent
+        // (grantEntitlement) nor plan reconciliation can restore it.
+        if ($isSuperAdmin) {
+            $rows = $rows->merge(
+                $account->entitlements()->revoked()->with('revokedBy')
+                    ->whereHas('capability', fn ($q) => $q->where('slug', $capability))
+                    ->get()
+                    ->reject(fn (AccountEntitlement $row) => $row->isManuallyRevoked() && $row->revokedBy?->isSuperAdmin()),
+            );
+        }
 
         foreach ($rows as $row) {
             $row->forceFill([

@@ -9,13 +9,16 @@ use App\Models\MessageDispatchLog;
 use App\Models\MessageTemplate;
 use App\Services\PaymentAlerts\PaymentAlertDispatcher;
 use App\Services\WhatsApp\WhatsAppEngineFactory;
+use App\Support\OutboundPacing;
 use App\Support\PhoneNumberNormalizer;
 use App\Support\TemplateRenderer;
 use App\Services\Access\ProviderCapabilityService;
+use App\Support\QueueDelay;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
+use Illuminate\Queue\Jobs\SyncJob;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
@@ -240,7 +243,12 @@ class ProcessGroupDispatchJob implements ShouldQueue
         $attemptedThisSlice = 0;
         // Pacing continues across slices: if an earlier slice already
         // attempted recipients, the first send of this slice is spaced too.
-        $paceNextSend = $recorded !== [];
+        // Phase 5 fix P5-9 — pacing is a queue delay, not a sleep(). A
+        // slice's first send is never paced in-process: the batch's very
+        // first send has nothing before it, and a slice that follows a send
+        // was itself queued with the pacing delay (continueInNextSlice()).
+        $paceNextSend = false;
+        $sentThisSlice = false;
 
         foreach ($members as $member) {
             if (isset($recorded[(int) $member->id])) {
@@ -251,7 +259,7 @@ class ProcessGroupDispatchJob implements ShouldQueue
             // budget is spent, hand the rest to a fresh job.
             if ($attemptedThisSlice > 0
                 && now()->getTimestamp() - $sliceStartedAt >= MessageDispatchLog::GROUP_JOB_SLICE_BUDGET_SECONDS) {
-                $this->continueInNextSlice($log, $token);
+                $this->continueInNextSlice($log, $token, $sentThisSlice ? $this->pacingDelay() : 0);
 
                 return;
             }
@@ -308,8 +316,18 @@ class ProcessGroupDispatchJob implements ShouldQueue
             // Anti-ban jitter between consecutive provider sends, same
             // rationale and range as before (and as ProcessPaymentAlertJob's
             // single-send delay) — never before the batch's first send.
+            // Phase 5 fix P5-9 — the jitter no longer blocks the worker: the
+            // rest of the batch goes to a continuation slice queued with the
+            // delay (same claim hand-over, frozen list and skip-recorded rules
+            // as a budget slice), so this recipient is sent by that slice.
             if ($paceNextSend) {
-                sleep(random_int(3, 8));
+                $delay = $this->pacingDelay();
+
+                if ($delay > 0) {
+                    $this->continueInNextSlice($log, $token, $delay);
+
+                    return;
+                }
             }
 
             // Checked immediately before the send, after the pacing: if the
@@ -321,6 +339,7 @@ class ProcessGroupDispatchJob implements ShouldQueue
 
             $attemptedThisSlice++;
             $paceNextSend = true;
+            $sentThisSlice = true;
 
             // Per-recipient personalization: the member's own name
             // (contact_group_members.name) always wins over any
@@ -576,15 +595,31 @@ class ProcessGroupDispatchJob implements ShouldQueue
      * the same connection/queue. If the claim can no longer be released
      * the batch was settled meanwhile, and nothing is queued.
      */
-    private function continueInNextSlice(MessageDispatchLog $log, string $token): void
+    private function continueInNextSlice(MessageDispatchLog $log, string $token, int $delaySeconds = 0): void
     {
         if (! $log->releaseGroupDispatchClaim($token)) {
             return;
         }
 
-        static::dispatch($this->dispatchLogId, $this->templateId, $this->variables, $this->apiKeyId)
+        $next = static::dispatch($this->dispatchLogId, $this->templateId, $this->variables, $this->apiKeyId)
             ->onConnection($this->connection)
             ->onQueue($this->queue);
+
+        // Phase 5 fix P5-9 — anti-ban pacing as a queue delay (see pacingDelay()).
+        if ($delaySeconds > 0) {
+            $next->delay(QueueDelay::after($delaySeconds));
+        }
+    }
+
+    /**
+     * Phase 5 fix P5-9 — seconds the next paced send waits, as a queue delay.
+     * 0 when pacing is off, or on the `sync` connection: sync ignores queue
+     * delays and would only recurse, so there the batch continues in-process
+     * without any wait (a blocking sleep is exactly what P5-9 removes).
+     */
+    private function pacingDelay(): int
+    {
+        return $this->job instanceof SyncJob ? 0 : OutboundPacing::delaySeconds();
     }
 
 }

@@ -210,32 +210,29 @@ class SocialInboxLeadReplyDispatchTest extends TestCase
         $this->assertSame(0, $this->logs($account)->where('status', 'sent')->count());
     }
 
-    public function test_the_dispatcher_quota_gate_refuses_when_the_route_guard_is_bypassed(): void
+    public function test_a_super_admin_reply_for_a_client_with_exhausted_quota_is_refused_by_the_quota_gate(): void
     {
-        // A Super Admin bypasses subscription.guard and module.guard by
-        // design, so for them the dispatcher's own quota gate is the only
-        // barrier. Before P5-2 this path had its own hasActiveSubscription()
-        // check; it must still refuse, now through DirectMessageDispatcher.
+        // Phase 9 Task 6 — before, a Super Admin bypassed subscription.guard and
+        // only the dispatcher's own quota gate refused (422 + a failed log row).
+        // target.account now checks the SELECTED client exactly as its own users
+        // are checked, so the Super Admin gets the tenant's 403 before anything
+        // is dispatched. (The dispatcher's own quota gate is still covered by
+        // UnifiedQuotaAndCapabilityTest / ConsumeAfterQuotaMigrationTest.)
         $this->fakeProvidersOk();
         $account = $this->qrTenant(['total_allocated_messages' => 5, 'used_messages' => 5]);
         $lead = $this->lead($account);
         $superAdmin = User::factory()->create(['account_id' => null, 'is_active' => true]);
         $superAdmin->assignRole('super_admin');
 
+        // Owner decision (2026-09-30): target.account no longer stops a Super Admin on
+        // the client's subscription; the dispatcher's own quota gate still refuses.
         $this->actingAs($superAdmin)
             ->postJson(self::ENDPOINT.'?account_id='.$account->id, ['thread_id' => "lead:{$lead->id}", 'message' => 'hi'])
-            ->assertStatus(422)
-            ->assertExactJson(['message' => $account->fresh()->quotaExhaustedMessage()]);
+            ->assertStatus(422);
 
         Http::assertNothingSent();
         $this->assertSame(5, $this->used($account));
-
-        // The dispatcher's own refusal log -- never a 'sent' row.
-        $log = $this->logs($account)->sole();
-        $this->assertSame('failed', $log->status);
-        $this->assertSame('social_inbox', $log->source);
-        $this->assertNull($log->gateway_message_id);
-        $this->assertNull($log->sent_at);
+        $this->assertSame(0, $this->logs($account)->where('status', 'sent')->count());
     }
 
     public function test_a_super_admin_reply_for_a_selected_client_is_charged_to_that_client(): void

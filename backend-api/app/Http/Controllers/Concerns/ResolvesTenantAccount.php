@@ -102,4 +102,25 @@ trait ResolvesTenantAccount
 
         return $account;
     }
+
+    /**
+     * Phase 9 Task 6 — the target account of a Social operation, with NO
+     * fallback on any environment: a tenant user gets their own account
+     * (TenantIsolationMiddleware), an Agent the sub-client they selected, and
+     * a Super Admin exactly the ?account_id= they selected — or 422. Unlike
+     * requireAccount(), it never picks "the first account" when
+     * APP_ENV=local, so the platform/Super Admin can never silently act on,
+     * read, or be charged against a client nobody selected. Every Social
+     * controller uses this; other areas keep requireAccount() unchanged.
+     */
+    protected function requireTargetAccount(
+        Request $request,
+        string $message = 'Select a client/tenant account first (pass ?account_id=).'
+    ): Account {
+        $account = $this->resolveAccount($request);
+
+        abort_if(! $account, 422, $message);
+
+        return $account;
+    }
 }

@@ -7,13 +7,16 @@ use App\Http\Controllers\Controller;
 use App\Models\Account;
 use App\Models\Lead;
 use App\Models\SocialAccount;
+use App\Services\SocialAuth\Exceptions\ProviderRequestFailed;
+use App\Services\SocialAuth\Exceptions\SocialConnectionException;
+use App\Services\SocialAuth\SocialConnectionService;
 use App\Services\WhatsApp\DirectMessageDispatcher;
+use Illuminate\Http\Client\Response as HttpResponse;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\ValidationException;
-use RuntimeException;
 use Throwable;
 
 /**
@@ -68,7 +71,7 @@ class SocialInboxController extends Controller
     /** GET /api/social/inbox/threads */
     public function threads(Request $request): JsonResponse
     {
-        $account = $this->requireAccount($request);
+        $account = $this->requireTargetAccount($request);
 
         $threads = [];
 
@@ -77,12 +80,28 @@ class SocialInboxController extends Controller
             ->whereIn('asset_type', ['facebook_page', 'instagram'])
             ->get();
 
+        $connectionIssues = [];
+        $connections = app(SocialConnectionService::class);
+
         foreach ($socialAccounts as $socialAccount) {
             $platform = $socialAccount->asset_type === 'facebook_page' ? 'facebook' : 'instagram';
 
             try {
+                // Phase 9 Task 2 — an expired/revoked connection is not asked
+                // again; it is listed so the inbox can offer Reconnect.
+                $connections->assertUsable($socialAccount, 'inbox.threads');
                 $conversations = $this->fetchConversations($socialAccount);
+            } catch (SocialConnectionException $e) {
+                $connectionIssues[] = $this->connectionIssue($e);
+
+                continue;
             } catch (Throwable $e) {
+                if ($e instanceof ProviderRequestFailed && ($result = $connections->observe($socialAccount, $e, 'inbox.threads'))) {
+                    $connectionIssues[] = $this->connectionIssue(SocialConnectionException::for($socialAccount, $result->status, $result->reason));
+
+                    continue;
+                }
+
                 Log::warning("SocialInboxController: could not fetch {$platform} conversations for SocialAccount#{$socialAccount->id}.", [
                     'exception' => $e->getMessage(),
                 ]);
@@ -117,13 +136,13 @@ class SocialInboxController extends Controller
 
         usort($threads, fn (array $a, array $b) => strcmp((string) $b['updated_at'], (string) $a['updated_at']));
 
-        return response()->json(['data' => $threads]);
+        return response()->json(['data' => $threads, 'connection_issues' => $connectionIssues]);
     }
 
     /** GET /api/social/inbox/threads/{id}/messages */
     public function messages(Request $request, string $id): JsonResponse
     {
-        $account = $this->requireAccount($request);
+        $account = $this->requireTargetAccount($request);
         $parsed = $this->parseThreadId($id, $account);
 
         if ($parsed['type'] === 'lead') {
@@ -131,6 +150,12 @@ class SocialInboxController extends Controller
         }
 
         $socialAccount = $parsed['social_account'];
+
+        try {
+            app(SocialConnectionService::class)->assertUsable($socialAccount, 'inbox.messages');
+        } catch (SocialConnectionException $e) {
+            return $e->render();
+        }
 
         try {
             $response = Http::withToken($socialAccount->access_token)->timeout(15)->get(
@@ -142,7 +167,7 @@ class SocialInboxController extends Controller
         }
 
         if ($response->failed()) {
-            return response()->json(['message' => $response->json('error.message') ?? 'Meta rejected the conversation request.'], 422);
+            return $this->providerFailure($socialAccount, $response, 'Meta rejected the conversation request.', 'inbox.messages');
         }
 
         $messages = collect($response->json('data', []))
@@ -173,7 +198,7 @@ class SocialInboxController extends Controller
      */
     public function send(Request $request): JsonResponse
     {
-        $account = $this->requireAccount($request);
+        $account = $this->requireTargetAccount($request);
 
         $data = $request->validate([
             'thread_id' => ['required', 'string'],
@@ -224,6 +249,12 @@ class SocialInboxController extends Controller
     private function sendToConversation(SocialAccount $socialAccount, string $conversationId, string $message): JsonResponse
     {
         try {
+            app(SocialConnectionService::class)->assertUsable($socialAccount, 'inbox.send');
+        } catch (SocialConnectionException $e) {
+            return $e->render();
+        }
+
+        try {
             $conversation = Http::withToken($socialAccount->access_token)->timeout(15)->get(
                 'https://graph.facebook.com/'.self::API_VERSION."/{$conversationId}",
                 ['fields' => 'participants']
@@ -233,7 +264,7 @@ class SocialInboxController extends Controller
         }
 
         if ($conversation->failed()) {
-            return response()->json(['message' => $conversation->json('error.message') ?? 'Meta rejected the conversation lookup.'], 422);
+            return $this->providerFailure($socialAccount, $conversation, 'Meta rejected the conversation lookup.', 'inbox.send');
         }
 
         $participant = $this->otherParticipant($conversation->json('participants.data', []), $socialAccount->provider_id);
@@ -256,10 +287,39 @@ class SocialInboxController extends Controller
         }
 
         if ($response->failed()) {
-            return response()->json(['message' => $response->json('error.message') ?? 'Meta rejected the message.'], 422);
+            return $this->providerFailure($socialAccount, $response, 'Meta rejected the message.', 'inbox.send');
         }
 
         return response()->json(['message' => 'Message sent.']);
+    }
+
+    /**
+     * Phase 9 Task 2 — a failed Meta call: an expired/revoked connection is
+     * persisted and answered with the safe 409 (reconnect path); any other
+     * rejection keeps its previous 422 response.
+     */
+    private function providerFailure(SocialAccount $socialAccount, HttpResponse $response, string $fallback, string $operation): JsonResponse
+    {
+        $failure = ProviderRequestFailed::fromResponse($response, $fallback);
+
+        if ($result = app(SocialConnectionService::class)->observe($socialAccount, $failure, $operation)) {
+            return SocialConnectionException::for($socialAccount, $result->status, $result->reason)->render();
+        }
+
+        return response()->json(['message' => $failure->getMessage()], 422);
+    }
+
+    /** @return array{social_account_id: int, asset_type: string, name: string|null, connection_status: string, message: string, reconnect_path: string} */
+    private function connectionIssue(SocialConnectionException $e): array
+    {
+        return [
+            'social_account_id' => $e->socialAccountId,
+            'asset_type' => $e->assetType,
+            'name' => $e->assetName,
+            'connection_status' => $e->connectionStatus,
+            'message' => $e->getMessage(),
+            'reconnect_path' => SocialConnectionException::RECONNECT_PATH,
+        ];
     }
 
     /**
@@ -277,7 +337,7 @@ class SocialInboxController extends Controller
         );
 
         if ($response->failed()) {
-            throw new RuntimeException($response->json('error.message') ?? 'Meta rejected the conversations request.');
+            throw ProviderRequestFailed::fromResponse($response, 'Meta rejected the conversations request.');
         }
 
         return $response->json('data', []);

@@ -12,6 +12,7 @@ use App\Models\ContactGroupMember;
 use App\Services\Crm\ContactGroupContactLinker;
 use App\Services\Groups\GroupMessageDispatcher;
 use App\Services\Groups\NativeGroupCreationService;
+use App\Services\Groups\NativeGroupEntitlement;
 use App\Services\Groups\NativeWhatsAppGroupService;
 use App\Support\PhoneNumberNormalizer;
 use App\Services\Access\ProviderCapabilityService;
@@ -105,6 +106,12 @@ class ContactGroupController extends Controller
         $groupType = $data['group_type'] ?? ContactGroup::GROUP_TYPE_INTERNAL;
 
         if ($groupType === ContactGroup::GROUP_TYPE_NATIVE) {
+            // Phase 5 P5-C — a Native WhatsApp Group needs the
+            // `whatsapp_groups` capability (contact lists do not).
+            if (! NativeGroupEntitlement::allows($account, 'groups.create_native', 'api', (bool) $request->attributes->get('is_super_admin'))) {
+                return response()->json(NativeGroupEntitlement::denialBody(), 403);
+            }
+
             return $this->storeNativeGroup($account, $data);
         }
 
@@ -347,6 +354,12 @@ class ContactGroupController extends Controller
 
         $group = ContactGroup::where('account_id', $account->id)->find($data['group_id']);
         abort_if(! $group, 404, 'Contact group not found.');
+
+        // Phase 5 P5-C — adding members to a Native WhatsApp Group changes
+        // the real group's participants; refused before any write.
+        if ($group->isNative() && ! NativeGroupEntitlement::allows($account, 'groups.add_contacts_native', 'api', (bool) $request->attributes->get('is_super_admin'))) {
+            return response()->json(NativeGroupEntitlement::denialBody(), 403);
+        }
 
         $now = now();
         $rows = collect($data['contacts'])

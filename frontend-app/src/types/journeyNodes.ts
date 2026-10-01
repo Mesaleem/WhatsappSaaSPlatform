@@ -349,7 +349,10 @@ export interface ProductNodeConfig {
 }
 
 export interface AgentNodeConfig {
-  agentId: string;
+  /** A display label (selects nothing). */
+  agentId?: string;
+  /** Phase 8 Task 11 — id of a registered AI agent of this account; when set, instructions are optional. */
+  registeredAgentId?: string;
   instructions?: string;
 }
 
@@ -456,7 +459,11 @@ export type JourneyFieldType =
   /** A repeatable list of plain strings (e.g. catalog product IDs). */
   | 'strings'
   | 'code'
-  | 'json';
+  | 'json'
+  /** Phase 8 Task 10 — one of the edited account's knowledge bases (options loaded from the API). */
+  | 'knowledgeBase'
+  /** Phase 8 Task 11 — one of the edited account's registered AI agents (options loaded from the API). */
+  | 'aiAgent';
 
 export interface JourneyFieldOption {
   value: string;
@@ -474,6 +481,8 @@ export interface JourneyNodeField {
   label: string;
   type: JourneyFieldType;
   required?: boolean;
+  /** Phase 8 Task 11 — `required` is waived while this other field of the node has a value. */
+  requiredUnless?: string;
   placeholder?: string;
   help?: string;
   options?: JourneyFieldOption[];

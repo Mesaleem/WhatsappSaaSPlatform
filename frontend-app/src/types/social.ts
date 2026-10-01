@@ -15,6 +15,27 @@ export type SocialAssetType =
 
 export type SocialHealthStatus = 'connected' | 'token_expired' | 'reauth_required';
 
+/**
+ * Phase 9 Task 1 — the lifecycle status the API derives per connection
+ * (SocialConnectionStatus): revoked = the provider no longer accepts the
+ * grant; expired = the token expired. The client-only states
+ * (not_connected / connecting / failed / cancelled / disconnecting) live in
+ * SocialAccountsPage.
+ */
+export type SocialConnectionStatus = 'connected' | 'expired' | 'revoked';
+
+/**
+ * Phase 9 Task 2 — the lifecycle status of a connection as the API reports
+ * it (`connection_status`: stored health + token expiry), falling back to
+ * health_status for older payloads the way the backend maps it.
+ */
+export function connectionStatusOf(account: Pick<SocialAccount, 'connection_status' | 'health_status'>): SocialConnectionStatus {
+  if (account.connection_status) return account.connection_status;
+  if (account.health_status === 'reauth_required') return 'revoked';
+  if (account.health_status === 'token_expired') return 'expired';
+  return 'connected';
+}
+
 export const SOCIAL_ASSET_TYPE_LABELS: Record<SocialAssetType, string> = {
   facebook_page: 'Facebook Page',
   instagram: 'Instagram Account',
@@ -31,14 +52,34 @@ export interface SocialAccount {
   name: string | null;
   avatar_url: string | null;
   health_status: SocialHealthStatus;
+  /** Phase 9 Task 1 — optional so older API payloads / fixtures still type-check. */
+  connection_status?: SocialConnectionStatus;
+  status_reason?: string | null;
+  status_checked_at?: string | null;
+  capabilities?: string[];
   token_expires_at: string | null;
   created_at: string | null;
+}
+
+/** GET /api/social/providers — Phase 9 Task 1. */
+export interface SocialProviderInfo {
+  key: SocialProvider;
+  label: string;
+  asset_types: SocialAssetType[];
+  capabilities: Record<string, string[]>;
+  configured: boolean;
+  enabled_for_account: boolean;
+}
+
+/** POST /api/social/accounts/{id}/check */
+export interface SocialConnectionCheckResponse {
+  data: SocialAccount;
+  check: { status: SocialConnectionStatus | 'unknown'; reason: string | null };
 }
 
 /** GET /api/social/oauth/{provider}/redirect */
 export interface OAuthRedirectResponse {
   url: string;
-  nonce: string;
 }
 
 /** One asset offered by the provider after a successful code exchange, not yet bound. */
@@ -62,7 +103,13 @@ export interface OAuthPopupErrorMessage {
   message: string;
 }
 
-export type OAuthPopupMessage = OAuthPopupSuccessMessage | OAuthPopupErrorMessage;
+/** Phase 9 Task 1 — the user declined or closed the provider's consent screen. */
+export interface OAuthPopupCancelledMessage {
+  type: 'social-oauth-cancelled';
+  message: string;
+}
+
+export type OAuthPopupMessage = OAuthPopupSuccessMessage | OAuthPopupErrorMessage | OAuthPopupCancelledMessage;
 
 /** POST /api/social/accounts/bind */
 export interface BindAccountsPayload {

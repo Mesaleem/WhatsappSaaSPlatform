@@ -138,6 +138,10 @@ export interface JourneyNodeConfigFormProps {
   config: Record<string, unknown>;
   errors?: JourneyNodeConfigErrors;
   knownVariables?: string[];
+  /** Phase 8 Task 10 — the edited account's knowledge bases; null while loading / unavailable. */
+  knowledgeBases?: ReadonlyArray<{ id: number; name: string }> | null;
+  /** Phase 8 Task 11 — the edited account's registered AI agents; null while loading / unavailable. */
+  aiAgents?: ReadonlyArray<{ id: number; name: string; is_enabled?: boolean }> | null;
   onChange: (patch: Record<string, unknown>) => void;
 }
 
@@ -146,6 +150,8 @@ export default function JourneyNodeConfigForm({
   config,
   errors = {},
   knownVariables = [],
+  knowledgeBases = null,
+  aiAgents = null,
   onChange,
 }: JourneyNodeConfigFormProps) {
   const definition = getJourneyNode(nodeType);
@@ -211,6 +217,71 @@ export default function JourneyNodeConfigForm({
             />
           </FieldShell>
         );
+
+      case 'knowledgeBase': {
+        // Phase 8 Task 10 — account-scoped choices; the backend re-checks ownership.
+        const selected = value === undefined || value === null ? '' : String(value);
+        const known = (knowledgeBases ?? []).some((kb) => String(kb.id) === selected);
+
+        return (
+          <FieldShell key={field.key} field={field} error={error}>
+            <select
+              className={inputClass}
+              data-testid={`kb-select-${field.key}`}
+              value={selected}
+              onChange={(e) => onChange({ [field.key]: e.target.value })}
+            >
+              <option value="">{knowledgeBases === null ? 'Loading knowledge bases…' : '— select —'}</option>
+              {(knowledgeBases ?? []).map((kb) => (
+                <option key={kb.id} value={String(kb.id)}>
+                  {kb.name}
+                </option>
+              ))}
+              {selected !== '' && !known && knowledgeBases !== null && (
+                <option value={selected}>Unavailable knowledge base (#{selected})</option>
+              )}
+            </select>
+            {knowledgeBases !== null && knowledgeBases.length === 0 && (
+              <p className="mt-1 text-[11px] text-slate-500" data-testid="kb-empty">
+                This account has no knowledge bases yet. There is no screen to create one in this version — they are added through the Knowledge Base API
+                (<code>/api/knowledge-bases</code>); ask your administrator.
+              </p>
+            )}
+          </FieldShell>
+        );
+      }
+
+      case 'aiAgent': {
+        // Phase 8 Task 11 — account-scoped choices; the backend re-checks ownership on save and at run time.
+        const selected = value === undefined || value === null ? '' : String(value);
+        const known = (aiAgents ?? []).some((agent) => String(agent.id) === selected);
+
+        return (
+          <FieldShell key={field.key} field={field} error={error}>
+            <select
+              className={inputClass}
+              data-testid={`agent-select-${field.key}`}
+              value={selected}
+              onChange={(e) => onChange({ [field.key]: e.target.value })}
+            >
+              <option value="">{aiAgents === null ? 'Loading AI agents…' : '— none (single bounded reply) —'}</option>
+              {(aiAgents ?? []).map((agent) => (
+                <option key={agent.id} value={String(agent.id)}>
+                  {agent.name}
+                  {agent.is_enabled === false ? ' (disabled)' : ''}
+                </option>
+              ))}
+              {selected !== '' && !known && aiAgents !== null && <option value={selected}>Unavailable AI agent (#{selected})</option>}
+            </select>
+            {aiAgents !== null && aiAgents.length === 0 && (
+              <p className="mt-1 text-[11px] text-slate-500" data-testid="agent-empty">
+                This account has no registered AI agents yet — leave this empty for a single bounded reply. There is no screen to create agents in this version — they
+                are added through the AI Agents API (<code>/api/ai-agents</code>); ask your administrator.
+              </p>
+            )}
+          </FieldShell>
+        );
+      }
 
       case 'select':
         return (

@@ -43,8 +43,12 @@ use App\Http\Controllers\Api\NotificationTemplateController;
 use App\Http\Controllers\Api\MailLogController;
 use App\Http\Controllers\Api\NotificationBroadcastController;
 use App\Http\Controllers\Api\SocialAuthController;
+use App\Http\Controllers\Api\AdAttributionController;
 use App\Http\Controllers\Api\AdCampaignController;
+use App\Http\Controllers\Api\AdsDashboardController;
 use App\Http\Controllers\Api\OrganicPostController;
+use App\Http\Controllers\Api\OrganicPostInsightsController;
+use App\Http\Controllers\Api\SocialAnalyticsController;
 use App\Http\Controllers\Api\CommentAutomationRuleController;
 use App\Http\Controllers\Api\SocialInboxController;
 use App\Http\Controllers\Api\SocialWebhookController;
@@ -59,6 +63,8 @@ use App\Http\Controllers\Api\CrmLeadBulkController;
 use App\Http\Controllers\Api\CrmAnalyticsController;
 use App\Http\Controllers\Api\V1\CrmLeadController as V1CrmLeadController;
 use App\Http\Controllers\Api\AICopywriterController;
+use App\Http\Controllers\Api\KnowledgeBaseController;
+use App\Http\Controllers\Api\AiAgentController;
 use App\Http\Controllers\Api\SocialMediaController;
 use App\Http\Controllers\Api\SocialReportController;
 use App\Http\Controllers\Api\ContactGroupController;
@@ -134,7 +140,13 @@ Route::post('/webhooks/stripe', [PaymentWebhookController::class, 'stripe']);
 // account) and after throttle:external-api (rate limits unchanged). It is
 // a no-op for any request that sends no Idempotency-Key header, so every
 // existing client of these three routes is unaffected.
-Route::middleware(['log.apirequest', 'auth.apikey', 'throttle:external-api', 'idempotency'])->prefix('v1')->group(function () {
+// Phase 5 P5-B -- 'module.apikey:developer_api' (the existing API-key
+// sibling of module.guard, reading the key's own account): the Developer
+// API is a module the Super Admin can switch off per account, and every
+// /v1 route now honours that switch. Placed after throttle so a refused
+// call is still rate-limited and logged, before idempotency so nothing
+// is stored for it.
+Route::middleware(['log.apirequest', 'auth.apikey', 'throttle:external-api', 'module.apikey:developer_api', 'idempotency'])->prefix('v1')->group(function () {
     Route::post('/messages/send-payment-alert', [ExternalAlertController::class, 'sendPaymentAlert']);
     // Dynamic Templates & Variables System.
     Route::post('/messages/send-template', [TemplateMessageController::class, 'send']);
@@ -191,7 +203,8 @@ Route::middleware(['log.apirequest', 'auth.apikey', 'throttle:external-api', 'id
 // Phase 3 Task 5 -- same optional 'idempotency' guard as the group above,
 // innermost for the same reasons (ApiAuthMiddleware resolves
 // api_account_id before it runs).
-Route::middleware(['log.apirequest', 'auth.apisecret', 'throttle:external-api', 'idempotency'])->prefix('v1/whatsapp')->group(function () {
+// Phase 5 P5-B -- same 'module.apikey:developer_api' gate as the /v1 group above.
+Route::middleware(['log.apirequest', 'auth.apisecret', 'throttle:external-api', 'module.apikey:developer_api', 'idempotency'])->prefix('v1/whatsapp')->group(function () {
     Route::post('/groups/create', [V1GroupController::class, 'create']);
     Route::post('/messages/send', [UnifiedMessageController::class, 'send']);
 });
@@ -264,9 +277,15 @@ Route::middleware('auth:sanctum')->group(function () {
     // same permission tier as the Developer Portal (ApiKeyController) —
     // regenerating an account's shared API secret is an administrative
     // action, not something the plain 'user' role should be able to do.
-    Route::middleware(['tenant.isolation', 'permission:manage-developer-settings'])->prefix('account/api-key')->group(function () {
+    //
+    // Phase 5 P5-B -- module.guard:developer_api (the same gate the
+    // Developer Portal's /developer/* routes use): an account whose
+    // Developer API module is off can neither see nor mint this key.
+    // Regenerating additionally needs an active subscription
+    // (subscription.guard), like creating a key under /developer does.
+    Route::middleware(['tenant.isolation', 'permission:manage-developer-settings', 'module.guard:developer_api'])->prefix('account/api-key')->group(function () {
         Route::get('/', [ClientApiKeyController::class, 'show']);
-        Route::post('/regenerate', [ClientApiKeyController::class, 'regenerate']);
+        Route::post('/regenerate', [ClientApiKeyController::class, 'regenerate'])->middleware('subscription.guard');
     });
 
     // ==========================================================================
@@ -452,15 +471,60 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::middleware('permission:manage-chatbot|whatsapp.delete')->delete('/{id}', [WhatsAppFlowController::class, 'destroy']);
         });
 
+        // Phase 8 Task 9 — Knowledge Base foundation (retrieval for the future
+        // Journey `rag` node). Route gate: the Journey/chatbot permission tier;
+        // the controller additionally runs AiAuthorizer::forRequest('chatbot',
+        // 'manage-chatbot') on the TARGET account (module, permission, account,
+        // subscription and the `ai` capability — no Super Admin entitlement
+        // bypass), exactly like the Ad Copywriter. No new capability/module.
+        Route::middleware('permission:manage-chatbot')->prefix('knowledge-bases')->group(function () {
+            Route::get('/', [KnowledgeBaseController::class, 'index']);
+            Route::post('/', [KnowledgeBaseController::class, 'store']);
+            Route::get('/{knowledgeBase}', [KnowledgeBaseController::class, 'show']);
+            Route::delete('/{knowledgeBase}', [KnowledgeBaseController::class, 'destroy']);
+            Route::get('/{knowledgeBase}/documents', [KnowledgeBaseController::class, 'documents']);
+            Route::post('/{knowledgeBase}/documents', [KnowledgeBaseController::class, 'storeDocument']);
+            Route::get('/{knowledgeBase}/documents/{document}', [KnowledgeBaseController::class, 'showDocument']);
+            Route::post('/{knowledgeBase}/documents/{document}/reprocess', [KnowledgeBaseController::class, 'reprocessDocument']);
+            Route::delete('/{knowledgeBase}/documents/{document}', [KnowledgeBaseController::class, 'destroyDocument']);
+            Route::post('/{knowledgeBase}/search', [KnowledgeBaseController::class, 'search']);
+        });
+
+        // Phase 8 Task 11 — AI Agent Registry (account-scoped). Same gate as the
+        // knowledge bases: the Journey/chatbot permission tier on the route and
+        // AiAuthorizer::forRequest('chatbot', 'manage-chatbot') on the TARGET
+        // account in the controller (no Super Admin entitlement bypass). No new
+        // capability/module/permission; tool grants are checked per tool.
+        Route::middleware('permission:manage-chatbot')->prefix('ai-agents')->group(function () {
+            Route::get('/', [AiAgentController::class, 'index']);
+            Route::get('/tools', [AiAgentController::class, 'tools']);
+            Route::post('/', [AiAgentController::class, 'store']);
+            Route::get('/{agent}', [AiAgentController::class, 'show']);
+            Route::put('/{agent}', [AiAgentController::class, 'update']);
+            Route::post('/{agent}/enable', [AiAgentController::class, 'enable']);
+            Route::post('/{agent}/disable', [AiAgentController::class, 'disable']);
+            Route::get('/{agent}/versions', [AiAgentController::class, 'versions']);
+            Route::delete('/{agent}', [AiAgentController::class, 'destroy']);
+        });
+
         // Social Media Marketing & Meta Ads Automation Expansion (Phase 1).
         // Gated the same tier as chatbot/team above: an active-subscription
         // admin-console feature. redirect()/index()/bind()/destroy() all
         // resolve the tenant via ResolvesTenantAccount, same as every other
         // route in this group.
-        Route::middleware('permission:manage-social-accounts')->prefix('social')->group(function () {
+        //
+        // Phase 9 Task 1 — provider-agnostic foundation: the connection routes
+        // now also require the `social_accounts` module (as Organic Posts
+        // already did) and the existing `social` capability (seeded, bundled
+        // in every baseline plan, editable per plan) — no new capability.
+        // SocialAuthController additionally checks the TARGET account on
+        // every connect step (these guards bypass a Super Admin).
+        Route::middleware(['permission:manage-social-accounts', 'module.guard:social_accounts', 'capability.guard:social', 'target.account:social_accounts,social'])->prefix('social')->group(function () {
+            Route::get('/providers', [SocialAuthController::class, 'providers']);
             Route::get('/accounts', [SocialAuthController::class, 'index']);
-            Route::delete('/accounts/{id}', [SocialAuthController::class, 'destroy']);
+            Route::delete('/accounts/{id}', [SocialAuthController::class, 'destroy'])->whereNumber('id');
             Route::post('/accounts/bind', [SocialAuthController::class, 'bind']);
+            Route::post('/accounts/{id}/check', [SocialAuthController::class, 'check'])->whereNumber('id');
             Route::get('/oauth/{provider}/redirect', [SocialAuthController::class, 'redirect']);
         });
 
@@ -491,8 +555,21 @@ Route::middleware('auth:sanctum')->group(function () {
         // named in the spec's 4-item checklist) — they stay gated on
         // 'launch-meta-ads' alone, unchanged. module.guard:meta_ads stays
         // a group-level gate, applying to every action exactly as before.
-        Route::middleware('module.guard:meta_ads')->prefix('social/ads')->group(function () {
+        // Phase 9 Task 6 — target.account: a Super Admin acting on a selected client is
+        // checked like that client's own users (active, route module, subscription for
+        // writes) on every pre-Phase-9 Social group below; no capability is added.
+        // Phase 10 Task 2 — Ads entitlement enforcement: the launcher now also
+        // requires the `ads` capability (NOT `social`), for the tenant
+        // (capability.guard:ads) and for a Super Admin's selected client
+        // (target.account:meta_ads,ads). Reads stay allowed on an expired
+        // subscription (subscription.guard / target.account), writes do not.
+        Route::middleware(['module.guard:meta_ads', 'capability.guard:ads', 'target.account:meta_ads,ads'])->prefix('social/ads')->group(function () {
             Route::middleware('permission:launch-meta-ads|social_ads.view')->get('/', [AdCampaignController::class, 'index']);
+            // Phase 10 Task 3 — Ads dashboard: stored campaign / spend / attribution data only, same read gates as the list.
+            Route::middleware('permission:launch-meta-ads|social_ads.view')->get('/dashboard', [AdsDashboardController::class, 'show']);
+            // Owner request (2026-09-30): ad account currency / balance, and Meta location search for the launch form (reads).
+            Route::middleware('permission:launch-meta-ads|social_ads.view')->get('/account', [AdCampaignController::class, 'account']);
+            Route::middleware('permission:launch-meta-ads|social_ads.launch')->get('/locations', [AdCampaignController::class, 'locations']);
             Route::middleware('permission:launch-meta-ads|social_ads.launch')->post('/launch', [AdCampaignController::class, 'launch']);
             Route::middleware('permission:launch-meta-ads')->post('/{id}/pause', [AdCampaignController::class, 'pause']);
             Route::middleware('permission:launch-meta-ads')->post('/{id}/resume', [AdCampaignController::class, 'resume']);
@@ -501,7 +578,16 @@ Route::middleware('auth:sanctum')->group(function () {
 
         // Social Media Marketing & Meta Ads Automation Expansion (Phase 4).
         // Ad Comment Auto-Responder — rule CRUD (CommentRulesPage).
-        Route::middleware(['permission:manage-comment-automation', 'module.guard:comment_automation'])->prefix('social/comment-rules')->group(function () {
+        // Phase 10 Task 1 — Ads attribution foundation (read-only). Ads has its own
+        // gates: meta_ads module + `ads` capability (NOT the `social` capability);
+        // the controller re-checks the TARGET (SocialTargetGate::denialFor) and a
+        // Super Admin must select a client (requireTargetAccount → 422).
+        Route::middleware(['permission:launch-meta-ads|social_ads.view', 'module.guard:meta_ads', 'capability.guard:ads', 'target.account:meta_ads,ads'])->prefix('social/ads/attribution')->group(function () {
+            Route::get('/', [AdAttributionController::class, 'index']);
+            Route::get('/summary', [AdAttributionController::class, 'summary']);
+        });
+
+        Route::middleware(['permission:manage-comment-automation', 'module.guard:comment_automation', 'target.account:comment_automation'])->prefix('social/comment-rules')->group(function () {
             Route::get('/', [CommentAutomationRuleController::class, 'index']);
             Route::post('/', [CommentAutomationRuleController::class, 'store']);
             Route::put('/{id}', [CommentAutomationRuleController::class, 'update']);
@@ -512,7 +598,7 @@ Route::middleware('auth:sanctum')->group(function () {
         // Unified Social Inbox — gated on manage-social-leads (same tier
         // as the Instant Lead Bridge it surfaces alongside FB/IG DMs;
         // see SocialInboxController's docblock).
-        Route::middleware(['permission:manage-social-leads', 'module.guard:social_inbox'])->prefix('social/inbox')->group(function () {
+        Route::middleware(['permission:manage-social-leads', 'module.guard:social_inbox', 'target.account:social_inbox'])->prefix('social/inbox')->group(function () {
             Route::get('/threads', [SocialInboxController::class, 'threads']);
             Route::get('/threads/{id}/messages', [SocialInboxController::class, 'messages']);
             Route::post('/send', [SocialInboxController::class, 'send']);
@@ -528,7 +614,7 @@ Route::middleware('auth:sanctum')->group(function () {
         // before this. Same permission tier as the Inbox above
         // (manage-social-leads), since both surface the same underlying
         // data.
-        Route::middleware(['permission:manage-social-leads', 'module.guard:lead_crm'])->prefix('social/leads')->group(function () {
+        Route::middleware(['permission:manage-social-leads', 'module.guard:lead_crm', 'target.account:lead_crm'])->prefix('social/leads')->group(function () {
             Route::get('/', [LeadController::class, 'index']);
             Route::get('/{id}', [LeadController::class, 'show']);
         });
@@ -725,7 +811,7 @@ Route::middleware('auth:sanctum')->group(function () {
         // Phase. AI Ad Copywriter — gated the SAME tier as
         // launch-meta-ads (it is embedded in, and only useful from, the
         // Ad Creation Wizard on MetaAdsPage.tsx).
-        Route::middleware('permission:launch-meta-ads')->prefix('social/ai')->group(function () {
+        Route::middleware(['permission:launch-meta-ads', 'target.account'])->prefix('social/ai')->group(function () {
             Route::post('/generate', [AICopywriterController::class, 'generate']);
         });
 
@@ -733,7 +819,7 @@ Route::middleware('auth:sanctum')->group(function () {
         // for the Ad Creation Wizard's creative step — same permission
         // tier as the AI Copywriter and the launcher itself, since all
         // three are steps of the one wizard. See SocialMediaController.
-        Route::middleware('permission:launch-meta-ads')->prefix('social/media')->group(function () {
+        Route::middleware(['permission:launch-meta-ads', 'target.account'])->prefix('social/media')->group(function () {
             Route::post('/upload', [SocialMediaController::class, 'upload']);
         });
 
@@ -746,9 +832,39 @@ Route::middleware('auth:sanctum')->group(function () {
         // permission and module slug already exist and are already
         // seeded/co-assigned (RolePermissionSeeder) — no seeder changes
         // needed. See OrganicPostController/OrganicPublishService.
-        Route::middleware(['module.guard:social_accounts', 'permission:manage-social-accounts'])->prefix('social/organic-posts')->group(function () {
+        //
+        // Phase 9 Task 3 — scheduling, cancel and retry added; the group now
+        // also requires the `social` capability (the same guard as the
+        // Social Accounts group above). Super Admin passes the route guards
+        // but OrganicPublishService re-checks the TARGET account
+        // (SocialTargetGate) on create and retry, and the worker re-checks it
+        // before sending.
+        Route::middleware(['module.guard:social_accounts', 'permission:manage-social-accounts', 'capability.guard:social', 'target.account:social_accounts,social'])->prefix('social/organic-posts')->group(function () {
             Route::get('/', [OrganicPostController::class, 'index']);
             Route::post('/', [OrganicPostController::class, 'store']);
+            Route::get('/{id}', [OrganicPostController::class, 'show'])->whereNumber('id');
+            Route::post('/{id}/cancel', [OrganicPostController::class, 'cancel'])->whereNumber('id');
+            Route::post('/{id}/retry', [OrganicPostController::class, 'retry'])->whereNumber('id');
+        });
+
+        // Phase 9 Task 4 — organic post insights. Read tier: view-social-analytics
+        // (the existing read-only social analytics permission) + the same module
+        // and capability as publishing. The controller re-checks the TARGET
+        // account (SocialTargetGate) and scopes every post to it.
+        Route::middleware(['module.guard:social_accounts', 'permission:view-social-analytics', 'capability.guard:social'])->prefix('social/organic-posts')->group(function () {
+            Route::get('/insights/summary', [OrganicPostInsightsController::class, 'summary']);
+            Route::get('/{id}/insights', [OrganicPostInsightsController::class, 'show'])->whereNumber('id');
+            Route::post('/{id}/insights/refresh', [OrganicPostInsightsController::class, 'refresh'])->whereNumber('id');
+        });
+
+        // Phase 9 Task 5 — account-level social analytics dashboard (persisted
+        // insight snapshots only). Read tier: view-social-analytics — deliberately
+        // NOT manage-social-accounts, so view-only analytics users get it — plus
+        // the social_accounts module and the `social` capability; the controller
+        // re-checks the TARGET account (SocialTargetGate).
+        Route::middleware(['module.guard:social_accounts', 'permission:view-social-analytics', 'capability.guard:social'])->prefix('social/analytics')->group(function () {
+            Route::get('/dashboard', [SocialAnalyticsController::class, 'dashboard']);
+            Route::get('/top-posts', [SocialAnalyticsController::class, 'topPosts']);
         });
 
         // Social Media Marketing & Meta Ads Automation Expansion — Final
@@ -762,7 +878,7 @@ Route::middleware('auth:sanctum')->group(function () {
         // endpoint — the spec explicitly asks the SAME page to also show
         // "monthly metric graphs", which needs data in a chartable shape,
         // not PDF bytes.
-        Route::middleware(['permission:view-social-analytics', 'module.guard:reports'])->prefix('social/reports')->group(function () {
+        Route::middleware(['permission:view-social-analytics', 'module.guard:reports', 'target.account:reports'])->prefix('social/reports')->group(function () {
             Route::get('/summary', [SocialReportController::class, 'summary']);
             Route::get('/generate', [SocialReportController::class, 'generate']);
         });
@@ -863,14 +979,21 @@ Route::middleware('auth:sanctum')->group(function () {
             // "pick an existing group" alongside "+ Create Group".
             // Registered as a literal path, not '/{id}', so it can never
             // collide with the DELETE/{id} route below.
-            Route::get('/available-native', [ContactGroupController::class, 'availableNativeGroups']);
+            //
+            // Phase 5 P5-C -- available-native / import-native / recreate
+            // act only on Native WhatsApp Groups, so they carry the
+            // `whatsapp_groups` capability at the route. create,
+            // add-contacts and send-template also serve contact lists and
+            // check the capability for native groups only
+            // (NativeGroupEntitlement).
+            Route::get('/available-native', [ContactGroupController::class, 'availableNativeGroups'])->middleware('capability.guard:whatsapp_groups');
             // [New, "select an existing group"]: adopts one of the
             // groups listed above as a ContactGroup row, importing its
             // real current member list. See
             // NativeGroupCreationService::importExisting()'s docblock
             // for why this never dispatches CreateNativeWhatsAppGroupJob
             // the way /create's native_wa_group path does.
-            Route::post('/import-native', [ContactGroupController::class, 'importNative']);
+            Route::post('/import-native', [ContactGroupController::class, 'importNative'])->middleware('capability.guard:whatsapp_groups');
             Route::post('/add-contacts', [ContactGroupController::class, 'addContacts']);
             Route::delete('/{id}', [ContactGroupController::class, 'destroy']);
             // [New, disclosed]: previously there was NO session-authenticated
@@ -886,7 +1009,7 @@ Route::middleware('auth:sanctum')->group(function () {
             // a later send failure now also flips this — see
             // ProcessGroupDispatchJob). See recreate()'s own docblock for
             // the disclosed duplicate-group risk this carries.
-            Route::post('/{id}/recreate', [ContactGroupController::class, 'recreate']);
+            Route::post('/{id}/recreate', [ContactGroupController::class, 'recreate'])->middleware('capability.guard:whatsapp_groups');
         });
 
         // Module 7: analytics KPIs/charts — same sensitivity tier as

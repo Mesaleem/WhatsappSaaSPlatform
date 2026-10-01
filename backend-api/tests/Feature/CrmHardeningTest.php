@@ -512,6 +512,8 @@ class CrmHardeningTest extends TestCase
         $account = Account::factory()->create();
         // Task 10 — capture promotion requires a CRM-entitled account.
         $this->grant($account, 'crm');
+        // P6-2 — ... with an active account + subscription, as a manual CRM write does.
+        \App\Models\Subscription::factory()->create(['account_id' => $account->id]);
         $socialAccount = SocialAccount::create([
             'account_id' => $account->id,
             'provider' => 'meta',

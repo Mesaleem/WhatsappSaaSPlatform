@@ -14,7 +14,7 @@ const inputClass =
 
 
 export default function ProfileModal({ onClose }: { onClose: () => void }) {
-  const { user, logout, refreshUser, hasPermission, isSuperAdmin } = useAuth();
+  const { user, logout, refreshUser, hasPermission, hasModule, isSuperAdmin } = useAuth();
   const navigate = useNavigate();
 
   const [name, setName] = useState(user?.name ?? '');
@@ -28,8 +28,9 @@ export default function ProfileModal({ onClose }: { onClose: () => void }) {
 
   // Client API Key — Developer Portal credential for this tenant account. Super Admin has no
   // tenant account and is excluded; a tenant user needs manage-developer-settings, matching the
-  // backend route's `permission:manage-developer-settings` gate on /account/api-key.
-  const canManageApiKey = hasPermission('manage-developer-settings') && !isSuperAdmin();
+  // backend route's `permission:manage-developer-settings` gate on /account/api-key — and, since
+  // P5-B, its `module.guard:developer_api` gate (the section is hidden when the module is off).
+  const canManageApiKey = hasPermission('manage-developer-settings') && hasModule('developer_api') && !isSuperAdmin();
   const [apiKey, setApiKey] = useState<ClientApiKey | null>(null);
   const [isKeyLoading, setIsKeyLoading] = useState(canManageApiKey);
   const [keyError, setKeyError] = useState<string | null>(null);

@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
-import { AlertCircle, Building2, Loader2, Pencil, Plus, Sparkle, Trash2, ToggleLeft, ToggleRight, X } from 'lucide-react';
+import { AlertCircle, Loader2, Pencil, Plus, Sparkle, Trash2, ToggleLeft, ToggleRight, X } from 'lucide-react';
 import { useAuth } from '../../core/context/AuthContext';
 import { useTenant } from '../../core/context/TenantContext';
+import { SelectClientNotice } from '../../components/common/ActionGate';
+import { useClientGate } from '../../components/common/actionGateHooks';
 import commentRulesService from '../../services/commentRulesService';
 import { Card, TableCard, inputClass } from '../../components/common/Card';
 import ConfirmModal from '../../components/common/ConfirmModal';
@@ -181,10 +183,12 @@ function RuleFormModal({
 }
 
 export default function CommentRulesPage() {
-  const { isSuperAdmin } = useAuth();
+  const { user, isSuperAdmin } = useAuth();
   const { selectedAccountId } = useTenant();
   const superAdmin = isSuperAdmin();
-  const noTenantSelected = superAdmin && selectedAccountId === null;
+  // Owner request (2026-09-30): with its own Platform account a Super Admin needs no client here.
+  const noTenantSelected = superAdmin && selectedAccountId === null && !user?.platform_crm_account;
+  const { guard, openPicker, picker } = useClientGate({ platformFallback: true });
 
   const [rules, setRules] = useState<CommentAutomationRule[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -269,10 +273,9 @@ export default function CommentRulesPage() {
             </p>
           </div>
           <button
-            onClick={() => setModalRule('new')}
-            disabled={noTenantSelected}
-            title={noTenantSelected ? 'Select a client above first' : undefined}
-            className="flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+            onClick={() => guard(() => setModalRule('new'), 'add a comment rule')}
+            title={noTenantSelected ? 'You will be asked which client to add the rule for.' : undefined}
+            className="flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold text-white"
             style={{ background: activeGradient }}
           >
             <Plus className="h-4 w-4" />
@@ -280,11 +283,9 @@ export default function CommentRulesPage() {
           </button>
         </div>
 
+        {picker}
         {noTenantSelected ? (
-          <div className="flex items-start gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm" style={{ color: indigo.muted }}>
-            <Building2 className="mt-0.5 h-4 w-4 flex-shrink-0" />
-            Select a client from the switcher at the top of the page to manage their comment rules.
-          </div>
+          <SelectClientNotice message="Comment rules belong to a client. Select one to manage their comment rules." onSelect={() => openPicker('manage comment rules')} />
         ) : (
           <>
             {pageError && (

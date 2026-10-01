@@ -406,6 +406,18 @@ class Account extends Model
      * Account-level admin gate: Super Admin can suspend an account outright,
      * independent of whether its subscription/billing is otherwise fine.
      */
+    /**
+     * The Super Admin's own "Platform (Super Admin)" account (account_type
+     * 'super_admin', see App\Services\Crm\PlatformCrmAccount). It has no
+     * plan or subscription of its own: Social / Ads / CRM target checks treat
+     * it as entitled and never expired (it is still subject to suspension
+     * and module switches).
+     */
+    public function isPlatformAccount(): bool
+    {
+        return $this->account_type === \App\Services\Crm\PlatformCrmAccount::ACCOUNT_TYPE;
+    }
+
     public function isAdministrativelyActive(): bool
     {
         return $this->status === 'active';
@@ -585,6 +597,11 @@ class Account extends Model
      */
     public function hasSocialPlatformEnabled(string $assetType): bool
     {
+        // The Super Admin's own Platform account may connect every Meta asset.
+        if ($this->isPlatformAccount() && in_array($assetType, ['facebook_page', 'meta_ad_account', 'instagram'], true)) {
+            return true;
+        }
+
         return match ($assetType) {
             'facebook_page', 'meta_ad_account' => (bool) $this->allow_facebook,
             'instagram' => (bool) $this->allow_instagram,

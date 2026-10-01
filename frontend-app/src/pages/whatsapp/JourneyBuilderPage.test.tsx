@@ -4,6 +4,8 @@ import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 
 import JourneyBuilderPage from './JourneyBuilderPage';
 import journeyService from '../../services/journeyService';
+import knowledgeBases from '../../services/knowledgeBaseService';
+import aiAgents from '../../services/aiAgentService';
 import {
   JOURNEY_PALETTE_NODES,
   JOURNEY_PALETTE_NODE_TYPES,
@@ -49,6 +51,11 @@ vi.mock('../../services/journeyService', () => ({
     test: vi.fn(),
   },
 }));
+
+// Phase 8 Task 10 — the rag node's knowledge-base selector.
+vi.mock('../../services/knowledgeBaseService', () => ({ default: { list: vi.fn() } }));
+// Phase 8 Task 11 — the agent node's registered-agent selector.
+vi.mock('../../services/aiAgentService', () => ({ default: { list: vi.fn() } }));
 
 vi.mock('../../core/context/TenantContext', () => ({
   useTenant: () => ({ selectedAccountId: 1, selectedAccount: null }),
@@ -194,6 +201,8 @@ beforeEach(() => {
   journeys.list.mockResolvedValue([]);
   journeys.create.mockResolvedValue(legacyFlow);
   journeys.update.mockResolvedValue(legacyFlow);
+  (knowledgeBases.list as Mock).mockResolvedValue([{ id: 7, name: 'Store policies', embedding_dimensions: 256 }]);
+  (aiAgents.list as Mock).mockResolvedValue([{ id: 12, name: 'Sales agent', is_enabled: true, version: 2, tools: [] }]);
 });
 
 // ====================================================================
@@ -528,7 +537,7 @@ describe('entitlement UX', () => {
     }
   });
 
-  it('greys out a node whose capability the account lacks, and says why', async () => {
+  it('greys out a node whose capability the account lacks, and says why — also on click', async () => {
     authState.capabilities = { ...ALL_CAPABILITIES, external_api: false };
 
     const user = userEvent.setup();
@@ -536,9 +545,14 @@ describe('entitlement UX', () => {
 
     const api = screen.getByTestId('palette-node-api') as HTMLButtonElement;
 
-    expect(api.disabled).toBe(true);
+    // Final hardening §23: greyed out and marked unavailable, but still
+    // clickable so the reason is discoverable without a hover tooltip.
+    expect(api.getAttribute('aria-disabled')).toBe('true');
     expect(api.dataset.entitled).toBe('false');
     expect(api.title).toContain('external_api');
+
+    await user.click(api);
+    expect(screen.getByTestId('palette-notice')).toHaveTextContent('external_api');
 
     // Everything else stays usable — one missing capability is not a
     // reason to disable the palette.
@@ -554,7 +568,7 @@ describe('entitlement UX', () => {
     for (const metaOnly of ['reply_button', 'list', 'template', 'flow', 'catalog']) {
       const button = screen.getByTestId(`palette-node-${metaOnly}`) as HTMLButtonElement;
 
-      expect(button.disabled, `${metaOnly} should be blocked on QR`).toBe(true);
+      expect(button.getAttribute('aria-disabled'), `${metaOnly} should be blocked on QR`).toBe('true');
       expect(button.title).toContain('qr');
     }
 
@@ -570,6 +584,7 @@ describe('entitlement UX', () => {
     await openNewEditor(user);
 
     await user.click(screen.getByTestId('palette-node-code'));
+    expect(screen.getByTestId('palette-notice')).toHaveTextContent('custom_code');
     await user.click(saveButton());
 
     await waitFor(() => expect(journeys.create).toHaveBeenCalled());
@@ -625,9 +640,49 @@ describe('runtime truth and secret handling', () => {
       .map((el) => (el as HTMLElement).dataset.testid!.replace('palette-node-', ''))
       .sort();
 
-    expect(executable).toEqual(['audio', 'conditional', 'delay', 'document', 'image', 'text', 'video']);
-    expect(draftOnly).toHaveLength(20);
+    // Phase 8 Task 7: prompt + agent run (metered AI); Task 10: rag.
+    expect(executable).toEqual(['agent', 'audio', 'conditional', 'delay', 'document', 'image', 'prompt', 'rag', 'text', 'video']);
+    expect(draftOnly).toHaveLength(17);
     expect(draftOnly).toContain('api');
+  });
+
+  // Phase 8 Task 7 — an AI node's reply is offered as a variable to later nodes.
+  it('suggests an AI node output variable to the other variable fields', async () => {
+    const user = userEvent.setup();
+    await openNewEditor(user);
+
+    await user.click(screen.getByTestId('palette-node-prompt'));
+    await user.click(screen.getByTestId('palette-node-agent'));
+
+    await waitFor(() => expect(document.querySelector('datalist#vars-agent-inputVariable option[value="ai_response"]')).not.toBeNull());
+  });
+
+  // Phase 8 Task 10 — the rag node offers only the account's knowledge bases.
+  it('offers the account knowledge bases in the rag node selector', async () => {
+    const user = userEvent.setup();
+    await openNewEditor(user);
+
+    await user.click(screen.getByTestId('palette-node-rag'));
+
+    const select = (await screen.findByTestId('kb-select-knowledgeBaseId')) as HTMLSelectElement;
+    await waitFor(() => expect(within(select).getByRole('option', { name: 'Store policies' })).toBeTruthy());
+    await user.selectOptions(select, '7');
+    expect(select.value).toBe('7');
+    expect(document.querySelector('datalist#vars-rag-outputVariable')).not.toBeNull();
+  });
+
+  // Phase 8 Task 11 — the agent node offers only the account's registered agents.
+  it('offers the account AI agents in the agent node selector', async () => {
+    const user = userEvent.setup();
+    await openNewEditor(user);
+
+    await user.click(screen.getByTestId('palette-node-agent'));
+
+    const select = (await screen.findByTestId('agent-select-registeredAgentId')) as HTMLSelectElement;
+    await waitFor(() => expect(within(select).getByRole('option', { name: 'Sales agent' })).toBeTruthy());
+    await user.selectOptions(select, '12');
+    expect(select.value).toBe('12');
+    expect(aiAgents.list).toHaveBeenCalledTimes(1);
   });
 
   it('publishes an executable journey without the publish flag (server default)', async () => {

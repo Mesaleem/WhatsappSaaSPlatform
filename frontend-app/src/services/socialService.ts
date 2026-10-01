@@ -4,7 +4,9 @@ import type {
   BindAccountsResponse,
   OAuthRedirectResponse,
   SocialAccount,
+  SocialConnectionCheckResponse,
   SocialProvider,
+  SocialProviderInfo,
 } from '../types/social';
 
 const BASE = '/social';
@@ -31,6 +33,16 @@ const socialService = {
     return axiosInstance
       .get<OAuthRedirectResponse>(`${BASE}/oauth/${provider}/redirect`)
       .then((res) => res.data);
+  },
+
+  /** Phase 9 Task 1 — which providers this account can connect (configured / enabled). */
+  listProviders() {
+    return axiosInstance.get<{ data: SocialProviderInfo[] }>(`${BASE}/providers`).then((res) => res.data.data);
+  },
+
+  /** Phase 9 Task 1 — ask the provider whether a stored connection still works. */
+  checkConnection(id: number) {
+    return axiosInstance.post<SocialConnectionCheckResponse>(`${BASE}/accounts/${id}/check`).then((res) => res.data);
   },
 
   bindAccounts(payload: BindAccountsPayload) {

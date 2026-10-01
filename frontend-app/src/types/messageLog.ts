@@ -20,8 +20,8 @@ import type { PaginatedResponse } from './account';
  */
 export type MessageDispatchStatus = 'sent' | 'failed' | 'queued';
 
-/** Matches every source string a dispatcher currently writes — see TemplateMessageDispatcher/PaymentAlertDispatcher/ChatbotEngineService/WhatsAppJourneyEngine. */
-export type MessageDispatchSource = 'web_ui' | 'web_template' | 'api' | 'chatbot' | 'journey';
+/** Matches every source string a dispatcher currently writes — see TemplateMessageDispatcher/PaymentAlertDispatcher/ChatbotEngineService/WhatsAppJourneyEngine, plus DirectMessageDispatcher's Social Inbox (P5-2) and Meta Lead Ads (P5-A) callers. */
+export type MessageDispatchSource = 'web_ui' | 'web_template' | 'api' | 'chatbot' | 'journey' | 'social_inbox' | 'meta_lead_ads';
 
 /** Group Messaging Phase 5 — matches recipient_type's DB default ('individual', see the migration adding it) plus the one other value recordGroupDispatchQueued() ever writes ('group'). */
 export type MessageDispatchRecipientType = 'individual' | 'group';

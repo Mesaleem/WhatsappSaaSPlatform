@@ -5,6 +5,11 @@ namespace App\Services\Comments;
 use App\Models\CommentAutomationEvent;
 use App\Models\CommentAutomationRule;
 use App\Models\SocialAccount;
+use App\Services\SocialAuth\Exceptions\ProviderRequestFailed;
+use App\Services\SocialAuth\Exceptions\SocialConnectionException;
+use App\Services\SocialAuth\SocialConnectionService;
+use App\Services\SocialAuth\WebhookAssetResolver;
+use Illuminate\Http\Client\Response as HttpResponse;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Throwable;
@@ -97,11 +102,13 @@ class CommentAutomationService
             return;
         }
 
-        $socialAccount = SocialAccount::query()
-            ->where('provider', 'meta')
-            ->where('asset_type', 'facebook_page')
-            ->where('provider_id', $pageId)
-            ->first();
+        // Phase 9 Task 2.2 — deterministic owner or nothing (WebhookAssetResolver).
+        $resolution = app(WebhookAssetResolver::class)->resolve('meta', 'facebook_page', $pageId, 'comment', ['comment_id' => (string) $commentId]);
+        $socialAccount = $resolution['account'];
+
+        if ($resolution['status'] === WebhookAssetResolver::AMBIGUOUS) {
+            return;
+        }
 
         if (! $socialAccount) {
             Log::warning("CommentAutomationService: no tenant has Page {$pageId} connected — comment ignored.");
@@ -133,11 +140,13 @@ class CommentAutomationService
             return;
         }
 
-        $socialAccount = SocialAccount::query()
-            ->where('provider', 'meta')
-            ->where('asset_type', 'instagram')
-            ->where('provider_id', $igAccountId)
-            ->first();
+        // Phase 9 Task 2.2 — deterministic owner or nothing (WebhookAssetResolver).
+        $resolution = app(WebhookAssetResolver::class)->resolve('meta', 'instagram', $igAccountId, 'instagram_comment', ['comment_id' => (string) $commentId]);
+        $socialAccount = $resolution['account'];
+
+        if ($resolution['status'] === WebhookAssetResolver::AMBIGUOUS) {
+            return;
+        }
 
         if (! $socialAccount) {
             Log::warning("CommentAutomationService: no tenant has Instagram account {$igAccountId} connected — comment ignored.");
@@ -187,6 +196,21 @@ class CommentAutomationService
             return;
         }
 
+        // Phase 9 Task 2.1 — $socialAccount is the connection that owns this
+        // webhook entry (resolved from the signed payload's Page / Instagram
+        // id). A connection known to be expired/revoked is not used: like a
+        // missing token, the comment is left un-actioned (logged with its
+        // safe code). Webhook context: nothing is returned to a user.
+        try {
+            app(SocialConnectionService::class)->assertUsable($socialAccount, 'comments.reply');
+        } catch (SocialConnectionException $e) {
+            Log::warning("CommentAutomationService: SocialAccount#{$socialAccount->id} needs reconnecting — comment {$commentId} not actioned.", [
+                'error_code' => $e->errorCode(),
+            ]);
+
+            return;
+        }
+
         $event = CommentAutomationEvent::create([
             'account_id' => $socialAccount->account_id,
             'comment_automation_rule_id' => $rule->id,
@@ -196,8 +220,16 @@ class CommentAutomationService
             'commenter_id' => $commenterId,
         ]);
 
-        $this->postPublicReply($event, $accessToken, $commentId, $rule->public_reply_template);
-        $this->sendPrivateReply($event, $accessToken, $commentId, $rule->private_dm_template);
+        $connectionFailure = $this->postPublicReply($event, $socialAccount, $commentId, $rule->public_reply_template);
+
+        if ($connectionFailure) {
+            // The same token cannot send the private reply either.
+            $event->forceFill(['private_message_error' => $connectionFailure->getMessage()])->save();
+
+            return;
+        }
+
+        $this->sendPrivateReply($event, $socialAccount, $commentId, $rule->private_dm_template);
     }
 
     /**
@@ -232,26 +264,37 @@ class CommentAutomationService
         return $wildcard;
     }
 
-    private function postPublicReply(CommentAutomationEvent $event, string $accessToken, string $commentId, string $message): void
+    /**
+     * @return SocialConnectionException|null set when Meta reported the connection expired/revoked (persisted)
+     */
+    private function postPublicReply(CommentAutomationEvent $event, SocialAccount $socialAccount, string $commentId, string $message): ?SocialConnectionException
     {
         try {
-            $response = Http::asForm()->withToken($accessToken)->timeout(15)->post(
+            $response = Http::asForm()->withToken($socialAccount->access_token)->timeout(15)->post(
                 'https://graph.facebook.com/'.self::API_VERSION."/{$commentId}/comments",
                 ['message' => $message]
             );
         } catch (Throwable $e) {
             $event->forceFill(['public_reply_error' => $e->getMessage()])->save();
 
-            return;
+            return null;
         }
 
         if ($response->failed()) {
+            if ($connectionFailure = $this->connectionFailure($socialAccount, $response, 'Meta rejected the public reply.')) {
+                $event->forceFill(['public_reply_error' => $connectionFailure->getMessage()])->save();
+
+                return $connectionFailure;
+            }
+
             $event->forceFill(['public_reply_error' => $response->json('error.message') ?? 'Meta rejected the public reply.'])->save();
 
-            return;
+            return null;
         }
 
         $event->forceFill(['public_replied_at' => now()])->save();
+
+        return null;
     }
 
     /**
@@ -262,10 +305,10 @@ class CommentAutomationService
      * already resolved for this comment, no phone number required. Not
      * verified against a live call — see class docblock.
      */
-    private function sendPrivateReply(CommentAutomationEvent $event, string $accessToken, string $commentId, string $message): void
+    private function sendPrivateReply(CommentAutomationEvent $event, SocialAccount $socialAccount, string $commentId, string $message): void
     {
         try {
-            $response = Http::asForm()->withToken($accessToken)->timeout(15)->post(
+            $response = Http::asForm()->withToken($socialAccount->access_token)->timeout(15)->post(
                 'https://graph.facebook.com/'.self::API_VERSION."/{$commentId}/private_replies",
                 ['message' => $message]
             );
@@ -276,11 +319,25 @@ class CommentAutomationService
         }
 
         if ($response->failed()) {
-            $event->forceFill(['private_message_error' => $response->json('error.message') ?? 'Meta rejected the private reply.'])->save();
+            $connectionFailure = $this->connectionFailure($socialAccount, $response, 'Meta rejected the private reply.');
+            $event->forceFill(['private_message_error' => $connectionFailure?->getMessage() ?? $response->json('error.message') ?? 'Meta rejected the private reply.'])->save();
 
             return;
         }
 
         $event->forceFill(['private_message_sent_at' => now()])->save();
+    }
+
+    /**
+     * Phase 9 Task 2.1 — asks SocialConnectionService (and through it the
+     * provider driver) whether a failed reply means the connection itself is
+     * expired/revoked; if so it is persisted and the safe exception returned.
+     * Any other failure → null (the event keeps Meta's message, as before).
+     */
+    private function connectionFailure(SocialAccount $socialAccount, HttpResponse $response, string $fallback): ?SocialConnectionException
+    {
+        $result = app(SocialConnectionService::class)->observe($socialAccount, ProviderRequestFailed::fromResponse($response, $fallback), 'comments.reply');
+
+        return $result ? SocialConnectionException::for($socialAccount, $result->status, $result->reason) : null;
     }
 }

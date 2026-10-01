@@ -374,11 +374,11 @@ class CrmEntitlementRbacApiTest extends TestCase
     }
 
     /**
-     * Owner decision (post Phase 6): the Task 11 Super Admin bypass no
-     * longer applies to CRM — the TARGET account must hold lead_crm + crm
-     * (EnsureCrmTargetAccount).
+     * Owner decision (post Phase 6): the TARGET account must have lead_crm
+     * enabled (EnsureCrmTargetAccount). Owner decision (2026-09-30): the
+     * client's PLAN (`crm` capability) no longer binds a Super Admin.
      */
-    public function test_super_admin_is_held_to_the_target_accounts_crm_entitlement(): void
+    public function test_super_admin_is_held_to_the_target_module_but_not_its_plan(): void
     {
         $client = $this->account(crm: false);
         $lead = $this->lead($client);
@@ -386,8 +386,8 @@ class CrmEntitlementRbacApiTest extends TestCase
 
         $this->actingAs($sa)
             ->patchJson(self::UI.'/'.$lead->id.'/status?account_id='.$client->id, ['status' => 'contacted'])
-            ->assertStatus(403)->assertJsonPath('error_code', 'CAPABILITY_NOT_ENTITLED');
-        $this->assertSame(CrmLead::STATUS_NEW, $lead->fresh()->status);
+            ->assertOk();
+        $this->assertSame(CrmLead::STATUS_CONTACTED, $lead->fresh()->status);
 
         $modulesOff = $this->account(attributes: ['allowed_modules' => array_values(array_diff(Account::MODULES, ['lead_crm']))]);
         $this->actingAs($sa)->getJson(self::UI.'?account_id='.$modulesOff->id)

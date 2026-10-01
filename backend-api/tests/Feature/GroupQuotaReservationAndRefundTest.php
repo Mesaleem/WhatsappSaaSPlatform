@@ -22,6 +22,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Str;
+use Tests\Concerns\GrantsNativeWhatsAppGroups;
 use Tests\TestCase;
 
 // See this file's own docblock: shadows sleep() for App\Jobs so the
@@ -52,7 +53,7 @@ require_once __DIR__.'/../Support/disable_job_sleep.php';
  */
 class GroupQuotaReservationAndRefundTest extends TestCase
 {
-    use RefreshDatabase;
+    use RefreshDatabase, GrantsNativeWhatsAppGroups;
 
 
     protected function setUp(): void
@@ -115,6 +116,7 @@ class GroupQuotaReservationAndRefundTest extends TestCase
         $account = Account::factory()->create();
         $this->giveActiveSubscription($account, 'qr');
         WhatsAppSession::create(['account_id' => $account->id, 'status' => 'connected']);
+        $this->grantNativeWhatsAppGroups($account); // P5-C
 
         return $account;
     }
@@ -123,6 +125,7 @@ class GroupQuotaReservationAndRefundTest extends TestCase
     {
         $account = Account::factory()->create();
         $this->giveActiveSubscription($account, 'meta');
+        $this->grantNativeWhatsAppGroups($account); // P5-C — so the provider gate is what refuses
         WhatsAppSession::create([
             'account_id' => $account->id,
             'status' => 'connected',

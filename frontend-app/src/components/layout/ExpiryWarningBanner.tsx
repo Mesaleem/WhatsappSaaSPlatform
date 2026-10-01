@@ -1,4 +1,5 @@
 import { AlertTriangle } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import { useAuth } from '../../core/context/AuthContext';
 
 /**
@@ -30,7 +31,11 @@ function calendarDaysRemaining(expiresAtIso: string): number {
 }
 
 export default function ExpiryWarningBanner() {
-  const { user, isSuperAdmin, isReadOnly } = useAuth();
+  const { user, isSuperAdmin, isReadOnly, hasPermission, hasModule } = useAuth();
+  // Final hardening §23 — the read-only notice explains every disabled
+  // mutation button, so it also carries the way out: Billing for a user who
+  // may manage the subscription, "contact your administrator" otherwise.
+  const canRenew = hasPermission('manage-subscriptions') && hasModule('billing');
 
   if (isSuperAdmin()) return null;
 
@@ -39,10 +44,17 @@ export default function ExpiryWarningBanner() {
 
   if (isReadOnly()) {
     return (
-      <div className="flex items-center gap-2 border-b border-red-200 bg-red-50 px-6 py-2 text-sm font-medium text-red-800">
+      <div className="flex flex-wrap items-center gap-2 border-b border-red-200 bg-red-50 px-6 py-2 text-sm font-medium text-red-800" data-testid="read-only-banner">
         <AlertTriangle className="h-4 w-4 flex-shrink-0" />
         Your subscription is expired or suspended. You can still view your data — actions are disabled until it's
         renewed.
+        {canRenew ? (
+          <Link to="/billing" className="rounded-md border border-red-300 bg-white px-2.5 py-1 text-xs font-semibold text-red-800 hover:bg-red-100">
+            Renew subscription
+          </Link>
+        ) : (
+          <span className="text-xs font-normal">Contact your account administrator to renew it.</span>
+        )}
       </div>
     );
   }
@@ -57,6 +69,11 @@ export default function ExpiryWarningBanner() {
       <AlertTriangle className="h-4 w-4 flex-shrink-0" />
       Your subscription expires in {daysRemaining} day{daysRemaining === 1 ? '' : 's'}. Renew to avoid service
       interruption.
+      {canRenew && (
+        <Link to="/billing" className="rounded-md border border-amber-300 bg-white px-2.5 py-1 text-xs font-semibold text-amber-800 hover:bg-amber-100">
+          Renew now
+        </Link>
+      )}
     </div>
   );
 }

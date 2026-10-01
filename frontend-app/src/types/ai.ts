@@ -42,7 +42,7 @@ export interface AdCopyVariant {
   cta: string;
 }
 
-/** provider is 'gemini' | 'openai' | 'anthropic' | 'template' — surfaced so the tenant/operator can tell which path served the copy. Gemini is now tried first. */
+/** provider is the central AI provider that served the copy ('openai' | 'anthropic' today; Phase 8 Task 6 removed the direct Gemini call) or 'template' — surfaced so the tenant/operator can tell which path served the copy. */
 export interface GenerateAdCopyResult {
   provider: string;
   variants: AdCopyVariant[];

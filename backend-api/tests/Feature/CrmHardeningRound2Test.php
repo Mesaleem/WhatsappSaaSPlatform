@@ -557,6 +557,7 @@ class CrmHardeningRound2Test extends TestCase
         $account = Account::factory()->create();
         // Task 10 — linkQuietly() now promotes only for a CRM-entitled account.
         $this->grant($account, 'crm');
+        Subscription::factory()->create(['account_id' => $account->id]); // P6-2 — and an active subscription
         $lead = $this->captureLead($account, '');
         $lead->forceFill(['lead_phone' => null])->save();
 
@@ -592,6 +593,7 @@ class CrmHardeningRound2Test extends TestCase
     {
         $account = Account::factory()->create();
         $this->grant($account, 'crm'); // Task 10 — see above.
+        Subscription::factory()->create(['account_id' => $account->id]); // P6-2 — see above.
         $lead = $this->captureLead($account, '');
         $lead->forceFill(['lead_phone' => null])->save();
         $linker = app(CaptureLeadLinker::class);
@@ -612,6 +614,7 @@ class CrmHardeningRound2Test extends TestCase
     {
         $account = Account::factory()->create();
         $this->grant($account, 'crm'); // Task 10 — see above.
+        Subscription::factory()->create(['account_id' => $account->id]); // P6-2 — see above.
         $lead = $this->captureLead($account, '');
         $lead->forceFill(['lead_phone' => null])->save();
         $linker = app(CaptureLeadLinker::class);

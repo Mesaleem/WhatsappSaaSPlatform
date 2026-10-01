@@ -3,6 +3,8 @@ import { Link } from 'react-router-dom';
 import { Plus } from 'lucide-react';
 import crmService from '../../services/crmService';
 import { TableCard } from '../../components/common/Card';
+import { ClientPickerModal, GateNoticeModal } from '../../components/common/ActionGate';
+import { useUpgradePath } from '../../components/common/actionGateHooks';
 import { Pagination } from '../../components/common/DataTableControls';
 import { TableSkeletonRows } from '../../components/common/Skeleton';
 import CrmLeadFilterBar from '../../components/crm/CrmLeadFilterBar';
@@ -45,6 +47,14 @@ export default function CrmLeadsPage() {
   const { toast, show } = useCrmToast();
 
   const [creating, setCreating] = useState(false);
+  // Final hardening §23 — "Add lead" is clickable whenever the reason is
+  // something the user can act on: no client selected (pick one, then the
+  // form opens) or a target without CRM (explained, with the upgrade path).
+  // Only an expired subscription keeps it disabled (read-only mode, explained
+  // by the page banner). The backend still authorizes the create itself.
+  const [pickingClient, setPickingClient] = useState(false);
+  const [showCrmDenied, setShowCrmDenied] = useState(false);
+  const upgrade = useUpgradePath();
 
   // The view = account + filters + page + page size. It keys both the
   // server read and the bulk selection.
@@ -138,15 +148,20 @@ export default function CrmLeadsPage() {
             CRM route). Target: a Super Admin's / Agent's selected client
             (?account_id=); a Super Admin with no client selected → their
             own platform CRM account (EnsureCrmTargetAccount); everyone else
-            → their own account. Disabled only when there is no target (a
-            Super Admin without a platform account and no selection), on an
-            expired subscription, or when the target failed the CRM gates.
+            → their own account. Disabled only on an expired subscription
+            (read-only mode). No target yet (a Super Admin without a platform
+            account and no selection) → the click opens the client picker; a
+            target that failed the CRM gates → the click explains why.
             Needs no Meta / social / WhatsApp connection.
           */}
           <button
             type="button"
-            onClick={() => setCreating(true)}
-            disabled={addLeadBlockedReason !== undefined}
+            onClick={() => {
+              if (needsClient) setPickingClient(true);
+              else if (targetDenied && !readOnly) setShowCrmDenied(true);
+              else setCreating(true);
+            }}
+            disabled={readOnly}
             title={addLeadBlockedReason}
             data-testid="crm-add-lead"
             className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
@@ -310,6 +325,27 @@ export default function CrmLeadsPage() {
             show(message);
             query.reload();
           }}
+        />
+      )}
+
+      {pickingClient && (
+        <ClientPickerModal
+          purpose="add a lead"
+          onCancel={() => setPickingClient(false)}
+          onSelected={() => {
+            setPickingClient(false);
+            setCreating(true);
+          }}
+        />
+      )}
+
+      {showCrmDenied && (
+        <GateNoticeModal
+          testId="crm-access-notice"
+          title="CRM is not available for this account"
+          message={`This account's plan does not include the CRM (or the CRM module is switched off), so leads cannot be added. ${upgrade.hint}`}
+          action={upgrade.action}
+          onClose={() => setShowCrmDenied(false)}
         />
       )}
 

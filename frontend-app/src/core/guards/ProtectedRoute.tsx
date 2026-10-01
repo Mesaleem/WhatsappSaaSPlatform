@@ -44,6 +44,12 @@ interface ProtectedRouteProps {
    * journey/nodeEntitlement.ts uses; the backend still decides.
    */
   capability?: string;
+  /**
+   * Phase 10 Task 3 — admit a user holding ANY of these permissions (the
+   * backend's `permission:a|b` route middleware). Super Admin bypasses, as
+   * with `permission`.
+   */
+  anyPermission?: string[];
 }
 
 /**
@@ -61,7 +67,7 @@ interface ProtectedRouteProps {
  * behavior this mode replaces, so this guard's only remaining job is
  * authentication and permission/role gating.
  */
-export function ProtectedRoute({ children, permission, role, strictRole, module, capability }: ProtectedRouteProps) {
+export function ProtectedRoute({ children, permission, role, strictRole, module, capability, anyPermission }: ProtectedRouteProps) {
   const { isAuthenticated, isLoading, user, hasPermission, hasRole, isSuperAdmin, hasModule } = useAuth();
   const location = useLocation();
 
@@ -80,6 +86,10 @@ export function ProtectedRoute({ children, permission, role, strictRole, module,
   const superAdmin = isSuperAdmin();
 
   if (permission && !superAdmin && !hasPermission(permission)) {
+    return <Navigate to="/unauthorized" replace />;
+  }
+
+  if (anyPermission && !superAdmin && !anyPermission.some((p) => hasPermission(p))) {
     return <Navigate to="/unauthorized" replace />;
   }
 

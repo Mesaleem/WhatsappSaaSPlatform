@@ -18,6 +18,7 @@ use Database\Seeders\Phase1FoundationSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
+use Tests\Concerns\GrantsNativeWhatsAppGroups;
 use Tests\TestCase;
 
 /**
@@ -43,7 +44,7 @@ use Tests\TestCase;
  */
 class UnifiedQuotaAndCapabilityTest extends TestCase
 {
-    use RefreshDatabase;
+    use RefreshDatabase, GrantsNativeWhatsAppGroups;
 
     private const RECIPIENT = '919999999999';
 
@@ -132,6 +133,7 @@ class UnifiedQuotaAndCapabilityTest extends TestCase
         $account = Account::factory()->create();
         $this->giveActiveSubscription($account, 'qr');
         WhatsAppSession::create(['account_id' => $account->id, 'status' => 'connected']);
+        $this->grantNativeWhatsAppGroups($account); // P5-C
 
         return $account;
     }
@@ -140,6 +142,7 @@ class UnifiedQuotaAndCapabilityTest extends TestCase
     {
         $account = Account::factory()->create();
         $this->giveActiveSubscription($account, 'meta');
+        $this->grantNativeWhatsAppGroups($account); // P5-C — so the provider gate is what refuses
         WhatsAppSession::create([
             'account_id' => $account->id,
             'status' => 'connected',

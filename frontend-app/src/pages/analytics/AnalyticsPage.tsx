@@ -55,7 +55,8 @@ const SOURCE_BADGE: Record<MessageDispatchSource, { label: string; className: st
   web_template: { label: 'Template', className: 'bg-violet-50 text-violet-700 ring-violet-600/20' },
   api: { label: 'API', className: 'bg-amber-50 text-amber-700 ring-amber-600/20' },
   chatbot: { label: 'Chatbot', className: 'bg-cyan-50 text-cyan-700 ring-cyan-600/20' },
-  journey: { label: 'Journey', className: 'bg-fuchsia-50 text-fuchsia-700 ring-fuchsia-600/20' },
+  journey: { label: 'Journey', className: 'bg-fuchsia-50 text-fuchsia-700 ring-fuchsia-600/20' },  social_inbox: { label: 'Social Inbox', className: 'bg-emerald-50 text-emerald-700 ring-emerald-600/20' },
+  meta_lead_ads: { label: 'Lead Ads', className: 'bg-sky-50 text-sky-700 ring-sky-600/20' },
 };
 
 const ENGINE_COLOR: Record<EngineType, string> = {

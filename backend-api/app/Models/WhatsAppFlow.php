@@ -93,6 +93,12 @@ class WhatsAppFlow extends Model
      * `audio` are executed too — one outbound message each through the
      * unified driver (JourneyActionConfig::PALETTE_SEND_TYPES). Same
      * listing rule as `delay`.
+     *
+     * EXCEPTION (Phase 8 Task 7): `prompt` and `agent` are executed too — one
+     * metered AI call each (JourneyAiNodeRunner → MeteredAiService), the
+     * reply stored in the node's output variable. EXCEPTION (Phase 8 Task 10):
+     * `rag` too — KnowledgeRetriever over the account's knowledge base, then
+     * one metered generation over the passages. Same listing rule as `delay`.
      */
     public const PALETTE_NODE_TYPES = [
         // Message (7)

@@ -406,8 +406,8 @@ class CrmAnalyticsTest extends TestCase
 
         $this->analytics($sa)->assertStatus(422);
         $this->analytics($sa, ['account_id' => $a->id])->assertOk()->assertJsonPath('data.totals.total', 1);
-        // The Super Admin is held to the selected client's own CRM entitlement (EnsureCrmTargetAccount).
-        $this->analytics($sa, ['account_id' => $b->id])->assertStatus(403)->assertJsonPath('error_code', 'CAPABILITY_NOT_ENTITLED');
+        // Owner decision (2026-09-30): the client's plan (`crm`) does not bind a Super Admin.
+        $this->analytics($sa, ['account_id' => $b->id])->assertOk()->assertJsonPath('data.totals.total', 2);
         $this->analytics($sa, ['account_id' => 99999999])->assertNotFound();
     }
 

@@ -719,7 +719,7 @@ class PublicApiIdempotencyTest extends TestCase
     public function test_module_entitlement_denial_does_not_consume_the_key(): void
     {
         $account = Account::factory()->create([
-            'allowed_modules' => ['dashboard', 'send_alert'], // contact_groups deliberately absent
+            'allowed_modules' => ['dashboard', 'send_alert', 'developer_api'], // contact_groups deliberately absent (P5-B: developer_api kept on so the group gate is what refuses)
         ]);
         $this->giveActiveSubscription($account);
         $this->connectSession($account);

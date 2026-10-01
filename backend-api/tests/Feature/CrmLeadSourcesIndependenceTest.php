@@ -208,7 +208,8 @@ class CrmLeadSourcesIndependenceTest extends TestCase
         $this->manual($this->user($noCrm))->assertStatus(403)->assertJsonPath('error_code', 'CAPABILITY_NOT_ENTITLED');
         $this->manual($this->user($moduleOff))->assertStatus(403)->assertJsonPath('error_code', 'MODULE_DISABLED');
         $this->manual($this->user($agent, null, ['manage-crm']), [], '?account_id='.$othersSub->id)->assertNotFound();
-        $this->manual($this->superAdmin(), [], '?account_id='.$noCrm->id)->assertStatus(403);
+        // A Super Admin is not held to the client's plan (2026-09-30), but a switched-off module still blocks.
+        $this->manual($this->superAdmin(), [], '?account_id='.$moduleOff->id)->assertStatus(403)->assertJsonPath('error_code', 'MODULE_DISABLED');
 
         $this->assertDatabaseCount('crm_leads', 0);
     }

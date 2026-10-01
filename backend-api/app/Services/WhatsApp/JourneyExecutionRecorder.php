@@ -28,8 +28,8 @@ final class JourneyExecutionRecorder
         'invalid_configuration', // a node's config / condition could never run
         'missing_node',          // an edge (or checkpoint) points at a node the pinned version lacks
         'unsupported_node',      // a palette node the engine has no execution path for
-        'provider_failure',      // the WhatsApp engine did not accept the message
-        'quota_failure',         // subscription inactive or message quota exhausted
+        'provider_failure',      // the WhatsApp engine did not accept the message, or (Phase 8 Task 7) the AI provider call failed
+        'quota_failure',         // subscription inactive, message quota exhausted, or (Phase 8 Task 7) AI credits insufficient
         'crm_failure',           // the CRM write of a captured lead failed
         'entitlement_blocked',   // module/capability/journey entitlement denied
         'execution_limit',       // MAX_ADVANCE_STEPS reached in one run
@@ -41,7 +41,7 @@ final class JourneyExecutionRecorder
 
     public const SOURCES = ['inbound', 'test', 'scheduler', 'api', 'system'];
 
-    private const DETAIL_KEYS = ['dispatch_log_id', 'lead_id', 'crm_lead_id', 'next_node_id', 'provider', 'restored_to'];
+    private const DETAIL_KEYS = ['dispatch_log_id', 'lead_id', 'crm_lead_id', 'next_node_id', 'provider', 'restored_to', 'ai_operation_id', 'retrieval_operation_id', 'agent_version_id', 'tool_calls'];
 
     private const MAX_DETAILS = 6;
 

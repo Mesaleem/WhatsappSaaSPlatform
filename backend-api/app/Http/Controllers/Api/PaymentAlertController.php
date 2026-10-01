@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Concerns\ResolvesTenantAccount;
 use App\Http\Controllers\Controller;
 use App\Jobs\ProcessPaymentAlertJob;
+use App\Support\OutboundPacing;
 use App\Models\PaymentAlert;
 use App\Services\PaymentAlerts\PaymentAlertDispatcher;
 use Illuminate\Database\QueryException;
@@ -114,6 +115,10 @@ class PaymentAlertController extends Controller
         $skippedDuplicates = [];
         $invalidRows = [];
         $seenRefsInThisFile = [];
+        // Phase 5 fix P5-9 — running anti-ban delay: consecutive alerts of this
+        // upload are queued 3-8 s apart (the spacing the job's former sleep()
+        // gave a single worker), without any worker or request waiting.
+        $pacingOffset = 0;
         $rowNumber = 1; // header consumed the first row
 
         while (($row = fgetcsv($handle)) !== false) {
@@ -178,7 +183,8 @@ class PaymentAlertController extends Controller
                 throw $e;
             }
 
-            ProcessPaymentAlertJob::dispatch($alert->id);
+            $pacingOffset += OutboundPacing::delaySeconds();
+            ProcessPaymentAlertJob::dispatchPaced($alert->id, afterSeconds: $pacingOffset);
             $queued[] = ['row' => $rowNumber, 'payment_ref' => $paymentRef, 'id' => $alert->id];
         }
 

@@ -335,8 +335,9 @@ describe('validation: numeric fields', () => {
   });
 
   it('range-checks RAG top K', () => {
-    expect(validateJourneyNodeConfig('rag', { knowledgeBaseId: 'kb', topK: 0 }).topK).toBeDefined();
-    expect(validateJourneyNodeConfig('rag', { knowledgeBaseId: 'kb', topK: 3 })).toEqual({});
+    // Phase 8 Task 10: ids are numeric and the output/question variables are required.
+    expect(validateJourneyNodeConfig('rag', { knowledgeBaseId: '1', queryVariable: 'q', outputVariable: 'a', topK: 0 }).topK).toBeDefined();
+    expect(validateJourneyNodeConfig('rag', { knowledgeBaseId: '1', queryVariable: 'q', outputVariable: 'a', topK: 3 })).toEqual({});
   });
 });
 
@@ -348,7 +349,8 @@ describe('validation: required identifiers', () => {
     ['catalog', 'catalogId'],
     ['product', 'productId'],
     ['flow', 'flowId'],
-    ['agent', 'agentId'],
+    // Phase 8 Task 11: agentId is now only a label; without a registered agent the instructions are required.
+    ['agent', 'instructions'],
   ])('"%s" requires %s', (type, key) => {
     expect(validateJourneyNodeConfig(type, {})[key]).toBeDefined();
   });
@@ -644,11 +646,94 @@ describe('runtime-executable node types', () => {
     for (const legacy of ['trigger', 'message', 'question', 'condition', 'save_lead']) {
       expect(isRuntimeExecutableNodeType(legacy)).toBe(true);
     }
-    expect(ALL_JOURNEY_NODE_TYPES.filter((t) => !isRuntimeExecutableNodeType(t))).toHaveLength(20);
+    // Phase 8 Task 7: prompt + agent run (metered AI); Task 10: rag.
+    expect(ALL_JOURNEY_NODE_TYPES.filter((t) => !isRuntimeExecutableNodeType(t))).toHaveLength(17);
+    expect(isRuntimeExecutableNodeType('prompt')).toBe(true);
+    expect(isRuntimeExecutableNodeType('agent')).toBe(true);
+    expect(isRuntimeExecutableNodeType('rag')).toBe(true);
   });
 
   it('reports each blocking type of a graph once', () => {
     expect(nonExecutableNodeTypes([{ type: 'trigger' }, { type: 'api' }, { type: 'text' }, { type: 'api' }, { type: 'email' }])).toEqual(['api', 'email']);
     expect(nonExecutableNodeTypes([{ type: 'trigger' }, { type: 'delay' }])).toEqual([]);
+  });
+});
+
+// Phase 8 Task 7 — the AI nodes' configuration mirrors the backend contract
+// (JourneyActionConfig): a prompt/instructions and an output variable.
+describe('AI node configuration', () => {
+  it('seeds an output variable on new prompt and agent nodes', () => {
+    expect(getJourneyNode('prompt')!.defaultConfig.outputVariable).toBe('ai_response');
+    expect(getJourneyNode('agent')!.defaultConfig.outputVariable).toBe('agent_response');
+  });
+
+  it('requires the prompt and where to save the reply', () => {
+    const errors = validateJourneyNodeConfig('prompt', { prompt: ' ', outputVariable: '' });
+
+    expect(errors.prompt).toBeDefined();
+    expect(errors.outputVariable).toBeDefined();
+    expect(validateJourneyNodeConfig('prompt', { prompt: 'Summarise {{answer}}', outputVariable: 'summary' })).toEqual({});
+  });
+
+  it('requires agent instructions and an output variable; the input variable is optional', () => {
+    const errors = validateJourneyNodeConfig('agent', { agentId: 'Support' });
+
+    expect(errors.instructions).toBeDefined();
+    expect(errors.outputVariable).toBeDefined();
+    expect(validateJourneyNodeConfig('agent', { agentId: 'Support', instructions: 'Be kind.', outputVariable: 'reply' })).toEqual({});
+  });
+
+  it('refuses variable names the runtime could not store or substitute', () => {
+    expect(validateJourneyNodeConfig('prompt', { prompt: 'x', outputVariable: 'bad name!' }).outputVariable).toBeDefined();
+    expect(validateJourneyNodeConfig('agent', { agentId: 'a', instructions: 'x', outputVariable: 'ok', inputVariable: '@ai_runs' }).inputVariable).toBeDefined();
+    expect(validateJourneyNodeConfig('prompt', { prompt: 'x', outputVariable: 'x'.repeat(65) }).outputVariable).toBeDefined();
+  });
+});
+
+// Phase 8 Task 11 — the agent node can reference a registered AI agent.
+describe('agent node configuration', () => {
+  it('offers an account-scoped agent selector and keeps the single-reply mode', () => {
+    const agent = getJourneyNode('agent')!;
+
+    expect(agent.configSchema.map((f) => f.key)).toEqual(['registeredAgentId', 'agentId', 'instructions', 'inputVariable', 'outputVariable']);
+    expect(agent.configSchema[0].type).toBe('aiAgent');
+    expect(validateJourneyNodeConfig('agent', { instructions: 'Be kind.', outputVariable: 'reply' })).toEqual({});
+  });
+
+  it('waives the instructions for a registered agent and checks its id', () => {
+    expect(validateJourneyNodeConfig('agent', { registeredAgentId: '7', outputVariable: 'reply' })).toEqual({});
+    expect(validateJourneyNodeConfig('agent', { outputVariable: 'reply' }).instructions).toBeDefined();
+    expect(validateJourneyNodeConfig('agent', { registeredAgentId: 'bot-1', outputVariable: 'reply' }).registeredAgentId).toBeDefined();
+  });
+});
+
+// Phase 8 Task 10 — the rag node's configuration mirrors the backend contract.
+describe('rag node configuration', () => {
+  it('offers exactly the supported fields with a default output variable', () => {
+    const rag = getJourneyNode('rag')!;
+
+    expect(rag.configSchema.map((f) => f.key)).toEqual(['knowledgeBaseId', 'queryVariable', 'topK', 'outputVariable']);
+    expect(rag.configSchema[0].type).toBe('knowledgeBase');
+    expect(rag.defaultConfig).toEqual({ knowledgeBaseId: '', topK: 3, outputVariable: 'rag_answer' });
+  });
+
+  it('requires a knowledge base, a question variable and an output variable', () => {
+    const errors = validateJourneyNodeConfig('rag', {});
+
+    expect(errors.knowledgeBaseId).toBeDefined();
+    expect(errors.queryVariable).toBeDefined();
+    expect(errors.outputVariable).toBeDefined();
+    expect(validateJourneyNodeConfig('rag', { knowledgeBaseId: '4', queryVariable: 'question', topK: 3, outputVariable: 'answer' })).toEqual({});
+  });
+
+  it('refuses a non-numeric id, an out-of-range top K and bad variable names', () => {
+    const base = { knowledgeBaseId: '4', queryVariable: 'question', outputVariable: 'answer' };
+
+    expect(validateJourneyNodeConfig('rag', { ...base, knowledgeBaseId: 'kb1' }).knowledgeBaseId).toBeDefined();
+    expect(validateJourneyNodeConfig('rag', { ...base, topK: 21 }).topK).toBeDefined();
+    expect(validateJourneyNodeConfig('rag', { ...base, topK: 0 }).topK).toBeDefined();
+    expect(validateJourneyNodeConfig('rag', { ...base, topK: 2.5 }).topK).toBeDefined();
+    expect(validateJourneyNodeConfig('rag', { ...base, queryVariable: 'a b' }).queryVariable).toBeDefined();
+    expect(validateJourneyNodeConfig('rag', { ...base, outputVariable: '@rag' }).outputVariable).toBeDefined();
   });
 });

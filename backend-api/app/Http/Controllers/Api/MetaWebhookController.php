@@ -9,6 +9,8 @@ use App\Models\MessageDispatchLog;
 use App\Models\PaymentAlert;
 use App\Models\SocialProviderConfig;
 use App\Models\WhatsAppSession;
+use App\Models\AdAttribution;
+use App\Services\Ads\AdAttributionService;
 use App\Services\Chatbot\ChatbotEngineService;
 use App\Services\Crm\CaptureLeadLinker;
 use App\Services\Webhooks\WebhookDispatcher;
@@ -52,6 +54,18 @@ class MetaWebhookController extends Controller
             ->value('account_id');
 
         return $accountId !== null ? (int) $accountId : null;
+    }
+
+    /** Phase 10 Task 1 — the receiving tenant session (for attribution); same unique key as resolveAccountId(). */
+    private function resolveSessionId(?string $phoneNumberId): ?int
+    {
+        if (! $phoneNumberId) {
+            return null;
+        }
+
+        $id = WhatsAppSession::query()->where('meta_phone_number_id', $phoneNumberId)->value('id');
+
+        return $id !== null ? (int) $id : null;
     }
 
     /**
@@ -457,7 +471,27 @@ class MetaWebhookController extends Controller
             $referral = $message['referral'] ?? null;
 
             if (! empty($referral)) {
-                $this->captureCtwaLead($accountId, $from, $message, $contacts);
+                [$captureLead, $crmLead] = $this->captureCtwaLead($accountId, $from, $message, $contacts);
+
+                // Phase 10 Task 1 — ad attribution for this referral, on the
+                // tenant that owns the receiving number (resolved above from
+                // phone_number_id, never from the ad id). Best-effort: the
+                // webhook's own behaviour is unchanged if it cannot be written.
+                $wamidForAttribution = $message['id'] ?? null;
+
+                if (is_string($wamidForAttribution) && $wamidForAttribution !== '' && is_array($referral)) {
+                    AdAttributionService::quietly('referral', $accountId, fn () => app(AdAttributionService::class)->recordReferral(
+                        $accountId,
+                        AdAttribution::PROVIDER_META,
+                        AdAttribution::CHANNEL_WHATSAPP_CTWA,
+                        $wamidForAttribution,
+                        (string) $from,
+                        $referral,
+                        $this->resolveSessionId($phoneNumberId),
+                        $captureLead,
+                        $crmLead,
+                    ));
+                }
             }
 
             // Module 5 (No-Code WhatsApp Journey Builder) widening: a
@@ -547,10 +581,14 @@ class MetaWebhookController extends Controller
      * intentionally allowed to recur (e.g. the same person clicking a
      * different ad, or messaging again days later).
      *
+     * Phase 10 Task 1 — returns the capture row and its CRM lead (either may
+     * be null) so the caller can attribute the referral; behaviour unchanged.
+     *
      * @param array<string, mixed> $message
      * @param array<int, array<string, mixed>> $contacts
+     * @return array{0: \App\Models\Lead|null, 1: \App\Models\CrmLead|null}
      */
-    private function captureCtwaLead(int $accountId, string $from, array $message, array $contacts): void
+    private function captureCtwaLead(int $accountId, string $from, array $message, array $contacts): array
     {
         $referral = $message['referral'] ?? [];
         $wamid = $message['id'] ?? null;
@@ -560,7 +598,7 @@ class MetaWebhookController extends Controller
                 'account_id' => $accountId,
             ]);
 
-            return;
+            return [null, null];
         }
 
         $normalizedPhone = PhoneNumberNormalizer::normalize($from);
@@ -605,7 +643,7 @@ class MetaWebhookController extends Controller
                 'wamid' => $wamid,
             ]);
 
-            return;
+            return [null, null];
         }
 
         $lead = Lead::updateOrCreate(
@@ -636,6 +674,8 @@ class MetaWebhookController extends Controller
          * sites: this runs inside Meta's webhook, which retries on any
          * non-2xx.
          */
-        app(CaptureLeadLinker::class)->linkQuietly($lead);
+        $crmLead = app(CaptureLeadLinker::class)->linkQuietly($lead);
+
+        return [$lead, $crmLead];
     }
 }

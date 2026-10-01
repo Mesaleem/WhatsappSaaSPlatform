@@ -58,6 +58,14 @@ function race(int $n, callable $work): void {
 function sent(Account $a, string $phone = '919800000001'): array {
     return MessageDispatchLog::where('account_id', $a->id)->where('source', 'journey')->where('status', 'sent')->where('recipient_phone', $phone)->orderBy('id')->pluck('message_preview')->all();
 }
+/** P5-9 — run the deferred-inbound jobs (database `journeys` queue) until none is left, honouring their short delays. */
+function drainDeferredInbound(int $timeoutSeconds = 60): void {
+    $deadline = microtime(true) + $timeoutSeconds;
+    while (microtime(true) < $deadline && DB::table('jobs')->where('queue', 'journeys')->where('payload', 'like', '%ProcessDeferredInboundMessageJob%')->exists()) {
+        Artisan::call('queue:work', ['connection' => 'database', '--queue' => 'journeys', '--stop-when-empty' => true, '--sleep' => 0, '--tries' => 1]);
+        usleep(250000);
+    }
+}
 $results = [];
 $check = function (string $name, bool $ok, string $detail = '') use (&$results) { $results[] = [$name, $ok, $detail]; };
 $N = 8;
@@ -73,6 +81,11 @@ $check('(a) concurrent resume runs once', sent($a) === ['X', 'Y'] && $s->fresh()
 // (b) N copies of the same inbound event (same WAMID).
 $b = tenant(); flow($b, [['id' => 'q', 'type' => 'question', 'data' => ['prompt_text' => 'Q?', 'variable_name' => 'v', 'input_type' => 'text']]]);
 race($N, fn () => app(ChatbotEngineService::class)->handleInboundMessage($b->id, '919800000001', 'go', null, 'qr', 'wamid.same'));
+// P5-9 — copies that found the conversation busy no longer wait (up to 10 s)
+// for the lease inside the request: they are deferred to the database
+// `journeys` queue. Drain it the way the scheduled worker does, then apply
+// the unchanged assertion (one execution, N-1 recorded duplicates).
+drainDeferredInbound();
 $check('(b) duplicate inbound executes once', sent($b) === ['Q?'] && WhatsAppFlowSession::where('account_id', $b->id)->count() === 1 && Ev::where('account_id', $b->id)->where('event', 'inbound_deduplicated')->count() === $N - 1, json_encode([sent($b), Ev::where('account_id', $b->id)->where('event', 'inbound_deduplicated')->count()]));
 
 // (c) N DIFFERENT messages for one phone at once: serialized, one journey.

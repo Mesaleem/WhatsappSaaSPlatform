@@ -201,6 +201,7 @@ export default function RouteMasterPage() {
                 })
               }
               disabled={categories.length === 0}
+              title={categories.length === 0 ? 'Create a category first — every route belongs to one.' : undefined}
               className="flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
             >
               <Plus className="h-4 w-4" />

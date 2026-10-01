@@ -19,6 +19,36 @@ class SocialOAuthProviderFactory
     /** @var list<string> Providers with a real driver wired up today. */
     public const IMPLEMENTED_PROVIDERS = ['meta'];
 
+    /**
+     * Phase 9 Task 1 — every implemented driver (the provider list the UI
+     * offers). Adding a provider = one driver class + one line here.
+     *
+     * @return list<SocialOAuthProviderInterface>
+     */
+    public static function all(): array
+    {
+        return array_map(fn (string $key) => self::make($key), self::IMPLEMENTED_PROVIDERS);
+    }
+
+    /** Is there a real driver for this slug (unknown and not-yet-built slugs are both "no")? */
+    public static function isImplemented(string $provider): bool
+    {
+        return in_array($provider, self::IMPLEMENTED_PROVIDERS, true);
+    }
+
+    /**
+     * The active credentials row, or null — the non-throwing twin of
+     * configFor(), for status displays.
+     */
+    public static function configIfReady(string $provider): ?SocialProviderConfig
+    {
+        try {
+            return self::configFor($provider);
+        } catch (\Throwable) {
+            return null;
+        }
+    }
+
     public static function make(string $provider): SocialOAuthProviderInterface
     {
         return match ($provider) {

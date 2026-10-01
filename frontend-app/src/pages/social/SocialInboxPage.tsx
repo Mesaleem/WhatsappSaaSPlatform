@@ -1,12 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { AlertCircle, Building2, Camera, Inbox, Loader2, MessageSquare, Send, Target } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { AlertCircle, Camera, Inbox, Loader2, MessageSquare, Send, Target } from 'lucide-react';
 import { useAuth } from '../../core/context/AuthContext';
 import { useTenant } from '../../core/context/TenantContext';
+import { SelectClientNotice } from '../../components/common/ActionGate';
+import { useClientGate } from '../../components/common/actionGateHooks';
 import inboxService from '../../services/inboxService';
 import { extractErrorMessage } from '../../utils/apiError';
 import { indigo, activeGradient } from '../../theme/signalIndigo';
 import { INBOX_PLATFORM_LABELS } from '../../types/inbox';
-import type { InboxMessage, InboxPlatform, InboxThread } from '../../types/inbox';
+import type { InboxConnectionIssue, InboxMessage, InboxPlatform, InboxThread } from '../../types/inbox';
 import { ClearFiltersButton, SearchInput, StatusFilterSelect } from '../../components/common/DataTableControls';
 
 /**
@@ -30,6 +33,11 @@ const PLATFORM_TINT: Record<InboxPlatform, { bg: string; fg: string }> = {
   lead: { bg: '#FEF3D9', fg: '#B45309' },
 };
 
+/** Phase 9 Task 2 — only an in-app path is followed for Reconnect. */
+function safeInboxReconnect(path: string): string {
+  return path.startsWith('/') && !path.startsWith('//') ? path : '/social/accounts';
+}
+
 function formatTime(value: string | null): string {
   if (!value) return '';
   return new Date(value).toLocaleString();
@@ -50,14 +58,18 @@ function PlatformBadge({ platform }: { platform: InboxPlatform }) {
 }
 
 export default function SocialInboxPage() {
-  const { isSuperAdmin } = useAuth();
+  const { user, isSuperAdmin, hasPermission, hasModule } = useAuth();
   const { selectedAccountId } = useTenant();
   const superAdmin = isSuperAdmin();
-  const noTenantSelected = superAdmin && selectedAccountId === null;
+  const canManageSocialAccounts = superAdmin || (hasPermission('manage-social-accounts') && hasModule('social_accounts'));
+  // Owner request (2026-09-30): with its own Platform account a Super Admin needs no client here.
+  const noTenantSelected = superAdmin && selectedAccountId === null && !user?.platform_crm_account;
+  const { openPicker, picker } = useClientGate({ platformFallback: true });
 
   const [threads, setThreads] = useState<InboxThread[]>([]);
   const [isLoadingThreads, setIsLoadingThreads] = useState(true);
   const [threadsError, setThreadsError] = useState<string | null>(null);
+  const [connectionIssues, setConnectionIssues] = useState<InboxConnectionIssue[]>([]);
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
 
   const [messages, setMessages] = useState<InboxMessage[]>([]);
@@ -82,8 +94,9 @@ export default function SocialInboxPage() {
     setThreadsError(null);
     inboxService
       .listThreads()
-      .then((data) => {
+      .then(({ threads: data, connectionIssues: issues }) => {
         setThreads(data);
+        setConnectionIssues(issues);
         setSelectedThreadId((prev) => prev ?? data[0]?.id ?? null);
       })
       .catch((err: unknown) => setThreadsError(extractErrorMessage(err, 'Failed to load conversations.')))
@@ -156,11 +169,25 @@ export default function SocialInboxPage() {
           </p>
         </div>
 
-        {noTenantSelected ? (
-          <div className="flex items-start gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm" style={{ color: indigo.muted }}>
-            <Building2 className="mt-0.5 h-4 w-4 flex-shrink-0" />
-            Select a client from the switcher at the top of the page to view their inbox.
+        {picker}
+        {!noTenantSelected && connectionIssues.length > 0 && (
+          <div className="mb-4 space-y-2" data-testid="inbox-connection-issues">
+            {connectionIssues.map((issue) => (
+              <div key={issue.social_account_id} className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                <span>
+                  <strong>{issue.connection_status === 'revoked' ? 'Access revoked' : 'Connection expired'}:</strong> {issue.message}
+                </span>
+                {canManageSocialAccounts && (
+                  <Link to={safeInboxReconnect(issue.reconnect_path)} className="font-semibold underline">
+                    Reconnect
+                  </Link>
+                )}
+              </div>
+            ))}
           </div>
+        )}
+        {noTenantSelected ? (
+          <SelectClientNotice message="Social inbox conversations belong to a client. Select one to view their inbox." onSelect={() => openPicker('view the inbox')} />
         ) : (
           <div className="flex overflow-hidden rounded-2xl border" style={{ borderColor: indigo.border, height: 'calc(100vh - 220px)', minHeight: 420 }}>
             <div className="flex w-72 flex-shrink-0 flex-col border-r bg-white" style={{ borderColor: indigo.border }}>

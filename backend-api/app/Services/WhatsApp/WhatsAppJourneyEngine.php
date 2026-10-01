@@ -2,6 +2,7 @@
 
 namespace App\Services\WhatsApp;
 
+use App\Jobs\ResumeJourneySessionJob;
 use App\Models\Account;
 use App\Models\JourneyExecutionEvent as Ev;
 use App\Models\Lead;
@@ -895,7 +896,7 @@ class WhatsAppJourneyEngine
 
         if (! $this->transition($session, [
             'status' => WhatsAppFlowSession::STATUS_WAITING,
-            'wait_until' => now()->addSeconds(self::RETRY_BACKOFF_SECONDS * (2 ** max(0, $session->attempts - 1))),
+            'wait_until' => $this->retryAt($failure, self::RETRY_BACKOFF_SECONDS * (2 ** max(0, $session->attempts - 1))),
             'last_error' => mb_substr($error, 0, 500),
         ])) {
             return $session->status;
@@ -1154,7 +1155,7 @@ class WhatsAppJourneyEngine
         // in between is never turned back into 'waiting'.
         if (! $this->transition($session, [
             'status' => WhatsAppFlowSession::STATUS_WAITING,
-            'wait_until' => now()->addSeconds(self::RETRY_BACKOFF_SECONDS),
+            'wait_until' => $this->retryAt($failure, self::RETRY_BACKOFF_SECONDS),
             'attempts' => 0,
             'last_error' => mb_substr($error, 0, 500),
         ], [WhatsAppFlowSession::STATUS_ACTIVE])) {
@@ -1167,6 +1168,22 @@ class WhatsAppJourneyEngine
             'current_node_id' => $session->current_node_id,
             'error' => $error,
         ]);
+    }
+
+    /**
+     * Phase 8 Task 7 — when a failed step is retried: after the usual backoff,
+     * or later when the failure says it cannot succeed before a given moment
+     * (JourneyStepFailed::$notBefore). Never earlier than the backoff.
+     */
+    private function retryAt(Throwable $failure, int $backoffSeconds): \Illuminate\Support\Carbon
+    {
+        $at = now()->addSeconds($backoffSeconds);
+
+        if ($failure instanceof JourneyStepFailed && $failure->notBefore !== null && $failure->notBefore > $at) {
+            return \Illuminate\Support\Carbon::instance($failure->notBefore);
+        }
+
+        return $at;
     }
 
     /** @param array<string, mixed> $data */
@@ -1374,6 +1391,12 @@ class WhatsAppJourneyEngine
         ]);
 
         $this->trace($session, Ev::SESSION_STARTED, ['node_id' => (string) $triggerNode['id'], 'node_type' => 'trigger', 'result' => (string) $flow->trigger_type]);
+
+        // Phase 10 Task 1 — a journey started from an ad referral: link it to
+        // the referral's attribution row (same account). Best-effort.
+        if ($referral !== null) {
+            \App\Services\Ads\AdAttributionService::quietly('journey_start', $accountId, fn () => app(\App\Services\Ads\AdAttributionService::class)->journeyStarted($accountId, $senderPhone, $referral, $session));
+        }
 
         $this->runImmediate($account, $flow, $session, (string) $firstEdge['target']);
 
@@ -1736,6 +1759,68 @@ class WhatsAppJourneyEngine
                 return;
             }
 
+            // Phase 8 Task 7 — AI nodes (prompt, agent). Config, node
+            // entitlement (`ai`) and the Journey runtime entitlement were
+            // checked above; JourneyAiNodeRunner authorizes the session's own
+            // account again and runs the call through MeteredAiService.
+            if (in_array($type, JourneyAiNodeRunner::TYPES, true)) {
+                // A provider call is never made on the immediate path (inside
+                // the inbound webhook request / manual test request): the
+                // session is handed to the existing scheduler at this very
+                // checkpoint — status 'waiting', due now — and the journeys
+                // worker runs the node through resumeDueSession() (claim,
+                // lease, retry/backoff, cancellation), exactly like a delay.
+                if (! $resumed) {
+                    $parked = $this->transition($session, [
+                        'status' => WhatsAppFlowSession::STATUS_WAITING,
+                        'current_node_id' => $node['id'],
+                        'wait_until' => now(),
+                        'attempts' => 0,
+                        'last_error' => null,
+                        'last_interaction_at' => now(),
+                    ]);
+
+                    if ($parked) {
+                        $this->trace($session, Ev::SESSION_WAITING, ['node_type' => $type, 'result' => 'ai_queued', 'scheduled_for' => $session->wait_until]);
+                        ResumeJourneySessionJob::dispatch((int) $session->id)->onConnection('database')->onQueue('journeys');
+                    }
+
+                    return;
+                }
+
+                $this->trace($session, Ev::NODE_STARTED, ['node_type' => $type]);
+                // Phase 8 Task 10 — a rag node persists its retrieval hits mid-step
+                // through the same guarded write (so a retry never re-embeds).
+                $result = app(JourneyAiNodeRunner::class)->run($account, $session, $node, fn (array $context) => $this->transition($session, ['context_data' => $context]));
+
+                // The reply goes into its output variable and the node's
+                // completion counter advances — both written in the SAME
+                // guarded write as the next checkpoint (top of the loop) or
+                // the completion, never on their own: a retry before that
+                // write reuses the operation key; one after it cannot re-run
+                // this node.
+                $session->forceFill(['context_data' => JourneyAiNodeRunner::contextAfter($session->context_data ?? [], $result)]);
+                $this->nodeSucceeded($session, $type === 'rag' && $result['operation_id'] === null ? 'rag_no_context' : 'ai_response', array_filter([
+                    'ai_operation_id' => $result['operation_id'],
+                    'retrieval_operation_id' => $result['retrieval_operation_id'] ?? null,
+                    // Phase 8 Task 11 — which agent version ran, and how many tools it executed.
+                    'agent_version_id' => $result['agent_version_id'] ?? null,
+                    'tool_calls' => $result['tool_calls'] ?? null,
+                ], fn ($v) => $v !== null));
+
+                $next = Collection::make($graph->outgoingEdges($node['id']))->first();
+
+                if (! $next) {
+                    $this->complete($session);
+
+                    return;
+                }
+
+                $nodeId = (string) $next['target'];
+
+                continue;
+            }
+
             // Phase 7 Task 6 — the palette's plain send nodes: Text and the
             // four media types both WhatsApp engines already send through the
             // unified driver (WhatsAppMediaPayloadBuilder, as
@@ -1930,6 +2015,11 @@ class WhatsAppJourneyEngine
          */
         $crmLead = app(CaptureLeadLinker::class)->linkQuietly($lead);
         $this->lastLeadRefs = ['lead_id' => (int) $lead->id, 'crm_lead_id' => $crmLead ? (int) $crmLead->id : null];
+
+        // Phase 10 Task 1 — a lead saved inside an ad-attributed journey session. Best-effort.
+        if ($crmLead !== null) {
+            \App\Services\Ads\AdAttributionService::quietly('journey_lead', (int) $account->id, fn () => app(\App\Services\Ads\AdAttributionService::class)->linkJourneyLead($session, $crmLead));
+        }
 
         if ($crmLead === null && app(CaptureLeadLinker::class)->accountMayUseCrm($lead)) {
             throw new JourneyStepFailed('Node save_lead: the lead was captured but could not be written to the CRM (recorded in crm_capture_link_failures).', 'crm_failure');

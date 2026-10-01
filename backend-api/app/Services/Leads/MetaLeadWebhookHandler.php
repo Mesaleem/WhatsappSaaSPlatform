@@ -6,11 +6,14 @@ use App\Models\Account;
 use App\Models\Lead;
 use App\Models\SocialAccount;
 use App\Services\Crm\CaptureLeadLinker;
-use App\Services\WhatsApp\WhatsAppEngineFactory;
+use App\Services\SocialAuth\Exceptions\ProviderRequestFailed;
+use App\Services\SocialAuth\Exceptions\SocialConnectionException;
+use App\Services\SocialAuth\SocialConnectionService;
+use App\Services\SocialAuth\WebhookAssetResolver;
+use App\Services\WhatsApp\DirectMessageDispatcher;
 use App\Support\PhoneNumberNormalizer;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
-use RuntimeException;
 use Throwable;
 
 /**
@@ -52,6 +55,12 @@ class MetaLeadWebhookHandler
     private const API_VERSION = 'v18.0';
 
     /**
+     * Phase 5 P5-A -- the message_dispatch_logs.source written for both
+     * WhatsApp sends this handler makes (tenant notice + lead welcome).
+     */
+    public const DISPATCH_SOURCE = 'meta_lead_ads';
+
+    /**
      * @param array<string, mixed> $entry One element of the webhook
      *        payload's top-level `entry` array (see SocialWebhookController).
      */
@@ -86,11 +95,16 @@ class MetaLeadWebhookHandler
             return;
         }
 
-        $socialAccount = SocialAccount::query()
-            ->where('provider', 'meta')
-            ->where('asset_type', 'facebook_page')
-            ->where('provider_id', (string) $pageId)
-            ->first();
+        // Phase 9 Task 2.2 — the Page's owner is resolved without guessing:
+        // a Page connected by more than one account is not processed
+        // (logged + audited for manual resolution) instead of being given
+        // to an arbitrary tenant. See WebhookAssetResolver.
+        $resolution = app(WebhookAssetResolver::class)->resolve('meta', 'facebook_page', (string) $pageId, 'leadgen', ['leadgen_id' => (string) $leadgenId]);
+        $socialAccount = $resolution['account'];
+
+        if ($resolution['status'] === WebhookAssetResolver::AMBIGUOUS) {
+            return;
+        }
 
         if (! $socialAccount) {
             Log::warning("MetaLeadWebhookHandler: no tenant has Page {$pageId} connected — lead dropped.", [
@@ -108,7 +122,7 @@ class MetaLeadWebhookHandler
             return;
         }
 
-        $fieldData = $this->fetchLeadFieldData($leadgenId, $socialAccount->access_token);
+        $fieldData = $this->fetchLeadFieldData($leadgenId, $socialAccount);
 
         if ($fieldData === null) {
             // fetchLeadFieldData() already logged the specific failure.
@@ -162,10 +176,31 @@ class MetaLeadWebhookHandler
     /**
      * @return array<int, array{name: string, values: list<string>}>|null
      */
-    private function fetchLeadFieldData(string $leadgenId, ?string $pageAccessToken): ?array
+    private function fetchLeadFieldData(string $leadgenId, SocialAccount $socialAccount): ?array
     {
+        $pageAccessToken = $socialAccount->access_token;
+
         if (! $pageAccessToken) {
             Log::warning("MetaLeadWebhookHandler: leadgen {$leadgenId} — no Page Access Token stored for this SocialAccount.");
+
+            return null;
+        }
+
+        // Phase 9 Task 2.1 — the Page connection that owns this webhook entry
+        // (resolved from the signed payload's page_id, never from input) is
+        // not asked again once it is known to be expired/revoked. This runs
+        // inside Meta's webhook request, which must still answer 200 (a
+        // non-2xx would make Meta redeliver forever), so the refusal is
+        // logged with its safe code rather than returned as a 409.
+        $connections = app(SocialConnectionService::class);
+
+        try {
+            $connections->assertUsable($socialAccount, 'leads.fetch');
+        } catch (SocialConnectionException $e) {
+            Log::warning("MetaLeadWebhookHandler: leadgen {$leadgenId} not fetched — the Page connection needs reconnecting.", [
+                'social_account_id' => $socialAccount->id,
+                'error_code' => $e->errorCode(),
+            ]);
 
             return null;
         }
@@ -184,6 +219,20 @@ class MetaLeadWebhookHandler
         }
 
         if ($response->failed()) {
+            // Phase 9 Task 2.1 — an expired/revoked Page token is persisted on
+            // the connection (the provider driver classifies the error); any
+            // other rejection (rate limit, 5xx, validation) changes nothing.
+            $result = $connections->observe($socialAccount, ProviderRequestFailed::fromResponse($response, 'Meta rejected the leadgen fetch.'), 'leads.fetch');
+
+            if ($result) {
+                Log::warning("MetaLeadWebhookHandler: leadgen {$leadgenId} not fetched — the Page connection is {$result->status}.", [
+                    'social_account_id' => $socialAccount->id,
+                    'error_code' => SocialConnectionException::for($socialAccount, $result->status)->errorCode(),
+                ]);
+
+                return null;
+            }
+
             Log::warning("MetaLeadWebhookHandler: Meta rejected the leadgen {$leadgenId} fetch.", [
                 'error' => $response->json('error.message'),
             ]);
@@ -285,22 +334,35 @@ class MetaLeadWebhookHandler
     }
 
     /**
+     * Phase 5 P5-A -- this used to resolve the engine driver and call
+     * sendMessage() on it directly: no quota was consumed and no
+     * dispatch-log row was written, so every Lead Ads notice/welcome was
+     * a free, unaudited send. It now goes through the unified
+     * individual-recipient path (the same one P5-2 moved the Social
+     * Inbox lead reply onto), which owns the subscription/quota gate,
+     * the disconnected-QR check, phone normalization, provider
+     * resolution, the single quota consumption on a confirmed send and
+     * the dispatch log on every terminal branch. No provider, quota or
+     * logging logic lives here. $account is the tenant that owns the
+     * connected Page (resolved in handleLeadgenChange()); nothing from
+     * the webhook payload chooses the sending account.
+     *
      * @return array{success: bool, error?: string}
      */
     private function send(Account $account, string $normalizedPhone, string $message): array
     {
-        $account->loadMissing(['currentSubscription', 'whatsAppSession']);
+        $result = DirectMessageDispatcher::dispatch(
+            $account->id,
+            $normalizedPhone,
+            'text',
+            ['body' => $message],
+            source: self::DISPATCH_SOURCE,
+        );
 
-        if (! $account->hasActiveSubscription()) {
-            return ['success' => false, 'error' => 'Account has no active WhatsApp subscription.'];
+        if ($result['status'] === 'sent') {
+            return ['success' => true];
         }
 
-        try {
-            $driver = WhatsAppEngineFactory::make($account);
-        } catch (RuntimeException $e) {
-            return ['success' => false, 'error' => $e->getMessage()];
-        }
-
-        return $driver->sendMessage($normalizedPhone, $message);
+        return ['success' => false, 'error' => $result['message'] ?? 'Send failed.'];
     }
 }

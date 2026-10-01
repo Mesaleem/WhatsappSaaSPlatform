@@ -75,6 +75,8 @@ class WhatsAppFlowController extends Controller
 
         $data = $this->validateFlow($request);
         $this->assertNodesEntitled($request, $account, $data['graph_data']['nodes'], $this->saveAction($request), null);
+        $this->assertKnowledgeBasesOwned($account, $data['graph_data']['nodes']);
+        $this->assertAgentsOwned($request, $account, $data['graph_data']['nodes']);
 
         // P5-7 — a journey that is published (the default) must be executable.
         if ($this->publishFlag($request)) {
@@ -105,6 +107,8 @@ class WhatsAppFlowController extends Controller
 
         $data = $this->validateFlow($request, $flow);
         $this->assertNodesEntitled($request, $account, $data['graph_data']['nodes'], $this->saveAction($request), $flow->id);
+        $this->assertKnowledgeBasesOwned($account, $data['graph_data']['nodes']);
+        $this->assertAgentsOwned($request, $account, $data['graph_data']['nodes']);
 
         // P5-7 — publishing (the default) requires an executable graph; a
         // draft save (`publish: false`) that switches the journey ON requires
@@ -407,6 +411,83 @@ class WhatsAppFlowController extends Controller
         $request->validate(['publish' => ['sometimes', 'boolean']]);
 
         return $request->boolean('publish', true);
+    }
+
+    /**
+     * Phase 8 Task 10 — a `rag` node may only name a knowledge base of the
+     * journey's OWN (resolved target) account. Another account's id is
+     * answered exactly like a missing one (no existence leak). The engine
+     * checks again at run time (KnowledgeRetriever resolves the id inside
+     * the session's account), so a knowledge base deleted later fails the
+     * node rather than reaching anyone else's data.
+     *
+     * @param  array<int, mixed>  $nodes
+     */
+    private function assertKnowledgeBasesOwned(Account $account, array $nodes): void
+    {
+        $errors = [];
+
+        foreach ($nodes as $i => $node) {
+            $id = is_array($node) && ($node['type'] ?? null) === 'rag' && is_array($node['data'] ?? null) ? ($node['data']['knowledgeBaseId'] ?? null) : null;
+
+            if ($id === null || $id === '') {
+                continue;
+            }
+
+            if (! JourneyActionConfig::positiveId($id) || ! \App\Models\KnowledgeBase::query()->forAccount((int) $account->id)->whereKey((int) $id)->exists()) {
+                $errors["graph_data.nodes.{$i}.data.knowledgeBaseId"] = ['Knowledge base not found.'];
+            }
+        }
+
+        if ($errors !== []) {
+            throw ValidationException::withMessages($errors);
+        }
+    }
+
+    /**
+     * Phase 8 Task 11 — an `agent` node's registeredAgentId must name an AI
+     * agent of the journey's OWN (target) account; another account's id is
+     * reported exactly like a missing one. The saving user must also be
+     * allowed to use every tool of that agent's current version (a journey
+     * must not become a way to run a tool its author may not grant). The
+     * engine resolves the agent again at run time inside the session's
+     * account, so this is a save-time guard, not the only one.
+     *
+     * @param  array<int, mixed>  $nodes
+     */
+    private function assertAgentsOwned(Request $request, Account $account, array $nodes): void
+    {
+        $errors = [];
+
+        foreach ($nodes as $i => $node) {
+            $id = is_array($node) && ($node['type'] ?? null) === 'agent' && is_array($node['data'] ?? null) ? ($node['data']['registeredAgentId'] ?? null) : null;
+
+            if ($id === null || $id === '') {
+                continue;
+            }
+
+            $agent = JourneyActionConfig::positiveId($id) ? \App\Models\AiAgent::query()->forAccount((int) $account->id)->find((int) $id) : null;
+
+            if ($agent === null) {
+                $errors["graph_data.nodes.{$i}.data.registeredAgentId"] = ['AI agent not found.'];
+
+                continue;
+            }
+
+            foreach ($agent->currentVersion()?->toolNames() ?? [] as $toolName) {
+                $permission = app(\App\Services\Ai\Agents\Tools\ToolRegistry::class)->get($toolName)?->permission();
+
+                if ($permission !== null && ! $request->user()?->can($permission)) {
+                    $errors["graph_data.nodes.{$i}.data.registeredAgentId"] = ["You are not permitted to use this AI agent's tool '{$toolName}'."];
+
+                    break;
+                }
+            }
+        }
+
+        if ($errors !== []) {
+            throw ValidationException::withMessages($errors);
+        }
     }
 
     private function validateFlow(Request $request, ?WhatsAppFlow $existing = null): array

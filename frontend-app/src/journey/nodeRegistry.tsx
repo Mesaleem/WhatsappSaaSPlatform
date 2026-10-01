@@ -178,6 +178,31 @@ export function isHttpUrl(value: string): boolean {
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 /** `{{token}}` names referenced by a body of text. */
+/**
+ * Phase 8 Task 7 — an AI node's variable fields must be names the runtime
+ * can store and `{{ }}` can read back (mirror of the backend's
+ * JourneyActionConfig::VARIABLE_NAME_PATTERN). Empty is left to `required`.
+ */
+const AI_VARIABLE_NAME = /^[A-Za-z0-9_.-]{1,64}$/;
+
+/** Phase 8 Task 10 — mirror of JourneyActionConfig::RAG_DEFAULT_TOP_K / config('ai.knowledge.max_results'). */
+const RAG_DEFAULT_TOP_K = 3;
+const RAG_MAX_TOP_K = 20;
+
+function aiVariableErrors(config: Record<string, unknown>, keys: string[]): JourneyNodeConfigErrors {
+  const errors: JourneyNodeConfigErrors = {};
+
+  for (const key of keys) {
+    const value = config[key];
+
+    if (typeof value === 'string' && value.trim() !== '' && !AI_VARIABLE_NAME.test(value.trim())) {
+      errors[key] = 'Use only letters, digits, _ . - (at most 64 characters).';
+    }
+  }
+
+  return errors;
+}
+
 export function extractTemplateVariables(text: string): string[] {
   const found = new Set<string>();
 
@@ -217,7 +242,7 @@ const MESSAGE_NODES: JourneyNodeDefinition[] = [
   {
     type: 'prompt',
     label: 'Prompt',
-    description: 'System / AI initial prompt that seeds the conversation.',
+    description: 'Ask the AI and save its reply to a variable (uses AI credits).',
     category: 'message',
     icon: Sparkles,
     color: '#7c3aed',
@@ -226,11 +251,13 @@ const MESSAGE_NODES: JourneyNodeDefinition[] = [
     providers: ['none'],
     sourceHandles: NEXT,
     hasTargetHandle: true,
-    defaultConfig: { prompt: '' },
+    defaultConfig: { prompt: '', outputVariable: 'ai_response' },
     configSchema: [
-      { key: 'prompt', label: 'System prompt', type: 'textarea', required: true, help: 'Instructions for the AI. Never put an API key here — credentials live server-side.' },
-      { key: 'model', label: 'Model hint', type: 'text', placeholder: 'Optional' },
+      { key: 'prompt', label: 'Prompt', type: 'textarea', required: true, help: 'Sent to the AI as written; {{variables}} are filled from this conversation. Nothing else from the chat is sent. Never put an API key here — credentials live server-side.' },
+      { key: 'outputVariable', label: 'Save reply as', type: 'variable', required: true, placeholder: 'ai_response', help: 'Use it later as {{ai_response}} (letters, digits, _ . -).' },
+      { key: 'model', label: 'Model hint', type: 'text', placeholder: 'Optional', help: 'Used only if your platform administrator allows that model; otherwise the default model runs.' },
     ],
+    validate: (c): JourneyNodeConfigErrors => aiVariableErrors(c, ['outputVariable']),
     summarize: (c) => (str(c, 'prompt') ? truncate(str(c, 'prompt')) : null),
   },
   {
@@ -704,7 +731,7 @@ const ADVANCED_NODES: JourneyNodeDefinition[] = [
   {
     type: 'agent',
     label: 'AI Agent',
-    description: 'Hand the conversation to a configured AI agent.',
+    description: 'A registered AI agent (optionally with tools) or one bounded AI reply from instructions (uses AI credits).',
     category: 'advanced',
     icon: Bot,
     color: '#7c3aed',
@@ -713,17 +740,31 @@ const ADVANCED_NODES: JourneyNodeDefinition[] = [
     providers: ['none'],
     sourceHandles: NEXT,
     hasTargetHandle: true,
-    defaultConfig: { agentId: '' },
+    defaultConfig: { agentId: '', registeredAgentId: '', outputVariable: 'agent_response' },
     configSchema: [
-      { key: 'agentId', label: 'Agent', type: 'text', required: true, help: 'Agent credentials are resolved server-side and never stored on the node.' },
-      { key: 'instructions', label: 'Instructions', type: 'textarea' },
+      { key: 'registeredAgentId', label: 'Registered agent', type: 'aiAgent', help: "Only this account's AI agents are offered; the server checks ownership again. Leave empty for a single bounded reply without tools." },
+      { key: 'agentId', label: 'Label', type: 'text', help: 'A name shown on the canvas. Agent credentials are resolved server-side and never stored on the node.' },
+      { key: 'instructions', label: 'Instructions', type: 'textarea', required: true, requiredUnless: 'registeredAgentId', help: '{{variables}} are filled from this conversation. Required without a registered agent; with one, an optional task for it.' },
+      { key: 'inputVariable', label: 'Input variable', type: 'variable', placeholder: 'Optional — e.g. an answer collected earlier' },
+      { key: 'outputVariable', label: 'Save reply as', type: 'variable', required: true, placeholder: 'agent_response' },
     ],
-    summarize: (c) => str(c, 'agentId') || null,
+    validate: (c): JourneyNodeConfigErrors => {
+      const errors: JourneyNodeConfigErrors = aiVariableErrors(c, ['inputVariable', 'outputVariable']);
+      const registered = c.registeredAgentId;
+      const hasRegistered = registered !== undefined && registered !== null && String(registered).trim() !== '';
+
+      if (hasRegistered && !/^[1-9][0-9]*$/.test(String(registered).trim())) {
+        errors.registeredAgentId = 'Choose one of your AI agents.';
+      }
+
+      return errors;
+    },
+    summarize: (c) => str(c, 'agentId') || (str(c, 'registeredAgentId') ? `AI agent #${str(c, 'registeredAgentId')}` : null),
   },
   {
     type: 'rag',
     label: 'Knowledge Base',
-    description: 'Answer from a knowledge base / vector search.',
+    description: 'Answer from one of your knowledge bases and save the reply to a variable (uses AI credits).',
     category: 'advanced',
     icon: Database,
     color: '#7c3aed',
@@ -732,22 +773,32 @@ const ADVANCED_NODES: JourneyNodeDefinition[] = [
     providers: ['none'],
     sourceHandles: NEXT,
     hasTargetHandle: true,
-    defaultConfig: { knowledgeBaseId: '', topK: 3 },
+    defaultConfig: { knowledgeBaseId: '', topK: RAG_DEFAULT_TOP_K, outputVariable: 'rag_answer' },
     configSchema: [
-      { key: 'knowledgeBaseId', label: 'Knowledge base', type: 'text', required: true },
-      { key: 'queryVariable', label: 'Query variable', type: 'variable', placeholder: 'last_message' },
-      { key: 'topK', label: 'Results (top K)', type: 'number', min: 1, max: 50 },
+      { key: 'knowledgeBaseId', label: 'Knowledge base', type: 'knowledgeBase', required: true, help: "Only this account's knowledge bases are offered; the server checks ownership again." },
+      { key: 'queryVariable', label: 'Question variable', type: 'variable', required: true, placeholder: 'e.g. an answer collected earlier', help: 'The customer question to search for.' },
+      { key: 'topK', label: 'Passages to use (top K)', type: 'number', min: 1, max: RAG_MAX_TOP_K },
+      { key: 'outputVariable', label: 'Save answer as', type: 'variable', required: true, placeholder: 'rag_answer', help: 'Empty when nothing relevant is found — branch on it with a Conditional node.' },
     ],
     validate: (c): JourneyNodeConfigErrors => {
-      if (c.topK === undefined || c.topK === null || c.topK === '') {
-        return {};
+      const errors: JourneyNodeConfigErrors = aiVariableErrors(c, ['queryVariable', 'outputVariable']);
+      const kb = c.knowledgeBaseId;
+
+      if (kb !== undefined && kb !== null && kb !== '' && !/^[1-9][0-9]*$/.test(String(kb).trim())) {
+        errors.knowledgeBaseId = 'Choose one of your knowledge bases.';
       }
 
-      const topK = Number(c.topK);
+      if (c.topK !== undefined && c.topK !== null && c.topK !== '') {
+        const topK = Number(c.topK);
 
-      return Number.isFinite(topK) && topK >= 1 && topK <= 50 ? {} : { topK: 'Top K must be between 1 and 50.' };
+        if (!Number.isInteger(topK) || topK < 1 || topK > RAG_MAX_TOP_K) {
+          errors.topK = `Top K must be a whole number between 1 and ${RAG_MAX_TOP_K}.`;
+        }
+      }
+
+      return errors;
     },
-    summarize: (c) => str(c, 'knowledgeBaseId') || null,
+    summarize: (c) => (str(c, 'knowledgeBaseId') ? `Knowledge base #${str(c, 'knowledgeBaseId')}` : null),
   },
   {
     type: 'human_intervention',
@@ -1069,6 +1120,7 @@ export const ALL_JOURNEY_NODE_TYPES: string[] = JOURNEY_NODE_DEFINITIONS.map((d)
 export const RUNTIME_EXECUTABLE_NODE_TYPES: readonly string[] = [
   'trigger', 'message', 'question', 'condition', 'save_lead',
   'delay', 'conditional', 'text', 'image', 'video', 'document', 'audio',
+  'prompt', 'agent', 'rag',
 ];
 
 export function isRuntimeExecutableNodeType(type: string): boolean {
@@ -1115,7 +1167,13 @@ export function validateJourneyNodeConfig(
   for (const field of definition.configSchema) {
     const value = config[field.key];
 
-    if (field.required) {
+    const waived =
+      field.requiredUnless !== undefined &&
+      config[field.requiredUnless] !== undefined &&
+      config[field.requiredUnless] !== null &&
+      String(config[field.requiredUnless]).trim() !== '';
+
+    if (field.required && !waived) {
       const empty =
         value === undefined ||
         value === null ||

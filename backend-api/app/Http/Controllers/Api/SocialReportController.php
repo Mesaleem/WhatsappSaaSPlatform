@@ -50,7 +50,7 @@ class SocialReportController extends Controller
     /** GET /api/social/reports/summary — JSON, for SocialReportsPage's recharts. */
     public function summary(Request $request): JsonResponse
     {
-        $account = $this->requireAccount($request);
+        $account = $this->requireTargetAccount($request);
         [$from, $to, $label] = $this->resolvePeriod($request);
 
         return response()->json(['data' => $this->buildReportData($account, $from, $to, $label)]);
@@ -59,7 +59,7 @@ class SocialReportController extends Controller
     /** GET /api/social/reports/generate — the literal spec endpoint, PDF bytes. */
     public function generate(Request $request): Response
     {
-        $account = $this->requireAccount($request);
+        $account = $this->requireTargetAccount($request);
         [$from, $to, $label] = $this->resolvePeriod($request);
         $data = $this->buildReportData($account, $from, $to, $label);
 

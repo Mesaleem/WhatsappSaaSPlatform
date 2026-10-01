@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
-import { AlertCircle, Building2, Camera, CheckCircle2, Loader2, MessageSquare, X, XCircle } from 'lucide-react';
+import { AlertCircle, Camera, CheckCircle2, Loader2, MessageSquare, X, XCircle } from 'lucide-react';
 import { useAuth } from '../../core/context/AuthContext';
 import { useTenant } from '../../core/context/TenantContext';
+import { SelectClientNotice } from '../../components/common/ActionGate';
+import { useClientGate } from '../../components/common/actionGateHooks';
 import leadsService from '../../services/leadsService';
 import { TableCard } from '../../components/common/Card';
 import { ClearFiltersButton, Pagination, SearchInput } from '../../components/common/DataTableControls';
@@ -126,10 +128,12 @@ function LeadDetailModal({ leadId, onClose }: { leadId: number; onClose: () => v
 }
 
 export default function LeadsPage() {
-  const { isSuperAdmin } = useAuth();
+  const { user, isSuperAdmin } = useAuth();
   const { selectedAccountId } = useTenant();
   const superAdmin = isSuperAdmin();
-  const noTenantSelected = superAdmin && selectedAccountId === null;
+  // Owner request (2026-09-30): with its own Platform account a Super Admin needs no client here.
+  const noTenantSelected = superAdmin && selectedAccountId === null && !user?.platform_crm_account;
+  const { openPicker, picker } = useClientGate({ platformFallback: true });
 
   const [leads, setLeads] = useState<Lead[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -183,11 +187,9 @@ export default function LeadsPage() {
           </p>
         </div>
 
+        {picker}
         {noTenantSelected ? (
-          <div className="flex items-start gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm" style={{ color: indigo.muted }}>
-            <Building2 className="mt-0.5 h-4 w-4 flex-shrink-0" />
-            Select a client from the switcher at the top of the page to view their leads.
-          </div>
+          <SelectClientNotice message="Leads belong to a client. Select one to view their leads." onSelect={() => openPicker('view leads')} />
         ) : (
           <>
             <div className="mb-4 flex flex-wrap items-center gap-3">

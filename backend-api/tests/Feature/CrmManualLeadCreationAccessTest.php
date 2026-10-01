@@ -267,30 +267,31 @@ class CrmManualLeadCreationAccessTest extends TestCase
         $this->assertSame(0, CrmLead::where('account_id', $platform->id)->count());
     }
 
-    public function test_a_selected_client_without_crm_is_blocked_for_super_admin(): void
+    public function test_a_selected_client_without_crm_is_open_to_super_admin_but_a_disabled_module_is_not(): void
     {
         $this->platform();
         $noCrm = $this->account(crm: false);
         $moduleOff = $this->account(attributes: ['allowed_modules' => array_values(array_diff(Account::MODULES, ['lead_crm']))]);
         $sa = $this->superAdmin();
 
-        $this->actingAs($sa)->postJson(self::URL.'?account_id='.$noCrm->id, $this->body())
-            ->assertStatus(403)->assertJsonPath('error_code', 'CAPABILITY_NOT_ENTITLED');
+        // Owner decision (2026-09-30): the client's plan does not bind a Super Admin.
+        $this->actingAs($sa)->postJson(self::URL.'?account_id='.$noCrm->id, $this->body())->assertCreated();
+        $this->actingAs($sa)->getJson(self::URL.'?account_id='.$noCrm->id)->assertOk();
         $this->actingAs($sa)->postJson(self::URL.'?account_id='.$moduleOff->id, $this->body())
             ->assertStatus(403)->assertJsonPath('error_code', 'MODULE_DISABLED');
-        $this->actingAs($sa)->getJson(self::URL.'?account_id='.$noCrm->id)->assertStatus(403);
 
-        $this->assertDatabaseCount('crm_leads', 0);
+        $this->assertSame(1, CrmLead::where('account_id', $noCrm->id)->count());
+        $this->assertSame(0, CrmLead::where('account_id', $moduleOff->id)->count());
     }
 
-    public function test_a_platform_account_whose_crm_was_revoked_is_blocked_too(): void
+    public function test_the_platform_account_is_not_held_to_a_plan_and_ensure_never_regrants(): void
     {
         $platform = $this->platform();
         AccountEntitlement::where('account_id', $platform->id)->update(['revoked_at' => now()]);
 
-        $this->actingAs($this->superAdmin())->postJson(self::URL, $this->body())
-            ->assertStatus(403)->assertJsonPath('error_code', 'CAPABILITY_NOT_ENTITLED');
-        $this->assertDatabaseCount('crm_leads', 0);
+        // Owner decision (2026-09-30): the Super Admin's own account has no plan to enforce.
+        $this->actingAs($this->superAdmin())->postJson(self::URL, $this->body())->assertCreated();
+        $this->assertSame(1, CrmLead::where('account_id', $platform->id)->count());
 
         // ensure() never silently re-grants a revoked entitlement.
         app(PlatformCrmAccount::class)->ensure();

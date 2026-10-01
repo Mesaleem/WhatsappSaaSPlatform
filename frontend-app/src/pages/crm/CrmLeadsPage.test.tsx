@@ -39,7 +39,17 @@ vi.mock('../../core/context/AuthContext', () => ({
 
 const tenant = { selectedAccountId: null as number | null, selectedAccount: null as { id: number; company_name: string } | null };
 vi.mock('../../core/context/TenantContext', () => ({
-  useTenant: () => ({ selectedAccountId: tenant.selectedAccountId, selectedAccount: tenant.selectedAccount }),
+  useTenant: () => ({
+    selectedAccountId: tenant.selectedAccountId,
+    selectedAccount: tenant.selectedAccount,
+    // Final hardening §23 — the client picker behind "Add lead".
+    accounts: [{ id: 42, company_name: 'Acme Traders' }],
+    isLoadingAccounts: false,
+    selectAccount: (id: number | null) => {
+      tenant.selectedAccountId = id;
+      tenant.selectedAccount = id === null ? null : { id, company_name: 'Acme Traders' };
+    },
+  }),
 }));
 
 const crm = crmService as unknown as Record<string, Mock>;
@@ -152,16 +162,24 @@ describe('rendering', () => {
 });
 
 describe('Add lead (manual creation)', () => {
-  it('Super Admin with NO platform CRM account and no client selected: Add lead disabled, with the reason', async () => {
+  it('Super Admin with NO platform CRM account and no client selected: Add lead asks for the client first, then opens the form', async () => {
+    // Final hardening §23: clickable with a reason, not a dead disabled button.
+    const user = userEvent.setup();
     auth.superAdmin = true;
     renderAt();
     await screen.findByTestId('crm-no-client');
 
     const button = screen.getByRole('button', { name: /add lead/i }) as HTMLButtonElement;
-    expect(button.disabled).toBe(true);
+    expect(button.disabled).toBe(false);
     expect(button.title).toMatch(/select a client/i);
-    await userEvent.setup().click(button);
+    await user.click(button);
     expect(screen.queryByTestId('crm-create-lead')).toBeNull();
+    const picker = screen.getByTestId('client-picker');
+    await user.selectOptions(within(picker).getByTestId('client-picker-select'), '42');
+    await user.click(within(picker).getByRole('button', { name: 'Continue' }));
+
+    expect(screen.queryByTestId('client-picker')).toBeNull();
+    expect(await screen.findByTestId('crm-create-lead')).toBeTruthy();
     expect(crm.createLead).not.toHaveBeenCalled();
   });
 
@@ -191,7 +209,7 @@ describe('Add lead (manual creation)', () => {
     await waitFor(() => expect(crm.listLeads).toHaveBeenCalledTimes(2));
   });
 
-  it('disables Add lead when the target account fails the CRM gates (403 from the backend)', async () => {
+  it('explains, on click, why Add lead cannot be used when the target account fails the CRM gates (403 from the backend)', async () => {
     auth.superAdmin = true;
     tenant.selectedAccountId = 42;
     tenant.selectedAccount = { id: 42, company_name: 'Demo Account' };
@@ -200,8 +218,12 @@ describe('Add lead (manual creation)', () => {
 
     expect(await screen.findByRole('alert')).toBeTruthy();
     const button = screen.getByRole('button', { name: /add lead/i }) as HTMLButtonElement;
-    await waitFor(() => expect(button.disabled).toBe(true));
-    expect(button.title).toMatch(/does not have CRM access/i);
+    await waitFor(() => expect(button.title).toMatch(/does not have CRM access/i));
+    expect(button.disabled).toBe(false);
+    await userEvent.setup().click(button);
+    expect(screen.getByTestId('crm-access-notice')).toHaveTextContent(/does not include the CRM/i);
+    expect(screen.queryByTestId('crm-create-lead')).toBeNull();
+    expect(crm.createLead).not.toHaveBeenCalled();
   });
 
   it('Super Admin with a selected client: Add lead is enabled and names the target client', async () => {

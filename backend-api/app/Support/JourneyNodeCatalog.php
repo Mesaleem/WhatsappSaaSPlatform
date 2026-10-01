@@ -152,10 +152,12 @@ final class JourneyNodeCatalog
      * with the deterministic `unsupported_node` outcome.
      *
      *   legacy:  trigger, message, question, condition, save_lead
-     *   palette: delay (Phase 7 T1), conditional (T4), text + 4 media (T6)
+     *   palette: delay (Phase 7 T1), conditional (T4), text + 4 media (T6),
+     *            prompt + agent (Phase 8 T7 — through MeteredAiService),
+     *            rag (Phase 8 T10 — KnowledgeRetriever + MeteredAiService)
      *
-     * The other 20 palette types depend on integrations this platform does
-     * not have yet (AI, an outbound HTTP runner, a code sandbox, email
+     * The other 17 palette types depend on integrations this platform does
+     * not have yet (an outbound HTTP runner, a code sandbox, email
      * sending from a journey, payment links, commerce catalogs, interactive
      * Cloud API messages, template sends from a journey, sub-journeys,
      * human hand-off) — they stay persistable as DRAFTS, never publishable.
@@ -165,6 +167,7 @@ final class JourneyNodeCatalog
     public const RUNTIME_EXECUTABLE_TYPES = [
         'trigger', 'message', 'question', 'condition', 'save_lead',
         'delay', 'conditional', 'text', 'image', 'video', 'document', 'audio',
+        'prompt', 'agent', 'rag',
     ];
 
     public static function isRuntimeExecutable(mixed $nodeType): bool

@@ -43,6 +43,13 @@ class SocialAccount extends Model
         'refresh_token',
         'token_expires_at',
         'health_status',
+        // Phase 9 Task 1 — connection lifecycle (see the 2026_09_29_130000 migration).
+        'status_reason',
+        'status_checked_at',
+        // Phase 9 Task 2 — last health-check claim/attempt (see the 2026_09_30_100000 migration).
+        'health_check_attempted_at',
+        'connected_by_user_id',
+        'metadata',
     ];
 
     /**
@@ -59,6 +66,9 @@ class SocialAccount extends Model
     {
         return [
             'token_expires_at' => 'datetime',
+            'status_checked_at' => 'datetime',
+            'health_check_attempted_at' => 'datetime',
+            'metadata' => 'array',
             // Same Crypt::encryptString/decryptString transparent cast as
             // WhatsAppSession.meta_access_token / webhook_subscriptions.secret.
             'access_token' => 'encrypted',
@@ -89,5 +99,20 @@ class SocialAccount extends Model
     public function isTokenExpired(): bool
     {
         return $this->token_expires_at !== null && $this->token_expires_at->isPast();
+    }
+
+    /**
+     * Phase 9 Task 1 — the lifecycle status the API reports:
+     * `revoked` (the provider no longer accepts the grant), `expired`
+     * (stored as expired, or its token_expires_at has passed) or
+     * `connected`. See App\Services\SocialAuth\SocialConnectionStatus.
+     */
+    public function connectionStatus(): string
+    {
+        return match (true) {
+            $this->health_status === self::HEALTH_REAUTH_REQUIRED => \App\Services\SocialAuth\SocialConnectionStatus::REVOKED,
+            $this->health_status === self::HEALTH_TOKEN_EXPIRED, $this->isTokenExpired() => \App\Services\SocialAuth\SocialConnectionStatus::EXPIRED,
+            default => \App\Services\SocialAuth\SocialConnectionStatus::CONNECTED,
+        };
     }
 }

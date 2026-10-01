@@ -14,6 +14,7 @@ use Database\Seeders\Phase1FoundationSeeder;
 use Database\Seeders\RolePermissionSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Str;
+use Tests\Concerns\GrantsNativeWhatsAppGroups;
 use Tests\TestCase;
 
 /**
@@ -28,7 +29,7 @@ use Tests\TestCase;
  */
 class PublicApiSecurityTest extends TestCase
 {
-    use RefreshDatabase;
+    use RefreshDatabase, GrantsNativeWhatsAppGroups;
 
 
     protected function setUp(): void
@@ -254,7 +255,7 @@ class PublicApiSecurityTest extends TestCase
     // 7. Missing required entitlement is rejected.
     public function test_missing_entitlement_is_rejected(): void
     {
-        $account = Account::factory()->create(['allowed_modules' => ['dashboard', 'send_alert']]); // 'contact_groups' deliberately NOT included
+        $account = Account::factory()->create(['allowed_modules' => ['dashboard', 'send_alert', 'developer_api']]); // 'contact_groups' deliberately NOT included (P5-B: developer_api kept on so the group gate is what refuses)
         $this->giveActiveSubscription($account);
         $this->makeApprovedTemplate($account->id, 'GROUP_TPL');
         ContactGroup::create(['account_id' => $account->id, 'name' => 'VIP', 'group_code' => 'VIP', 'group_type' => ContactGroup::GROUP_TYPE_INTERNAL]);
@@ -276,6 +277,7 @@ class PublicApiSecurityTest extends TestCase
     {
         $account = Account::factory()->create();
         $this->giveActiveSubscription($account, 'business'); // Meta Cloud API engine
+        $this->grantNativeWhatsAppGroups($account); // P5-C — so the provider gate is what refuses
         $this->makeApprovedTemplate($account->id, 'NATIVE_TPL');
         // A Native WhatsApp Group can only ever be reached over the QR
         // (Baileys) engine -- Meta Cloud API has no concept of it.

@@ -62,7 +62,7 @@ class SocialMediaController extends Controller
      */
     public function upload(Request $request): JsonResponse
     {
-        $account = $this->requireAccount($request);
+        $account = $this->requireTargetAccount($request);
 
         $request->validate([
             'media' => [

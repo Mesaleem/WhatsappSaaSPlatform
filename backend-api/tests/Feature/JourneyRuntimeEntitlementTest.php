@@ -403,7 +403,11 @@ class JourneyRuntimeEntitlementTest extends TestCase
         $this->travel(5)->minutes();
 
         Artisan::call('journeys:resume-due');
-        Artisan::call('queue:work', ['connection' => 'database', '--queue' => 'journeys', '--stop-when-empty' => true]);
+        // P5-9 — '--memory': queue:work's default 128 MB limit is measured on the
+        // whole PHPUnit process; late in a full suite run the worker stopped
+        // after the FIRST of these two jobs, leaving B 'waiting' (reproduced by
+        // running this test after a 140 MB allocation). Not a behaviour change.
+        Artisan::call('queue:work', ['connection' => 'database', '--queue' => 'journeys', '--stop-when-empty' => true, '--memory' => 4096]);
 
         $this->assertSame(WhatsAppFlowSession::STATUS_BLOCKED, $this->flowSession($a)->status);
         $this->assertSame(WhatsAppFlowSession::STATUS_COMPLETED, $this->flowSession($b)->status);

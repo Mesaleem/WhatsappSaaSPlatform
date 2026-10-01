@@ -12,7 +12,10 @@ import {
   XCircle,
   Zap,
 } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import journeyService from '../../services/journeyService';
+import knowledgeBaseService, { type KnowledgeBaseSummary } from '../../services/knowledgeBaseService';
+import aiAgentService, { type AiAgentSummary } from '../../services/aiAgentService';
 import {
   JOURNEY_NODE_CATEGORIES,
   JOURNEY_NODE_CATEGORY_LABELS,
@@ -29,6 +32,7 @@ import { journeyNodeAvailability } from '../../journey/nodeEntitlement';
 import { ClearFiltersButton, SearchInput } from '../../components/common/DataTableControls';
 import { TableCard, inputClass } from '../../components/common/Card';
 import ConfirmModal from '../../components/common/ConfirmModal';
+import { useUpgradePath } from '../../components/common/actionGateHooks';
 import { useAuth } from '../../core/context/AuthContext';
 import { useTenant } from '../../core/context/TenantContext';
 import { extractErrorMessage } from '../../utils/apiError';
@@ -384,6 +388,11 @@ function JourneyCanvasEditor({
   const [selection, setSelection] = useState<Selection>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  // Final hardening §23 — a palette node this account cannot use is still
+  // clickable: the click explains why (and where to get it) instead of the
+  // reason living only in a hover tooltip.
+  const [paletteNotice, setPaletteNotice] = useState<{ reason: string; upgradable: boolean } | null>(null);
+  const upgrade = useUpgradePath();
   const [testingFlow, setTestingFlow] = useState<WhatsAppFlow | null>(null);
 
   /*
@@ -411,11 +420,53 @@ function JourneyCanvasEditor({
   const [nodeErrors, setNodeErrors] = useState<Record<string, Record<string, string>>>({});
 
   const knownVariables = useMemo(
-    () => graph.nodes.filter((n) => n.type === 'question' && n.data.variable_name).map((n) => n.data.variable_name as string),
+    () =>
+      graph.nodes.flatMap((n) => {
+        if (n.type === 'question' && n.data.variable_name) return [n.data.variable_name as string];
+        // Phase 8 Task 7 — an AI node's reply is a variable too.
+        if ((n.type === 'prompt' || n.type === 'agent' || n.type === 'rag') && typeof n.data.outputVariable === 'string' && n.data.outputVariable) {
+          return [n.data.outputVariable];
+        }
+        return [];
+      }),
     [graph.nodes],
   );
 
   const nodeById = useCallback((id: string) => graph.nodes.find((n) => n.id === id), [graph.nodes]);
+
+  // Phase 8 Task 10 — the edited account's knowledge bases for the `rag` node's
+  // selector, fetched once when a rag node is first opened (null = not loaded;
+  // an account without AI access simply gets an empty list).
+  const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBaseSummary[] | null>(null);
+  const needsKnowledgeBases = graph.nodes.some((n) => n.type === 'rag');
+  useEffect(() => {
+    if (!needsKnowledgeBases || knowledgeBases !== null) return;
+    let cancelled = false;
+    knowledgeBaseService
+      .list()
+      .then((list) => !cancelled && setKnowledgeBases(list))
+      .catch(() => !cancelled && setKnowledgeBases([]));
+    return () => {
+      cancelled = true;
+    };
+  }, [needsKnowledgeBases, knowledgeBases]);
+
+  // Phase 8 Task 11 — the edited account's registered AI agents for the `agent`
+  // node's selector, fetched once when an agent node exists (null = not loaded;
+  // an account without AI access simply gets an empty list).
+  const [aiAgents, setAiAgents] = useState<AiAgentSummary[] | null>(null);
+  const needsAiAgents = graph.nodes.some((n) => n.type === 'agent');
+  useEffect(() => {
+    if (!needsAiAgents || aiAgents !== null) return;
+    let cancelled = false;
+    aiAgentService
+      .list()
+      .then((list) => !cancelled && setAiAgents(list))
+      .catch(() => !cancelled && setAiAgents([]));
+    return () => {
+      cancelled = true;
+    };
+  }, [needsAiAgents, aiAgents]);
 
   const updateNodeData = (nodeId: string, patch: Record<string, unknown>) => {
     setGraph((g) => ({
@@ -807,10 +858,17 @@ function JourneyCanvasEditor({
                     data-node-category={definition.category}
                     data-entitled={availability.available ? 'true' : 'false'}
                     data-runtime={runnable ? 'executable' : 'draft-only'}
-                    disabled={!availability.available}
-                    onClick={() => addNode(definition.type)}
+                    aria-disabled={!availability.available}
+                    onClick={() => {
+                      if (!availability.available) {
+                        setPaletteNotice({ reason: availability.reason ?? `${definition.label} is not available for this account.`, upgradable: (availability.reason ?? '').includes('capability') });
+                        return;
+                      }
+                      setPaletteNotice(null);
+                      addNode(definition.type);
+                    }}
                     title={availability.reason ?? (runnable ? definition.description : `${definition.description} Not executable yet — a journey containing it can only be saved as a draft.`)}
-                    className="flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-semibold hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
+                    className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-semibold hover:bg-slate-50 ${availability.available ? '' : 'opacity-40 hover:bg-transparent'}`}
                     style={{ borderColor: indigo.border, color: definition.color }}
                   >
                     <Plus className="h-3 w-3" />
@@ -830,6 +888,22 @@ function JourneyCanvasEditor({
           Drag a node's right-edge dot onto another node to connect them. Click a node or connection to edit it.
         </span>
       </div>
+
+      {paletteNotice && (
+        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800" role="status" data-testid="palette-notice">
+          <Lock className="h-3.5 w-3.5 flex-shrink-0" />
+          <span>{paletteNotice.reason}</span>
+          {paletteNotice.upgradable && <span>{upgrade.hint}</span>}
+          {paletteNotice.upgradable && upgrade.action && (
+            <Link to={upgrade.action.to} className="font-semibold underline">
+              {upgrade.action.label}
+            </Link>
+          )}
+          <button type="button" onClick={() => setPaletteNotice(null)} className="ml-auto text-amber-700 hover:text-amber-900" aria-label="Dismiss">
+            ×
+          </button>
+        </div>
+      )}
 
       <div className="flex min-h-0 flex-1 gap-4">
         <div
@@ -996,6 +1070,8 @@ function JourneyCanvasEditor({
               node={selectedNode}
               errors={nodeErrors[selectedNode.id]}
               knownVariables={knownVariables}
+              knowledgeBases={knowledgeBases}
+              aiAgents={aiAgents}
               onChange={(patch) => updateNodeData(selectedNode.id, patch)}
             />
           )}
@@ -1033,11 +1109,15 @@ function NodeEditorPanel({
   node,
   errors,
   knownVariables,
+  knowledgeBases,
+  aiAgents,
   onChange,
 }: {
   node: JourneyNode;
   errors?: Record<string, string>;
   knownVariables: string[];
+  knowledgeBases: KnowledgeBaseSummary[] | null;
+  aiAgents: AiAgentSummary[] | null;
   onChange: (patch: Record<string, unknown>) => void;
 }) {
   /*
@@ -1063,6 +1143,8 @@ function NodeEditorPanel({
         config={node.data as Record<string, unknown>}
         errors={errors}
         knownVariables={knownVariables}
+        knowledgeBases={knowledgeBases}
+        aiAgents={aiAgents}
         onChange={onChange}
       />
     );

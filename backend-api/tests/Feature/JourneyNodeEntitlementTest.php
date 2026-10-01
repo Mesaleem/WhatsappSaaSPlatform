@@ -552,7 +552,7 @@ class JourneyNodeEntitlementTest extends TestCase
         ]);
 
         $this->actingAs($user)
-            ->putJson(self::ENDPOINT.'/'.$flow->id, $this->payload([$this->node('n1', 'rag', ['knowledgeBaseId' => 'kb1'])]))
+            ->putJson(self::ENDPOINT.'/'.$flow->id, $this->payload([$this->node('n1', 'rag', ['knowledgeBaseId' => ''])]) /* Phase 8 T10: ids are numeric now; an empty draft value keeps this an entitlement test */)
             ->assertStatus(403);
 
         // Unchanged on disk — a refused update mutates nothing.

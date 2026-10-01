@@ -22,6 +22,25 @@ export interface InboxThread {
   unread: boolean;
 }
 
+/**
+ * Phase 9 Task 2 — a connected Page / Instagram account whose conversations
+ * could not be listed because the connection is expired or revoked
+ * (GET /social/inbox/threads `connection_issues`). Safe fields only.
+ */
+export interface InboxConnectionIssue {
+  social_account_id: number;
+  asset_type: string;
+  name: string | null;
+  connection_status: 'expired' | 'revoked';
+  message: string;
+  reconnect_path: string;
+}
+
+export interface InboxThreadList {
+  threads: InboxThread[];
+  connectionIssues: InboxConnectionIssue[];
+}
+
 export interface InboxMessage {
   id: string;
   from_me: boolean;

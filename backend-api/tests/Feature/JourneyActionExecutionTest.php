@@ -178,7 +178,8 @@ class JourneyActionExecutionTest extends TestCase
 
     public function test_the_action_contract_governs_exactly_the_executable_actions(): void
     {
-        $this->assertSame(['message', 'question', 'save_lead', 'text', 'image', 'video', 'document', 'audio'], JourneyActionConfig::ACTION_TYPES);
+        // Phase 8 Task 7: the AI nodes prompt + agent joined the contract; Task 10: rag.
+        $this->assertSame(['message', 'question', 'save_lead', 'text', 'image', 'video', 'document', 'audio', 'prompt', 'agent', 'rag'], JourneyActionConfig::ACTION_TYPES);
 
         // Everything else is either control flow with its own contract or not executable.
         foreach (['trigger', 'delay', 'condition', 'conditional', 'email', 'api', 'code'] as $type) {

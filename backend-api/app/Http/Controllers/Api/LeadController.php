@@ -43,7 +43,7 @@ class LeadController extends Controller
      */
     public function index(Request $request): JsonResponse
     {
-        $account = $this->requireAccount($request);
+        $account = $this->requireTargetAccount($request);
         $perPage = min((int) $request->integer('per_page', 20), self::PER_PAGE_MAX);
 
         $leads = Lead::query()
@@ -68,7 +68,7 @@ class LeadController extends Controller
     /** GET /api/social/leads/{id} — adds the full raw_field_data payload. */
     public function show(Request $request, int $id): JsonResponse
     {
-        $account = $this->requireAccount($request);
+        $account = $this->requireTargetAccount($request);
         $lead = Lead::query()->forAccount($account->id)->with('socialAccount:id,asset_type,provider_id')->findOrFail($id);
 
         return response()->json([

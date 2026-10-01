@@ -2,6 +2,7 @@
 
 namespace App\Services\Chatbot;
 
+use App\Jobs\ProcessDeferredInboundMessageJob;
 use App\Models\Account;
 use App\Models\ChatbotLog;
 use App\Models\ChatbotRule;
@@ -11,6 +12,7 @@ use App\Services\Messaging\InboundEventGate;
 use App\Services\WhatsApp\JourneyExecutionRecorder;
 use App\Services\WhatsApp\WhatsAppJourneyEngine;
 use App\Services\Messaging\MessageQuotaService;
+use App\Support\QueueDelay;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -72,6 +74,22 @@ class ChatbotEngineService
      */
     public function handleInboundMessage(int $accountId, string $senderPhone, string $incomingMessage, ?array $referral = null, ?string $provider = null, ?string $eventKey = null): ?ChatbotLog
     {
+        return $this->handleThroughGate($accountId, $senderPhone, $incomingMessage, $referral, $provider, $eventKey, 0, false);
+    }
+
+    /**
+     * Phase 5 fix P5-9 — a message that found its conversation busy, retried
+     * by ProcessDeferredInboundMessageJob. Identical processing (same gate,
+     * same claim/de-duplication, same pipeline); only the busy outcome
+     * differs: it is deferred again, up to the job's attempt limit.
+     */
+    public function handleDeferredInboundMessage(int $accountId, string $senderPhone, string $incomingMessage, ?array $referral, ?string $provider, ?string $eventKey, int $attempt, bool $runningSynchronously = false): ?ChatbotLog
+    {
+        return $this->handleThroughGate($accountId, $senderPhone, $incomingMessage, $referral, $provider, $eventKey, $attempt, $runningSynchronously);
+    }
+
+    private function handleThroughGate(int $accountId, string $senderPhone, string $incomingMessage, ?array $referral, ?string $provider, ?string $eventKey, int $attempt, bool $runningSynchronously): ?ChatbotLog
+    {
         try {
             $gate = app(InboundEventGate::class)->run(
                 $accountId,
@@ -100,6 +118,16 @@ class ChatbotEngineService
                 app(JourneyExecutionRecorder::class)->recordDuplicate($accountId, $gate['original_event_id'] ?? null, $provider ?? 'unknown');
             }
 
+            // Phase 5 fix P5-9 — another worker holds this conversation. The
+            // gate returned at once (it no longer waits up to 10 s inside the
+            // webhook request); the message is queued for a later attempt
+            // instead of being dropped. Nothing was claimed or processed, so
+            // the retry is a clean first attempt, still de-duplicated by the
+            // event key.
+            if (($gate['reason'] ?? null) === 'busy') {
+                $this->deferBusyMessage($accountId, $senderPhone, $incomingMessage, $referral, $provider, $eventKey, $attempt, $runningSynchronously);
+            }
+
             return $gate['result'];
         } catch (Throwable $e) {
             // Both call sites (Meta webhook, Baileys internal endpoint) MUST
@@ -114,6 +142,40 @@ class ChatbotEngineService
 
             return null;
         }
+    }
+
+    /**
+     * Phase 5 fix P5-9 — queue a busy conversation's message for a later,
+     * non-blocking attempt (ProcessDeferredInboundMessageJob). Given up (and
+     * logged, as the old gate did after its 10 s wait) only once the attempt
+     * limit — well past the conversation lease — is spent. Defensive: should
+     * a deferred attempt ever run synchronously (a `sync`-driver connection),
+     * it is not re-dispatched into a tight inline loop.
+     */
+    private function deferBusyMessage(int $accountId, string $senderPhone, string $incomingMessage, ?array $referral, ?string $provider, ?string $eventKey, int $attempt, bool $runningSynchronously): void
+    {
+        if ($runningSynchronously || $attempt >= ProcessDeferredInboundMessageJob::MAX_ATTEMPTS) {
+            Log::error('ChatbotEngineService: conversation stayed busy; inbound message not processed.', [
+                'account_id' => $accountId,
+                'provider' => $provider ?? 'unknown',
+                'attempts' => $attempt,
+                'sync_queue' => $runningSynchronously,
+            ]);
+
+            return;
+        }
+
+        $next = $attempt + 1;
+
+        // Explicitly the `database` connection + `journeys` queue — the same
+        // durable queue Journey delays already use, drained by the scheduled
+        // `queue:work database --queue=journeys` (routes/console.php) — so a
+        // deferred message is kept and retried even where QUEUE_CONNECTION is
+        // `sync` (which would run it inline at once, busy again).
+        ProcessDeferredInboundMessageJob::dispatch($accountId, $senderPhone, $incomingMessage, $referral, $provider, $eventKey, $next)
+            ->onConnection(ProcessDeferredInboundMessageJob::CONNECTION)
+            ->onQueue(ProcessDeferredInboundMessageJob::QUEUE)
+            ->delay(QueueDelay::after(ProcessDeferredInboundMessageJob::delayBeforeAttempt($next)));
     }
 
     private function process(int $accountId, string $senderPhone, string $incomingMessage): ?ChatbotLog

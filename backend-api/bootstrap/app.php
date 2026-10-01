@@ -45,6 +45,9 @@ return Application::configure(basePath: dirname(__DIR__))
             // is the Super Admin's per-tenant toggle, this is what the
             // tenant's PLAN sold them. See its own docblock.
             'capability.guard' => EnsureCapabilityMiddleware::class,
+            // Phase 9 Task 6 — a Super Admin acting on a selected client is checked
+            // like that client's own users (active, module, subscription for writes).
+            'target.account' => \App\Http\Middleware\EnsureTargetAccountMiddleware::class,
             // Phase 6 CRM Hardening Round 2 — the same capability check
             // for the external Developer API, reading the account from
             // the presented API key instead of TenantIsolationMiddleware

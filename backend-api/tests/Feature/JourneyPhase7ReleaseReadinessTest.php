@@ -173,7 +173,9 @@ class JourneyPhase7ReleaseReadinessTest extends TestCase
     private function schedulerTick(): void
     {
         $this->artisan('journeys:resume-due')->assertSuccessful();
-        $this->artisan('queue:work', ['connection' => 'database', '--queue' => 'journeys', '--stop-when-empty' => true])->assertSuccessful();
+        // --memory: queue:work's default 128 MB limit is measured on the whole PHPUnit
+        // process and a full run now passes it before this class (PROJECT_STATE §7, P5-9 finding).
+        $this->artisan('queue:work', ['connection' => 'database', '--queue' => 'journeys', '--stop-when-empty' => true, '--memory' => 4096])->assertSuccessful();
     }
 
     /** @return list<string> */

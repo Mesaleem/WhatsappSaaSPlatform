@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
 import {
   AlertCircle,
-  Building2,
+  BarChart3,
   Loader2,
   Pause,
   Play,
@@ -14,34 +15,71 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../../core/context/AuthContext';
 import { useTenant } from '../../core/context/TenantContext';
-import adsService from '../../services/adsService';
+import adsService, { newLaunchKey } from '../../services/adsService';
+import socialService from '../../services/socialService';
+import { GateNoticeModal, SelectClientNotice, type GateNoticeAction } from '../../components/common/ActionGate';
+import { useClientGate } from '../../components/common/actionGateHooks';
+import { connectionStatusOf, type SocialAccount } from '../../types/social';
 import aiService from '../../services/aiService';
 import mediaService from '../../services/mediaService';
 import { TableCard, inputClass } from '../../components/common/Card';
 import { ClearFiltersButton, SearchInput, StatusFilterSelect } from '../../components/common/DataTableControls';
 import AdPreview from '../../components/social/AdPreview';
 import OrganicPostModal from '../../components/social/OrganicPostModal';
-import { extractErrorMessage } from '../../utils/apiError';
+import OrganicPostsPanel from '../../components/social/OrganicPostsPanel';
+import type { OrganicPost } from '../../types/organic';
+import { extractErrorCode, extractErrorMessage, extractFieldErrors } from '../../utils/apiError';
+import { socialConnectionError, type SocialConnectionErrorInfo } from '../../utils/socialConnectionError';
+import SocialReconnectNotice from '../../components/social/SocialReconnectNotice';
 import { indigo, activeGradient } from '../../theme/signalIndigo';
-import { AD_OBJECTIVE_LABELS } from '../../types/ads';
-import type { AdCampaign, AdObjective, LaunchCampaignPayload } from '../../types/ads';
+import { AD_CTA_LABELS, AD_CTAS_BY_OBJECTIVE, AD_OBJECTIVE_LABELS, AD_PLACEMENT_LABELS, formatAdMoney } from '../../types/ads';
+import type { AdAccountInfo, AdCallToAction, AdCampaign, AdLocation, AdObjective, AdPlacement, LaunchCampaignPayload } from '../../types/ads';
+import AdLocationPicker from '../../components/social/AdLocationPicker';
 import { AD_COPY_TONES, TARGET_GOAL_LABELS } from '../../types/ai';
 import type { AdCopyTone, AdCopyVariant, TargetGoal } from '../../types/ai';
 import type { MediaType } from '../../types/media';
 
 const STATUS_BADGE: Record<AdCampaign['status'], string> = {
+  LAUNCHING: 'bg-sky-50 text-sky-700 ring-sky-600/20',
   ACTIVE: 'bg-emerald-50 text-emerald-700 ring-emerald-600/20',
   PAUSED: 'bg-slate-100 text-slate-600 ring-slate-500/20',
+  FAILED: 'bg-red-50 text-red-700 ring-red-600/20',
+  UNCONFIRMED: 'bg-amber-50 text-amber-700 ring-amber-600/20',
+  UNAVAILABLE: 'bg-slate-100 text-slate-500 ring-slate-400/20',
 };
 
 /** Global Table Filters refactor — Meta Ads had no filter controls at all before this. */
 const CAMPAIGN_STATUS_OPTIONS = [
   { value: 'ACTIVE', label: 'Active' },
   { value: 'PAUSED', label: 'Paused' },
+  { value: 'LAUNCHING', label: 'Launching' },
+  { value: 'FAILED', label: 'Failed' },
+  { value: 'UNCONFIRMED', label: 'Unconfirmed' },
+  { value: 'UNAVAILABLE', label: 'Unavailable' },
 ];
 
-function formatMoney(value: number): string {
-  return `$${value.toFixed(2)}`;
+/** Phase 10 Task 2 — only these can be paused/resumed (backend MetaAdsService::changeStatus()). */
+function canToggle(campaign: AdCampaign): boolean {
+  return campaign.status === 'ACTIVE' || campaign.status === 'PAUSED';
+}
+
+const OUTCOME_UNKNOWN_LAUNCH =
+  'Meta did not confirm the launch. It was not resent automatically — check Meta Ads Manager before launching again.';
+const OUTCOME_UNKNOWN_CHANGE =
+  'Meta did not confirm the change, so the status was left unchanged. Check Meta Ads Manager; repeating the action is safe.';
+
+function errorStatus(err: unknown): number | undefined {
+  return (err as { response?: { status?: number } } | null)?.response?.status;
+}
+
+/** The campaign row a 409/502 campaign-state error carries (backend AdCampaignConflict). */
+function errorCampaign(err: unknown): AdCampaign | undefined {
+  return (err as { response?: { data?: { data?: AdCampaign } } } | null)?.response?.data?.data;
+}
+
+/** Owner request (2026-09-30): the ad account's own currency (INR when not known), no longer a hard-coded "$". */
+function formatMoney(value: number, currency?: string | null): string {
+  return formatAdMoney(value, currency);
 }
 
 function formatDate(value: string | null): string {
@@ -65,7 +103,8 @@ interface WizardState {
   objective: AdObjective;
   daily_budget: string;
   cpl_threshold: string;
-  countries: string;
+  /** Countries / states / cities from Meta's location search (owner request 2026-09-30). */
+  locations: AdLocation[];
   age_min: string;
   age_max: string;
   interests: string;
@@ -82,13 +121,18 @@ interface WizardState {
   target_goal: TargetGoal;
   headline: string;
   primary_text: string;
+  /** automatic = Advantage+ placements (every Facebook / Instagram placement). */
+  placement_mode: 'automatic' | 'manual';
+  placements: AdPlacement[];
+  /** The ad's button (owner request 2026-09-30). */
+  call_to_action: AdCallToAction;
 }
 
 const WIZARD_DEFAULTS: WizardState = {
   objective: 'LEAD_GENERATION',
   daily_budget: '',
   cpl_threshold: '',
-  countries: 'IN',
+  locations: [{ key: 'IN', name: 'India', type: 'country', country_code: 'IN', country_name: 'India' }],
   age_min: '18',
   age_max: '65',
   interests: '',
@@ -101,16 +145,17 @@ const WIZARD_DEFAULTS: WizardState = {
   target_goal: 'PAID_LEAD_AD',
   headline: '',
   primary_text: '',
+  placement_mode: 'automatic',
+  placements: [],
+  call_to_action: 'SIGN_UP',
 };
 
-/** Mirrors MetaAdsService::createAdCreative()'s exact CTA-type mapping so the live preview never shows a button the launched ad wouldn't actually have. */
-const OBJECTIVE_CTA_LABEL: Record<AdObjective, string> = {
-  LEAD_GENERATION: 'Sign Up',
-  MESSAGES: 'Learn More',
-  TRAFFIC: 'Learn More',
-  // Step 4 (Click-to-WhatsApp Ads) — mirrors MetaAdsService::createAdCreative()'s ctaTypeMap.
-  CLICK_TO_WHATSAPP: 'Send WhatsApp Message',
-};
+/** Which wizard step owns a backend validation field (422 `errors` keys). */
+function stepOfField(field: string): number {
+  if (field.startsWith('targeting_specs') || field.startsWith('placements')) return 1;
+  if (field.startsWith('creative')) return 2;
+  return 0;
+}
 
 const WIZARD_STEPS = ['Objective & Budget', 'Audience Targeting', 'Creative & Hook Copy'] as const;
 
@@ -125,15 +170,48 @@ const WIZARD_STEPS = ['Objective & Budget', 'Audience Targeting', 'Creative & Ho
 function LaunchWizardModal({
   onClose,
   onLaunched,
+  canManageSocialAccounts = false,
 }: {
   onClose: () => void;
   onLaunched: () => void;
+  canManageSocialAccounts?: boolean;
 }) {
   const [step, setStep] = useState(0);
   const [form, setForm] = useState<WizardState>(WIZARD_DEFAULTS);
   const [stepError, setStepError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  // Phase 9 Task 2 — the Ad Account connection expired/was revoked: shown
+  // with a reconnect link; the wizard (and everything typed) stays open.
+  const [connectionError, setConnectionError] = useState<SocialConnectionErrorInfo | null>(null);
+  // Phase 10 Task 2 — one Idempotency-Key per launch attempt, kept until a
+  // definitive answer: a lost response or double submit replays the stored
+  // launch instead of creating a second campaign at Meta.
+  const launchKey = useRef<string | null>(null);
+  // Owner request (2026-09-30): errors shown where they belong — per field, and
+  // at the top of the form with the view scrolled to them.
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const topRef = useRef<HTMLDivElement>(null);
+  const showTop = () => topRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
+  const fieldError = (...prefixes: string[]) => Object.entries(fieldErrors).find(([k]) => prefixes.some((p) => k === p || k.startsWith(`${p}.`)))?.[1] ?? null;
+  // The connected ad account: its currency (INR for an Indian ad account), status and spend cap.
+  const [accountInfo, setAccountInfo] = useState<AdAccountInfo | null>(null);
+  const [accountInfoError, setAccountInfoError] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    Promise.resolve()
+      .then(() => adsService.account())
+      .then((info) => {
+        if (!cancelled) setAccountInfo(info);
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setAccountInfoError(extractErrorMessage(err, 'Could not read the Meta ad account.'));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  const currency = accountInfo?.currency ?? 'INR';
 
   // AI Ad Copywriter — Social/Ads Launcher Overhaul (Step 1: Gemini Pro
   // Engine & Multi-Token Prompt Refactor). Suggestions only: the tenant
@@ -154,7 +232,12 @@ function LaunchWizardModal({
   const [uploadProgress, setUploadProgress] = useState(0);
   const [mediaError, setMediaError] = useState<string | null>(null);
 
-  const update = (patch: Partial<WizardState>) => setForm((prev) => ({ ...prev, ...patch }));
+  const update = (patch: Partial<WizardState>) => setForm((prev) => {
+    const next = { ...prev, ...patch };
+    // A button the new objective does not offer falls back to that objective's default.
+    if (!AD_CTAS_BY_OBJECTIVE[next.objective].includes(next.call_to_action)) next.call_to_action = AD_CTAS_BY_OBJECTIVE[next.objective][0];
+    return next;
+  });
 
   const handleGenerateAi = () => {
     if (!form.business_name.trim() || !form.target_industry.trim()) {
@@ -211,9 +294,14 @@ function LaunchWizardModal({
       const budget = Number(form.daily_budget);
       if (!form.daily_budget || Number.isNaN(budget) || budget <= 0) return 'Enter a daily budget greater than 0.';
       if (form.cpl_threshold && Number.isNaN(Number(form.cpl_threshold))) return 'CPL threshold must be a number.';
+      if (accountInfo?.runnable === false) return `The connected Meta ad account is ${accountInfo.account_status_label ?? 'not active'}, so campaigns cannot run. Resolve it in Meta Ads Manager first.`;
+      if (accountInfo?.remaining_spend_cap != null && budget > accountInfo.remaining_spend_cap) {
+        return `The daily budget is more than the ${formatMoney(accountInfo.remaining_spend_cap, currency)} left before the ad account's spend cap.`;
+      }
     }
     if (step === 1) {
-      if (parseList(form.countries).length === 0) return 'Enter at least one country code (e.g. IN, US).';
+      if (form.locations.length === 0) return 'Choose at least one location (country, state or city).';
+      if (form.placement_mode === 'manual' && form.placements.length === 0) return 'Choose at least one placement, or use automatic placements.';
       const ageMin = Number(form.age_min);
       const ageMax = Number(form.age_max);
       if (!Number.isInteger(ageMin) || ageMin < 13 || ageMin > 65) return 'Minimum age must be between 13 and 65.';
@@ -231,6 +319,7 @@ function LaunchWizardModal({
     const error = validateStep();
     if (error) {
       setStepError(error);
+      showTop();
       return;
     }
     setStepError(null);
@@ -246,6 +335,7 @@ function LaunchWizardModal({
     const error = validateStep();
     if (error) {
       setStepError(error);
+      showTop();
       return;
     }
 
@@ -255,7 +345,7 @@ function LaunchWizardModal({
       daily_budget: Number(form.daily_budget),
       cpl_threshold: form.cpl_threshold ? Number(form.cpl_threshold) : null,
       targeting_specs: {
-        countries: parseList(form.countries),
+        locations: form.locations.map(({ key, type, name }) => ({ key, type, name })),
         age_min: Number(form.age_min),
         age_max: Number(form.age_max),
         interests: parseList(form.interests),
@@ -269,32 +359,63 @@ function LaunchWizardModal({
         image_url: form.media_url,
         headline: form.headline.trim(),
         primary_text: form.primary_text.trim(),
+        call_to_action: form.call_to_action,
       },
+      placements: form.placement_mode === 'manual' ? form.placements : [],
     };
 
     setSubmitError(null);
+    setConnectionError(null);
+    setFieldErrors({});
     setIsSubmitting(true);
 
+    launchKey.current ??= newLaunchKey();
+
     adsService
-      .launch(payload)
+      .launch(payload, launchKey.current)
       .then(() => {
+        launchKey.current = null;
         onLaunched();
       })
       .catch((err: unknown) => {
-        setSubmitError(extractErrorMessage(err, 'Failed to launch the campaign.'));
+        const code = extractErrorCode(err);
+        const status = errorStatus(err);
+        // Keep the key when the outcome is not definitive (no response, the
+        // launch still running, Meta never confirmed it) so a repeat cannot
+        // launch twice; a definitive refusal starts a fresh attempt next time.
+        const definitive = status !== undefined && status < 500 && code !== 'AD_LAUNCH_IN_PROGRESS';
+        if (definitive) launchKey.current = null;
+
+        const connection = socialConnectionError(err);
+        const fields = extractFieldErrors(err);
+        if (connection) {
+          setConnectionError(connection);
+        } else if (code === 'AD_PROVIDER_OUTCOME_UNKNOWN') {
+          setSubmitError(OUTCOME_UNKNOWN_LAUNCH);
+        } else if (Object.keys(fields).length > 0) {
+          // Take the user to the step that holds the first invalid field.
+          setFieldErrors(fields);
+          setStep(Math.min(...Object.keys(fields).map(stepOfField)));
+          setSubmitError('Some details need attention — see the highlighted fields.');
+        } else {
+          setSubmitError(extractErrorMessage(err, 'Failed to launch the campaign.'));
+        }
+        showTop();
       })
       .finally(() => setIsSubmitting(false));
   };
 
+  // Owner request (2026-09-30): an in-page form instead of a modal, so the whole
+  // form and its errors are visible and the page can scroll normally.
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4">
-      <div className={`w-full rounded-2xl bg-white p-6 shadow-xl transition-all ${step === 2 ? 'max-w-3xl' : 'max-w-lg'}`}>
+    <section className="w-full" data-testid="launch-wizard" ref={topRef}>
+      <div className="w-full rounded-2xl border bg-white p-6 shadow-sm" style={{ borderColor: indigo.border }}>
         <div className="flex items-center justify-between">
           <h2 className="font-display text-base font-bold" style={{ color: indigo.ink }}>
             Launch Meta Ads Campaign
           </h2>
-          <button onClick={onClose} className="rounded-md p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600" aria-label="Close">
-            <X className="h-5 w-5" />
+          <button onClick={onClose} className="flex items-center gap-1 rounded-md px-2 py-1 text-sm text-slate-500 hover:bg-slate-100 hover:text-slate-700" aria-label="Close">
+            <X className="h-4 w-4" /> Cancel
           </button>
         </div>
 
@@ -321,9 +442,27 @@ function LaunchWizardModal({
 
         <div className="mt-6 space-y-4">
           {stepError && (
-            <div className="flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+            <div className="flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">
               <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0" />
               {stepError}
+            </div>
+          )}
+
+          {connectionError && <SocialReconnectNotice info={connectionError} canManageSocialAccounts={canManageSocialAccounts} />}
+
+          {submitError && (
+            <div className="flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700" role="alert" data-testid="launch-submit-error">
+              <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0" />
+              <div>
+                <p>{submitError}</p>
+                {Object.keys(fieldErrors).length > 0 && (
+                  <ul className="mt-1 list-disc pl-4 text-xs">
+                    {Object.entries(fieldErrors).map(([k, m]) => (
+                      <li key={k}>{m}</li>
+                    ))}
+                  </ul>
+                )}
+              </div>
             </div>
           )}
 
@@ -338,6 +477,7 @@ function LaunchWizardModal({
                   onChange={(e) => update({ campaign_name: e.target.value })}
                   placeholder="Spring Lead Gen Push"
                 />
+                {fieldError('campaign_name') && <p className="mt-1 text-xs font-medium text-red-600">{fieldError('campaign_name')}</p>}
               </label>
               <label className="block text-sm font-medium text-slate-700">
                 Objective
@@ -353,8 +493,34 @@ function LaunchWizardModal({
                   ))}
                 </select>
               </label>
+              <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-600" data-testid="ad-account-info">
+                {accountInfo ? (
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                    <div>
+                      <p className="font-medium text-slate-500">Ad account</p>
+                      <p className="text-sm font-semibold text-slate-800">{accountInfo.name ?? '—'}</p>
+                      <p className={accountInfo.runnable === false ? 'text-red-600' : 'text-emerald-700'}>{accountInfo.account_status_label ?? 'status unknown'}</p>
+                    </div>
+                    <div>
+                      <p className="font-medium text-slate-500">Amount spent</p>
+                      <p className="text-sm font-semibold text-slate-800">{accountInfo.amount_spent !== null ? formatMoney(accountInfo.amount_spent, currency) : '—'}</p>
+                    </div>
+                    <div>
+                      <p className="font-medium text-slate-500">Spend cap left</p>
+                      <p className="text-sm font-semibold text-slate-800">{accountInfo.remaining_spend_cap !== null ? formatMoney(accountInfo.remaining_spend_cap, currency) : 'No cap'}</p>
+                    </div>
+                    <div>
+                      <p className="font-medium text-slate-500">Balance due</p>
+                      <p className="text-sm font-semibold text-slate-800">{accountInfo.balance !== null ? formatMoney(accountInfo.balance, currency) : '—'}</p>
+                    </div>
+                  </div>
+                ) : (
+                  <p>{accountInfoError ? `${accountInfoError} Amounts are assumed to be in INR.` : 'Reading the Meta ad account…'}</p>
+                )}
+                <p className="mt-2 text-[11px] text-slate-500">Meta bills this ad account directly in its own currency; payment is managed in Meta Ads Manager.</p>
+              </div>
               <label className="block text-sm font-medium text-slate-700">
-                Daily Budget (USD) <span className="text-red-500">*</span>
+                Daily Budget ({currency}) <span className="text-red-500">*</span>
                 <input
                   type="number"
                   min="1"
@@ -362,11 +528,12 @@ function LaunchWizardModal({
                   className={inputClass}
                   value={form.daily_budget}
                   onChange={(e) => update({ daily_budget: e.target.value })}
-                  placeholder="25.00"
+                  placeholder={currency === 'INR' ? '500.00' : '25.00'}
                 />
+                {fieldError('daily_budget') && <p className="mt-1 text-xs font-medium text-red-600">{fieldError('daily_budget')}</p>}
               </label>
               <label className="block text-sm font-medium text-slate-700">
-                CPL Auto-Pause Threshold (optional)
+                CPL Auto-Pause Threshold ({currency}, optional)
                 <input
                   type="number"
                   min="0"
@@ -382,16 +549,11 @@ function LaunchWizardModal({
 
           {step === 1 && (
             <>
-              <label className="block text-sm font-medium text-slate-700">
-                Countries (comma-separated ISO codes) <span className="text-red-500">*</span>
-                <input
-                  type="text"
-                  className={inputClass}
-                  value={form.countries}
-                  onChange={(e) => update({ countries: e.target.value })}
-                  placeholder="IN, US"
-                />
-              </label>
+              <div className="block text-sm font-medium text-slate-700">
+                Locations <span className="text-red-500">*</span>
+                <AdLocationPicker value={form.locations} onChange={(locations) => update({ locations })} invalid={Boolean(fieldError('targeting_specs.locations', 'targeting_specs.countries'))} />
+                {fieldError('targeting_specs.locations', 'targeting_specs.countries') && <p className="mt-1 text-xs font-medium text-red-600">{fieldError('targeting_specs.locations', 'targeting_specs.countries')}</p>}
+              </div>
               <div className="grid grid-cols-2 gap-3">
                 <label className="block text-sm font-medium text-slate-700">
                   Min Age <span className="text-red-500">*</span>
@@ -426,6 +588,35 @@ function LaunchWizardModal({
                   placeholder="Fitness, Home Loans"
                 />
               </label>
+              <fieldset className="text-sm text-slate-700" data-testid="ad-placements">
+                <legend className="font-medium">Placements</legend>
+                <div className="mt-1 flex flex-wrap gap-4">
+                  <label className="flex items-center gap-2">
+                    <input type="radio" name="placement_mode" checked={form.placement_mode === 'automatic'} onChange={() => update({ placement_mode: 'automatic' })} />
+                    Automatic (recommended — Meta shows the ad wherever it performs best)
+                  </label>
+                  <label className="flex items-center gap-2">
+                    <input type="radio" name="placement_mode" checked={form.placement_mode === 'manual'} onChange={() => update({ placement_mode: 'manual' })} />
+                    Choose placements
+                  </label>
+                </div>
+                {form.placement_mode === 'manual' && (
+                  <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-3">
+                    {(Object.keys(AD_PLACEMENT_LABELS) as AdPlacement[]).map((placement) => (
+                      <label key={placement} className="flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2">
+                        <input
+                          type="checkbox"
+                          checked={form.placements.includes(placement)}
+                          onChange={(e) => update({ placements: e.target.checked ? [...form.placements, placement] : form.placements.filter((p) => p !== placement) })}
+                        />
+                        {AD_PLACEMENT_LABELS[placement]}
+                      </label>
+                    ))}
+                  </div>
+                )}
+                <p className="mt-1 text-xs text-slate-500">Stories and Reels show vertical (9:16) media best.</p>
+                {fieldError('placements') && <p className="mt-1 text-xs font-medium text-red-600">{fieldError('placements')}</p>}
+              </fieldset>
             </>
           )}
 
@@ -615,6 +806,25 @@ function LaunchWizardModal({
                     onChange={(e) => update({ headline: e.target.value })}
                     placeholder="Get a Free Quote Today"
                   />
+                  {fieldError('creative.headline') && <p className="mt-1 text-xs font-medium text-red-600">{fieldError('creative.headline')}</p>}
+                </label>
+                <label className="block text-sm font-medium text-slate-700">
+                  Button
+                  <select
+                    aria-label="Button"
+                    className={inputClass}
+                    value={form.call_to_action}
+                    onChange={(e) => update({ call_to_action: e.target.value as AdCallToAction })}
+                    disabled={AD_CTAS_BY_OBJECTIVE[form.objective].length === 1}
+                  >
+                    {AD_CTAS_BY_OBJECTIVE[form.objective].map((cta) => (
+                      <option key={cta} value={cta}>
+                        {AD_CTA_LABELS[cta]}
+                      </option>
+                    ))}
+                  </select>
+                  {AD_CTAS_BY_OBJECTIVE[form.objective].length === 1 && <span className="mt-1 block text-xs font-normal text-slate-500">Click-to-WhatsApp ads always use this button.</span>}
+                  {fieldError('creative.call_to_action') && <p className="mt-1 text-xs font-medium text-red-600">{fieldError('creative.call_to_action')}</p>}
                 </label>
                 <label className="block text-sm font-medium text-slate-700">
                   Primary Text <span className="text-red-500">*</span>
@@ -625,6 +835,7 @@ function LaunchWizardModal({
                     onChange={(e) => update({ primary_text: e.target.value })}
                     placeholder="Tell people why they should tap your ad…"
                   />
+                  {fieldError('creative.primary_text') && <p className="mt-1 text-xs font-medium text-red-600">{fieldError('creative.primary_text')}</p>}
                 </label>
               </div>
 
@@ -636,7 +847,7 @@ function LaunchWizardModal({
                   businessName={form.business_name}
                   headline={form.headline}
                   primaryText={form.primary_text}
-                  ctaLabel={OBJECTIVE_CTA_LABEL[form.objective]}
+                  ctaLabel={AD_CTA_LABELS[form.call_to_action]}
                   mediaUrl={form.media_url}
                   mediaType={form.media_type}
                   isSponsored={form.target_goal === 'PAID_LEAD_AD'}
@@ -645,12 +856,6 @@ function LaunchWizardModal({
             </div>
           )}
 
-          {submitError && (
-            <div className="flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-              <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0" />
-              {submitError}
-            </div>
-          )}
         </div>
 
         <div className="mt-6 flex items-center justify-between">
@@ -685,7 +890,7 @@ function LaunchWizardModal({
           )}
         </div>
       </div>
-    </div>
+    </section>
   );
 }
 
@@ -715,7 +920,7 @@ function CplThresholdEditor({ campaign, onSaved }: { campaign: AdCampaign; onSav
   return (
     <div className="flex items-center gap-1.5">
       <span className="text-xs" style={{ color: indigo.muted }}>
-        $
+        {campaign.currency ?? 'INR'}
       </span>
       <input
         type="number"
@@ -742,11 +947,47 @@ function CplThresholdEditor({ campaign, onSaved }: { campaign: AdCampaign; onSav
   );
 }
 
+interface LaunchNotice {
+  title: string;
+  message: string;
+  action: GateNoticeAction | null;
+  /** Offered when the missing asset is only recommended, not required by the backend. */
+  continueAnyway: (() => void) | null;
+}
+
+/**
+ * Final hardening §23 — the two launch actions are always clickable. A click
+ * walks the prerequisites the backend itself enforces (MetaAdsService:
+ * a connected `meta_ad_account` is required; a `facebook_page` is used when
+ * present) and, when one is missing, explains it and links to the Social
+ * Accounts connect flow with `returnTo` so the launcher reopens afterwards.
+ * This is guidance only — the backend re-checks everything on launch/publish
+ * (module, permission, tenant, provider state) and its error is still shown.
+ */
 export default function MetaAdsPage() {
-  const { isSuperAdmin } = useAuth();
+  const { user, isSuperAdmin, hasPermission, hasModule } = useAuth();
   const { selectedAccountId } = useTenant();
   const superAdmin = isSuperAdmin();
-  const noTenantSelected = superAdmin && selectedAccountId === null;
+  // Owner request (2026-09-30): with its own Platform account a Super Admin needs no client here.
+  const noTenantSelected = superAdmin && selectedAccountId === null && !user?.platform_crm_account;
+  const { guard, openPicker, picker } = useClientGate({ platformFallback: true });
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [checking, setChecking] = useState<'paid' | 'organic' | null>(null);
+  const [notice, setNotice] = useState<LaunchNotice | null>(null);
+  // Phase 9 Task 6 — the Social Accounts routes also require the `social` capability (capability.guard:social);
+  // absent capability map = no invented denial, same as ProtectedRoute.
+  const hasSocialCapability = user?.capabilities ? Boolean(user.capabilities.social) : true;
+  const canManageSocialAccounts = superAdmin || (hasPermission('manage-social-accounts') && hasModule('social_accounts') && hasSocialCapability);
+  // Phase 10 Task 3 — the page is open to social_ads.view (read-only) as well; each action
+  // follows its own backend permission (routes/api.php, social/ads group).
+  const canLaunchAds = superAdmin || hasPermission('launch-meta-ads') || hasPermission('social_ads.launch');
+  const canToggleAds = superAdmin || hasPermission('launch-meta-ads');
+  const canEditBudget = superAdmin || hasPermission('launch-meta-ads') || hasPermission('social_ads.edit_budget');
+  const canPostOrganic = superAdmin || hasPermission('launch-meta-ads') || canManageSocialAccounts;
+  // Phase 9 Task 4 — insights: view-social-analytics + social_accounts module + social capability
+  // (absent capability map = no invented denial, same as ProtectedRoute). The backend re-checks all of it.
+  const canViewSocialInsights =
+    superAdmin || (hasPermission('view-social-analytics') && hasModule('social_accounts') && hasSocialCapability);
 
   const [campaigns, setCampaigns] = useState<AdCampaign[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -758,6 +999,8 @@ export default function MetaAdsPage() {
   // OrganicPostModal's docblock) rather than one shared wizard with a
   // branching first step.
   const [isOrganicModalOpen, setIsOrganicModalOpen] = useState(false);
+  // Phase 9 Task 3 — bumped after a post is published/scheduled so the Organic Posts panel reloads.
+  const [organicRefreshKey, setOrganicRefreshKey] = useState(0);
   const [busyId, setBusyId] = useState<number | null>(null);
   const [toast, setToast] = useState<string | null>(null);
 
@@ -769,7 +1012,12 @@ export default function MetaAdsPage() {
     setTimeout(() => setToast(null), 4000);
   }, []);
 
+  // Phase 10 Task 2 — a response for a previously selected client never lands on the current one.
+  const loadSeq = useRef(0);
+
   const loadCampaigns = useCallback(() => {
+    const seq = ++loadSeq.current;
+
     if (noTenantSelected) {
       setCampaigns([]);
       setIsLoading(false);
@@ -780,14 +1028,125 @@ export default function MetaAdsPage() {
     setPageError(null);
     adsService
       .list()
-      .then(setCampaigns)
-      .catch((err: unknown) => setPageError(extractErrorMessage(err, 'Failed to load campaigns.')))
-      .finally(() => setIsLoading(false));
+      .then((rows) => {
+        if (seq === loadSeq.current) setCampaigns(rows);
+      })
+      .catch((err: unknown) => {
+        if (seq === loadSeq.current) setPageError(extractErrorMessage(err, 'Failed to load campaigns.'));
+      })
+      .finally(() => {
+        if (seq === loadSeq.current) setIsLoading(false);
+      });
   }, [noTenantSelected]);
+
+  // Phase 10 Task 2 — switching client clears everything that belonged to the previous one.
+  useEffect(() => {
+    setCampaigns([]);
+    setIsWizardOpen(false);
+    setIsOrganicModalOpen(false);
+    setBusyId(null);
+  }, [selectedAccountId]);
 
   useEffect(() => {
     loadCampaigns();
   }, [loadCampaigns, selectedAccountId]);
+
+  const connectAction = (mode: 'paid' | 'organic'): GateNoticeAction | null =>
+    canManageSocialAccounts ? { label: 'Connect Meta Account', to: `/social/accounts?returnTo=${encodeURIComponent(`/social/ads?open=${mode}`)}` } : null;
+  const askAdmin = canManageSocialAccounts ? '' : ' Ask a team member with access to Social Accounts to connect it.';
+
+  const openPaidWithPrerequisites = useCallback(() => {
+    setChecking('paid');
+    socialService
+      .listAccounts()
+      .then((accounts: SocialAccount[]) => {
+        const adAccount = accounts.find((a) => a.asset_type === 'meta_ad_account');
+        const page = accounts.find((a) => a.asset_type === 'facebook_page');
+
+        if (!adAccount) {
+          setNotice({
+            title: 'Connect a Meta Ad Account first',
+            message: `A paid campaign is created in a Meta Ad Account, and none is connected for this account yet. Connect your Meta account and select the Ad Account (and the Facebook Page) to use; the launcher reopens afterwards.${askAdmin}`,
+            action: connectAction('paid'),
+            continueAnyway: null,
+          });
+        } else if (connectionStatusOf(adAccount) !== 'connected') {
+          // Phase 9 Task 2 — connection_status also covers a token past its expiry.
+          const expired = connectionStatusOf(adAccount) === 'expired';
+          setNotice({
+            title: 'Reconnect your Meta Ad Account',
+            message: `${expired ? 'The Meta Ad Account connection has expired' : 'Access to the Meta Ad Account was revoked'} (${adAccount.status_reason ?? (expired ? 'its access token expired' : 'Meta no longer accepts the connection')}). Reconnect it before launching a campaign.${askAdmin}`,
+            action: connectAction('paid'),
+            continueAnyway: null,
+          });
+        } else if (!page) {
+          setNotice({
+            title: 'No Facebook Page connected',
+            message: `Ads normally run on behalf of a Facebook Page, and none is connected. You can connect one first (recommended), or continue — Meta may reject some objectives without a Page.${askAdmin}`,
+            action: connectAction('paid'),
+            continueAnyway: () => {
+              setNotice(null);
+              setIsWizardOpen(true);
+            },
+          });
+        } else {
+          setIsWizardOpen(true);
+        }
+      })
+      // The check is a convenience: if it cannot run (e.g. no access to the
+      // Social Accounts list), the wizard opens and the backend decides on launch.
+      .catch(() => setIsWizardOpen(true))
+      .finally(() => setChecking(null));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canManageSocialAccounts]);
+
+  const openOrganicWithPrerequisites = useCallback(() => {
+    setChecking('organic');
+    socialService
+      .listAccounts()
+      .then((accounts: SocialAccount[]) => {
+        const publishable = accounts.filter((a) => a.asset_type === 'facebook_page' || a.asset_type === 'instagram' || a.asset_type === 'linkedin_page');
+        if (publishable.length === 0) {
+          setNotice({
+            title: 'Connect a Page or Instagram account first',
+            message: `Organic posts are published to a connected Facebook Page, Instagram account or LinkedIn page, and none is connected yet.${askAdmin}`,
+            action: connectAction('organic'),
+            continueAnyway: null,
+          });
+        } else if (publishable.every((a) => connectionStatusOf(a) !== 'connected')) {
+          // Phase 9 Task 2 — every publishing connection is expired/revoked.
+          setNotice({
+            title: 'Reconnect your Page or Instagram account',
+            message: `Every connected Page / Instagram account needs to be reconnected (expired or access revoked) before a post can be published.${askAdmin}`,
+            action: connectAction('organic'),
+            continueAnyway: null,
+          });
+        } else {
+          setIsOrganicModalOpen(true);
+        }
+      })
+      .catch(() => setIsOrganicModalOpen(true))
+      .finally(() => setChecking(null));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canManageSocialAccounts]);
+
+  const startPaid = () => guard(openPaidWithPrerequisites, 'launch a paid Meta ad campaign');
+  const startOrganic = () => guard(openOrganicWithPrerequisites, 'publish an organic post');
+
+  // Returning from the Social Accounts connect flow (?open=paid|organic):
+  // re-run the same prerequisite check once, then drop the parameter.
+  const requestedOpen = searchParams.get('open');
+  useEffect(() => {
+    if (noTenantSelected || (requestedOpen !== 'paid' && requestedOpen !== 'organic')) return;
+    const next = new URLSearchParams(searchParams);
+    next.delete('open');
+    setSearchParams(next, { replace: true });
+    // Phase 10 Task 3 — a read-only user is never dropped into a flow they cannot complete.
+    if (requestedOpen === 'paid') {
+      if (canLaunchAds) openPaidWithPrerequisites();
+    } else if (canPostOrganic) openOrganicWithPrerequisites();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [requestedOpen, noTenantSelected]);
 
   const handleLaunched = () => {
     setIsWizardOpen(false);
@@ -795,20 +1154,28 @@ export default function MetaAdsPage() {
     loadCampaigns();
   };
 
-  const handlePublished = () => {
-    showToast('Post published.');
+  const handlePublished = (posts: OrganicPost[]) => {
+    const allScheduled = posts.length > 0 && posts.every((p) => p.status === 'scheduled');
+    showToast(allScheduled ? 'Post scheduled.' : 'Post published.');
+    setOrganicRefreshKey((k) => k + 1);
   };
 
   const toggleStatus = (campaign: AdCampaign) => {
+    if (!canToggle(campaign)) return;
     setBusyId(campaign.id);
     const action = campaign.status === 'ACTIVE' ? adsService.pause(campaign.id) : adsService.resume(campaign.id);
 
     action
       .then((res) => {
         setCampaigns((prev) => prev.map((c) => (c.id === campaign.id ? res.data : c)));
-        showToast(campaign.status === 'ACTIVE' ? 'Campaign paused.' : 'Campaign resumed.');
+        showToast(res.message || (campaign.status === 'ACTIVE' ? 'Campaign paused.' : 'Campaign resumed.'));
       })
-      .catch((err: unknown) => showToast(extractErrorMessage(err, 'Action failed.')))
+      .catch((err: unknown) => {
+        // Phase 10 Task 2 — a campaign-state error carries the current row (e.g. now UNAVAILABLE).
+        const current = errorCampaign(err);
+        if (current) setCampaigns((prev) => prev.map((c) => (c.id === current.id ? current : c)));
+        showToast(extractErrorCode(err) === 'AD_PROVIDER_OUTCOME_UNKNOWN' ? OUTCOME_UNKNOWN_CHANGE : extractErrorMessage(err, 'Action failed.'));
+      })
       .finally(() => setBusyId(null));
   };
 
@@ -860,34 +1227,56 @@ export default function MetaAdsPage() {
               free Organic Post flow and the paid Meta Ad Campaign wizard,
               per this step's explicit spec item. */}
           <div className="flex items-center gap-2">
-            <button
-              onClick={() => setIsOrganicModalOpen(true)}
-              disabled={noTenantSelected}
-              title={noTenantSelected ? 'Select a client above first' : undefined}
-              className="flex items-center gap-2 rounded-lg border px-4 py-2 text-sm font-semibold disabled:opacity-60"
+            <Link
+              to="/social/ads/dashboard"
+              data-testid="open-ads-dashboard"
+              className="flex items-center gap-2 rounded-lg border px-4 py-2 text-sm font-semibold"
               style={{ borderColor: indigo.border, color: indigo.ink }}
             >
-              <Share2 className="h-4 w-4" />
+              <BarChart3 className="h-4 w-4" />
+              Dashboard
+            </Link>
+            {canPostOrganic && (
+            <button
+              onClick={startOrganic}
+              aria-busy={checking === 'organic'}
+              title={noTenantSelected ? 'You will be asked which client to post for.' : undefined}
+              data-testid="open-organic-post"
+              className="flex items-center gap-2 rounded-lg border px-4 py-2 text-sm font-semibold"
+              style={{ borderColor: indigo.border, color: indigo.ink }}
+            >
+              {checking === 'organic' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Share2 className="h-4 w-4" />}
               Organic Post
             </button>
+            )}
+            {canLaunchAds && (
             <button
-              onClick={() => setIsWizardOpen(true)}
-              disabled={noTenantSelected}
-              title={noTenantSelected ? 'Select a client above first' : undefined}
-              className="flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+              onClick={startPaid}
+              aria-busy={checking === 'paid'}
+              title={noTenantSelected ? 'You will be asked which client to launch it for.' : undefined}
+              data-testid="open-paid-campaign"
+              className="flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold text-white"
               style={{ background: activeGradient }}
             >
-              <Rocket className="h-4 w-4" />
+              {checking === 'paid' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Rocket className="h-4 w-4" />}
               Paid Meta Ad Campaign
             </button>
+            )}
           </div>
         </div>
 
-        {noTenantSelected ? (
-          <div className="flex items-start gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm" style={{ color: indigo.muted }}>
-            <Building2 className="mt-0.5 h-4 w-4 flex-shrink-0" />
-            Select a client from the switcher at the top of the page to view or launch their ad campaigns.
-          </div>
+        {isWizardOpen ? (
+          <LaunchWizardModal
+            onClose={() => {
+              setIsWizardOpen(false);
+              // Phase 10 Task 2 — a failed or unconfirmed launch is a stored row too.
+              loadCampaigns();
+            }}
+            onLaunched={handleLaunched}
+            canManageSocialAccounts={canManageSocialAccounts}
+          />
+        ) : noTenantSelected ? (
+          <SelectClientNotice message="Ad campaigns belong to a client. Select one to view or launch their campaigns." onSelect={() => openPicker('view or launch ad campaigns')} />
         ) : (
           <>
             {pageError && (
@@ -931,8 +1320,19 @@ export default function MetaAdsPage() {
                     </tr>
                   ) : !hasCampaigns ? (
                     <tr>
-                      <td colSpan={7} className="px-4 py-10 text-center text-sm text-slate-500">
-                        No campaigns launched yet.
+                      <td colSpan={7} className="px-4 py-10 text-center text-sm text-slate-500" data-testid="ads-empty">
+                        <p>No campaigns launched yet.</p>
+                        {canLaunchAds && (
+                        <button
+                          type="button"
+                          onClick={startPaid}
+                          className="mt-3 inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold text-white"
+                          style={{ background: activeGradient }}
+                        >
+                          <Rocket className="h-4 w-4" />
+                          Launch your first campaign
+                        </button>
+                        )}
                       </td>
                     </tr>
                   ) : filteredCampaigns.length === 0 ? (
@@ -961,28 +1361,43 @@ export default function MetaAdsPage() {
                               Auto-paused: {campaign.auto_pause_reason}
                             </p>
                           )}
+                          {campaign.last_provider_error && (
+                            <p className="mt-1 max-w-[220px] text-xs text-red-600" title={campaign.last_provider_error}>
+                              {campaign.last_provider_error}
+                            </p>
+                          )}
                         </td>
-                        <td className="px-4 py-3 text-slate-700">{formatMoney(campaign.spend)}</td>
+                        <td className="px-4 py-3 text-slate-700">{formatMoney(campaign.spend, campaign.currency)}</td>
                         <td className="px-4 py-3 text-slate-700">{campaign.leads}</td>
-                        <td className="px-4 py-3 text-slate-700">{campaign.cpl !== null ? formatMoney(campaign.cpl) : '—'}</td>
+                        <td className="px-4 py-3 text-slate-700">{campaign.cpl !== null ? formatMoney(campaign.cpl, campaign.currency) : '—'}</td>
                         <td className="px-4 py-3">
-                          <CplThresholdEditor campaign={campaign} onSaved={updateCampaignInPlace} />
+                          {canEditBudget ? (
+                            <CplThresholdEditor campaign={campaign} onSaved={updateCampaignInPlace} />
+                          ) : (
+                            <span className="text-xs text-slate-700">{campaign.cpl_threshold !== null ? formatMoney(campaign.cpl_threshold, campaign.currency) : '—'}</span>
+                          )}
                         </td>
                         <td className="px-4 py-3 text-right">
-                          <button
-                            type="button"
-                            onClick={() => toggleStatus(campaign)}
-                            disabled={busyId === campaign.id}
-                            className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold shadow-sm disabled:opacity-60 ${
-                              campaign.status === 'ACTIVE'
-                                ? 'border border-red-200 text-red-600 hover:bg-red-50'
-                                : 'text-white'
-                            }`}
-                            style={campaign.status === 'ACTIVE' ? undefined : { background: activeGradient }}
-                          >
-                            {campaign.status === 'ACTIVE' ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
-                            {campaign.status === 'ACTIVE' ? 'Pause' : 'Resume'}
-                          </button>
+                          {canToggleAds && canToggle(campaign) ? (
+                            <button
+                              type="button"
+                              onClick={() => toggleStatus(campaign)}
+                              disabled={busyId === campaign.id}
+                              className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold shadow-sm disabled:opacity-60 ${
+                                campaign.status === 'ACTIVE'
+                                  ? 'border border-red-200 text-red-600 hover:bg-red-50'
+                                  : 'text-white'
+                              }`}
+                              style={campaign.status === 'ACTIVE' ? undefined : { background: activeGradient }}
+                            >
+                              {campaign.status === 'ACTIVE' ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
+                              {campaign.status === 'ACTIVE' ? 'Pause' : 'Resume'}
+                            </button>
+                          ) : (
+                            <span className="text-xs" style={{ color: indigo.muted }}>
+                              —
+                            </span>
+                          )}
                         </td>
                       </tr>
                     ))
@@ -990,12 +1405,26 @@ export default function MetaAdsPage() {
                 </tbody>
               </table>
             </TableCard>
+
+            {/* Phase 9 Task 6 — keyed by the selected client: switching client remounts the panel,
+                so no post, insight or error of the previous client stays on screen. */}
+            {canManageSocialAccounts && <OrganicPostsPanel key={selectedAccountId ?? 'own'} refreshKey={organicRefreshKey} canManageSocialAccounts={canManageSocialAccounts} canViewInsights={canViewSocialInsights} />}
           </>
         )}
       </div>
 
-      {isWizardOpen && <LaunchWizardModal onClose={() => setIsWizardOpen(false)} onLaunched={handleLaunched} />}
-      {isOrganicModalOpen && <OrganicPostModal onClose={() => setIsOrganicModalOpen(false)} onPublished={handlePublished} />}
+      {picker}
+      {notice && (
+        <GateNoticeModal
+          testId="ads-prerequisite"
+          title={notice.title}
+          message={notice.message}
+          action={notice.action}
+          secondary={notice.continueAnyway ? { label: 'Continue without a Page', onClick: notice.continueAnyway } : null}
+          onClose={() => setNotice(null)}
+        />
+      )}
+      {isOrganicModalOpen && <OrganicPostModal onClose={() => setIsOrganicModalOpen(false)} onPublished={handlePublished} canManageSocialAccounts={canManageSocialAccounts} />}
 
       {toast && (
         <div className="fixed bottom-6 right-6 z-50 rounded-lg bg-slate-900 px-4 py-3 text-sm font-medium text-white shadow-lg">

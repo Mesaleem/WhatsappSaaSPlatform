@@ -28,11 +28,13 @@ import AuditLogsPage from './pages/audit/AuditLogsPage';
 import NotificationsPage from './pages/notifications/NotificationsPage';
 import SocialAccountsPage from './pages/social/SocialAccountsPage';
 import MetaAdsPage from './pages/social/MetaAdsPage';
+import AdsDashboardPage from './pages/social/AdsDashboardPage';
 import AdminSocialSettingsPage from './pages/admin/AdminSocialSettingsPage';
 import SocialInboxPage from './pages/social/SocialInboxPage';
 import CommentRulesPage from './pages/social/CommentRulesPage';
 import LeadsPage from './pages/social/LeadsPage';
 import SocialReportsPage from './pages/social/SocialReportsPage';
+import SocialAnalyticsPage from './pages/social/SocialAnalyticsPage';
 import CrmLeadsPage from './pages/crm/CrmLeadsPage';
 import CrmLeadDetailPage from './pages/crm/CrmLeadDetailPage';
 import CrmPipelinePage from './pages/crm/CrmPipelinePage';
@@ -344,11 +346,21 @@ export default function App() {
               }
             />
             {/* Social Media Marketing & Meta Ads Automation Expansion (Phase 3). */}
+            {/* Phase 10 Task 2 — also the `ads` capability, as the backend requires (capability.guard:ads). */}
+            {/* Phase 10 Task 3 — any Ads permission the backend accepts for reads (launch-meta-ads | social_ads.view). */}
             <Route
               path="/social/ads"
               element={
-                <ProtectedRoute permission="launch-meta-ads" module="meta_ads">
+                <ProtectedRoute anyPermission={['launch-meta-ads', 'social_ads.view']} module="meta_ads" capability="ads">
                   <MetaAdsPage />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/social/ads/dashboard"
+              element={
+                <ProtectedRoute anyPermission={['launch-meta-ads', 'social_ads.view']} module="meta_ads" capability="ads">
+                  <AdsDashboardPage />
                 </ProtectedRoute>
               }
             />
@@ -384,6 +396,17 @@ export default function App() {
               element={
                 <ProtectedRoute permission="manage-social-leads" module="lead_crm">
                   <LeadsPage />
+                </ProtectedRoute>
+              }
+            />
+            {/* Phase 9 Task 5 — Social Analytics dashboard: the same three gates as
+                GET /api/social/analytics/* (view-social-analytics, NOT the management
+                permission; social_accounts module; social capability). */}
+            <Route
+              path="/social/analytics"
+              element={
+                <ProtectedRoute permission="view-social-analytics" module="social_accounts" capability="social">
+                  <SocialAnalyticsPage />
                 </ProtectedRoute>
               }
             />

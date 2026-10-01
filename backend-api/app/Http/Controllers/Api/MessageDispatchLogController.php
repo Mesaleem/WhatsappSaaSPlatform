@@ -36,7 +36,10 @@ class MessageDispatchLogController extends Controller
     // this grid needs to be able to select it like any other status.
     private const VALID_STATUSES = ['sent', 'failed', 'queued'];
 
-    private const VALID_SOURCES = ['web_ui', 'web_template', 'api', 'chatbot', 'journey'];
+    // Phase 5 P5-A — 'social_inbox' (P5-2's Social Inbox lead reply) and
+    // 'meta_lead_ads' (the Lead Ads notice/welcome) are sources the
+    // unified direct-send path now writes; filterable like any other.
+    private const VALID_SOURCES = ['web_ui', 'web_template', 'api', 'chatbot', 'journey', 'social_inbox', 'meta_lead_ads'];
 
     // Group Messaging Phase 5 — Dashboard Analytics Upgrade. Matches
     // the recipient_type column's own DB default ('individual', see

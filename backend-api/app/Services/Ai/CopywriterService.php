@@ -2,64 +2,85 @@
 
 namespace App\Services\Ai;
 
-use App\Models\Account;
-use App\Models\SocialProviderConfig;
-use Illuminate\Support\Facades\Http;
+use App\Services\Ai\Billing\MeteredAiService;
+use App\Services\Ai\Data\AiRequest;
+use App\Services\Ai\Data\AiResponse;
 use Illuminate\Support\Facades\Log;
-use Throwable;
 
 /**
- * Social/Ads Launcher Overhaul — Step 1 (Gemini Pro Engine & Multi-Token
- * Prompt Refactor). AI Ad Copywriter (AICopywriterController). Produces
- * 5 ad-copy variants, each a {hook, caption, cta} triple — a tenant
- * picking "variant 3" needs its hook/caption/cta to belong together,
- * which is what the wizard needs to fill headline/primary_text with a
- * coherent option.
+ * Social/Ads Launcher Overhaul — Step 1. AI Ad Copywriter
+ * (AICopywriterController). Produces 5 ad-copy variants, each a
+ * {hook, caption, cta} triple — a tenant picking "variant 3" needs its
+ * hook/caption/cta to belong together, which is what the wizard needs to
+ * fill headline/primary_text with a coherent option.
  *
- * PROVIDER SELECTION (Gemini Pro is now primary): Gemini is tried first
- * whenever a key resolves (see resolveGeminiApiKey() below); OpenAI and
- * Anthropic are KEPT as documented secondary fallbacks — no existing,
- * working behavior is removed — and the deterministic template engine
- * remains the final, zero-external-call fallback for a fresh install
- * with no key configured anywhere. A real provider call THROWING
- * (timeout, invalid key, malformed response) degrades to the next
- * provider in the chain rather than ever turning into a 500 for the
- * tenant.
+ * PHASE 8 TASK 6 — a normal consumer of the central AI system:
  *
- * PER-TENANT KEY RESOLUTION (database-backed, not only .env): see
- * resolveGeminiApiKey()'s docblock and the accounts.gemini_api_key
- * migration for the full 3-tier order (tenant override -> platform
- * social_provider_configs row -> env). OpenAI/Anthropic keys remain
- * env-only/platform-wide, unchanged from before this refactor — only
- * Gemini was asked to become per-tenant-resolvable.
+ *   Ad Copywriter → MeteredAiService → AiService → AiManager → provider
  *
- * MULTI-TOKEN PROMPT: generate() now takes 4 dynamic business-context
- * tokens (businessName, targetIndustry, offerDetails, targetGoal) plus
- * tone, up from the prior 2 (product_name misused as a campaign name,
- * target_industry). None of these are matched against a hardcoded
- * per-industry branch anywhere in this class — target_industry and
- * offer_details are free text interpolated directly into the prompt/
- * templates, so any industry (Real Estate, Gym, Coaching, Healthcare,
- * E-Commerce, ...) takes the exact same code path.
+ * This class no longer knows any vendor, key, model, provider order,
+ * credit, hold or settlement. It builds the SAME prompts as before
+ * (systemPrompt()/userPrompt(), unchanged), asks for a structured answer,
+ * validates it with the SAME rules (parseVariants(), unchanged), and
+ * returns the SAME shape: {provider, variants}.
  *
- * DISCLOSED — NOT INTEGRATION-TESTED: no Gemini/OpenAI/Anthropic API key
- * is configured anywhere in this dev environment, and this environment
- * has no network path to test one even if it did. The request/response
- * shapes below follow each provider's own published API docs as closely
- * as possible from training knowledge but are [Hypothesis] until
- * exercised against a real key — same disclosed status this class
- * already carried for OpenAI/Anthropic before this refactor.
+ * The caller passes an AiAuthorization (AiAuthorizer: target account,
+ * account/subscription state, the meta_ads module, launch-meta-ads and the
+ * `ai` capability) and an operation key (one charge per key). Credits are
+ * consumed from the authorization's target account by MeteredAiService.
+ *
+ * FALLBACK (kept from before): when the AI provider cannot produce usable
+ * copy — no provider configured, provider unavailable/failed/timed out,
+ * or an answer without a usable variant — the deterministic template
+ * engine answers (provider "template"), exactly as it did when every
+ * vendor in the old chain failed. MeteredAiService has already released
+ * the hold, so template copy is never charged. It is NOT a way around the
+ * account's limits: authorization, entitlement, insufficient-credit and
+ * duplicate-operation refusals are returned as errors, never templated.
+ *
+ * REMOVED (Phase 8 Task 6, disclosed): the direct Gemini / OpenAI /
+ * Anthropic HTTP calls and the per-tenant Gemini key resolution
+ * (accounts.gemini_api_key → platform social_provider_configs 'gemini' →
+ * GEMINI_API_KEY). Phase 8 Task 8 added Gemini to the central provider
+ * layer: with AI_PROVIDER=gemini the copy is served by it through the same
+ * path, with no Gemini-specific code here (platform key only; the per-tenant
+ * key is still not read).
  */
 class CopywriterService
 {
     /** Meta Ads objectives this app supports also gate campaign creation (see AdCampaign::OBJECTIVES); this is a SEPARATE, coarser concept the AI prompt uses to shape tone/CTA. */
     public const TARGET_GOALS = ['ORGANIC_POST', 'PAID_LEAD_AD'];
 
+    /** Logged operation label (not a price — pricing is AiCreditPricing's, token-based). */
+    public const OPERATION = 'ads.copywriter';
+
+    /** Provider-side failures that degrade to the template engine (never an entitlement/credit refusal). */
+    private const TEMPLATE_FALLBACK = [
+        AiException::PROVIDER_NOT_CONFIGURED,
+        AiException::PROVIDER_UNAVAILABLE,
+        AiException::PROVIDER_FAILED,
+        AiException::PROVIDER_TIMEOUT,
+        AiException::MALFORMED_RESPONSE,
+    ];
+
+    /** Answer budget: the Anthropic value the old chain used (OpenAI's call set none). */
+    private const MAX_TOKENS = 1024;
+
+    /** The old primary (Gemini) call's temperature. */
+    private const TEMPERATURE = 0.9;
+
+    public function __construct(private readonly MeteredAiService $metered)
+    {
+    }
+
     /**
      * @return array{provider: string, variants: list<array{hook: string, caption: string, cta: string}>}
+     *
+     * @throws AiException authorization / credit / duplicate refusals
      */
     public function generate(
-        Account $account,
+        AiAuthorization $authorization,
+        string $operationKey,
         string $businessName,
         string $targetIndustry,
         string $offerDetails,
@@ -68,170 +89,37 @@ class CopywriterService
     ): array {
         $tokens = compact('businessName', 'targetIndustry', 'offerDetails', 'targetGoal', 'tone');
 
-        if ($geminiKey = $this->resolveGeminiApiKey($account)) {
-            try {
-                return ['provider' => 'gemini', 'variants' => $this->generateWithGemini($geminiKey, $tokens)];
-            } catch (Throwable $e) {
-                Log::warning('CopywriterService: Gemini call failed, falling back to the next provider.', ['exception' => $e->getMessage()]);
-            }
-        }
-
-        if (config('services.openai.key')) {
-            try {
-                return ['provider' => 'openai', 'variants' => $this->generateWithOpenAi($tokens)];
-            } catch (Throwable $e) {
-                Log::warning('CopywriterService: OpenAI call failed, falling back to the next provider.', ['exception' => $e->getMessage()]);
-            }
-        } elseif (config('services.anthropic.key')) {
-            try {
-                return ['provider' => 'anthropic', 'variants' => $this->generateWithAnthropic($tokens)];
-            } catch (Throwable $e) {
-                Log::warning('CopywriterService: Anthropic call failed, falling back to templates.', ['exception' => $e->getMessage()]);
-            }
-        }
-
-        return ['provider' => 'template', 'variants' => $this->generateFromTemplates($tokens)];
-    }
-
-    /**
-     * Resolves the Gemini API key to use for THIS tenant's request, in
-     * priority order:
-     *
-     *  1. $account->gemini_api_key — a tenant's own key, if they've set
-     *     one (encrypted at rest, see Account::casts()).
-     *  2. SocialProviderConfig::findByProviderCached('gemini') — the
-     *     platform default a Super Admin configures once via the
-     *     existing Admin Social Gateway Settings endpoint/vault, reusing
-     *     its `client_secret` column as "the API key" for this
-     *     non-OAuth provider (see that model's PROVIDERS docblock).
-     *  3. null — generate() falls through to OpenAI/Anthropic/templates.
-     *
-     * Never throws; a decryption failure or missing row is treated as
-     * "no key configured", the same degrade-gracefully posture the rest
-     * of this class already takes toward a flaky/misconfigured provider.
-     */
-    private function resolveGeminiApiKey(Account $account): ?string
-    {
-        try {
-            if (! empty($account->gemini_api_key)) {
-                return $account->gemini_api_key;
-            }
-        } catch (Throwable $e) {
-            Log::warning('CopywriterService: failed to read accounts.gemini_api_key, falling back to the platform key.', [
-                'account_id' => $account->id,
-                'exception' => $e->getMessage(),
-            ]);
-        }
+        $request = new AiRequest(
+            prompt: $this->userPrompt($tokens),
+            system: $this->systemPrompt(),
+            maxTokens: self::MAX_TOKENS,
+            temperature: self::TEMPERATURE,
+            operation: self::OPERATION,
+            requiredKeys: ['variants'],
+        );
 
         try {
-            $platformKey = SocialProviderConfig::findByProviderCached('gemini')?->client_secret;
+            $result = $this->metered->generateStructured(
+                $authorization,
+                $request,
+                $operationKey,
+                accept: fn (AiResponse $response) => $this->usableVariants($response->data) !== [],
+            );
 
-            if (! empty($platformKey)) {
-                return $platformKey;
+            return ['provider' => $result->response->provider, 'variants' => $this->usableVariants($result->response->data)];
+        } catch (AiException $e) {
+            if (! in_array($e->errorCode, self::TEMPLATE_FALLBACK, true)) {
+                throw $e;
             }
-        } catch (Throwable $e) {
-            Log::warning('CopywriterService: failed to read the platform Gemini key.', ['exception' => $e->getMessage()]);
-        }
 
-        $envKey = config('services.gemini.key');
-
-        return $envKey !== null && $envKey !== '' ? (string) $envKey : null;
-    }
-
-    /**
-     * @param array{businessName: string, targetIndustry: string, offerDetails: string, targetGoal: string, tone: string} $tokens
-     * @return list<array{hook: string, caption: string, cta: string}>
-     */
-    private function generateWithGemini(string $apiKey, array $tokens): array
-    {
-        $model = config('services.gemini.model', 'gemini-1.5-pro');
-
-        // [Hypothesis]: Gemini's generateContent endpoint takes the API
-        // key as a `key` query parameter (not a bearer/header credential
-        // like OpenAI/Anthropic) and a `generationConfig.responseMimeType`
-        // of 'application/json' to request structured JSON output,
-        // per Google's published Generative Language API v1beta docs.
-        // Http::post() only accepts (url, body) — a 3rd array argument for
-        // query params is silently dropped, not merged — so the key is
-        // appended to the URL directly rather than passed as a 3rd arg.
-        $url = 'https://generativelanguage.googleapis.com/v1beta/models/'.
-            $model.':generateContent?key='.urlencode($apiKey);
-
-        $response = Http::timeout(20)->post($url, [
-            'contents' => [
-                ['role' => 'user', 'parts' => [['text' => $this->userPrompt($tokens)]]],
-            ],
-            'systemInstruction' => [
-                'parts' => [['text' => $this->systemPrompt()]],
-            ],
-            'generationConfig' => [
-                'responseMimeType' => 'application/json',
-                'temperature' => 0.9,
-            ],
-        ]);
-
-        if ($response->failed()) {
-            throw new \RuntimeException($response->json('error.message') ?? 'Gemini rejected the request.');
-        }
-
-        $raw = $response->json('candidates.0.content.parts.0.text');
-
-        return $this->parseVariants($raw);
-    }
-
-    /**
-     * @param array{businessName: string, targetIndustry: string, offerDetails: string, targetGoal: string, tone: string} $tokens
-     * @return list<array{hook: string, caption: string, cta: string}>
-     */
-    private function generateWithOpenAi(array $tokens): array
-    {
-        $response = Http::withToken(config('services.openai.key'))
-            ->timeout(20)
-            ->post('https://api.openai.com/v1/chat/completions', [
-                'model' => config('services.openai.model', 'gpt-4o-mini'),
-                'response_format' => ['type' => 'json_object'],
-                'messages' => [
-                    ['role' => 'system', 'content' => $this->systemPrompt()],
-                    ['role' => 'user', 'content' => $this->userPrompt($tokens)],
-                ],
+            // Metadata only — never the vendor's message or the prompt.
+            Log::warning('CopywriterService: AI copy unavailable, serving the template engine.', [
+                'account_id' => $authorization->account->id,
+                'error_code' => $e->errorCode,
             ]);
 
-        if ($response->failed()) {
-            throw new \RuntimeException($response->json('error.message') ?? 'OpenAI rejected the request.');
+            return ['provider' => 'template', 'variants' => $this->generateFromTemplates($tokens)];
         }
-
-        $raw = $response->json('choices.0.message.content');
-
-        return $this->parseVariants($raw);
-    }
-
-    /**
-     * @param array{businessName: string, targetIndustry: string, offerDetails: string, targetGoal: string, tone: string} $tokens
-     * @return list<array{hook: string, caption: string, cta: string}>
-     */
-    private function generateWithAnthropic(array $tokens): array
-    {
-        $response = Http::withHeaders([
-            'x-api-key' => config('services.anthropic.key'),
-            'anthropic-version' => '2023-06-01',
-        ])
-            ->timeout(20)
-            ->post('https://api.anthropic.com/v1/messages', [
-                'model' => config('services.anthropic.model', 'claude-3-5-haiku-latest'),
-                'max_tokens' => 1024,
-                'system' => $this->systemPrompt(),
-                'messages' => [
-                    ['role' => 'user', 'content' => $this->userPrompt($tokens)],
-                ],
-            ]);
-
-        if ($response->failed()) {
-            throw new \RuntimeException($response->json('error.message') ?? 'Anthropic rejected the request.');
-        }
-
-        $raw = $response->json('content.0.text');
-
-        return $this->parseVariants($raw);
     }
 
     private function systemPrompt(): string
@@ -267,24 +155,23 @@ class CopywriterService
     }
 
     /**
+     * The same validation the vendor calls used (parseVariants()): up to 5
+     * variants, each needing hook + caption + cta; [] when none is usable.
+     *
+     * @param array<string, mixed>|null $decoded
      * @return list<array{hook: string, caption: string, cta: string}>
      */
-    private function parseVariants(?string $raw): array
+    private function usableVariants(?array $decoded): array
     {
-        if (! $raw) {
-            throw new \RuntimeException('Empty AI response.');
-        }
-
-        $decoded = json_decode($raw, true);
         $variants = $decoded['variants'] ?? null;
 
         if (! is_array($variants) || count($variants) === 0) {
-            throw new \RuntimeException('AI response was not in the expected shape.');
+            return [];
         }
 
         $clean = [];
         foreach (array_slice($variants, 0, 5) as $variant) {
-            if (! isset($variant['hook'], $variant['caption'], $variant['cta'])) {
+            if (! is_array($variant) || ! isset($variant['hook'], $variant['caption'], $variant['cta'])) {
                 continue;
             }
             $clean[] = [
@@ -292,10 +179,6 @@ class CopywriterService
                 'caption' => (string) $variant['caption'],
                 'cta' => (string) $variant['cta'],
             ];
-        }
-
-        if (count($clean) === 0) {
-            throw new \RuntimeException('AI response contained no usable variants.');
         }
 
         return $clean;

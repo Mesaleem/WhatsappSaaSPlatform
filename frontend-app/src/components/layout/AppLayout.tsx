@@ -45,6 +45,8 @@ interface NavItem {
   tint: Tint;
   /** Omit to show for any authenticated user (e.g. Dashboard, WhatsApp Setup). */
   permission?: string;
+  /** Phase 10 Task 3 — shown when the user holds ANY of these (the backend's `permission:a|b`). */
+  anyPermission?: string[];
   /** Only shown to a user with a tenant account_id (hidden for Super Admin). */
   requiresAccount?: boolean;
   /** Only shown to Super Admin, regardless of permission. */
@@ -186,9 +188,11 @@ const NAV_ITEMS: NavItem[] = [
   // now a real ACCOUNT_MODULES slug (Social Media Suite), closing the
   // gap disclosed in an earlier task — this nav item is gated the same
   // way every other module-backed item above it is.
-  { label: 'Social Accounts', to: '/social/accounts', icon: Share2, tint: NAV_TINTS.social, permission: 'manage-social-accounts', requiresModule: 'social_accounts' },
+  // Phase 9 Task 1 — the connection routes now require the existing `social` capability (capability.guard:social); the nav mirrors it.
+  { label: 'Social Accounts', to: '/social/accounts', icon: Share2, tint: NAV_TINTS.social, permission: 'manage-social-accounts', requiresModule: 'social_accounts', requiresCapability: 'social' },
   // Social Media Marketing & Meta Ads Automation Expansion (Phase 3).
-  { label: 'Meta Ads Launcher', to: '/social/ads', icon: Rocket, tint: NAV_TINTS.social, permission: 'launch-meta-ads', requiresModule: 'meta_ads' },
+  { label: 'Meta Ads Launcher', to: '/social/ads', icon: Rocket, tint: NAV_TINTS.social, anyPermission: ['launch-meta-ads', 'social_ads.view'], requiresModule: 'meta_ads', requiresCapability: 'ads' },
+  { label: 'Ads Dashboard', to: '/social/ads/dashboard', icon: BarChart3, tint: NAV_TINTS.social, anyPermission: ['launch-meta-ads', 'social_ads.view'], requiresModule: 'meta_ads', requiresCapability: 'ads' },
   // Social Media Marketing & Meta Ads Automation Expansion (Phase 4).
   { label: 'Social Inbox', to: '/social/inbox', icon: Inbox, tint: NAV_TINTS.social, permission: 'manage-social-leads', requiresModule: 'social_inbox' },
   { label: 'Comment Rules', to: '/social/comment-rules', icon: MessageSquare, tint: NAV_TINTS.social, permission: 'manage-comment-automation', requiresModule: 'comment_automation' },
@@ -203,6 +207,8 @@ const NAV_ITEMS: NavItem[] = [
   // Phase 6 CRM Task 12 — same three gates; the API is GET /api/crm/analytics.
   { label: 'CRM Analytics', to: '/crm/analytics', icon: PieChart, tint: NAV_TINTS.social, permission: 'manage-crm', requiresModule: 'lead_crm', requiresCapability: 'crm' },
   { label: 'Instant Lead CRM', to: '/social/leads', icon: UserSearch, tint: NAV_TINTS.social, permission: 'manage-social-leads', requiresModule: 'lead_crm' },
+  // Phase 9 Task 5 — same gates as /api/social/analytics/* (view-only analytics users see it too).
+  { label: 'Social Analytics', to: '/social/analytics', icon: PieChart, tint: NAV_TINTS.social, permission: 'view-social-analytics', requiresModule: 'social_accounts', requiresCapability: 'social' },
   { label: 'Social Reports', to: '/social/reports', icon: FileBarChart, tint: NAV_TINTS.social, permission: 'view-social-analytics', requiresModule: 'reports' },
   { label: 'Manage Clients', to: '/admin/accounts', icon: Building2, tint: NAV_TINTS.accounts, superAdminOnly: true },
   { label: 'My Clients', to: '/admin/accounts', icon: Building2, tint: NAV_TINTS.accounts, agentOnly: true },
@@ -293,6 +299,7 @@ function isNavItemVisible(
   if (!opts.isSuperAdmin && item.hiddenForRoles?.some((role) => opts.hasRole(role))) return false;
   if (item.requiresAccount && !opts.hasAccount) return false;
   if (item.permission && !opts.isSuperAdmin && !opts.hasPermission(item.permission)) return false;
+  if (item.anyPermission && !opts.isSuperAdmin && !item.anyPermission.some((p) => opts.hasPermission(p))) return false;
   if (item.requiresModule && !opts.isSuperAdmin && !opts.hasModule(item.requiresModule)) return false;
   if (item.requiresCapability && !opts.isSuperAdmin && !opts.hasCapability(item.requiresCapability)) return false;
   return true;

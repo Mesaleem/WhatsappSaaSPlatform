@@ -7,6 +7,7 @@ use App\Http\Requests\CreateWhatsAppGroupRequest;
 use App\Models\Account;
 use App\Models\ContactGroup;
 use App\Services\Groups\NativeGroupCreationService;
+use App\Services\Groups\NativeGroupEntitlement;
 use App\Services\Access\ProviderCapabilityService;
 use Illuminate\Http\JsonResponse;
 
@@ -64,6 +65,12 @@ class GroupController extends Controller
             ]);
 
             return response()->json(['success' => true, 'data' => $group], 201);
+        }
+
+        // Phase 5 P5-C -- a Native WhatsApp Group needs the account's
+        // `whatsapp_groups` capability (API keys never bypass it).
+        if (! NativeGroupEntitlement::allows($account, 'groups.create_native', 'api_key')) {
+            return response()->json(NativeGroupEntitlement::denialBody(), 403);
         }
 
         // Native WhatsApp group -- requires the 'qr' (Baileys) engine and

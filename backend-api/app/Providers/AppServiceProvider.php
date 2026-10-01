@@ -15,7 +15,22 @@ class AppServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
-        //
+        // Phase 8 AI foundation — one AiManager per container, so providers
+        // registered with extend() and resolved instances persist.
+        $this->app->singleton(\App\Services\Ai\AiManager::class);
+
+        // Phase 8 Task 9 — knowledge-base foundation: provider-neutral seams.
+        $this->app->bind(\App\Services\Knowledge\Contracts\DocumentTextExtractor::class, \App\Services\Knowledge\PlainTextExtractor::class);
+        $this->app->bind(\App\Services\Knowledge\Contracts\TextChunker::class, fn () => \App\Services\Knowledge\CharacterWindowChunker::fromConfig());
+        $this->app->bind(\App\Services\Knowledge\Contracts\VectorStore::class, \App\Services\Knowledge\DatabaseVectorStore::class);
+        $this->app->bind(\App\Services\Ai\Retrieval\KnowledgeRetriever::class, \App\Services\Knowledge\DatabaseKnowledgeRetriever::class);
+        // Phase 8 Task 11 — the closed, code-owned set of agent tools (config('ai.agents.tools') allow-lists them).
+        $this->app->singleton(\App\Services\Ai\Agents\Tools\ToolRegistry::class, fn ($app) => new \App\Services\Ai\Agents\Tools\ToolRegistry([
+            $app->make(\App\Services\Ai\Agents\Tools\JourneyVariableTool::class),
+            $app->make(\App\Services\Ai\Agents\Tools\CrmFindCurrentLeadTool::class),
+            $app->make(\App\Services\Ai\Agents\Tools\CrmCaptureCurrentLeadTool::class),
+            $app->make(\App\Services\Ai\Agents\Tools\CrmUpdateLeadStatusTool::class),
+        ]));
     }
 
     /**

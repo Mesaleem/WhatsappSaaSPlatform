@@ -97,6 +97,13 @@ class GroupMessageDispatcher
         }
 
         if ($group->isNative()) {
+            // Phase 5 P5-C -- sending to a Native WhatsApp Group needs the
+            // account's `whatsapp_groups` capability; checked before any
+            // quota is reserved. Reuses the existing 403 status.
+            if (! NativeGroupEntitlement::allows($account, 'groups.send_native', $source)) {
+                return ['status' => 'group_access_denied', 'message' => NativeGroupEntitlement::MESSAGE];
+            }
+
             // A native group can only ever be sent to once it has a real
             // wa_group_jid — 'pending' (still creating) and 'failed'
             // (creation never succeeded) both mean there is nothing to

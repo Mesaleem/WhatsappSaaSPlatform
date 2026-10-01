@@ -1007,6 +1007,8 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
               ? 'Action disabled: Subscription expired.'
               : disabled
                 ? 'WhatsApp is disconnected — reconnect it in WhatsApp Setup to send alerts.'
+                : recipientType === 'group' && groups.length === 0
+                  ? 'No contact groups exist yet — create one under Contact Groups first.'
                 : recipientType === 'individual' && exceedsMaxRecipients
                   ? `Maximum ${MAX_BULK_RECIPIENTS} contacts allowed per batch.`
                   : recipientType === 'individual' && recipientPhones.length > 1 && isOnCooldown

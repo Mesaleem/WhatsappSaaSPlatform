@@ -13,6 +13,7 @@ use App\Support\PlanCatalog;
 use Database\Seeders\Phase1FoundationSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Str;
+use Tests\Concerns\GrantsNativeWhatsAppGroups;
 use Tests\TestCase;
 
 /**
@@ -66,7 +67,7 @@ use Tests\TestCase;
  */
 class PublicApiAuthorizationTest extends TestCase
 {
-    use RefreshDatabase;
+    use RefreshDatabase, GrantsNativeWhatsAppGroups;
 
 
     protected function setUp(): void
@@ -182,7 +183,7 @@ class PublicApiAuthorizationTest extends TestCase
     // on the group MESSAGE-SEND endpoint).
     public function test_missing_entitlement_module_is_denied_on_group_creation(): void
     {
-        $account = Account::factory()->create(['allowed_modules' => ['dashboard', 'send_alert']]); // 'contact_groups' deliberately absent
+        $account = Account::factory()->create(['allowed_modules' => ['dashboard', 'send_alert', 'developer_api']]); // 'contact_groups' deliberately absent (P5-B: developer_api kept on so the group gate is what refuses)
         $issued = $this->issueApiKey($account);
 
         $response = $this->withHeaders(['X-API-KEY' => $issued['key'], 'X-API-SECRET' => $issued['secret']])
@@ -201,6 +202,7 @@ class PublicApiAuthorizationTest extends TestCase
     {
         $account = Account::factory()->create();
         $this->giveActiveSubscription($account, 'business'); // Meta Cloud API engine
+        $this->grantNativeWhatsAppGroups($account); // P5-C — so the provider gate is what refuses
         $issued = $this->issueApiKey($account);
 
         $response = $this->withHeaders(['X-API-KEY' => $issued['key'], 'X-API-SECRET' => $issued['secret']])

@@ -23,7 +23,7 @@ class CommentAutomationRuleController extends Controller
     /** GET /api/social/comment-rules */
     public function index(Request $request): JsonResponse
     {
-        $account = $this->requireAccount($request);
+        $account = $this->requireTargetAccount($request);
 
         $rules = CommentAutomationRule::query()->forAccount($account->id)->latest()->get();
 
@@ -33,7 +33,7 @@ class CommentAutomationRuleController extends Controller
     /** POST /api/social/comment-rules */
     public function store(Request $request): JsonResponse
     {
-        $account = $this->requireAccount($request);
+        $account = $this->requireTargetAccount($request);
 
         $data = $request->validate([
             'keyword' => ['required', 'string', 'max:100'],
@@ -54,7 +54,7 @@ class CommentAutomationRuleController extends Controller
     /** PUT /api/social/comment-rules/{id} */
     public function update(Request $request, int $id): JsonResponse
     {
-        $account = $this->requireAccount($request);
+        $account = $this->requireTargetAccount($request);
         $rule = CommentAutomationRule::query()->forAccount($account->id)->findOrFail($id);
 
         $data = $request->validate([
@@ -72,7 +72,7 @@ class CommentAutomationRuleController extends Controller
     /** DELETE /api/social/comment-rules/{id} */
     public function destroy(Request $request, int $id): JsonResponse
     {
-        $account = $this->requireAccount($request);
+        $account = $this->requireTargetAccount($request);
         $rule = CommentAutomationRule::query()->forAccount($account->id)->findOrFail($id);
         $rule->delete();
 

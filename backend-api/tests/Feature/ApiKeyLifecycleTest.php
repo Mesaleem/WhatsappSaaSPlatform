@@ -195,6 +195,8 @@ class ApiKeyLifecycleTest extends TestCase
     public function test_client_api_key_show_endpoint_never_exposes_hash(): void
     {
         $account = Account::factory()->create();
+        // P5-B — regenerating now also needs an active subscription (subscription.guard).
+        \App\Models\Subscription::factory()->create(['account_id' => $account->id]);
         $admin = $this->makeAdmin($account);
 
         // Provisioned through the real endpoint rather than issueApiKey()

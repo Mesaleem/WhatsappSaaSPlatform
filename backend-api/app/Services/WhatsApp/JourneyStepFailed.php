@@ -2,6 +2,7 @@
 
 namespace App\Services\WhatsApp;
 
+use DateTimeInterface;
 use RuntimeException;
 
 /**
@@ -26,8 +27,14 @@ class JourneyStepFailed extends RuntimeException
      * Phase 7 Task 8: $retryable = false marks a refusal no retry can fix
      * (JourneySendGate: suspended account / no subscription); the engine
      * then fails the session at once instead of scheduling a retry.
+     *
+     * Phase 8 Task 7: $notBefore (optional) — the earliest moment a retry can
+     * succeed (a Journey AI step whose metered operation is still marked
+     * running must not be retried before that operation can be abandoned).
+     * The engine schedules the retry at the later of its own backoff and
+     * this; nothing else about the retry model changes.
      */
-    public function __construct(string $message = '', public readonly string $category = 'internal_error', public readonly bool $retryable = true)
+    public function __construct(string $message = '', public readonly string $category = 'internal_error', public readonly bool $retryable = true, public readonly ?DateTimeInterface $notBefore = null)
     {
         parent::__construct($message);
     }

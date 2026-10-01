@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { AlertCircle, Building2, Inbox, Loader2, Plus, Tag, X } from 'lucide-react';
 import crmService from '../../services/crmService';
 import PromptModal from '../common/PromptModal';
+import { useClientGate } from '../common/actionGateHooks';
 import { describeApiError } from '../../utils/apiError';
 import {
   CRM_LEAD_STATUSES,
@@ -81,11 +82,25 @@ export function TagChips({
   );
 }
 
+/** Final hardening §23 — the no-client state carries its own action (the Header switcher is hidden on small screens). */
 export function NoClientSelected({ what }: { what: string }) {
+  const { openPicker, picker } = useClientGate();
+
   return (
-    <div className="flex items-start gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-500" data-testid="crm-no-client">
-      <Building2 className="mt-0.5 h-4 w-4 flex-shrink-0" />
-      Select a client from the switcher at the top of the page to view their {what}.
+    <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-500" data-testid="crm-no-client">
+      <span className="flex items-start gap-3">
+        <Building2 className="mt-0.5 h-4 w-4 flex-shrink-0" />
+        Select a client from the switcher at the top of the page to view their {what}.
+      </span>
+      <button
+        type="button"
+        onClick={() => openPicker(`view their ${what}`)}
+        className="rounded-lg border border-indigo-200 bg-white px-3 py-1.5 text-xs font-semibold text-indigo-700 hover:bg-indigo-50"
+        data-testid="crm-select-client"
+      >
+        Choose a client
+      </button>
+      {picker}
     </div>
   );
 }

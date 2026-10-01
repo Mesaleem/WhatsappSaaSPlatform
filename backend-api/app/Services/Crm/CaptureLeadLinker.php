@@ -43,9 +43,10 @@ use Throwable;
  *
  * ENTITLEMENT (Phase 6 Task 10). linkQuietly() — the entry point every
  * capture writer, retry() and the backfill use — promotes a capture only
- * when its account may use the CRM: the same two checks the CRM routes
+ * when its account may use the CRM: the same checks the CRM routes
  * make (`capability.guard:crm` -> AccessControlService::canTenant() and
- * `module.guard:lead_crm` -> Account::hasModuleEnabled()). A capture for
+ * `module.guard:lead_crm` -> Account::hasModuleEnabled(), plus — P6-2 —
+ * `subscription.guard`'s active account + active subscription). A capture for
  * a non-entitled account is left unpromoted and recorded as a
  * `not_entitled` failure, so retry() can promote it after an upgrade.
  * The capture itself is never affected. link() stays the unconditional
@@ -74,6 +75,14 @@ class CaptureLeadLinker
         $account = Account::findCached((int) $lead->account_id);
 
         return $account !== null
+            // P6-2 — the capture's OWN account (the writer resolved it from
+            // its own data — page, phone number id, journey session — never
+            // from the payload) must meet the same account/subscription rule
+            // a manual CRM write meets (subscription.guard / crm.target:
+            // active account + active subscription). The capture source is
+            // never an authorization: a suspended or unsubscribed account's
+            // capture stays unpromoted (`not_entitled`, retryable).
+            && (Account::query()->with('currentSubscription')->find($account->id)?->hasActiveSubscription() ?? false)
             && $account->hasModuleEnabled(self::CRM_MODULE)
             && $this->accessControl->canTenant($account, self::CRM_CAPABILITY);
     }

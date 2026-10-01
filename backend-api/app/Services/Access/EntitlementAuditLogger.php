@@ -75,6 +75,8 @@ class EntitlementAuditLogger
         'missing_permission',        // the actor's role lacks the route permission
         'cross_tenant',              // the resource belongs to another account
         'unauthorized_target_account', // a requested ?account_id= the actor may not act on
+        'revoked_by_super_admin',    // P5-11: an Agent tried to re-grant a capability a Super Admin revoked
+        'tool_not_allowed',          // Phase 8 T11: an AI agent called a tool its version was not granted
         // denied — publishability (not entitlement)
         'unsupported_node',          // the runtime cannot execute a node in the graph
         'invalid_configuration',     // the graph/node configuration is invalid
@@ -87,6 +89,7 @@ class EntitlementAuditLogger
         'module', 'capability', 'capabilities', 'provider', 'providers', 'permission',
         'actor_account_id', 'target_account_id', 'account_id',
         'session_id', 'flow_version_id', 'inbound_event_id', 'error_code', 'http_status',
+        'tool', // Phase 8 T11 — an AI agent tool id (a code-owned slug)
     ];
 
     /**

@@ -112,13 +112,15 @@ class CheckAdPerformanceRules extends Command
         // exception propagates to handle()'s catch, and the next cycle
         // (15 min later) tries again — never a false-positive "paused"
         // state while real spend continues unchecked on Meta's side.
-        $service->pause($campaign);
-
-        $campaign->forceFill([
-            'status' => AdCampaign::STATUS_PAUSED,
-            'auto_paused_at' => now(),
-            'auto_pause_reason' => $reason,
-        ])->save();
+        //
+        // Phase 10 Task 2 — through the same guarded transition as a manual
+        // pause (one change at a time; status written only after Meta
+        // confirms, only from ACTIVE). A campaign someone already paused is
+        // not paused (or alerted) twice. A pause whose outcome is unknown is
+        // not retried here; the next cycle re-evaluates fresh insights.
+        if (! $service->changeStatus($campaign, AdCampaign::STATUS_PAUSED, $reason)) {
+            return;
+        }
 
         $this->sendAlert($campaign, $insights, $zeroConversionOverBudget, $threshold);
     }

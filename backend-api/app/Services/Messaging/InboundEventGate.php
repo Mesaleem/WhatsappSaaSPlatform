@@ -13,10 +13,18 @@ use Illuminate\Support\Str;
  *
  * 1. SERIALIZE the conversation: take the (account, phone) lease in
  *    journey_conversation_locks with one conditional UPDATE — only a row
- *    whose lease is free or expired can be taken. Other messages from the
- *    same customer wait (polling) up to lockWaitMs, so they are processed
- *    one after another, each seeing the session state the previous one
- *    left. Other customers are never blocked.
+ *    whose lease is free or expired can be taken. Messages from the same
+ *    customer are therefore processed one after another, each seeing the
+ *    session state the previous one left. Other customers are never
+ *    blocked.
+ *
+ *    Phase 5 fix P5-9 — the lease is tried ONCE and never waited for. It
+ *    used to be polled for up to 10 s (usleep), holding the webhook request
+ *    — and then the message was dropped anyway. A busy conversation now
+ *    returns ['handled' => false, 'reason' => 'busy'] at once, having
+ *    touched nothing (no claim, no processing); the caller decides what to
+ *    do with it. ChatbotEngineService defers the message to
+ *    ProcessDeferredInboundMessageJob, which re-enters this gate later.
  * 2. CLAIM the event: INSERT into inbound_message_events; the unique
  *    (account_id, provider, event_key) index makes the first insert win
  *    and every duplicate — redelivery, provider retry, a concurrent copy,
@@ -35,10 +43,6 @@ class InboundEventGate
 {
     public const LEASE_SECONDS = 120;
 
-    public const DEFAULT_LOCK_WAIT_MS = 10000;
-
-    private const POLL_MS = 100;
-
     /**
      * @template T
      * @param callable(?int): T $process receives the claim id (null without an event key)
@@ -49,7 +53,7 @@ class InboundEventGate
         $owner = (string) Str::uuid();
 
         if (! $this->acquire($accountId, $phone, $owner)) {
-            Log::error('InboundEventGate: conversation is busy; inbound message not processed.', ['account_id' => $accountId, 'provider' => $provider]);
+            Log::info('InboundEventGate: conversation is busy; returned without waiting.', ['account_id' => $accountId, 'provider' => $provider]);
 
             return ['handled' => false, 'result' => null, 'reason' => 'busy'];
         }
@@ -121,27 +125,15 @@ class InboundEventGate
             'created_at' => now(), 'updated_at' => now(),
         ]);
 
-        $deadline = microtime(true) + ((int) config('journeys.inbound_lock_wait_ms', self::DEFAULT_LOCK_WAIT_MS)) / 1000;
+        // Phase 5 fix P5-9 — exactly one attempt, no wait: the conditional
+        // UPDATE either takes a free/expired lease or reports it held.
+        $now = now();
 
-        do {
-            $now = now();
-
-            $taken = DB::table('journey_conversation_locks')
-                ->where('account_id', $accountId)
-                ->where('phone_number', $phone)
-                ->where(fn ($q) => $q->whereNull('owner')->orWhereNull('locked_until')->orWhere('locked_until', '<', $now))
-                ->update(['owner' => $owner, 'locked_until' => $now->copy()->addSeconds(self::LEASE_SECONDS), 'updated_at' => $now]);
-
-            if ($taken === 1) {
-                return true;
-            }
-
-            if (microtime(true) >= $deadline) {
-                return false;
-            }
-
-            usleep(self::POLL_MS * 1000);
-        } while (true);
+        return DB::table('journey_conversation_locks')
+            ->where('account_id', $accountId)
+            ->where('phone_number', $phone)
+            ->where(fn ($q) => $q->whereNull('owner')->orWhereNull('locked_until')->orWhere('locked_until', '<', $now))
+            ->update(['owner' => $owner, 'locked_until' => $now->copy()->addSeconds(self::LEASE_SECONDS), 'updated_at' => $now]) === 1;
     }
 
     private function release(int $accountId, string $phone, string $owner): void

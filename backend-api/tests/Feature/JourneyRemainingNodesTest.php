@@ -227,7 +227,7 @@ class JourneyRemainingNodesTest extends TestCase
     /** Every palette node that still has no safe execution path. */
     public static function unimplemented(): array
     {
-        $implemented = ['text', 'image', 'video', 'document', 'audio', 'delay', 'conditional'];
+        $implemented = ['text', 'image', 'video', 'document', 'audio', 'delay', 'conditional', 'prompt', 'agent', 'rag']; // prompt/agent: Phase 8 Task 7; rag: Task 10
         $cases = [];
         foreach (array_diff(WhatsAppFlow::PALETTE_NODE_TYPES, $implemented) as $type) {
             $cases[$type] = [$type];
@@ -248,9 +248,9 @@ class JourneyRemainingNodesTest extends TestCase
         $this->assertEnded($this->flowSession($account), WhatsAppFlowSession::STATUS_EXPIRED, 'x', "type '{$type}'");
     }
 
-    public function test_exactly_twenty_palette_types_remain_unimplemented(): void
+    public function test_exactly_seventeen_palette_types_remain_unimplemented(): void
     {
-        $this->assertCount(20, self::unimplemented());
+        $this->assertCount(17, self::unimplemented());
     }
 
     // ==================================================================

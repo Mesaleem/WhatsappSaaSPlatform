@@ -6,7 +6,9 @@ use App\Http\Controllers\Concerns\ResolvesTenantAccount;
 use App\Http\Controllers\Controller;
 use App\Models\Account;
 use App\Models\SocialAccount;
-use App\Services\SocialAuth\MetaOAuthProvider;
+use App\Services\Social\SocialTargetGate;
+use App\Services\SocialAuth\Contracts\SocialOAuthProviderInterface;
+use App\Services\SocialAuth\SocialConnectionService;
 use App\Services\SocialAuth\SocialOAuthProviderFactory;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -20,25 +22,43 @@ use RuntimeException;
 use Throwable;
 
 /**
- * Social Media Marketing & Meta Ads Automation Expansion — Phase 1.
+ * Social account connections — provider-agnostic (Phase 1 of the Social
+ * expansion built the flow; Phase 9 Task 1 moved every provider-specific
+ * decision into the provider drivers, see SocialOAuthProviderInterface).
+ * Nothing here knows what "Meta" is.
  *
- * Two-step OAuth-popup flow, split across three actions:
- *  1. redirect()  — authenticated (sanctum + tenant.isolation). Builds the
- *     provider's consent-screen URL and hands it to the frontend, which
- *     opens it in a popup (window.open), never navigates the SPA itself.
- *  2. callback()  — PUBLIC. The provider (Meta) redirects the POPUP here
- *     directly, with no Laravel session and no Bearer token — tenant
- *     identity travels in the encrypted `state` param instead. Exchanges
- *     the code, fetches the account's bindable assets, stashes them in
- *     cache keyed by a one-time nonce, and responds with a minimal HTML
- *     page that postMessages {nonce, assets} to window.opener and closes
- *     itself — the SAME "backend owns the OAuth redirect_uri" shape as
- *     MetaWebhookController's GET handshake, applied to a login flow
- *     instead of a webhook subscription.
- *  3. bind()      — authenticated. The Asset Selection Modal's chosen
- *     assets, redeemed against the cached nonce (never re-trusting a
- *     token or account_id supplied directly by the client) and persisted
- *     as SocialAccount rows.
+ * Two-step OAuth-popup flow:
+ *  1. redirect()  — authenticated. Builds the provider's consent URL for
+ *     the popup. The encrypted `state` carries account, provider, the
+ *     initiating user, a one-time nonce and an expiry.
+ *  2. callback()  — PUBLIC (the provider redirects the popup; no session).
+ *     Verifies `state`, exchanges the code, discovers assets, stashes the
+ *     grant server-side under the nonce and postMessages ONLY {nonce,
+ *     assets} to the opener — never a token.
+ *  3. bind()      — authenticated. Redeems the nonce for the SAME account
+ *     AND the SAME user that started the flow and stores the chosen assets.
+ *
+ * CSRF / account-binding (Phase 9 Task 1): redirect() no longer returns the
+ * nonce — it reaches the SPA only through the popup's postMessage, which is
+ * locked to the configured frontend origin — so someone who tricks another
+ * person into completing THEIR authorization URL never learns the nonce and
+ * cannot bind that person's assets; bind() also requires the initiating user.
+ *
+ * AUTHORIZATION: the route group applies auth, tenant.isolation,
+ * subscription.guard, permission:manage-social-accounts,
+ * module.guard:social_accounts and capability.guard:social. Because those
+ * guards bypass a Super Admin and check the CALLER's subscription, every
+ * CONNECT step (redirect, bind) also checks the TARGET account itself —
+ * active, active subscription, the module, the `social` capability, and
+ * the provider being enabled for it (assertTargetMayConnect).
+ *
+ * Phase 9 Task 6 — the group also runs target.account:social_accounts,social,
+ * so a Super Admin acting on a client is held to what that client's own
+ * users can do: nothing for a suspended / unentitled / module-off client,
+ * reads only for a client whose subscription lapsed. (Before, reads,
+ * connection checks and disconnects stayed open to a Super Admin for any
+ * selected client.) A Super Admin with no client gets 422
+ * (requireTargetAccount — no APP_ENV=local fallback).
  */
 class SocialAuthController extends Controller
 {
@@ -46,87 +66,123 @@ class SocialAuthController extends Controller
 
     private const STATE_TTL_MINUTES = 10;
 
+    public const MODULE = 'social_accounts';
+
+    public const CAPABILITY = 'social';
+
+    /** GET /api/social/providers — what this account can connect, and why not. */
+    public function providers(Request $request): JsonResponse
+    {
+        $account = $this->requireTargetAccount($request);
+
+        $providers = array_map(fn (SocialOAuthProviderInterface $driver) => [
+            'key' => $driver->key(),
+            'label' => $driver->label(),
+            'asset_types' => $driver->assetTypes(),
+            'capabilities' => $driver->capabilities(),
+            'configured' => SocialOAuthProviderFactory::configIfReady($driver->key()) !== null,
+            'enabled_for_account' => $driver->isEnabledFor($account),
+        ], SocialOAuthProviderFactory::all());
+
+        return response()->json(['data' => $providers]);
+    }
+
     /** GET /api/social/oauth/{provider}/redirect */
     public function redirect(Request $request, string $provider): JsonResponse
     {
-        $account = $this->requireAccount($request);
+        $account = $this->requireTargetAccount($request);
+        $driver = $this->driverOrFail($provider);
 
-        $this->assertProviderReachableFor($account, $provider);
+        if ($denied = $this->assertTargetMayConnect($account, $driver)) {
+            return $denied;
+        }
 
-        $config = SocialOAuthProviderFactory::configFor($provider);
-        $driver = SocialOAuthProviderFactory::make($provider);
+        try {
+            $config = SocialOAuthProviderFactory::configFor($provider);
+        } catch (RuntimeException $e) {
+            return $this->error($e->getMessage(), 'SOCIAL_PROVIDER_NOT_CONFIGURED', 422);
+        }
 
-        $nonce = (string) Str::uuid();
         $state = Crypt::encryptString(json_encode([
             'account_id' => $account->id,
             'provider' => $provider,
-            'nonce' => $nonce,
+            'user_id' => (int) $request->user()->id,
+            'nonce' => (string) Str::uuid(),
             'exp' => now()->addMinutes(self::STATE_TTL_MINUTES)->timestamp,
         ], JSON_THROW_ON_ERROR));
 
-        return response()->json([
-            'url' => $driver->buildAuthorizationUrl($config, $state),
-            'nonce' => $nonce,
-        ]);
+        return response()->json(['url' => $driver->buildAuthorizationUrl($config, $state)]);
     }
 
     /** GET /api/social/callback/{provider} — public; see class docblock. */
     public function callback(Request $request, string $provider): Response
     {
-        $code = $request->query('code');
-        $stateRaw = $request->query('state');
-        $error = $request->query('error_description', $request->query('error'));
-
-        if ($error) {
-            return $this->popupResponse(['type' => 'social-oauth-error', 'message' => (string) $error]);
+        if (! SocialOAuthProviderFactory::isImplemented($provider)) {
+            return $this->popupResponse(['type' => 'social-oauth-error', 'message' => 'This social provider is not available.']);
         }
 
-        if (! $code || ! $stateRaw) {
-            return $this->popupResponse(['type' => 'social-oauth-error', 'message' => 'Missing authorization code.']);
+        $driver = SocialOAuthProviderFactory::make($provider);
+
+        if ($providerError = $driver->callbackError($request->query())) {
+            return $this->popupResponse([
+                'type' => $providerError['cancelled'] ? 'social-oauth-cancelled' : 'social-oauth-error',
+                'message' => $providerError['message'],
+            ]);
+        }
+
+        $code = $request->query('code');
+        $stateRaw = $request->query('state');
+
+        if (! is_string($code) || $code === '' || ! is_string($stateRaw) || $stateRaw === '') {
+            return $this->popupResponse(['type' => 'social-oauth-error', 'message' => 'The authorization response was incomplete. Please try connecting again.']);
         }
 
         try {
             $state = json_decode(Crypt::decryptString($stateRaw), true, flags: JSON_THROW_ON_ERROR);
         } catch (Throwable) {
-            return $this->popupResponse(['type' => 'social-oauth-error', 'message' => 'Invalid or tampered OAuth state.']);
+            return $this->popupResponse(['type' => 'social-oauth-error', 'message' => 'Invalid or tampered authorization state. Please try connecting again.']);
         }
 
-        if (($state['provider'] ?? null) !== $provider || ($state['exp'] ?? 0) < now()->timestamp) {
+        if (! is_array($state) || ($state['provider'] ?? null) !== $provider || (int) ($state['exp'] ?? 0) < now()->timestamp || empty($state['nonce'])) {
             return $this->popupResponse(['type' => 'social-oauth-error', 'message' => 'This authorization link has expired. Please try connecting again.']);
         }
 
-        $account = Account::findCached((int) $state['account_id']);
-        if (! $account) {
-            return $this->popupResponse(['type' => 'social-oauth-error', 'message' => 'Tenant account no longer exists.']);
+        // Fresh read, not findCached(): the account's current flags decide.
+        $account = Account::query()->find((int) ($state['account_id'] ?? 0));
+
+        if (! $account || ! $driver->isEnabledFor($account)) {
+            return $this->popupResponse(['type' => 'social-oauth-error', 'message' => 'This account can no longer connect this provider.']);
         }
 
         try {
             $config = SocialOAuthProviderFactory::configFor($provider);
-            $driver = SocialOAuthProviderFactory::make($provider);
-
-            $token = $driver->exchangeCodeForToken($config, (string) $code);
-            $assets = $driver->fetchAssets($token['access_token']);
+            $grant = $driver->exchangeCodeForToken($config, $code);
+            $assets = $driver->fetchAssets($grant['access_token']);
         } catch (Throwable $e) {
-            Log::warning('Social OAuth callback failed', ['provider' => $provider, 'error' => $e->getMessage()]);
+            // Provider error texts are logged for the administrator (they carry
+            // no token); the user gets a generic, recoverable message.
+            Log::warning('Social OAuth callback failed.', [
+                'provider' => $provider, 'account_id' => $account->id,
+                'exception' => class_basename($e), 'error' => mb_substr($e->getMessage(), 0, 300),
+            ]);
 
-            return $this->popupResponse(['type' => 'social-oauth-error', 'message' => $e->getMessage()]);
+            return $this->popupResponse(['type' => 'social-oauth-error', 'message' => 'The connection could not be completed. Please try again, or ask a Super Admin to check the provider settings.']);
         }
 
-        // Only present assets this tenant's Super Admin has actually
-        // switched on (Account::hasSocialPlatformEnabled) — defense in
-        // depth on top of the provider-level check in redirect().
+        // Only asset types this driver binds AND this tenant's Super Admin enabled.
         $bindableAssets = array_values(array_filter(
             $assets,
-            fn (array $asset) => $account->hasSocialPlatformEnabled($asset['asset_type'])
+            fn (array $asset) => in_array($asset['asset_type'] ?? null, $driver->assetTypes(), true) && $account->hasSocialPlatformEnabled($asset['asset_type'])
         ));
 
         $nonce = (string) $state['nonce'];
         Cache::put("social_oauth_pending:{$nonce}", [
             'account_id' => $account->id,
+            'user_id' => (int) ($state['user_id'] ?? 0),
             'provider' => $provider,
-            'access_token' => $token['access_token'],
-            'refresh_token' => $token['refresh_token'],
-            'expires_in' => $token['expires_in'],
+            'access_token' => $grant['access_token'],
+            'refresh_token' => $grant['refresh_token'],
+            'expires_in' => $grant['expires_in'],
             'assets' => $bindableAssets,
         ], now()->addMinutes(self::STATE_TTL_MINUTES));
 
@@ -134,31 +190,39 @@ class SocialAuthController extends Controller
             'type' => 'social-oauth-success',
             'provider' => $provider,
             'nonce' => $nonce,
-            'assets' => $bindableAssets,
+            'assets' => array_map(fn (array $a) => array_intersect_key($a, array_flip(['asset_type', 'provider_id', 'name', 'avatar_url'])), $bindableAssets),
         ]);
     }
 
     /** POST /api/social/accounts/bind */
     public function bind(Request $request): JsonResponse
     {
-        $account = $this->requireAccount($request);
+        $account = $this->requireTargetAccount($request);
 
         $data = $request->validate([
-            'nonce' => ['required', 'string'],
+            'nonce' => ['required', 'string', 'max:64'],
             'selections' => ['required', 'array', 'min:1'],
             'selections.*.asset_type' => ['required', 'string', 'in:'.implode(',', SocialAccount::ASSET_TYPES)],
-            'selections.*.provider_id' => ['required', 'string'],
+            'selections.*.provider_id' => ['required', 'string', 'max:191'],
         ]);
 
         $cacheKey = "social_oauth_pending:{$data['nonce']}";
         $pending = Cache::get($cacheKey);
 
-        if (! $pending || (int) $pending['account_id'] !== $account->id) {
+        // The grant is redeemable only by the account AND the user that started it.
+        if (! is_array($pending) || (int) $pending['account_id'] !== (int) $account->id || (int) ($pending['user_id'] ?? 0) !== (int) $request->user()->id) {
             throw ValidationException::withMessages([
-                'nonce' => 'This connection attempt has expired or does not belong to your account. Please reconnect.',
+                'nonce' => 'This connection attempt has expired or does not belong to you. Please connect again.',
             ]);
         }
 
+        $driver = $this->driverOrFail((string) $pending['provider']);
+
+        if ($denied = $this->assertTargetMayConnect($account, $driver)) {
+            return $denied;
+        }
+
+        $grant = ['access_token' => $pending['access_token'], 'refresh_token' => $pending['refresh_token'], 'expires_in' => $pending['expires_in']];
         $bound = [];
 
         foreach ($data['selections'] as $selection) {
@@ -174,51 +238,26 @@ class SocialAuthController extends Controller
 
             if (! $offered) {
                 throw ValidationException::withMessages([
-                    'selections' => 'One of the selected assets was not part of the original authorization — please reconnect.',
+                    'selections' => 'One of the selected assets was not part of the original authorization — please connect again.',
                 ]);
             }
 
-            // Social Media Marketing & Meta Ads Automation Expansion —
-            // Phase 2: a Facebook Page asset gets its OWN long-lived Page
-            // Access Token (distinct from, and longer-lived than, the
-            // User Access Token everything else in this loop stores) —
-            // see MetaOAuthProvider::exchangePageAccessToken()'s
-            // docblock. Falls back to the user token, logged, rather than
-            // failing the whole bind() call over one Page's exchange —
-            // Instagram/Ad Account rows in the same request must still
-            // bind successfully.
-            $accessToken = $pending['access_token'];
-
-            if ($pending['provider'] === 'meta' && $offered['asset_type'] === 'facebook_page') {
-                $pageAccessToken = app(MetaOAuthProvider::class)->exchangePageAccessToken(
-                    $pending['access_token'],
-                    $offered['provider_id']
-                );
-
-                if ($pageAccessToken) {
-                    $accessToken = $pageAccessToken;
-                } else {
-                    Log::warning('Meta Page Access Token exchange failed; falling back to the User Access Token.', [
-                        'account_id' => $account->id,
-                        'page_id' => $offered['provider_id'],
-                    ]);
-                }
-            }
+            $credentials = $driver->credentialsForAsset($grant, $offered);
 
             $socialAccount = SocialAccount::updateOrCreate(
-                [
-                    'account_id' => $account->id,
-                    'provider' => $pending['provider'],
-                    'provider_id' => $offered['provider_id'],
-                ],
+                ['account_id' => $account->id, 'provider' => $driver->key(), 'provider_id' => $offered['provider_id']],
                 [
                     'asset_type' => $offered['asset_type'],
                     'name' => $offered['name'],
                     'avatar_url' => $offered['avatar_url'],
-                    'access_token' => $accessToken,
-                    'refresh_token' => $pending['refresh_token'],
-                    'token_expires_at' => $pending['expires_in'] ? now()->addSeconds((int) $pending['expires_in']) : null,
+                    'access_token' => $credentials['access_token'],
+                    'refresh_token' => $credentials['refresh_token'],
+                    'token_expires_at' => $credentials['expires_at'],
                     'health_status' => SocialAccount::HEALTH_CONNECTED,
+                    'status_reason' => null,
+                    'status_checked_at' => now(),
+                    'connected_by_user_id' => (int) $request->user()->id,
+                    'metadata' => is_array($offered['metadata'] ?? null) ? $offered['metadata'] : null,
                 ]
             );
 
@@ -233,41 +272,103 @@ class SocialAuthController extends Controller
     /** GET /api/social/accounts */
     public function index(Request $request): JsonResponse
     {
-        $account = $this->requireAccount($request);
+        $account = $this->requireTargetAccount($request);
 
         $accounts = SocialAccount::query()->forAccount($account->id)->latest()->get();
 
         return response()->json(['data' => $accounts->map(fn (SocialAccount $a) => $this->present($a))]);
     }
 
+    /** POST /api/social/accounts/{id}/check — ask the provider whether the connection still works. */
+    public function check(Request $request, int $id): JsonResponse
+    {
+        $account = $this->requireTargetAccount($request);
+        $socialAccount = SocialAccount::query()->forAccount($account->id)->findOrFail($id);
+
+        if (! SocialOAuthProviderFactory::isImplemented($socialAccount->provider)) {
+            return $this->error('This provider can no longer be checked.', 'SOCIAL_PROVIDER_UNAVAILABLE', 422);
+        }
+
+        // Phase 9 Task 2 — the same check + persistence the scheduled health
+        // check uses (SocialConnectionService): an unreachable provider keeps
+        // the stored state, a token past its expiry is marked expired without
+        // a provider call, and a check of credentials replaced meanwhile is dropped.
+        $result = app(SocialConnectionService::class)->check($socialAccount, 'manual');
+
+        return response()->json([
+            'data' => $this->present($socialAccount->fresh()),
+            'check' => ['status' => $result->status, 'reason' => $result->reason],
+        ]);
+    }
+
     /** DELETE /api/social/accounts/{id} */
     public function destroy(Request $request, int $id): JsonResponse
     {
-        $account = $this->requireAccount($request);
+        $account = $this->requireTargetAccount($request);
 
         $socialAccount = SocialAccount::query()->forAccount($account->id)->findOrFail($id);
+
+        $revoked = SocialOAuthProviderFactory::isImplemented($socialAccount->provider)
+            && SocialOAuthProviderFactory::make($socialAccount->provider)->revoke($socialAccount);
+
+        // Deleting the row removes its encrypted credentials; records that
+        // referenced it (leads, posts, campaigns) keep their data (nullOnDelete).
         $socialAccount->delete();
 
-        return response()->json(['message' => 'Disconnected.']);
+        return response()->json(['message' => 'Disconnected.', 'revoked_at_provider' => $revoked]);
     }
 
-    private function assertProviderReachableFor(Account $account, string $provider): void
+    private function driverOrFail(string $provider): SocialOAuthProviderInterface
     {
-        $enabled = match ($provider) {
-            'meta' => $account->allow_facebook || $account->allow_instagram,
-            'linkedin' => $account->allow_linkedin,
-            'google' => $account->allow_youtube,
-            default => false,
-        };
+        if (! SocialOAuthProviderFactory::isImplemented($provider)) {
+            abort(response()->json([
+                'success' => false,
+                'message' => 'This social provider is not available.',
+                'error_code' => 'SOCIAL_PROVIDER_UNAVAILABLE',
+            ], 404));
+        }
 
-        abort_unless($enabled, 403, 'This account is not permitted to connect a '.ucfirst($provider).' account. Ask a Super Admin to enable it.');
+        return SocialOAuthProviderFactory::make($provider);
     }
 
     /**
-     * @return array<string, mixed>
+     * The TARGET account itself may connect (see the class docblock): the
+     * route guards check the caller's own subscription and bypass a Super
+     * Admin, so a Super Admin's selected client or an Agent's sub-client is
+     * checked here, fresh from the database.
+     */
+    private function assertTargetMayConnect(Account $account, SocialOAuthProviderInterface $driver): ?JsonResponse
+    {
+        // Phase 9 Task 3 — the target checks now live in SocialTargetGate
+        // (shared with organic publishing); same order, codes and messages.
+        if ($denial = app(SocialTargetGate::class)->denial($account, 'connect social accounts')) {
+            $message = match ($denial['code']) {
+                'CLIENT_ACCOUNT_SUSPENDED' => 'This account is suspended. Social accounts cannot be connected.',
+                default => $denial['message'],
+            };
+
+            return $this->error($message, $denial['code'], 403);
+        }
+
+        return $driver->isEnabledFor($account)
+            ? null
+            : $this->error('This account is not permitted to connect '.$driver->label().'. Ask a Super Admin to enable it.', 'SOCIAL_PROVIDER_NOT_ENABLED', 403);
+    }
+
+    private function error(string $message, string $code, int $status): JsonResponse
+    {
+        return response()->json(['success' => false, 'message' => $message, 'error_code' => $code], $status);
+    }
+
+    /**
+     * @return array<string, mixed> the API view — never a token or a refresh token
      */
     private function present(SocialAccount $socialAccount): array
     {
+        $capabilities = SocialOAuthProviderFactory::isImplemented($socialAccount->provider)
+            ? (SocialOAuthProviderFactory::make($socialAccount->provider)->capabilities()[$socialAccount->asset_type] ?? [])
+            : [];
+
         return [
             'id' => $socialAccount->id,
             'provider' => $socialAccount->provider,
@@ -276,34 +377,33 @@ class SocialAuthController extends Controller
             'name' => $socialAccount->name,
             'avatar_url' => $socialAccount->avatar_url,
             'health_status' => $socialAccount->health_status,
+            'connection_status' => $socialAccount->connectionStatus(),
+            'status_reason' => $socialAccount->status_reason,
+            'status_checked_at' => $socialAccount->status_checked_at?->toIso8601String(),
             'token_expires_at' => $socialAccount->token_expires_at?->toIso8601String(),
+            'capabilities' => $capabilities,
             'created_at' => $socialAccount->created_at?->toIso8601String(),
         ];
     }
 
     /**
-     * A tiny static HTML page (not JSON — this response is loaded directly
-     * by the OAuth popup window, not fetched by axios) that hands the
-     * result back to the SPA via postMessage and closes itself. targetOrigin
-     * is locked to this request's own scheme+host, i.e. wherever
-     * backend-api itself is served from — frontend-app must be configured
-     * to listen for messages from that origin (see socialService.ts).
+     * A tiny static HTML page (loaded by the popup itself) that hands the
+     * result to the SPA via postMessage and closes. The target origin is the
+     * configured SPA origin (services.frontend.url / FRONTEND_URL). Phase 9
+     * Task 1: the '*' fallback is limited to local/testing — elsewhere an
+     * unset FRONTEND_URL withholds the payload (logged), because '*' would
+     * hand the one-time nonce to whichever page opened the popup.
      */
     private function popupResponse(array $payload): Response
     {
-        $json = json_encode($payload, JSON_THROW_ON_ERROR | JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP);
+        $targetOrigin = config('services.frontend.url') ?: (app()->environment('local', 'testing') ? '*' : null);
 
-        // Locked to the configured SPA origin (config/services.php ->
-        // services.frontend.url, set via FRONTEND_URL in .env) so a
-        // malicious page cannot receive this payload merely by being the
-        // one that happened to open the popup. Falls back to '*' only
-        // when FRONTEND_URL is unset, so local/dev setups that never
-        // configured it don't silently break the whole connect flow —
-        // the compensating control either way is that `nonce` is
-        // single-use and re-validated against the authenticated caller's
-        // own account_id in bind(), so a leaked nonce alone cannot bind
-        // an asset to a different tenant.
-        $targetOrigin = config('services.frontend.url') ?: '*';
+        if ($targetOrigin === null) {
+            Log::error('Social OAuth popup: FRONTEND_URL is not configured, so the result cannot be returned to the app safely.');
+            $payload = ['type' => 'social-oauth-error', 'message' => 'The platform is not configured to finish social connections (missing frontend URL). Please contact support.'];
+        }
+
+        $json = json_encode($payload, JSON_THROW_ON_ERROR | JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP);
         $targetOriginJson = json_encode($targetOrigin, JSON_THROW_ON_ERROR);
 
         $html = <<<HTML
@@ -315,7 +415,7 @@ class SocialAuthController extends Controller
   (function () {
     var payload = {$json};
     var targetOrigin = {$targetOriginJson};
-    if (window.opener) {
+    if (window.opener && targetOrigin) {
       window.opener.postMessage(payload, targetOrigin);
     }
     window.close();
@@ -324,6 +424,9 @@ class SocialAuthController extends Controller
 </body></html>
 HTML;
 
-        return response($html, 200)->header('Content-Type', 'text/html');
+        return response($html, 200)
+            ->header('Content-Type', 'text/html')
+            ->header('Cache-Control', 'no-store')
+            ->header('Referrer-Policy', 'no-referrer');
     }
 }

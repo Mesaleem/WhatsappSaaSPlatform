@@ -74,6 +74,8 @@ const SOURCE_LABEL: Record<MessageDispatchSource, string> = {
   api: 'API',
   chatbot: 'Chatbot',
   journey: 'Journey',
+  social_inbox: 'Social Inbox',
+  meta_lead_ads: 'Lead Ads',
 };
 
 function extractMessage(err: unknown, fallback: string): string {

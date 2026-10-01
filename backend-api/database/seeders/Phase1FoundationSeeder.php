@@ -11,9 +11,24 @@ use Illuminate\Support\Facades\Schema;
 
 /**
  * Phase 1 Foundation — seeds the Capability/Provider/ProviderCapability/
- * Plan/PlanEntitlement tables. Idempotent (updateOrCreate throughout,
- * matching RolePermissionSeeder's own firstOrCreate convention) — safe
- * to re-run.
+ * Plan/PlanEntitlement tables. Idempotent and safe to re-run.
+ *
+ * Phase 5 fix P5-10 — PLANS ARE INSERT-ONLY. A plan (and its capability
+ * bundle in plan_entitlements) is written only when its slug does not
+ * exist yet. An existing plan is never touched: not its price, quota,
+ * duration, billing model, rate, engine, label, description, AI-credit
+ * allowance or is_active, and not its capability rows — a capability a
+ * Super Admin removed through plan management is NOT re-attached, and a
+ * pivot value they changed is NOT reset. Plans are admin-managed
+ * (PlanManagementService); this seeder only supplies defaults for missing
+ * ones. (It used updateOrCreate + syncWithoutDetaching, which reset every
+ * commercial field and re-added removed capabilities on each run.)
+ *
+ * Unchanged by P5-10, deliberately: the capability, provider and
+ * provider_capabilities catalog rows are still upserted. They are
+ * code-owned (no admin write path exists in app/), and seeded corrections
+ * to provider support (e.g. qr → crm) reach existing installs through a
+ * re-seed.
  *
  * Plan rows are value-identical to App\Support\PlanCatalog::PLANS,
  * which is NOT removed or modified by this seeder — the live checkout
@@ -222,17 +237,16 @@ class Phase1FoundationSeeder extends Seeder
 
         foreach (self::PLANS as $slug => $attrs) {
             /*
-             * Phase 5 Task 11 — the seeder now writes the billing
-             * dimensions too, because `plans` became the runtime source
-             * of truth for checkout. Still value-identical to
-             * PlanCatalog, so re-seeding an existing environment cannot
-             * change any plan's price, engine or quota.
+             * Phase 5 fix P5-10 — missing → create, existing → preserve.
+             * firstOrCreate, never updateOrCreate: the attribute array is
+             * used ONLY for a plan that does not exist yet. An existing plan
+             * keeps every commercial field exactly as an administrator (or an
+             * earlier seed) left it.
              *
-             * is_active is NOT written here on purpose: it defaults true
-             * on insert, and re-seeding must never silently re-activate
-             * a plan a Super Admin deliberately retired.
+             * is_active is not written: it defaults true on insert, and an
+             * existing plan's retirement is part of what is preserved.
              */
-            $plan = Plan::updateOrCreate(['slug' => $slug], [
+            $plan = Plan::firstOrCreate(['slug' => $slug], [
                 'label' => $attrs['label'],
                 'price' => $attrs['price'],
                 'duration_days' => $attrs['duration_days'],
@@ -243,40 +257,35 @@ class Phase1FoundationSeeder extends Seeder
                 'total_allocated_messages' => $attrs['total_allocated_messages'],
             ]);
 
+            if (! $plan->wasRecentlyCreated) {
+                // Existing plan: nothing below runs — its capability bundle
+                // (including removals and pivot values) is admin-managed.
+                continue;
+            }
+
             /*
              * Phase 8 Task 2 — the plan's AI-credit allowance per purchased
-             * period. Owner decision: 0 for every existing plan (Starter does
-             * not even sell `ai`). Written ONLY when the plan row is created
-             * here: a value a Super Admin later sets through plan management
-             * is an explicit product decision that re-seeding must not reset.
-             * Existing rows already hold an explicit 0 from the migration's
-             * NOT NULL DEFAULT 0. (Guarded so the seeder still runs against a
-             * database the Phase 8 migration has not reached yet.)
+             * period. Owner decision: 0 for every seeded plan. (Guarded so the
+             * seeder still runs against a database the Phase 8 migration has
+             * not reached yet.)
              */
-            if ($plan->wasRecentlyCreated && Schema::hasColumn('plans', 'included_credits')) {
+            if (Schema::hasColumn('plans', 'included_credits')) {
                 $plan->forceFill(['included_credits' => $attrs['included_credits']])->save();
             }
 
             /*
              * The plan's message quota rides on its own capability row's
-             * usage_limit, exactly as before — unchanged, and the reason
-             * whatsapp_send is written separately from the bundle below.
-             * Pricing, quota and engine_type are NOT touched by Task 9.
+             * usage_limit, written separately from the bundle below.
              */
-            $plan->capabilities()->syncWithoutDetaching([
-                $capabilities[$attrs['capability']]->id => ['usage_limit' => $attrs['usage_limit']],
-            ]);
+            $plan->capabilities()->attach($capabilities[$attrs['capability']]->id, ['usage_limit' => $attrs['usage_limit']]);
 
             /*
-             * Phase 5 Task 9 — the confirmed bundle.
-             * syncWithoutDetaching, never sync(): it adds what is missing
-             * and leaves everything else alone, so re-running this seeder
-             * cannot duplicate a row (unique(plan_id, capability_id) backs
-             * that up) and cannot silently drop a capability some other
-             * process attached. usage_limit is left NULL for these —
-             * "unbounded / not applicable", per the plan_entitlements
-             * migration — since the only metered capability today is
-             * whatsapp_send, already written above.
+             * Phase 5 Task 9 — the confirmed bundle, for a NEWLY created plan
+             * only. usage_limit is NULL for these ("unbounded / not
+             * applicable", per the plan_entitlements migration) since the only
+             * metered capability today is whatsapp_send, written above. A new
+             * plan has no rows, so attach() cannot duplicate
+             * (unique(plan_id, capability_id) backs that up).
              */
             $bundle = collect(self::PLAN_CAPABILITIES[$slug] ?? [])
                 ->reject(fn (string $capabilitySlug) => $capabilitySlug === $attrs['capability'])
@@ -284,7 +293,7 @@ class Phase1FoundationSeeder extends Seeder
                 ->all();
 
             if ($bundle !== []) {
-                $plan->capabilities()->syncWithoutDetaching($bundle);
+                $plan->capabilities()->attach($bundle);
             }
         }
     }

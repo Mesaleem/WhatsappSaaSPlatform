@@ -14,7 +14,9 @@ use Illuminate\Database\Eloquent\Model;
  *   session_started      a run began (source inbound|test); inbound_event_id set for inbound
  *   session_resumed      the scheduler claimed a due session (attempt = claim number;
  *                        result delay_due|retry)
- *   session_waiting      parked on a delay (scheduled_for = when it is due)
+ *   session_waiting      parked on a delay (scheduled_for = when it is due); Phase 8 Task 7:
+ *                        result ai_queued = an AI node handed from the immediate path to the
+ *                        journeys worker (due at once)
  *   session_blocked      entitlement/module lost; state kept (error_category entitlement_blocked)
  *   session_restored     entitlement back; blocked → waiting/active (result = the status)
  *   session_completed    valid end (node = where it ended)
@@ -22,7 +24,7 @@ use Illuminate\Database\Eloquent\Model;
  *   session_failed       terminal failure, always with error_category + message
  *   session_cancelled    cancelled by an operator
  *   node_started         a node with a side effect (a send or a lead write) is about to run
- *   node_succeeded       a node finished (result: sent|prompted|saved|next:<node>|dead_end)
+ *   node_succeeded       a node finished (result: sent|prompted|saved|next:<node>|dead_end|ai_response|rag_no_context)
  *   node_failed          a node failed (error_category, attempt)
  *   node_retry_scheduled a failed node will be retried (attempt, scheduled_for)
  *   reply_received       a reply reached a question (result answered|invalid)

@@ -73,3 +73,56 @@ Schedule::command('group-dispatch:recover-stale')
 Schedule::command('credits:release-expired-reservations')
     ->everyFiveMinutes()
     ->withoutOverlapping();
+
+// Phase 8 Task 5 — completes AI usage charges whose ledger write failed
+// in-line, and releases the credit holds of failed / abandoned AI
+// operations. Idempotent (CreditService consume/release keys + conditional
+// status updates); same `schedule:run` cron assumption as above.
+Schedule::command('ai:settle-operations')
+    ->everyFiveMinutes()
+    ->withoutOverlapping();
+
+// Phase 8 Task 9 — knowledge-base document processing. Jobs are queued on
+// database:knowledge by KnowledgeBaseService; the worker below drains them
+// (same external `schedule:run` cron assumption as every entry above), and
+// knowledge:recover-documents re-dispatches a lost job or a document whose
+// worker died. Every job claims its document row atomically.
+Schedule::command('queue:work database --queue=knowledge --stop-when-empty --max-time=55')
+    ->everyMinute()
+    ->withoutOverlapping();
+
+Schedule::command('knowledge:recover-documents')
+    ->everyFiveMinutes()
+    ->withoutOverlapping();
+
+// Phase 9 Task 2 — social connection health. social:check-connections
+// claims every connected social account whose last check attempt AND last
+// confirmed status are older than SOCIAL_CONNECTION_CHECK_INTERVAL_MINUTES
+// (default 60) and queues one CheckSocialConnectionJob each on
+// database:social; the worker below drains it (same external
+// `schedule:run` cron assumption as every entry above). Each row is
+// claimed with a conditional UPDATE, so running every 15 minutes, an
+// overlapping tick or several servers never check a connection twice
+// within the interval.
+Schedule::command('social:check-connections')
+    ->everyFifteenMinutes()
+    ->withoutOverlapping();
+
+// Phase 9 Task 3 — scheduled organic publishing. social:publish-due claims
+// due `scheduled` organic posts (one conditional UPDATE each, so a post is
+// sent by at most one worker) and queues PublishScheduledPostJob on
+// database:social, drained by the worker below.
+Schedule::command('social:publish-due')
+    ->everyMinute()
+    ->withoutOverlapping();
+
+// Phase 9 Task 4 — organic post insights. social:refresh-insights queues
+// RefreshPostInsightsJob (database:social) for published posts whose stored
+// snapshot is missing or due; pages only read the stored snapshot.
+Schedule::command('social:refresh-insights')
+    ->everyThirtyMinutes()
+    ->withoutOverlapping();
+
+Schedule::command('queue:work database --queue=social --stop-when-empty --max-time=55')
+    ->everyMinute()
+    ->withoutOverlapping();

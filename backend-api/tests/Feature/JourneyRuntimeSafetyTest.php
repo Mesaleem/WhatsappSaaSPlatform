@@ -210,15 +210,16 @@ class JourneyRuntimeSafetyTest extends TestCase
     public function test_the_runtime_executable_list_is_exact_and_every_other_palette_node_is_unsupported(): void
     {
         $this->assertSame(
-            ['trigger', 'message', 'question', 'condition', 'save_lead', 'delay', 'conditional', 'text', 'image', 'video', 'document', 'audio'],
+            ['trigger', 'message', 'question', 'condition', 'save_lead', 'delay', 'conditional', 'text', 'image', 'video', 'document', 'audio', 'prompt', 'agent', 'rag'],
             JourneyNodeCatalog::RUNTIME_EXECUTABLE_TYPES
         );
 
+        // Phase 8 Task 7: prompt + agent became executable (metered AI); Task 10: rag.
         $unsupported = array_values(array_diff(WhatsAppFlow::NODE_TYPES, JourneyNodeCatalog::RUNTIME_EXECUTABLE_TYPES));
-        $this->assertCount(20, $unsupported);
+        $this->assertCount(17, $unsupported);
         $this->assertSame([], array_diff(JourneyNodeCatalog::RUNTIME_EXECUTABLE_TYPES, WhatsAppFlow::NODE_TYPES));
 
-        foreach (['api', 'payment', 'email', 'code', 'agent', 'rag', 'flow', 'catalog', 'product', 'template', 'journey', 'human_intervention', 'prompt', 'sticker', 'list', 'external_url', 'reply_button', 'location', 'location_request', 'address_request'] as $type) {
+        foreach (['api', 'payment', 'email', 'code', 'flow', 'catalog', 'product', 'template', 'journey', 'human_intervention', 'sticker', 'list', 'external_url', 'reply_button', 'location', 'location_request', 'address_request'] as $type) {
             $this->assertFalse(JourneyNodeCatalog::isRuntimeExecutable($type), $type);
         }
     }

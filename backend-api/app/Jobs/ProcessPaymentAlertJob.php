@@ -7,8 +7,10 @@ use App\Models\MessageDispatchLog;
 use App\Models\PaymentAlert;
 use App\Services\WhatsApp\WhatsAppEngineFactory;
 use App\Services\Webhooks\WebhookDispatcher;
+use App\Support\OutboundPacing;
 use App\Support\PhoneNumberNormalizer;
 use App\Services\Messaging\MessageQuotaService;
+use App\Support\QueueDelay;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -53,6 +55,25 @@ class ProcessPaymentAlertJob implements ShouldQueue
         public readonly string $source = 'web_ui',
         public readonly ?int $apiKeyId = null,
     ) {
+    }
+
+    /**
+     * Phase 5 fix P5-9 — queue this alert behind the anti-ban jitter instead
+     * of sleeping inside handle(). $afterSeconds is the delay the caller
+     * already accumulated (a CSV bulk upload spaces consecutive alerts by
+     * passing the running total); null = a single alert, jittered alone.
+     * Returns the delay used, so a bulk caller can keep accumulating.
+     */
+    public static function dispatchPaced(int $paymentAlertId, string $source = 'web_ui', ?int $apiKeyId = null, ?int $afterSeconds = null): int
+    {
+        $delay = $afterSeconds ?? OutboundPacing::delaySeconds();
+        $pending = static::dispatch($paymentAlertId, $source, $apiKeyId);
+
+        if ($delay > 0) {
+            $pending->delay(QueueDelay::after($delay));
+        }
+
+        return $delay;
     }
 
     public function handle(): void
@@ -116,12 +137,11 @@ class ProcessPaymentAlertJob implements ShouldQueue
 
         // Anti-ban jitter: WhatsApp (especially the unofficial Baileys/'qr'
         // engine) flags accounts that send in a mechanical, fixed cadence.
-        // This intentionally blocks THIS job's worker slot for the delay —
-        // it is not a queue re-release. Deploy multiple queue workers
-        // (`php artisan queue:work --queue=default -q &` x N, or Horizon)
-        // if alert throughput needs to stay high under this delay; a single
-        // worker processes at most one alert per ~3-8s by design.
-        sleep(random_int(3, 8));
+        // Phase 5 fix P5-9 — this used to be sleep(random_int(3, 8)) right
+        // here, holding the worker (or, on the `sync` queue, the tenant's
+        // HTTP request). The same 3-8 s jitter is now the queue delay this
+        // job is dispatched with (ProcessPaymentAlertJob::dispatchPaced()),
+        // so no worker slot is held while waiting.
 
         try {
             $driver = WhatsAppEngineFactory::make($account);

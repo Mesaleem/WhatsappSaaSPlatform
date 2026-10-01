@@ -73,7 +73,8 @@ class PaymentAlertDispatcher
             throw $e;
         }
 
-        ProcessPaymentAlertJob::dispatch($alert->id, $source, $apiKeyId);
+        // Phase 5 fix P5-9 — the anti-ban jitter is a queue delay now (was a sleep() in the job).
+        ProcessPaymentAlertJob::dispatchPaced($alert->id, $source, $apiKeyId);
 
         return ['status' => 'queued', 'alert' => $alert];
     }
