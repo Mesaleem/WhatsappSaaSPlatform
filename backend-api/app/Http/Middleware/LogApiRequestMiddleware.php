@@ -49,7 +49,10 @@ class LogApiRequestMiddleware
         // otherwise mint one. No existing request/correlation-id
         // generator was found anywhere in this codebase (this task's own
         // audit report), so this is the smallest addition covering it.
-        $requestId = (string) ($request->header('X-Request-Id') ?: Str::uuid());
+        // Phase 12 Task 3: AssignRequestId (global) has already validated/generated the id for every /api request;
+        // it is reused here so the api_request_logs row, the response header and the log context agree. The
+        // fallback keeps this middleware self-sufficient if it is ever run without the global one.
+        $requestId = (string) ($request->attributes->get('request_id') ?: $request->header('X-Request-Id') ?: Str::uuid());
         $request->attributes->set('request_id', $requestId);
 
         $startedAt = microtime(true);

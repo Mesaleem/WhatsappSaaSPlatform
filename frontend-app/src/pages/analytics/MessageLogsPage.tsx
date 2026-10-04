@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AxiosError } from 'axios';
-import { ClipboardList, RefreshCw, Users } from 'lucide-react';
+import { ClipboardList, Eye, RefreshCw, Users } from 'lucide-react';
 import messageLogsService from '../../services/messageLogsService';
 import type {
   MessageDispatchLog,
@@ -15,6 +15,7 @@ import { TableCard } from '../../components/common/Card';
 import { ClearFiltersButton, Pagination, SearchInput, StatusFilterSelect } from '../../components/common/DataTableControls';
 import { TableSkeletonRows } from '../../components/common/Skeleton';
 import DismissibleAlert from '../../components/common/DismissibleAlert';
+import MessageLogDetailModal from '../../components/messageLogs/MessageLogDetailModal';
 
 /** Same pattern as AuditLogsPage.tsx's extractMessage() — surfaces the backend's real error (e.g. a missing-table 500 before the message_dispatch_logs migration has run) instead of a fixed generic string. */
 function extractMessage(err: unknown, fallback: string): string {
@@ -100,6 +101,7 @@ export default function MessageLogsPage() {
   const [to, setTo] = useState('');
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [viewingId, setViewingId] = useState<number | null>(null);
 
   const filters: MessageDispatchLogFilters = useMemo(
     () => ({ search, status, source, recipient_type: recipientType, from, to }),
@@ -217,14 +219,15 @@ export default function MessageLogsPage() {
               <th className="px-4 py-3">Media Attachment</th>
               <th className="px-4 py-3">Status</th>
               <th className="px-4 py-3">Timestamp</th>
+              <th className="px-4 py-3 text-right">Action</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
             {isLoading ? (
-              <TableSkeletonRows columns={showClientColumn ? 7 : 6} />
+              <TableSkeletonRows columns={showClientColumn ? 8 : 7} />
             ) : logs.length === 0 ? (
               <tr>
-                <td colSpan={showClientColumn ? 7 : 6} className="px-4 py-10 text-center text-slate-400">
+                <td colSpan={showClientColumn ? 8 : 7} className="px-4 py-10 text-center text-slate-400">
                   No message dispatch attempts recorded for these filters.
                 </td>
               </tr>
@@ -272,6 +275,17 @@ export default function MessageLogsPage() {
                     </span>
                   </td>
                   <td className="px-4 py-3 text-slate-600">{formatDateTime(log.created_at)}</td>
+                  <td className="px-4 py-3 text-right">
+                    <button
+                      type="button"
+                      onClick={() => setViewingId(log.id)}
+                      aria-label={`View message ${log.id}`}
+                      className="inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                    >
+                      <Eye className="h-3.5 w-3.5" />
+                      View
+                    </button>
+                  </td>
                 </tr>
               ))
             )}
@@ -286,6 +300,7 @@ export default function MessageLogsPage() {
           onPerPageChange={(pp) => setPerPage(pp)}
         />
       </TableCard>
+      {viewingId !== null && <MessageLogDetailModal logId={viewingId} onClose={() => setViewingId(null)} />}
     </PageShell>
   );
 }

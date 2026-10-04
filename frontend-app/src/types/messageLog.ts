@@ -85,3 +85,21 @@ export interface MessageDispatchLogFilters {
   from?: string;
   to?: string;
 }
+
+/** One row's complete record — GET /api/message-logs/{id}. `message_body` is the full text the send actually carried. */
+export interface MessageDispatchLogDetail extends Omit<MessageDispatchLog, 'api_key_id'> {
+  /** Full resolved message (variables already substituted). Falls back to the preview for rows logged before the full text was kept. */
+  message_body: string | null;
+  /** false => message_body is only the legacy 160-character preview. */
+  message_body_is_complete: boolean;
+  template_code: string | null;
+  gateway_message_id: string | null;
+  engine_type: string | null;
+  api_key: { name: string; key_prefix: string } | null;
+  media: { has_media: boolean; name: string | null; type: string | null; url: string | null };
+}
+
+export interface MessageDispatchLogDetailResponse {
+  data: MessageDispatchLogDetail;
+  scope: 'account' | 'global';
+}

@@ -15,6 +15,12 @@ class AppServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
+        // Phase 12 Task 3 (redaction fix) — every log channel redacts before writing (see RedactingLogManager).
+        $this->app->singleton('log', fn ($app) => new \App\Logging\RedactingLogManager($app));
+        $this->app->scoped(\App\Support\Observability\WebhookTally::class);
+        // Phase 12 Task 2 — host-name resolution for the outbound SSRF guard (a seam so tests never use real DNS).
+        $this->app->bind(\App\Support\Security\HostResolver::class, \App\Support\Security\DnsHostResolver::class);
+
         // Phase 8 AI foundation — one AiManager per container, so providers
         // registered with extend() and resolved instances persist.
         $this->app->singleton(\App\Services\Ai\AiManager::class);
@@ -38,6 +44,15 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
+        // Phase 12 Task 3 — observability baseline (operational logs only; see config/observability.php).
+        // Sanctum announces the resolved token owner: record ids (never attributes) in the log context.
+        \Illuminate\Support\Facades\Event::listen(
+            \Laravel\Sanctum\Events\TokenAuthenticated::class,
+            [\App\Support\Observability\CorrelationContext::class, 'onTokenAuthenticated'],
+        );
+        \App\Support\Observability\JobLogging::register();
+        \App\Support\Observability\SlowQueryLogger::register();
+
         /**
          * Module 9 — "Enforce rate limiting based on the tenant account's
          * rate limit setting" (spec, requirement 1). Applied to the
@@ -96,5 +111,8 @@ class AppServiceProvider extends ServiceProvider
                     'message' => 'Too many requests.',
                 ], 429));
         });
+
+        // Phase 12 Task 2 (H1) — login throttling; applied only to POST /api/auth/login.
+        RateLimiter::for(\App\Support\Security\LoginThrottle::NAME, fn (Request $request) => \App\Support\Security\LoginThrottle::limits($request));
     }
 }

@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use App\Traits\LogsActivity;
 
 class ApiKey extends Model
@@ -28,6 +29,8 @@ class ApiKey extends Model
         'last_used_at',
         'expires_at',
         'revoked_at',
+        'access_disabled_at',
+        'access_disabled_reason',
     ];
 
     /**
@@ -46,12 +49,29 @@ class ApiKey extends Model
             'last_used_at' => 'datetime',
             'expires_at' => 'datetime',
             'revoked_at' => 'datetime',
+            'access_disabled_at' => 'datetime',
         ];
     }
 
     public function account(): BelongsTo
     {
         return $this->belongsTo(Account::class);
+    }
+
+    public function bindings(): HasMany
+    {
+        return $this->hasMany(ApiKeyBinding::class);
+    }
+
+    /** The pending/active authorized server, if any (at most one - enforced by a unique slot). */
+    public function liveBinding(): ?ApiKeyBinding
+    {
+        return $this->bindings()->whereIn('status', [ApiKeyBinding::STATUS_PENDING, ApiKeyBinding::STATUS_ACTIVE])->first();
+    }
+
+    public function isAccessDisabled(): bool
+    {
+        return $this->access_disabled_at !== null;
     }
 
     public function scopeForAccount(Builder $query, int $accountId): Builder

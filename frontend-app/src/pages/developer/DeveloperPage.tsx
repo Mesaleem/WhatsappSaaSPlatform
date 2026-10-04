@@ -34,6 +34,13 @@ import { ClearFiltersButton, Pagination, SearchInput, StatusFilterSelect } from 
 import { TableSkeletonRows } from '../../components/common/Skeleton';
 import { describeApiError, extractErrorMessage as extractMessage } from '../../utils/apiError';
 import DismissibleAlert from '../../components/common/DismissibleAlert';
+import ApiAccessPanel from './ApiAccessPanel';
+import ServerBindingFields, {
+  emptyServerBinding,
+  toServerBindingPayload,
+  validateServerBinding,
+  type ServerBindingValue,
+} from '../../components/developer/ServerBindingFields';
 
 type Tab = 'keys' | 'webhooks';
 
@@ -152,6 +159,8 @@ function CreateApiKeyModal({
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [revealedKey, setRevealedKey] = useState<string | null>(null);
   const [revealedSecret, setRevealedSecret] = useState<string | null>(null);
+  const [revealedCredential, setRevealedCredential] = useState<{ value: string; header: string } | null>(null);
+  const [binding, setBinding] = useState<ServerBindingValue>(emptyServerBinding);
 
   useEffect(() => {
     if (isSuperAdmin) {
@@ -208,6 +217,9 @@ function CreateApiKeyModal({
       nextFieldErrors.account_id = 'Select which client account this key is for.';
     }
 
+    // The licence acknowledgement and the authorized-server fields are required before a key is minted.
+    Object.assign(nextFieldErrors, validateServerBinding(binding));
+
     if (Object.keys(nextFieldErrors).length > 0) {
       setFieldErrors(nextFieldErrors);
       setError(null);
@@ -222,11 +234,13 @@ function CreateApiKeyModal({
         {
           name: name.trim(),
           expires_at: expiresAt ? new Date(expiresAt).toISOString() : null,
+          ...toServerBindingPayload(binding),
         },
         isSuperAdmin ? (accountId as number) : undefined,
       );
       setRevealedKey(result.plain_text_key);
       setRevealedSecret(result.plain_text_secret);
+      setRevealedCredential(result.installation_credential ? { value: result.installation_credential, header: result.installation_header } : null);
       onCreated(result.api_key);
     } catch (err) {
       const described = describeApiError(err, 'The API key could not be created. Please try again.');
@@ -242,7 +256,7 @@ function CreateApiKeyModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4">
-      <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-xl">
+      <div className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-xl bg-white p-6 shadow-xl">
         <div className="flex items-center justify-between">
           <h3 className="text-base font-semibold text-slate-900">
             {revealedKey ? 'API key created' : 'Create API key'}
@@ -257,6 +271,15 @@ function CreateApiKeyModal({
             <OneTimeSecretReveal label="API key" value={revealedKey} />
             {/* Developer API Platform for WhatsApp Group Creation & Unified Messaging — the dual-factor secret, needed alongside the key for the new POST /api/v1/whatsapp/* endpoints. */}
             {revealedSecret && <OneTimeSecretReveal label="API secret" value={revealedSecret} />}
+            {/* Authorized-server binding — the installation credential the authorized server sends in its own header. */}
+            {revealedCredential && (
+              <>
+                <OneTimeSecretReveal label="Installation credential" value={revealedCredential.value} />
+                <p className="text-xs text-slate-500">
+                  Send it in the <code className="font-mono">{revealedCredential.header}</code> header from your authorized server with every request.
+                </p>
+              </>
+            )}
             <div className="flex justify-end">
               <button
                 onClick={onClose}
@@ -341,6 +364,17 @@ function CreateApiKeyModal({
               <FieldError message={fieldErrors.expires_at} />
               <p className="mt-1 text-xs text-slate-500">Leave blank for a key that never expires.</p>
             </div>
+
+            <ServerBindingFields
+              value={binding}
+              onChange={(next) => {
+                setBinding(next);
+                clearFieldError('acknowledge_server_binding');
+                clearFieldError('authorized_ips');
+              }}
+              errors={fieldErrors}
+              idPrefix="create"
+            />
 
             {error && (
               <DismissibleAlert className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
@@ -710,6 +744,15 @@ function ApiKeysTab() {
         onPerPageChange={setPerPage}
         perPageOptions={[10, 15, 25, 50]}
       />
+
+      {/* Public API authorized-server binding — the buyer's API Access card per key (a Super Admin manages bindings from Admin > API Access). */}
+      {scope === 'account' && pagedKeys.some((k) => !k.revoked_at && k.server_binding) && (
+        <div className="space-y-3">
+          {pagedKeys.map((k) => (
+            <ApiAccessPanel key={k.id} apiKey={k} onChanged={() => void load()} />
+          ))}
+        </div>
+      )}
 
       {showCreate && (
         <CreateApiKeyModal

@@ -25,6 +25,9 @@ class SchedulerTopologyTest extends TestCase
         'knowledge:recover-documents',
         'social:check-connections',
         'social:publish-due',
+        'sanctum:prune-expired',
+        'ops:prune-retention',
+        'ops:scheduler-heartbeat',
         'social:refresh-insights',
     ];
 

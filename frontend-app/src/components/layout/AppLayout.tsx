@@ -245,6 +245,7 @@ const NAV_ITEMS: NavItem[] = [
   { label: 'Social Gateway Settings', to: '/admin/social-settings', icon: Settings, tint: NAV_TINTS.social, superAdminOnly: true },
   // Super Admin WhatsApp Device Integration — link/view/disconnect/reconnect any client's device from one screen.
   { label: 'Device Settings', to: '/admin/device-settings', icon: Smartphone, tint: NAV_TINTS.whatsapp, superAdminOnly: true },
+  { label: 'API Access', to: '/admin/api-access', icon: Settings, tint: NAV_TINTS.gateway, superAdminOnly: true },
   { label: 'Route Master', to: '/admin/route-master', icon: Layers, tint: NAV_TINTS.gateway, superAdminOnly: true },
   // IMPLEMENT: Dynamic Route Master with Super-Admin Bypass & Global
   // Audit Tracking — requirement 4. Labeled 'Activity Logs' (not 'Audit

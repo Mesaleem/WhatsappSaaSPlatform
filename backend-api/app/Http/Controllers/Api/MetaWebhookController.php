@@ -14,6 +14,7 @@ use App\Services\Ads\AdAttributionService;
 use App\Services\Chatbot\ChatbotEngineService;
 use App\Services\Crm\CaptureLeadLinker;
 use App\Services\Webhooks\WebhookDispatcher;
+use App\Support\Observability\WebhookTally;
 use App\Support\PhoneNumberNormalizer;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -182,7 +183,45 @@ class MetaWebhookController extends Controller
      */
     public function handle(Request $request): JsonResponse
     {
+        // Phase 12 Task 3 — duration/outcome visibility ONLY. The delivery is processed by deliverEntries() exactly as
+        // before (same order, same synchronous handling, same response); an exception or abort() still propagates
+        // unchanged after the measurement line is written. Metrics go to the operational log, never activity_logs.
+        $startedAt = hrtime(true);
+        $tally = app(WebhookTally::class);
+        $tally->statuses = $tally->messages = $tally->duplicates = $tally->busy = 0;   // one delivery per measurement
+        $outcome = 'ok';
+        $httpStatus = 200;
+
+        try {
+            return $this->deliverEntries($request);
+        } catch (\Symfony\Component\HttpKernel\Exception\HttpExceptionInterface $e) {
+            $outcome = 'rejected';
+            $httpStatus = $e->getStatusCode();
+
+            throw $e;
+        } catch (\Throwable $e) {
+            $outcome = 'failed';
+            $httpStatus = 500;
+
+            throw $e;
+        } finally {
+            $context = [
+                'outcome' => $outcome,
+                'http_status' => $httpStatus,
+                'duration_ms' => round((hrtime(true) - $startedAt) / 1e6, 2),
+                'statuses' => $tally->statuses,
+                'messages' => $tally->messages,
+                'duplicates_skipped' => $tally->duplicates,
+                'busy_deferred' => $tally->busy,
+            ];
+            $outcome === 'ok' ? Log::info('Meta webhook handled.', $context) : Log::warning('Meta webhook not handled.', $context);
+        }
+    }
+
+    private function deliverEntries(Request $request): JsonResponse
+    {
         $this->assertValidSignature($request);
+        $tally = app(WebhookTally::class);
 
         $entries = $request->input('entry', []);
 
@@ -205,10 +244,12 @@ class MetaWebhookController extends Controller
                 $statusAccountId = $this->resolveAccountId($value['metadata']['phone_number_id'] ?? null);
 
                 foreach ($statuses as $status) {
+                    $tally->statuses++;
                     Log::info('Meta WhatsApp status update received', [
                         'wamid' => $status['id'] ?? null,
                         'status' => $status['status'] ?? null,
-                        'recipient_id' => $status['recipient_id'] ?? null,
+                        // Phase 12 Task 3: the recipient's phone number is PII — logged masked (last 4 digits).
+                        'recipient_id' => isset($status['recipient_id']) ? \App\Logging\Redactor::maskPhone((string) $status['recipient_id']) : null,
                         'timestamp' => $status['timestamp'] ?? null,
                         'phone_number_id' => $value['metadata']['phone_number_id'] ?? null,
                         'errors' => $status['errors'] ?? null,
@@ -234,6 +275,7 @@ class MetaWebhookController extends Controller
                 $messages = $value['messages'] ?? [];
 
                 if (! empty($messages)) {
+                    $tally->messages += count($messages);
                     $this->handleInboundMessages($value['metadata']['phone_number_id'] ?? null, $messages, $value['contacts'] ?? []);
                 }
             }
@@ -371,6 +413,8 @@ class MetaWebhookController extends Controller
         // side-effecting call below, so two concurrent redeliveries can
         // never both fire.
         if (! Cache::add(self::deliveredClaimKey($wamid), true, self::REDELIVERY_CLAIM_TTL_SECONDS)) {
+            app(WebhookTally::class)->duplicates++;
+
             return;
         }
 

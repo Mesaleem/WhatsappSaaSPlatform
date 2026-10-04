@@ -1,5 +1,5 @@
 import axiosInstance from '../core/api/axiosInstance';
-import type { MessageDispatchLogFilters, MessageDispatchLogsResponse } from '../types/messageLog';
+import type { MessageDispatchLogDetailResponse, MessageDispatchLogFilters, MessageDispatchLogsResponse } from '../types/messageLog';
 
 /**
  * [New feature, disclosed]. CSV/PDF export is deliberately NOT included
@@ -27,6 +27,11 @@ const messageLogsService = {
         params: { page, per_page: perPage, ...cleanFilters(filters) },
       })
       .then((res) => res.data);
+  },
+
+  /** GET /api/message-logs/{id} — the complete record for the "View" action (tenant-scoped like the list). */
+  show(id: number) {
+    return axiosInstance.get<MessageDispatchLogDetailResponse>(`/message-logs/${id}`).then((res) => res.data.data);
   },
 };
 

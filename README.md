@@ -503,6 +503,18 @@ WantedBy=multi-user.target
 
 **Check it.** `php artisan ops:check-topology` is read-only and reports, per setting, `ok`, `single-node-only` (fine today, wrong with several instances), `unsafe` (wrong even on one node, e.g. a job timeout at or above its connection's `retry_after`) or `info`. By default it judges the current single-node deployment and exits 0 unless something is `unsafe`; set `TOPOLOGY_MULTI_INSTANCE=true` (or pass `--multi-instance`) to judge for several instances — then every `single-node-only` finding fails the command (exit 1), which makes it usable as a pre-deploy gate. `--json` gives machine-readable output.
 
+### 7.1.2 Observability baseline (Phase 12 Task 3)
+
+Operational logging and diagnostics only — nothing here writes to `activity_logs` or any audit/financial history, and no migration is involved. No external vendor is used.
+
+- **Request id.** Every `/api/*` response carries `X-Request-Id`. A caller-supplied id is kept only if it is 8–64 characters of `A-Za-z0-9._-`; otherwise a UUID is generated. The id is in the log context of the request and travels in the payload of any queued job the request dispatches (so a job's log lines and its `Queued job failed.` line carry it); scheduler/CLI jobs simply have none. `account_id`/`user_id` (ids only) are added once the caller is authenticated.
+- **Structured logs.** `LOG_CHANNEL=json` (or add `json` to `LOG_STACK`) writes one JSON object per line to stderr (`LOG_JSON_PATH` for a file, `LOG_JSON_TRACE=true` for frames): `timestamp, level, channel, message, request_id, account_id, user_id, job{}, exception{}, context`. Passwords, tokens, API keys/secrets, signatures, message bodies/previews and Bearer/Sanctum tokens are redacted; phone numbers are masked to the last 4 digits. The default channel is unchanged and is **not** redacted — select `json` in production.
+- **Readiness.** `GET /ready` → `200 {"status":"ready"}` or `503 {"status":"unavailable"}`; `/up` remains the dependency-free liveness probe. Checks: database, cache write/read + lock, jobs table (only when `QUEUE_CONNECTION=database`), scheduler heartbeat (written each minute by `ops:scheduler-heartbeat`; **reported, not gating** unless `READINESS_SCHEDULER_ENFORCE=true`). Per-check detail is returned only with header `X-Ops-Token: $READINESS_DETAIL_TOKEN` (never when unset); even then only fixed status words, no messages or hosts.
+- **Queue diagnostics.** `php artisan ops:queue-status [--json]` — read-only: per queue ready/delayed/reserved, oldest ready job age, failed-job count. Metrics it cannot read are printed as `unavailable` (null in JSON), never `0`; only the `database` queue driver is inspected.
+- **Slow queries.** `SLOW_QUERY_LOG_ENABLED=true` (default off; no listener is registered otherwise), `SLOW_QUERY_THRESHOLD_MS` (500). Logs the query shape + duration, never bindings; the same shape is logged at most `SLOW_QUERY_MAX_PER_SHAPE_PER_MINUTE` times a minute per process.
+- **Meta inbound.** Each `POST /api/webhooks/meta` writes one line `Meta webhook handled.` / `Meta webhook not handled.` with `outcome, http_status, duration_ms, statuses, messages, duplicates_skipped, busy_deferred`. Processing is still synchronous and unchanged.
+- **QR engine status — limitation.** `qr-engine-service` exposes only `GET /health` → `{"status":"ok"}` (process liveness) and no per-account connection state; per-account state reaches the backend by Socket.IO and the internal status callback and is stored as `whatsapp_sessions.status` ("last known"). That cannot prove a session is currently connected, so no QR health signal is added to `/ready` or the ops commands; showing the stored status as live would be a fake health signal.
+
 ### 7.2 `qr-engine-service` — PM2
 
 ```bash

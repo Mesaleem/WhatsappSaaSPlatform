@@ -79,7 +79,7 @@ class OrganicPostController extends Controller
         $data = $request->validate([
             'platform' => ['required', 'string', Rule::in(OrganicPost::PLATFORMS)],
             'caption' => ['required', 'string', 'max:5000'],
-            'media_url' => ['nullable', 'string', 'max:2048'],
+            'media_url' => ['nullable', 'string', 'max:2048', new \App\Rules\PublicOutboundUrl()],
             'media_type' => ['nullable', 'string', Rule::in(['image', 'video'])],
             'social_account_id' => ['nullable', 'integer', 'min:1'],
             'scheduled_at' => ['nullable', 'date', 'after:now', 'before_or_equal:'.now()->addDays($maxDays)->toIso8601String()],

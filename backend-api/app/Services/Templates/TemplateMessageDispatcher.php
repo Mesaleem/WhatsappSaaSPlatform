@@ -348,6 +348,12 @@ class TemplateMessageDispatcher
             return [];
         }
 
+        // Phase 12 Task 2 (H7): the QR engine downloads this URL from inside our network — a loopback / private /
+        // link-local / metadata address is treated like any other unusable media URL (sent as plain text).
+        if (! app(\App\Support\Security\OutboundUrlGuard::class)->isSafe($effectiveUrl)) {
+            return [];
+        }
+
         $mediaType = WhatsAppMediaPayloadBuilder::inferMediaType($effectiveUrl);
         $metaData = ['media_type' => $mediaType, 'media_url' => $effectiveUrl];
 

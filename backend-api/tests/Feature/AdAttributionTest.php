@@ -35,6 +35,8 @@ use Tests\TestCase;
  */
 class AdAttributionTest extends TestCase
 {
+    use \Tests\Concerns\AllowsUnboundApiKeys;
+
     use RefreshDatabase;
 
     private const SECRET = 'meta_app_secret_attribution_test';

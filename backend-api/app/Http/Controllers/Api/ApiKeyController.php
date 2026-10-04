@@ -5,6 +5,9 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Concerns\ResolvesTenantAccount;
 use App\Http\Controllers\Controller;
 use App\Models\ApiKey;
+use App\Models\ApiKeyChangeRequest;
+use App\Services\ApiAccess\ApiKeyBindingService;
+use InvalidArgumentException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
@@ -27,6 +30,10 @@ class ApiKeyController extends Controller
 {
     use ResolvesTenantAccount;
 
+    public function __construct(private readonly ApiKeyBindingService $bindings)
+    {
+    }
+
     private const KEY_PREFIX = 'wasaas_live_';
     /** Developer API Platform for WhatsApp Group Creation & Unified Messaging — distinct prefix from KEY_PREFIX so a plaintext key and its plaintext secret are never confusable at a glance. */
     private const SECRET_PREFIX = 'wasaas_secret_';
@@ -42,12 +49,12 @@ class ApiKeyController extends Controller
                 ->latest('id')
                 ->get();
 
-            return response()->json(['data' => $keys, 'scope' => 'global']);
+            return response()->json(['data' => $this->withBinding($keys), 'scope' => 'global', 'server_binding_warning' => config('api_binding.warning')]);
         }
 
         $keys = ApiKey::forAccount($account->id)->latest('id')->get();
 
-        return response()->json(['data' => $keys, 'scope' => 'account']);
+        return response()->json(['data' => $this->withBinding($keys), 'scope' => 'account', 'server_binding_warning' => config('api_binding.warning')]);
     }
 
     /**
@@ -64,6 +71,14 @@ class ApiKeyController extends Controller
         $data = $request->validate([
             'name' => ['required', 'string', 'max:255'],
             'expires_at' => ['nullable', 'date', 'after:now'],
+            // The buyer must acknowledge that the key is licensed to ONE authorized server before it is minted.
+            'acknowledge_server_binding' => ['accepted'],
+            'server_label' => ['nullable', 'string', 'max:100'],
+            'ip_policy' => ['nullable', 'string', 'in:SINGLE_IP,IP_ALLOWLIST'],
+            'authorized_ips' => ['nullable', 'array', 'max:20'],
+            'authorized_ips.*' => ['string', 'max:64'],
+        ], [
+            'acknowledge_server_binding.accepted' => (string) config('api_binding.warning'),
         ]);
 
         // 40 random bytes of entropy (hex-encoded -> 80 chars) after the
@@ -84,21 +99,41 @@ class ApiKeyController extends Controller
         // one-time reveal.
         $plainTextSecret = self::SECRET_PREFIX.Str::random(40);
 
-        $apiKey = ApiKey::create([
-            'account_id' => $account->id,
-            'name' => $data['name'],
-            'key_prefix' => substr($plainTextKey, 0, 20),
-            'key_hash' => ApiKey::hashKey($plainTextKey),
-            'secret_prefix' => substr($plainTextSecret, 0, 20),
-            'secret_hash' => ApiKey::hashSecret($plainTextSecret),
-            'expires_at' => $data['expires_at'] ?? null,
-        ]);
+        // Validate the binding input BEFORE anything is written, so a bad IP never leaves a half-created key.
+        try {
+            $this->bindings->normalizePolicy($data['ip_policy'] ?? null, $data['authorized_ips'] ?? []);
+        } catch (InvalidArgumentException $e) {
+            return response()->json(['message' => $e->getMessage(), 'errors' => ['authorized_ips' => [$e->getMessage()]]], 422);
+        }
+
+        [$apiKey, $credential] = \Illuminate\Support\Facades\DB::transaction(function () use ($account, $data, $plainTextKey, $plainTextSecret, $request) {
+            $apiKey = ApiKey::create([
+                'account_id' => $account->id,
+                'name' => $data['name'],
+                'key_prefix' => substr($plainTextKey, 0, 20),
+                'key_hash' => ApiKey::hashKey($plainTextKey),
+                'secret_prefix' => substr($plainTextSecret, 0, 20),
+                'secret_hash' => ApiKey::hashSecret($plainTextSecret),
+                'expires_at' => $data['expires_at'] ?? null,
+            ]);
+            $provisioned = $this->bindings->provision($apiKey, [
+                'label' => $data['server_label'] ?? null,
+                'ip_policy' => $data['ip_policy'] ?? null,
+                'authorized_ips' => $data['authorized_ips'] ?? [],
+            ], $request->user());
+            $this->bindings->record(ApiKeyBindingService::EV_KEY_CREATED, $apiKey, $provisioned['binding'], null, [], actor: $request->user());
+
+            return [$apiKey, $provisioned['credential']];
+        });
 
         return response()->json([
-            'message' => 'API key created. Copy the key and secret now — neither will be shown again.',
+            'message' => 'API key created. Copy the key, secret and installation credential now — none will be shown again.',
             'plain_text_key' => $plainTextKey,
             'plain_text_secret' => $plainTextSecret,
-            'api_key' => $apiKey,
+            'installation_credential' => $credential,
+            'installation_header' => config('api_binding.installation_header'),
+            'warning' => config('api_binding.warning'),
+            'api_key' => array_merge($apiKey->toArray(), ['server_binding' => $this->bindings->summary($apiKey)]),
         ], 201);
     }
 
@@ -161,5 +196,110 @@ class ApiKeyController extends Controller
         }
 
         return response()->json(['message' => 'API key revoked.', 'api_key' => $apiKey->fresh()]);
+    }
+
+    /** GET /api/developer/api-keys/{id}/server-binding */
+    public function serverBinding(Request $request, int $id): JsonResponse
+    {
+        $apiKey = $this->ownedKey($request, $id);
+
+        return response()->json(['data' => $this->bindings->summary($apiKey), 'warning' => config('api_binding.warning')]);
+    }
+
+    /** POST /api/developer/api-keys/{id}/server-binding - first-time registration for a key that has never been bound (legacy keys). */
+    public function registerServer(Request $request, int $id): JsonResponse
+    {
+        $apiKey = $this->ownedKey($request, $id);
+        $data = $request->validate([
+            'acknowledge_server_binding' => ['accepted'],
+            'server_label' => ['nullable', 'string', 'max:100'],
+            'ip_policy' => ['nullable', 'string', 'in:SINGLE_IP,IP_ALLOWLIST'],
+            'authorized_ips' => ['nullable', 'array', 'max:20'],
+            'authorized_ips.*' => ['string', 'max:64'],
+        ], ['acknowledge_server_binding.accepted' => (string) config('api_binding.warning')]);
+
+        if ($apiKey->isRevoked()) {
+            return response()->json(['message' => 'This API key has been revoked.'], 422);
+        }
+        if ($apiKey->bindings()->exists()) {
+            return response()->json(['message' => 'This key already has an authorized server. Request a server change instead.'], 422);
+        }
+
+        try {
+            $provisioned = $this->bindings->provision($apiKey, [
+                'label' => $data['server_label'] ?? null,
+                'ip_policy' => $data['ip_policy'] ?? null,
+                'authorized_ips' => $data['authorized_ips'] ?? [],
+            ], $request->user());
+        } catch (InvalidArgumentException $e) {
+            return response()->json(['message' => $e->getMessage(), 'errors' => ['authorized_ips' => [$e->getMessage()]]], 422);
+        }
+
+        return response()->json([
+            'message' => 'Authorized server registered. Copy the installation credential now — it will not be shown again.',
+            'installation_credential' => $provisioned['credential'],
+            'installation_header' => config('api_binding.installation_header'),
+            'data' => $this->bindings->summary($apiKey),
+        ], 201);
+    }
+
+    /** POST /api/developer/api-keys/{id}/installation-credential - issues the credential once, for a binding created by an approval/rebind (or never used). */
+    public function installationCredential(Request $request, int $id): JsonResponse
+    {
+        $apiKey = $this->ownedKey($request, $id);
+        $binding = $apiKey->liveBinding();
+        if (! $binding) {
+            return response()->json(['message' => 'There is no authorized server to issue a credential for.'], 422);
+        }
+        try {
+            $credential = $this->bindings->issueCredential($apiKey, $binding, $request->user());
+        } catch (InvalidArgumentException $e) {
+            return response()->json(['message' => $e->getMessage()], 422);
+        }
+
+        return response()->json([
+            'message' => 'Installation credential issued. Copy it now — it will not be shown again.',
+            'installation_credential' => $credential,
+            'installation_header' => config('api_binding.installation_header'),
+        ]);
+    }
+
+    /** POST /api/developer/api-keys/{id}/server-change-requests - the only way a buyer can ask to move to another server. Changes nothing until a Super Admin approves. */
+    public function requestServerChange(Request $request, int $id): JsonResponse
+    {
+        $apiKey = $this->ownedKey($request, $id);
+        $data = $request->validate([
+            'reason' => ['required', 'string', 'max:500'],
+            'requested_label' => ['nullable', 'string', 'max:100'],
+            'ip_policy' => ['nullable', 'string', 'in:SINGLE_IP,IP_ALLOWLIST'],
+            'requested_ips' => ['required', 'array', 'min:1', 'max:20'],
+            'requested_ips.*' => ['string', 'max:64'],
+        ]);
+
+        try {
+            $changeRequest = $this->bindings->requestChange($apiKey, $request->user(), $data);
+        } catch (InvalidArgumentException $e) {
+            return response()->json(['message' => $e->getMessage()], 422);
+        }
+
+        return response()->json([
+            'message' => 'Server change requested. The current server stays authorized until a Super Admin approves the change.',
+            'data' => $changeRequest->toSafeArray(),
+        ], 201);
+    }
+
+    private function ownedKey(Request $request, int $id): ApiKey
+    {
+        $account = $this->requireAccount($request, 'Select a client/tenant account to manage its API keys (pass ?account_id=).');
+        $apiKey = ApiKey::forAccount($account->id)->find($id);
+        abort_if(! $apiKey, 404, 'API key not found.');
+
+        return $apiKey;
+    }
+
+    /** @param \Illuminate\Support\Collection<int, ApiKey> $keys */
+    private function withBinding($keys): array
+    {
+        return $keys->map(fn (ApiKey $k) => array_merge($k->toArray(), ['server_binding' => $this->bindings->summary($k)]))->all();
     }
 }

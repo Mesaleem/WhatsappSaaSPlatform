@@ -132,7 +132,7 @@ class LinkedInPublisher implements SocialPublisher
 
         try {
             // Re-fetch the binary from the app's own durable media URL, then PUT it to LinkedIn.
-            $binary = Http::timeout(30)->get($mediaUrl)->body();
+            $binary = app(\App\Support\Security\OutboundUrlGuard::class)->send('GET', $mediaUrl, fn () => Http::timeout(30))->body();
             $upload = Http::withToken($accessToken)->timeout(30)->withBody($binary, 'application/octet-stream')->put($uploadUrl);
         } catch (Throwable $e) {
             throw new PublishUnreachable('Could not upload the media to LinkedIn.', previous: $e);

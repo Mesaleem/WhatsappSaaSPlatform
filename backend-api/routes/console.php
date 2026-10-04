@@ -173,3 +173,27 @@ Schedule::command('queue:work '.ReconcilePlanAccountsJob::resolveConnection().' 
     ->everyMinute()
     ->withoutOverlapping()
     ->when(fn (): bool => config('queue.default') !== 'sync');
+
+// Phase 12 Task 2 (H2) — removes expired personal access tokens (older than SANCTUM_TOKEN_EXPIRATION_MINUTES plus a
+// 24 h grace). An expired token is refused at authentication whether or not it has been pruned; this only keeps the
+// table small. With the default (no expiration configured) nothing is pruned and no token is ever touched.
+Schedule::command('sanctum:prune-expired --hours=24')
+    ->daily()
+    ->onOneServer()
+    ->withoutOverlapping();
+
+// Phase 12 Task 3 — scheduler heartbeat for GET /ready. onOneServer like every other non-drain entry (the heartbeat
+// is a single shared cache key, so one writer per tick is enough). Cache only; no table.
+Schedule::command('ops:scheduler-heartbeat')
+    ->everyMinute()
+    ->onOneServer()
+    ->withoutOverlapping();
+
+// Phase 12 Task 5 — operational data retention. Daily, off-peak. Deletes only when RETENTION_PRUNE_ENFORCE=true
+// (config/retention.php); otherwise it counts and logs what it WOULD delete. Bounded per run (batch × max_batches per
+// category), idempotent, and guarded against overlap two ways: onOneServer across instances, withoutOverlapping
+// (120 min expiry, not the 24 h default) across ticks, plus a cache lock inside the pruner for manual runs.
+Schedule::command('ops:prune-retention')
+    ->dailyAt('03:20')
+    ->onOneServer()
+    ->withoutOverlapping(120);

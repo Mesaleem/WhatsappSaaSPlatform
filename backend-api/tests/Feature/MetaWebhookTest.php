@@ -856,4 +856,131 @@ class MetaWebhookTest extends TestCase
         // own response array and verify()'s hash_equals() both depend on it.
         $this->assertSame('VerifyTokenSerializationCheck', $t['session']->fresh()->meta_webhook_verify_token);
     }
+
+    // ------------------------------------------------------------------
+    // Phase 12 Task 3 -- webhook duration/outcome visibility
+    // ------------------------------------------------------------------
+
+    /** @return list<array{message: string, context: array}> */
+    private function captureWebhookLogs(): \ArrayObject
+    {
+        $records = new \ArrayObject();
+        Log::listen(function ($m) use ($records) {
+            if (str_starts_with($m->message, 'Meta webhook handled') || str_starts_with($m->message, 'Meta webhook not handled')) {
+                $records->append(['message' => $m->message, 'level' => $m->level, 'context' => $m->context]);
+            }
+        });
+
+        return $records;
+    }
+
+    public function test_an_accepted_delivery_logs_its_duration_and_counts(): void
+    {
+        $this->makeTenant();
+        $records = $this->captureWebhookLogs();
+
+        $this->postSigned($this->statusPayload(['id' => self::WAMID, 'status' => 'sent']))->assertStatus(200)->assertExactJson(['received' => true]);
+
+        $this->assertCount(1, $records);
+        $this->assertSame('Meta webhook handled.', $records[0]['message']);
+        $this->assertSame('info', $records[0]['level']);
+        $this->assertSame('ok', $records[0]['context']['outcome']);
+        $this->assertSame(200, $records[0]['context']['http_status']);
+        $this->assertIsFloat($records[0]['context']['duration_ms']);
+        $this->assertGreaterThanOrEqual(0, $records[0]['context']['duration_ms']);
+        $this->assertSame(1, $records[0]['context']['statuses']);
+        $this->assertSame(0, $records[0]['context']['messages']);
+        $this->assertSame(0, $records[0]['context']['duplicates_skipped']);
+    }
+
+    public function test_a_rejected_signature_is_logged_as_rejected_and_the_response_is_unchanged(): void
+    {
+        $records = $this->captureWebhookLogs();
+
+        $response = $this->postSigned($this->statusPayload(['id' => self::WAMID, 'status' => 'sent']), 'wrong-secret');
+
+        $response->assertStatus(403);
+        $this->assertCount(1, $records);
+        $this->assertSame('Meta webhook not handled.', $records[0]['message']);
+        $this->assertSame('warning', $records[0]['level']);
+        $this->assertSame('rejected', $records[0]['context']['outcome']);
+        $this->assertSame(403, $records[0]['context']['http_status']);
+    }
+
+    public function test_a_redelivered_inbound_message_and_a_redelivered_delivered_status_are_counted_as_duplicates(): void
+    {
+        Http::fake(['graph.facebook.com/*' => Http::response(['messages' => [['id' => 'wamid.REPLY']]], 200)]);
+        $t = $this->makeTenant();
+        ChatbotRule::create([
+            'account_id' => $t['account']->id, 'name' => 'Greeting', 'match_type' => 'contains', 'keywords' => ['hello'],
+            'response_type' => 'text', 'response_payload' => ['text' => 'Hi there!'], 'is_active' => true, 'priority' => 1,
+        ]);
+        PaymentAlert::create([
+            'account_id' => $t['account']->id, 'recipient_phone' => '919111111111', 'customer_name' => 'Bob', 'amount' => 100,
+            'payment_ref' => 'PAY-OBS', 'status' => 'sent', 'gateway_message_id' => self::WAMID,
+        ]);
+        $records = $this->captureWebhookLogs();
+
+        $inbound = $this->inboundPayload('hello there');
+        $this->postSigned($inbound)->assertStatus(200);
+        $this->postSigned($inbound)->assertStatus(200);                       // redelivery: the event gate skips it
+        $delivered = $this->statusPayload(['id' => self::WAMID, 'status' => 'delivered']);
+        $this->postSigned($delivered)->assertStatus(200);
+        $this->postSigned($delivered)->assertStatus(200);                     // redelivery: the claim is already taken
+
+        $this->assertCount(4, $records);
+        $this->assertSame([1, 1, 1, 1], array_map(fn ($r) => $r['context']['messages'] + $r['context']['statuses'], $records->getArrayCopy()), 'each delivery carried one event');
+        $this->assertSame([0, 1, 0, 1], array_map(fn ($r) => $r['context']['duplicates_skipped'], $records->getArrayCopy()), 'counters reset per delivery');
+    }
+
+    public function test_an_unexpected_failure_is_logged_and_still_propagates_exactly_as_before(): void
+    {
+        $this->makeTenant();
+        $records = $this->captureWebhookLogs();
+        $this->app->bind(\App\Services\Chatbot\ChatbotEngineService::class, fn () => throw new \RuntimeException('engine exploded'));
+
+        $this->withoutExceptionHandling();
+        try {
+            $this->postSigned($this->inboundPayload('hello'));
+            $this->fail('the exception should have propagated');
+        } catch (\RuntimeException $e) {
+            $this->assertSame('engine exploded', $e->getMessage());
+        }
+
+        $this->assertCount(1, $records);
+        $this->assertSame('failed', $records[0]['context']['outcome']);
+        $this->assertSame(500, $records[0]['context']['http_status']);
+    }
+
+    public function test_the_status_log_masks_the_recipient_phone_number(): void
+    {
+        $this->makeTenant();
+        $lines = [];
+        Log::listen(function ($m) use (&$lines) {
+            $lines[] = $m->message.' '.json_encode($m->context);
+        });
+
+        $this->postSigned($this->statusPayload([
+            'id' => self::WAMID, 'status' => 'failed', 'recipient_id' => '919876543210', 'timestamp' => '1700000000',
+            'errors' => [['code' => 131026, 'title' => 'Message undeliverable']],
+        ]))->assertStatus(200);
+
+        $status = array_values(array_filter($lines, fn ($l) => str_starts_with($l, 'Meta WhatsApp status update received')));
+        $this->assertCount(1, $status);
+        $this->assertStringContainsString('********3210', $status[0]);
+        $this->assertStringNotContainsString('919876543210', implode("\n", $lines), 'the recipient number reached the log');
+        $this->assertStringContainsString(self::WAMID, $status[0], 'the WAMID stays: it is the correlation key');
+        $this->assertStringContainsString(self::PHONE_ID, $status[0], 'phone_number_id stays: it identifies the number object, not a person');
+    }
+
+    public function test_the_webhook_semantics_are_unchanged_by_the_measurement(): void
+    {
+        $t = $this->makeTenant();
+        $log = $this->makeDispatchLog($t['account'], self::WAMID);
+
+        $this->postSigned($this->statusPayload(['id' => self::WAMID, 'status' => 'failed', 'errors' => [['title' => 'blocked']]]))
+            ->assertStatus(200)->assertExactJson(['received' => true]);
+
+        $this->assertSame('failed', $log->fresh()->status);
+    }
 }

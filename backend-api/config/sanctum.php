@@ -50,7 +50,10 @@ return [
     |
     */
 
-    'expiration' => null,
+    // Phase 12 Task 2 — configurable token lifetime. Unset / empty / 0 keeps the previous behavior (tokens never
+    // expire). The lifetime counts from token creation. Expired rows are pruned daily (`sanctum:prune-expired`,
+    // routes/console.php); an expired token is already refused at authentication regardless of pruning.
+    'expiration' => ((int) env('SANCTUM_TOKEN_EXPIRATION_MINUTES', 0)) > 0 ? (int) env('SANCTUM_TOKEN_EXPIRATION_MINUTES') : null,
 
     /*
     |--------------------------------------------------------------------------

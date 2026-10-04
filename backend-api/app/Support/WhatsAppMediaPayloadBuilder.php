@@ -2,6 +2,9 @@
 
 namespace App\Support;
 
+use App\Support\Security\OutboundUrlGuard;
+use App\Support\Security\UnsafeOutboundUrlException;
+
 /**
  * Developer API Platform for WhatsApp Group Creation & Unified
  * Messaging -- translates ONE engine-agnostic media descriptor
@@ -63,7 +66,13 @@ class WhatsAppMediaPayloadBuilder
 
     /**
      * @param array{media_type: string, url: string, caption?: string|null, filename?: string|null} $media
+     * Phase 12 Task 2 (H7): on the 'qr' engine the engine itself downloads media_url from inside our network, so the
+     * URL must be a public http(s) address (OutboundUrlGuard) before it is handed over. The 'meta' engine only
+     * forwards the link to Meta, who fetch it from their own network.
+     *
      * @return array{0: string, 1: array<string, mixed>} [messageParamForDriver, metaData]
+     *
+     * @throws UnsafeOutboundUrlException 'qr' engine only, when the media URL is not a public address
      */
     public static function build(?string $engineType, array $media): array
     {
@@ -73,6 +82,8 @@ class WhatsAppMediaPayloadBuilder
         $filename = $media['filename'] ?? null;
 
         if ($engineType === 'qr') {
+            app(OutboundUrlGuard::class)->assertSafe((string) $url);
+
             $metaData = array_filter([
                 'media_type' => $mediaType,
                 'media_url' => $url,

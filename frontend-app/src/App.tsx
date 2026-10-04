@@ -17,6 +17,7 @@ import MessageLogsPage from './pages/analytics/MessageLogsPage';
 import BillingPage from './pages/billing/BillingPage';
 import GatewaySettingsPage from './pages/admin/GatewaySettingsPage';
 import QuotaRequestsPage from './pages/admin/QuotaRequestsPage';
+import ApiAccessPage from './pages/admin/ApiAccessPage';
 import AdminDeviceSettingsPage from './pages/admin/AdminDeviceSettingsPage';
 import DeveloperPage from './pages/developer/DeveloperPage';
 import ChatbotPage from './pages/chatbot/ChatbotPage';
@@ -132,6 +133,14 @@ export default function App() {
               element={
                 <ProtectedRoute strictRole="super_admin">
                   <PlanManagementPage />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/admin/api-access"
+              element={
+                <ProtectedRoute strictRole="super_admin">
+                  <ApiAccessPage />
                 </ProtectedRoute>
               }
             />

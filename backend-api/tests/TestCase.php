@@ -8,6 +8,17 @@ use RuntimeException;
 abstract class TestCase extends BaseTestCase
 {
     /**
+     * Phase 12 Task 2 — the SSRF guard resolves host names; tests must never reach real DNS. Every host name resolves to
+     * a fixed public address unless a test overrides it (tests/Support/FakeHostResolver).
+     */
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        $this->app->instance(\App\Support\Security\HostResolver::class, new \Tests\Support\FakeHostResolver());
+    }
+
+    /**
      * Safety guard (added 2026-09-30 after a test run wiped the real
      * database). RefreshDatabase runs `migrate:fresh` — it DROPS every
      * table — so the suite must never start against a real database.

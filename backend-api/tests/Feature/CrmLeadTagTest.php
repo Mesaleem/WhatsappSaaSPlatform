@@ -41,6 +41,8 @@ use Tests\TestCase;
  */
 class CrmLeadTagTest extends TestCase
 {
+    use \Tests\Concerns\AllowsUnboundApiKeys;
+
     use RefreshDatabase;
 
     private const TAGS = '/api/crm/tags';

@@ -4,6 +4,12 @@ import type {
   ApiKeysResponse,
   CreateApiKeyPayload,
   CreateApiKeyResponse,
+  InstallationCredentialResponse,
+  RegisterServerResponse,
+  RequestServerChangePayload,
+  ServerBindingPayload,
+  ServerBindingSummary,
+  ServerChangeRequest,
   RegenerateApiKeySecretResponse,
   CreateWebhookPayload,
   CreateWebhookResponse,
@@ -44,6 +50,25 @@ const developerService = {
   regenerateApiKeySecret(id: number) {
     return axiosInstance
       .post<RegenerateApiKeySecretResponse>(`/developer/api-keys/${id}/regenerate-secret`)
+      .then((res) => res.data);
+  },
+
+  /** Public API authorized-server binding — buyer side. There is deliberately no "edit server" call. */
+  getServerBinding(id: number) {
+    return axiosInstance.get<{ data: ServerBindingSummary; warning: string }>(`/developer/api-keys/${id}/server-binding`).then((res) => res.data);
+  },
+
+  registerServer(id: number, payload: ServerBindingPayload) {
+    return axiosInstance.post<RegisterServerResponse>(`/developer/api-keys/${id}/server-binding`, payload).then((res) => res.data);
+  },
+
+  issueInstallationCredential(id: number) {
+    return axiosInstance.post<InstallationCredentialResponse>(`/developer/api-keys/${id}/installation-credential`).then((res) => res.data);
+  },
+
+  requestServerChange(id: number, payload: RequestServerChangePayload) {
+    return axiosInstance
+      .post<{ message: string; data: ServerChangeRequest }>(`/developer/api-keys/${id}/server-change-requests`, payload)
       .then((res) => res.data);
   },
 

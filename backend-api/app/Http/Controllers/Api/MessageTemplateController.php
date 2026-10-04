@@ -85,11 +85,18 @@ class MessageTemplateController extends Controller
             ->when($agentAccount, function ($q) use ($agentAccount) {
                 // Tiered Template Approval Workflow -- an Agent's own
                 // account's templates (Rule 4) plus every Sub-Client's
-                // (Rules 1/3). A global (account_id null) or another
-                // Agent's tree's template never appears here.
+                // (Rules 1/3), PLUS the platform's approved Global
+                // Templates (account_id null) -- the only cross-account
+                // templates. One OR-ed predicate in a single query, so
+                // anything that pages/sorts afterwards sees both sets
+                // together. Global templates are read-only here:
+                // assertAgentOwnsTemplate() still 404s every Agent write
+                // on a global row, and another Agent's tree's template
+                // never appears.
                 $q->where(function ($qq) use ($agentAccount) {
                     $qq->where('account_id', $agentAccount->id)
-                        ->orWhereHas('account', fn ($qa) => $qa->where('agent_id', $agentAccount->id));
+                        ->orWhereHas('account', fn ($qa) => $qa->where('agent_id', $agentAccount->id))
+                        ->orWhere(fn ($qg) => $qg->whereNull('account_id')->where('status', 'approved'));
                 });
             })
             ->when(! empty($filters['status']), fn ($q) => $q->where('status', $filters['status']))
@@ -97,6 +104,10 @@ class MessageTemplateController extends Controller
             ->when(! empty($filters['search']), fn ($q) => $q->where('title', 'like', '%'.$filters['search'].'%'))
             ->latest('id')
             ->get();
+
+        // `is_global` lets the UI label shared templates and render them read-only; it is derived from
+        // account_id (the existing ownership field), never stored or trusted from the client.
+        $templates->each(fn (MessageTemplate $t) => $t->setAttribute('is_global', $t->account_id === null));
 
         return response()->json(['data' => $templates]);
     }
@@ -347,10 +358,18 @@ class MessageTemplateController extends Controller
     {
         $account = $this->requireAccount($request, 'Select a client/tenant account to view its templates (pass ?account_id=).');
 
+        // Own templates (any status) PLUS the platform's approved Global Templates -- the same visibility
+        // rule as available()/approvedFor(): global means account_id null, and only an approved one is
+        // shared. A global row is never copied into the tenant; it is read straight from its one record.
         $templates = MessageTemplate::query()
-            ->where('account_id', $account->id)
+            ->where(fn ($q) => $q->where('account_id', $account->id)
+                ->orWhere(fn ($qg) => $qg->whereNull('account_id')->where('status', 'approved')))
             ->orderByDesc('id')
-            ->get(['id', 'title', 'industry_type', 'status', 'rejection_reason', 'created_at', 'template_code']);
+            ->get(['id', 'account_id', 'title', 'industry_type', 'status', 'rejection_reason', 'created_at', 'template_code'])
+            ->each(function (MessageTemplate $t) {
+                $t->setAttribute('is_global', $t->account_id === null);
+                $t->makeHidden('account_id');
+            });
 
         return response()->json(['data' => $templates]);
     }

@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Concerns\ResolvesTenantAccount;
 use App\Http\Controllers\Controller;
 use App\Models\MessageDispatchLog;
+use App\Models\MessageTemplate;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
@@ -73,6 +74,71 @@ class MessageDispatchLogController extends Controller
         $logs = $query->latest('id')->paginate($perPage)->withQueryString();
 
         return response()->json($logs->toArray() + ['scope' => $account ? 'account' : 'global']);
+    }
+
+    /**
+     * GET /api/message-logs/{id} -- the complete record behind one grid row for the "View" action.
+     *
+     * Tenant scoping is identical to index(): the account resolved by tenant.isolation (a tenant's own account, a
+     * Super Admin's selected client, an Agent's own/sub-client account) constrains the query, and a Super Admin with
+     * no client selected sees every tenant. A row outside that scope is a 404 -- indistinguishable from a missing id --
+     * so changing the id in the URL discloses nothing. Nothing is returned that the list does not already expose except
+     * the full resolved message text, the template code and a sanitised media descriptor (never a storage path).
+     */
+    public function show(Request $request, int $id): JsonResponse
+    {
+        $account = $this->resolveAccount($request);
+
+        $log = ($account ? MessageDispatchLog::forAccount($account->id) : MessageDispatchLog::query())
+            ->with(['account:id,company_name', 'apiKey:id,name,key_prefix'])
+            ->findOrFail($id);
+
+        $templateCode = null;
+        if ($log->reference_type === 'template' && $log->reference_id) {
+            // Looked up through the log's own account scope: a template is only reported when it belongs to, or is
+            // shared with, the tenant that sent it.
+            $templateCode = MessageTemplate::query()
+                ->whereKey($log->reference_id)
+                ->where(fn ($q) => $q->where('account_id', $log->account_id)->orWhereNull('account_id'))
+                ->value('template_code');
+        }
+
+        $log->makeVisible('message_body');
+        $data = $log->toArray();
+        // Rows written before message_body existed fall back to the preview they did keep.
+        $data['message_body'] = $log->message_body ?? $log->message_preview;
+        $data['message_body_is_complete'] = $log->message_body !== null || $log->message_preview === null;
+        $data['template_code'] = $templateCode;
+        $data['media'] = $this->mediaDescriptor($log);
+        $data['api_key'] = $log->apiKey ? ['name' => $log->apiKey->name, 'key_prefix' => $log->apiKey->key_prefix] : null;
+        unset($data['api_key_id']);
+
+        return response()->json(['data' => $data, 'scope' => $account ? 'account' : 'global']);
+    }
+
+    /** @return array{has_media: bool, name: ?string, type: ?string, url: ?string} */
+    private function mediaDescriptor(MessageDispatchLog $log): array
+    {
+        $url = $log->media_url;
+        if (! $log->has_media || ! $url) {
+            return ['has_media' => (bool) $log->has_media, 'name' => null, 'type' => null, 'url' => null];
+        }
+
+        $path = (string) parse_url($url, PHP_URL_PATH);
+        $name = $path !== '' ? rawurldecode(basename($path)) : null;
+        $ext = strtolower(pathinfo((string) $name, PATHINFO_EXTENSION));
+        $type = match (true) {
+            in_array($ext, ['jpg', 'jpeg', 'png', 'gif', 'webp'], true) => 'image',
+            in_array($ext, ['mp4', 'mov', '3gp', 'webm'], true) => 'video',
+            in_array($ext, ['mp3', 'ogg', 'wav', 'm4a', 'aac'], true) => 'audio',
+            $ext !== '' => 'document',
+            default => null,
+        };
+        // Only an absolute http(s) URL is ever handed to the browser; a filesystem path or internal scheme is not.
+        $scheme = strtolower((string) parse_url($url, PHP_URL_SCHEME));
+        $safeUrl = in_array($scheme, ['http', 'https'], true) ? $url : null;
+
+        return ['has_media' => true, 'name' => $name, 'type' => $type, 'url' => $safeUrl];
     }
 
     /**

@@ -78,6 +78,8 @@ class MessageDispatchLog extends Model
         // new table was needed.
         'parent_dispatch_id',
         'engine_type',
+        // Message Logs View action: the full resolved text, see the add_message_body migration.
+        'message_body',
     ];
 
     protected function casts(): array
@@ -100,6 +102,9 @@ class MessageDispatchLog extends Model
      */
     protected $hidden = [
         'claim_token',
+        // The full resolved text is served only by the detail endpoint (MessageDispatchLogController::show),
+        // so the paginated list payload keeps its existing shape and size.
+        'message_body',
     ];
 
     public function account(): BelongsTo
@@ -182,6 +187,14 @@ class MessageDispatchLog extends Model
     /** message_preview is stored as a short snippet, not the full outgoing text — see record()'s own truncation. */
     private const PREVIEW_MAX_LENGTH = 160;
 
+    /** Upper bound for the stored full text (WhatsApp's own limit is 4096 characters). */
+    private const BODY_MAX_LENGTH = 8000;
+
+    private static function bodyOf(?string $text): ?string
+    {
+        return $text !== null ? mb_substr(trim($text), 0, self::BODY_MAX_LENGTH) : null;
+    }
+
     /**
      * Single write path so every dispatch pathway logs with the exact
      * same shape — a bare ::create() call at 5 different call sites risks
@@ -254,6 +267,7 @@ class MessageDispatchLog extends Model
             'message_preview' => $messagePreview !== null
                 ? mb_substr(trim($messagePreview), 0, self::PREVIEW_MAX_LENGTH)
                 : null,
+            'message_body' => self::bodyOf($messagePreview),
             // [New, disclosed]: the engine-returned message id (Meta
             // WAMID on success; always null for a failed send, and null
             // for engines/callers that don't supply one, e.g. Baileys).
@@ -322,6 +336,7 @@ class MessageDispatchLog extends Model
             'message_preview' => $messagePreview !== null
                 ? mb_substr(trim($messagePreview), 0, self::PREVIEW_MAX_LENGTH)
                 : null,
+            'message_body' => self::bodyOf($messagePreview),
             'sent_at' => null,
         ]);
     }
@@ -400,6 +415,7 @@ class MessageDispatchLog extends Model
                 'media_url' => $mediaUrl,
                 'template_name' => $parent->template_name,
                 'message_preview' => $parent->message_preview,
+                'message_body' => $parent->message_body,
                 'sent_at' => $success ? now() : null,
                 'gateway_message_id' => $success ? $gatewayMessageId : null,
             ],

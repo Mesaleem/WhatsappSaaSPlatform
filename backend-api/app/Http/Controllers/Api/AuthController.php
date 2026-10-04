@@ -101,6 +101,9 @@ class AuthController extends Controller
 
         $token = $user->createToken('api-token', $abilities)->plainTextToken;
 
+        // Phase 12 Task 2 — a successful login forgets this e-mail + IP's failed attempts (see LoginThrottle).
+        \App\Support\Security\LoginThrottle::clear($request);
+
         $this->logAttempt($request, $user, 'success');
 
         return response()->json([

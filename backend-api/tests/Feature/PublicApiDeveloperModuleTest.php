@@ -27,6 +27,8 @@ use Tests\TestCase;
  */
 class PublicApiDeveloperModuleTest extends TestCase
 {
+    use \Tests\Concerns\AllowsUnboundApiKeys;
+
     use RefreshDatabase;
 
     private const RECIPIENT = '919999999999';
@@ -217,7 +219,7 @@ class PublicApiDeveloperModuleTest extends TestCase
         $account = $this->tenant();
         $admin = $this->user($account);
 
-        $response = $this->actingAs($admin)->postJson('/api/account/api-key/regenerate')->assertOk();
+        $response = $this->actingAs($admin)->postJson('/api/account/api-key/regenerate', ['acknowledge_server_binding' => true])->assertOk();
 
         $this->assertStringStartsWith('wasaas_live_', $response->json('plain_text_key'));
         $this->assertSame(1, ApiKey::where('account_id', $account->id)->count());

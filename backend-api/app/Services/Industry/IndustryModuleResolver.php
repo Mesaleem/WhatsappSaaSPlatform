@@ -4,6 +4,7 @@ namespace App\Services\Industry;
 
 use App\Models\Account;
 use App\Models\User;
+use App\Services\Access\DenialScope;
 
 /**
  * Phase 11 Task 1 — what an account can see of its industries: for each assigned industry, whether it
@@ -25,18 +26,25 @@ class IndustryModuleResolver
     public function contextFor(Account $account, ?User $user = null, ?bool $superAdmin = null): array
     {
         $out = [];
+        // Phase 12 Task 4 — one scope for this whole read-only pass (the industry + every module share the
+        // fresh target load and capability/module lookups). Discarded when the method returns.
+        $scope = new DenialScope();
+        $assignedRows = $this->resolver->forAccount($account);
+        foreach ($assignedRows as $row) {
+            $scope->seed("has:{$account->id}:{$row->industry}", true); // just read from account_industries
+        }
 
-        foreach ($this->resolver->forAccount($account) as $assigned) {
+        foreach ($assignedRows as $assigned) {
             $industry = $assigned->industry;
             $definition = $this->registry->find($industry);
             if ($definition === null) {
                 continue; // a registry entry removed after assignment: nothing to show
             }
 
-            $denial = $this->authorizer->denial($account, $industry, null, true, $user, $superAdmin);
+            $denial = $this->authorizer->denialWithin($scope, $account, $industry, null, true, $user, $superAdmin);
             $modules = [];
             foreach ($this->registry->modules($industry) as $key => $module) {
-                $moduleDenial = $this->authorizer->denial($account, $industry, $key, true, $user, $superAdmin);
+                $moduleDenial = $this->authorizer->denialWithin($scope, $account, $industry, $key, true, $user, $superAdmin);
                 $modules[] = [
                     'key' => $key,
                     'label' => $module['label'],

@@ -56,7 +56,7 @@ export default function ConfirmModal({
           </button>
         </div>
 
-        <p className="mt-3 text-sm text-slate-600">{message}</p>
+        <div className="mt-3 text-sm text-slate-600">{message}</div>
 
         <div className="mt-5 flex justify-end gap-2">
           <button

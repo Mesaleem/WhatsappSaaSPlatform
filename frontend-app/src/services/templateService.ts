@@ -123,8 +123,8 @@ const templateService = {
     return axiosInstance.get<{ data: ClientApiKey | null }>('/account/api-key').then((res) => res.data.data);
   },
 
-  regenerateApiKey() {
-    return axiosInstance.post<RegenerateClientApiKeyResponse>('/account/api-key/regenerate').then((res) => res.data);
+  regenerateApiKey(payload: import('../types/developer').ServerBindingPayload) {
+    return axiosInstance.post<RegenerateClientApiKeyResponse>('/account/api-key/regenerate', payload).then((res) => res.data);
   },
 };
 

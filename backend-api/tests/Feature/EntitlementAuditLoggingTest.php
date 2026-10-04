@@ -39,6 +39,8 @@ use Tests\TestCase;
  */
 class EntitlementAuditLoggingTest extends TestCase
 {
+    use \Tests\Concerns\AllowsUnboundApiKeys;
+
     use RefreshDatabase;
 
     private const FLOWS = '/api/whatsapp/flows';

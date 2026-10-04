@@ -4,6 +4,7 @@ namespace App\Services\Social;
 
 use App\Models\Account;
 use App\Services\Access\AccessControlService;
+use App\Services\Access\DenialScope;
 
 /**
  * Phase 9 Task 3 — the target-account checks every social write shares:
@@ -50,12 +51,15 @@ class SocialTargetGate
      * capability pair (e.g. Ads: meta_ads + ads), so every Social/Ads
      * surface shares one implementation, order and set of error codes.
      *
+     * Phase 12 Task 4 — `$scope` (optional) lets several checks inside ONE decision share the fresh
+     * target load and the module/capability lookups. Without it every call reloads, exactly as before.
+     *
      * @param  array<string, string>  $messages  optional overrides for MODULE_DISABLED / CAPABILITY_NOT_ENTITLED
      * @return array{code: string, message: string}|null
      */
-    public function denialFor(Account $account, string $module, string $capability, string $action, array $messages = [], ?bool $superAdmin = null, bool $read = false): ?array
+    public function denialFor(Account $account, string $module, string $capability, string $action, array $messages = [], ?bool $superAdmin = null, bool $read = false, ?DenialScope $scope = null): ?array
     {
-        $target = Account::query()->with('currentSubscription')->find($account->id);
+        $target = $scope ? $scope->target($account) : Account::query()->with('currentSubscription')->find($account->id);
 
         // Owner decision (2026-09-30): a Super Admin is not held to a client's
         // PLAN or SUBSCRIPTION — both checks are skipped for them (suspension
@@ -69,8 +73,8 @@ class SocialTargetGate
         return match (true) {
             ! $target || ! $target->isAdministrativelyActive() => ['code' => 'CLIENT_ACCOUNT_SUSPENDED', 'message' => "This account is suspended. It cannot {$action}."],
             ! $read && ! $platform && ! $superAdmin && ! $target->hasActiveSubscription() => ['code' => 'SUBSCRIPTION_EXPIRED', 'message' => "This account's subscription is not active. Renew it to {$action}."],
-            ! $target->hasModuleEnabled($module) => ['code' => 'MODULE_DISABLED', 'message' => $messages['MODULE_DISABLED'] ?? 'This feature is switched off for this account.'],
-            ! $platform && ! $superAdmin && ! $this->access->canTenant($target, $capability) => ['code' => 'CAPABILITY_NOT_ENTITLED', 'message' => $messages['CAPABILITY_NOT_ENTITLED'] ?? 'Your current plan does not include this feature. Please upgrade your subscription to unlock it.'],
+            ! ($scope ? $scope->remember("mod:{$target->id}:{$module}", fn () => $target->hasModuleEnabled($module)) : $target->hasModuleEnabled($module)) => ['code' => 'MODULE_DISABLED', 'message' => $messages['MODULE_DISABLED'] ?? 'This feature is switched off for this account.'],
+            ! $platform && ! $superAdmin && ! ($scope ? $scope->remember("cap:{$target->id}:{$capability}", fn () => $this->access->canTenant($target, $capability)) : $this->access->canTenant($target, $capability)) => ['code' => 'CAPABILITY_NOT_ENTITLED', 'message' => $messages['CAPABILITY_NOT_ENTITLED'] ?? 'Your current plan does not include this feature. Please upgrade your subscription to unlock it.'],
             default => null,
         };
     }

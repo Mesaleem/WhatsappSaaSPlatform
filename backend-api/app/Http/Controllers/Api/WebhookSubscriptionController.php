@@ -58,7 +58,7 @@ class WebhookSubscriptionController extends Controller
         $account = $this->requireAccount($request, 'Select a client/tenant account to register a webhook for (pass ?account_id=).');
 
         $data = $request->validate([
-            'url' => ['required', 'url', 'max:2048'],
+            'url' => ['required', 'url', 'max:2048', new \App\Rules\PublicOutboundUrl()],
             'secret' => ['nullable', 'string', 'min:8', 'max:255'],
             'events' => ['required', 'array', 'min:1'],
             'events.*' => [Rule::in(WebhookSubscription::SUPPORTED_EVENTS)],

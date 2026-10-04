@@ -42,6 +42,8 @@ use Tests\TestCase;
  */
 class CrmContactLeadLinkingTest extends TestCase
 {
+    use \Tests\Concerns\AllowsUnboundApiKeys;
+
     use RefreshDatabase;
 
     private const LEADS = '/api/crm/leads';

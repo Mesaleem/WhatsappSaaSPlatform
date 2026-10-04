@@ -71,6 +71,8 @@ export interface MessageTemplate {
   /** Developer API: unique, human-readable lookup key for POST /api/v1/messages/send-template (e.g. PAYMENT_RECEIPT_V1). Null only on a row from before this feature existed and not yet resaved -- see the backend migration's backfill. */
   template_code: string | null;
   account_id: number | null;
+  /** Server-derived from account_id === null: a platform Global Template shared with every eligible account (read-only for Agents). */
+  is_global?: boolean;
   account: { id: number; company_name: string } | null;
   industry_type: string | null;
   title: string;
@@ -176,6 +178,8 @@ export interface MyTemplateSummary {
   status: MessageTemplateStatus;
   rejection_reason: string | null;
   created_at: string;
+  /** true for a platform Global Template shared with this account (not owned by it). */
+  is_global?: boolean;
 }
 
 export interface SendTemplateMessagePayload {
@@ -252,6 +256,7 @@ export interface ClientApiKey {
   key_prefix: string;
   created_at: string;
   last_used_at: string | null;
+  server_binding?: import('./developer').ServerBindingSummary;
 }
 
 /** POST /api/account/api-key/regenerate */
@@ -259,5 +264,8 @@ export interface RegenerateClientApiKeyResponse {
   message: string;
   /** Shown exactly ONCE — never retrievable again after this response. */
   plain_text_key: string;
+  /** Shown exactly ONCE; sent in the `X-Client-Installation` header by the authorized server. */
+  installation_credential: string;
+  installation_header: string;
   data: ClientApiKey;
 }

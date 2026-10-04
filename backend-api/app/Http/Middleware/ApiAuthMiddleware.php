@@ -86,6 +86,12 @@ class ApiAuthMiddleware
             return $this->unauthorized('The account associated with this API key is not active.');
         }
 
+        // Authorized-server binding (Public API key sharing protection): a valid key is not enough, the request must
+        // also come from the key's authorized server. One shared decision point - see ApiKeyBindingService.
+        if ($denied = app(\App\Services\ApiAccess\ApiKeyBindingService::class)->gate($request, $apiKey)) {
+            return $denied;
+        }
+
         // Best-effort usage tracking, same trade-off AuthenticateApiKey
         // already accepts for this same column.
         $apiKey->forceFill(['last_used_at' => now()])->save();

@@ -1930,6 +1930,40 @@ explain/route; entitlement/permission → explain + upgrade path; genuinely impo
 
 ---
 
+### Phase 12 Task 6 — Release pipeline parity, backup/restore verification, migration safety (2026-10-02)
+
+- **Verification-only; no migration, no behaviour/authorization/API-contract change, QR/Baileys untouched.** New read-only ops commands: `ops:verify-restore --database=<throwaway> [--json]` (exit 0/1/2), `ops:check-recovery [--strict] [--skip-database] [--json]` (APP_KEY validity, `RECOVERY_APP_KEY_FINGERPRINT` escrow match, `APP_PREVIOUS_KEYS`, credential presence by name only, runbook headings, encrypted-column decryptability by count), `ops:rehearse-migrations [--steps=32] [--seed] [--json]` (migrate:fresh → seed → rollback → re-migrate → schema symmetry). All refuse any database not named like a throwaway (`App\Support\ThrowawayDatabaseGuard`) and `ops:rehearse-migrations` refuses production.
+- `database/migration_risk.php` classifies migrations 111–142 (schema-only 13 / additive 7 / locking 6 / data-changing 6; rollback clean/conditional/data-loss/none); `MigrationSafetyTest` fails if the classification understates what a file does. Runbook: `backend-api/docs/RELEASE_AND_RECOVERY.md` (APP_KEY escrow/recovery, restore verification, provider credential recovery, migration safety). `config/recovery.php` holds the inventory.
+- CI (`.github/workflows/ci.yml`, PHP 8.4): backend-sqlite (release-safety group, full suite, rehearsal), backend-mariadb (full suite, rehearsal, mysqldump→restore→verify, 3 probes on `wa_throwaway_test` — the probes' own guard name), frontend (tsc, vitest, build), qr-engine syntax job unchanged. The workflow file was delivered as a download because that path is write-protected for the assistant — copy it into place.
+- Tests (`#[Group('release-safety')]`, 91 tests): CriticalRouteAuthorizationSweep, ReleasePipelineTopology, RestoreVerification, RecoveryConfiguration, MigrationSafety, MetaDuplicateDeliveryContract, PublicApiV1Contract. Results: SQLite full suite 3297 passed / 10 skipped (before a RestoreVerification connection-pinning fix); fresh-MariaDB full suite 3307 passed / 1 skipped; rehearsal and the 3 probes passed on MariaDB; frontend tsc clean, vitest 800/800, build OK.
+- **Limitations**: the GitHub Actions workflow has not been executed; the restore verifier samples ≤20 values per encrypted column and does not sample journey `enc:v1:` graph secrets; the throwaway-name rule is a refusal rule, not a permission system.
+
+### Public API Key Authorized Server Binding — DONE
+- Every `/api/v1/*` key is bound to one authorized server. Enforced centrally in the two shared middlewares (`AuthenticateApiKey`, `ApiAuthMiddleware`) via `ApiKeyBindingService::gate()`, before throttle/idempotency/business logic; controllers are untouched.
+- Mechanism: key-creation mints a one-time `wasaas_inst_…` installation credential (sha256-hashed at rest, sent in `X-Client-Installation`) plus an IP policy (`SINGLE_IP` default / `IP_ALLOWLIST` / `NONE`; IPv4, IPv6, CIDR, IPv4-mapped). Credential is a bearer secret, so the IP policy is the second factor. First-request activation is trust-on-first-use under `lockForUpdate`; one live binding per key via nullable slot columns (portable to SQLite/MariaDB).
+- Denial: HTTP 403 `{success:false,status:false,code/error_code:"API_CLIENT_NOT_AUTHORIZED",message:"This API key is not authorized for this server."}` — uniform, reveals nothing about the authorized server.
+- Server change: buyer files a request (`POST /api/developer/api-keys/{id}/server-change-requests`); old server stays active until a Super Admin approves (`/api/admin/api-access/change-requests/{id}/approve`), which revokes the old binding and issues a pending one; buyer then issues the new credential once. No client-side rebind exists. Super Admin can also revoke/rebind/disable/enable and read security events (`api_key_security_events`; safe identifiers only, never keys/credentials/headers).
+- Migration `2026_10_05_100000_create_api_key_server_binding_tables` (additive, has `down()`): `api_key_bindings`, `api_key_change_requests`, `api_key_security_events`, `api_keys.access_disabled_*`. Not run against the real DB.
+- Legacy: keys with no binding rows keep working while `config('api_binding.allow_legacy_unbound')` is true; set false to enforce for all.
+- Key creation / client regenerate require `acknowledge_server_binding` plus the licence warning (config/api_binding.php `warning`).
+- Tests: `ApiKeyServerBindingTest` (26, group release-safety). UI: `ApiAccessPanel` (buyer), `pages/admin/ApiAccessPage` (`/admin/api-access`, super_admin).
+
+### Message Logs "View" action — DONE
+- `GET /api/message-logs/{id}` (same `module.guard:message_logs` group as the list; tenant scope = the account `tenant.isolation` resolves, identical to `index()`; out-of-scope id => 404). Returns the full resolved text (`message_body`), `template_code`, sanitised `media` descriptor (never a storage path; URL only if http/https), safe `api_key` {name, prefix}, `message_body_is_complete`.
+- New nullable `message_dispatch_logs.message_body` (migration `2026_10_06_100000`, guarded + reversible), written centrally by `MessageDispatchLog::record()` / `recordGroupDispatchQueued()` from the text the dispatchers already pass as the preview (resolved, variables substituted); group-recipient rows copy the parent's. Hidden from the list payload. No dispatcher/send code changed. Rows older than the migration keep only their 160-char preview (flagged in the UI); no backfill.
+- Frontend: `MessageLogDetailModal` + "View" button column in `MessageLogsPage`. Tests: `MessageLogDetailTest` (13), `MessageLogsPage.test.tsx` (8).
+
+### Global Templates visible in Agent / Client template lists — DONE
+- Global template = `message_templates.account_id IS NULL` (existing field; no schema change). Root cause: `MessageTemplateController::index()` restricted an Agent to own+sub-client rows (global excluded), and `myTemplates()` (client "My Templates") returned `account_id = own` only.
+- Rule: Agent index = own OR sub-client OR (account_id NULL AND status approved); client My Templates = own (any status) OR (account_id NULL AND status approved) — same predicate as `approvedFor()`. One query, so search/status/account filters and ordering run over the union. Responses carry derived `is_global`. Super Admin view unchanged.
+- Global is read-only for Agents (`assertAgentOwnsTemplate` still 404s every write on a global row; UI shows "Read-only"). Permission/module/subscription middleware and send-path entitlement checks untouched. No rows are copied into tenants. A global stays `pending` until test-fired + approved (existing gate), so it only becomes visible after approval.
+- Tests: `GlobalTemplateVisibilityTest` (10); UI: `TemplateManagerPage.agentGlobal.test.tsx`, `MyTemplatesModal.test.tsx`.
+
+### Legacy (unbound) API keys no longer unrestricted — DONE
+- `api_binding.allow_legacy_unbound` now defaults to **false** (env `API_ALLOW_LEGACY_UNBOUND`; documented as a temporary emergency override that records a `legacy_unbound_override_used` event). A key with no binding row gets 403 `API_SERVER_BINDING_REQUIRED` ("This API key requires server authorization before it can be used.") on `/api/v1/*`; API use never creates or claims a binding.
+- Enrollment is owner-authenticated only: Developer > API Access > "Register authorized server" (`POST /api/developer/api-keys/{id}/server-binding`, Sanctum, tenant-scoped, ack required) returns the one-time installation credential; the same key then works from the authorized IP + credential. Super Admin can rebind. Panel/Profile show "Server authorization required". No key regeneration needed.
+- Tests: legacy suite in `ApiKeyServerBindingTest`; contract suites that use bare factory keys opt into the override via `Tests\Concerns\AllowsUnboundApiKeys`. **Deploy note:** every existing customer key is refused until its owner enrolls — notify customers before rollout.
+
 ## 9. Working Conventions
 
 ### Frontend page layout

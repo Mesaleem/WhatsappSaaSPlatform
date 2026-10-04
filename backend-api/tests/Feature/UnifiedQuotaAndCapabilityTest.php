@@ -44,6 +44,8 @@ use Tests\TestCase;
  */
 class UnifiedQuotaAndCapabilityTest extends TestCase
 {
+    use \Tests\Concerns\AllowsUnboundApiKeys;
+
     use RefreshDatabase, GrantsNativeWhatsAppGroups;
 
     private const RECIPIENT = '919999999999';

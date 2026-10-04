@@ -40,6 +40,8 @@ use Tests\TestCase;
  */
 class CrmHardeningRound2Test extends TestCase
 {
+    use \Tests\Concerns\AllowsUnboundApiKeys;
+
     use RefreshDatabase;
 
     private const LEADS = '/api/crm/leads';

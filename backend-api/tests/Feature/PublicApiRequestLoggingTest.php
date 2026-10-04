@@ -29,6 +29,8 @@ use Tests\TestCase;
  */
 class PublicApiRequestLoggingTest extends TestCase
 {
+    use \Tests\Concerns\AllowsUnboundApiKeys;
+
     use RefreshDatabase;
 
 

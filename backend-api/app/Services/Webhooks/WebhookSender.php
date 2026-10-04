@@ -4,6 +4,8 @@ namespace App\Services\Webhooks;
 
 use App\Models\WebhookDelivery;
 use App\Models\WebhookSubscription;
+use App\Support\Security\OutboundUrlGuard;
+use App\Support\Security\UnsafeOutboundUrlException;
 use Illuminate\Support\Facades\Http;
 use Throwable;
 
@@ -40,20 +42,26 @@ class WebhookSender
         $success = false;
 
         try {
-            $response = Http::withHeaders([
-                'Content-Type' => 'application/json',
-                'X-WASAAS-Signature' => $signature,
-                'X-WASAAS-Event' => $event,
-            ])
-                ->withBody($body, 'application/json')
-                ->timeout(self::TIMEOUT_SECONDS)
-                ->post($subscription->url);
+            // Phase 12 Task 2 (H7): the URL is re-validated NOW (the stored value may predate the guard, or its DNS
+            // may have changed since registration); the connection is pinned to the validated address and every
+            // redirect hop is re-checked — a public URL can never bounce a delivery into an internal address.
+            $response = app(OutboundUrlGuard::class)->send('POST', $subscription->url, function (string $method) use ($body, $signature, $event) {
+                $request = Http::withHeaders([
+                    'Content-Type' => 'application/json',
+                    'X-WASAAS-Signature' => $signature,
+                    'X-WASAAS-Event' => $event,
+                ])->timeout(self::TIMEOUT_SECONDS);
+
+                return $method === 'GET' ? $request : $request->withBody($body, 'application/json');
+            });
 
             $statusCode = $response->status();
             $success = $response->successful();
             if (! $success) {
                 $error = "Endpoint responded with HTTP {$statusCode}.";
             }
+        } catch (UnsafeOutboundUrlException $e) {
+            $error = 'The webhook URL was refused: '.$e->getMessage();
         } catch (Throwable $e) {
             $error = 'Could not reach the webhook URL: '.$e->getMessage();
         }

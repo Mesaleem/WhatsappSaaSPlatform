@@ -20,6 +20,7 @@ use App\Http\Controllers\Api\PaymentWebhookController;
 use App\Http\Controllers\Api\BillingController;
 use App\Http\Controllers\Api\CreditController;
 use App\Http\Controllers\Api\AdminCreditController;
+use App\Http\Controllers\Api\Admin\ApiKeyBindingAdminController;
 use App\Http\Controllers\Api\Admin\GatewaySettingsController;
 use App\Http\Controllers\Api\Admin\MailSettingsController;
 use App\Http\Controllers\Api\ApiKeyController;
@@ -77,7 +78,7 @@ use App\Http\Controllers\Api\SocialReportController;
 use App\Http\Controllers\Api\ContactGroupController;
 use Illuminate\Support\Facades\Route;
 
-Route::post('/auth/login', [AuthController::class, 'login']);
+Route::post('/auth/login', [AuthController::class, 'login'])->middleware('throttle:login');
 
 // Social/Ads Launcher Overhaul — Step 2. Publicly fetchable ad-creative
 // media (images/videos a tenant uploaded) — see SocialMediaController::
@@ -400,6 +401,13 @@ Route::middleware('auth:sanctum')->group(function () {
             // secret without touching its key_hash (see
             // ApiKeyController::regenerateSecret()'s own docblock).
             Route::post('/api-keys/{id}/regenerate-secret', [ApiKeyController::class, 'regenerateSecret']);
+
+            // Public API authorized-server binding (buyer side). There is deliberately NO endpoint here that edits
+            // an active binding: moving servers is a request that a Super Admin decides (admin/api-access below).
+            Route::get('/api-keys/{id}/server-binding', [ApiKeyController::class, 'serverBinding']);
+            Route::post('/api-keys/{id}/server-binding', [ApiKeyController::class, 'registerServer']);
+            Route::post('/api-keys/{id}/installation-credential', [ApiKeyController::class, 'installationCredential']);
+            Route::post('/api-keys/{id}/server-change-requests', [ApiKeyController::class, 'requestServerChange']);
 
             Route::get('/webhooks', [WebhookSubscriptionController::class, 'index']);
             Route::post('/webhooks', [WebhookSubscriptionController::class, 'store']);
@@ -1117,7 +1125,11 @@ Route::middleware('auth:sanctum')->group(function () {
             // 'whatsapp' module slug exists (Account::MODULES) — 'analytics'
             // matches this route's own frontend module gate (App.tsx /
             // AppLayout.tsx) exactly.
-            Route::middleware('module.guard:message_logs')->get('/message-logs', [MessageDispatchLogController::class, 'index']);
+            Route::middleware('module.guard:message_logs')->group(function () {
+                Route::get('/message-logs', [MessageDispatchLogController::class, 'index']);
+                // "View" action: the complete record for one row, same scoping as the list.
+                Route::get('/message-logs/{id}', [MessageDispatchLogController::class, 'show'])->whereNumber('id');
+            });
         });
 
         // Role-Based Login Audit Logging Architecture — held by ALL three
@@ -1322,6 +1334,20 @@ Route::middleware('auth:sanctum')->group(function () {
     // here. See WhatsAppController::adminIndex()'s docblock for the
     // disclosed "every tenant's device" interpretation.
     Route::middleware('role:super_admin')->get('/admin/whatsapp/devices', [WhatsAppController::class, 'adminIndex']);
+
+    // Public API authorized-server binding - Super Admin only: view bindings, decide server-change requests,
+    // revoke / re-bind a server, disable a key's API access. Never returns a key, credential or hash.
+    Route::middleware('role:super_admin')->prefix('admin/api-access')->group(function () {
+        Route::get('/', [ApiKeyBindingAdminController::class, 'index']);
+        Route::get('/change-requests', [ApiKeyBindingAdminController::class, 'changeRequests']);
+        Route::post('/change-requests/{requestId}/approve', [ApiKeyBindingAdminController::class, 'approve'])->whereNumber('requestId');
+        Route::post('/change-requests/{requestId}/reject', [ApiKeyBindingAdminController::class, 'reject'])->whereNumber('requestId');
+        Route::post('/{keyId}/revoke', [ApiKeyBindingAdminController::class, 'revoke'])->whereNumber('keyId');
+        Route::post('/{keyId}/rebind', [ApiKeyBindingAdminController::class, 'rebind'])->whereNumber('keyId');
+        Route::post('/{keyId}/disable', [ApiKeyBindingAdminController::class, 'disable'])->whereNumber('keyId');
+        Route::post('/{keyId}/enable', [ApiKeyBindingAdminController::class, 'enable'])->whereNumber('keyId');
+        Route::get('/{keyId}/events', [ApiKeyBindingAdminController::class, 'events'])->whereNumber('keyId');
+    });
 
     // Super Admin WhatsApp Device Integration — the Super Admin's OWN
     // scannable WhatsApp test device (Account::platformDevice()), used by

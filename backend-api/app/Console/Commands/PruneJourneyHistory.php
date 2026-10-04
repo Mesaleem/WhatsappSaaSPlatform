@@ -2,10 +2,8 @@
 
 namespace App\Console\Commands;
 
-use App\Models\WhatsAppFlowSession;
+use App\Services\Ops\RetentionPruner;
 use Illuminate\Console\Command;
-use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Log;
 
 /**
  * Phase 7 Task 7 — bounded retention for the two append-only Journey
@@ -36,78 +34,49 @@ use Illuminate\Support\Facades\Log;
  *
  * Bounded work: at most --batch × --max-batches rows per table per run,
  * deleted by primary key in batches, oldest first.
+ *
+ * Phase 12 Task 5 — the predicates and batching now live in App\Services\Ops\RetentionPruner (shared with the
+ * scheduled `ops:prune-retention`); this command keeps its own options, output and dry-run-by-default behaviour,
+ * and is still NOT scheduled. Defaults come from config/retention.php.
  */
 class PruneJourneyHistory extends Command
 {
     protected $signature = 'journeys:prune-history
-        {--events-days=90 : Keep journey execution events newer than this many days}
-        {--inbound-days=30 : Keep inbound message event keys newer than this many days}
+        {--events-days= : Keep journey execution events newer than this many days (default: retention config)}
+        {--inbound-days= : Keep inbound message event keys newer than this many days (default: retention config)}
         {--batch=1000 : Rows per delete batch}
         {--max-batches=50 : Maximum batches per table per run}
         {--force : Actually delete (default is a dry run that only counts)}';
 
     protected $description = 'Count (or, with --force, delete) old Journey execution events and inbound event keys';
 
-    public function handle(): int
+    public function handle(RetentionPruner $pruner): int
     {
-        $eventsDays = max(1, (int) $this->option('events-days'));
-        $inboundDays = max(1, (int) $this->option('inbound-days'));
-        $batch = max(1, min(10000, (int) $this->option('batch')));
-        $maxBatches = max(1, (int) $this->option('max-batches'));
+        $eventsDays = $this->option('events-days') !== null ? max(1, (int) $this->option('events-days')) : (int) config('retention.categories.journey_execution_events.days', 90);
+        $inboundDays = $this->option('inbound-days') !== null ? max(1, (int) $this->option('inbound-days')) : (int) config('retention.categories.inbound_message_events.days', 30);
         $force = (bool) $this->option('force');
 
-        $events = $this->prune('journey_execution_events', $this->eventCandidates(now()->subDays($eventsDays)), $batch, $maxBatches, $force);
-        $inbound = $this->prune('inbound_message_events', $this->inboundCandidates(now()->subDays($inboundDays)), $batch, $maxBatches, $force);
+        $result = $pruner->run($force, [
+            'only' => ['journey_execution_events', 'inbound_message_events'],
+            'days' => ['journey_execution_events' => $eventsDays, 'inbound_message_events' => $inboundDays],
+            'batch' => (int) $this->option('batch'),
+            'max_batches' => (int) $this->option('max-batches'),
+        ]);
+
+        if ($result['locked']) {
+            $this->warn('Another retention run is in progress; nothing done.');
+
+            return self::SUCCESS;
+        }
+
+        $by = collect($result['rows'])->keyBy('category');
+        $count = fn (string $c) => (int) ($force ? ($by[$c]['deleted'] ?? 0) : ($by[$c]['candidates'] ?? 0));
+        $events = $count('journey_execution_events');
+        $inbound = $count('inbound_message_events');
 
         $verb = $force ? 'Deleted' : 'Would delete (dry run; pass --force to delete)';
         $this->info("{$verb}: {$events} journey execution event(s) older than {$eventsDays} days, {$inbound} inbound event key(s) older than {$inboundDays} days.");
 
-        if ($force && ($events + $inbound) > 0) {
-            Log::info('journeys:prune-history deleted old journey history.', ['execution_events' => $events, 'inbound_events' => $inbound]);
-        }
-
-        return self::SUCCESS;
-    }
-
-    private function eventCandidates(\DateTimeInterface $cutoff): \Closure
-    {
-        return fn () => DB::table('journey_execution_events as e')
-            ->where('e.created_at', '<', $cutoff)
-            ->whereNotExists(fn ($q) => $q->select(DB::raw(1))
-                ->from('whatsapp_flow_sessions as s')
-                ->whereColumn('s.id', 'e.session_id')
-                ->whereIn('s.status', WhatsAppFlowSession::OPEN_STATUSES))
-            ->orderBy('e.id');
-    }
-
-    private function inboundCandidates(\DateTimeInterface $cutoff): \Closure
-    {
-        return fn () => DB::table('inbound_message_events as i')
-            ->where('i.created_at', '<', $cutoff)
-            ->whereNotExists(fn ($q) => $q->select(DB::raw(1))
-                ->from('journey_execution_events as e')
-                ->whereColumn('e.inbound_event_id', 'i.id'))
-            ->orderBy('i.id');
-    }
-
-    private function prune(string $table, \Closure $candidates, int $batch, int $maxBatches, bool $force): int
-    {
-        if (! $force) {
-            return min($candidates()->count(), $batch * $maxBatches);
-        }
-
-        $deleted = 0;
-
-        for ($i = 0; $i < $maxBatches; $i++) {
-            $ids = $candidates()->limit($batch)->pluck(str_starts_with($table, 'journey') ? 'e.id' : 'i.id')->all();
-
-            if ($ids === []) {
-                break;
-            }
-
-            $deleted += DB::table($table)->whereIn('id', $ids)->delete();
-        }
-
-        return $deleted;
+        return $result['failed'] ? self::FAILURE : self::SUCCESS;
     }
 }

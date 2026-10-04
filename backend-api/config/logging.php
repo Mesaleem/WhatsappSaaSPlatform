@@ -94,6 +94,23 @@ return [
             'processors' => [PsrLogMessageProcessor::class],
         ],
 
+        // Phase 12 Task 3 — structured (one JSON object per line) channel for production log shippers.
+        // NOT the default: select it explicitly with LOG_CHANNEL=json, or add `json` to LOG_STACK. Output goes to
+        // stderr (container/supervisor friendly) unless LOG_JSON_PATH names a file. Fields and the redaction rules
+        // are documented in App\Logging\StructuredLogFormatter / App\Logging\Redactor.
+        'json' => [
+            'driver' => 'monolog',
+            'level' => env('LOG_LEVEL', 'debug'),
+            'handler' => StreamHandler::class,
+            'with' => [
+                'stream' => env('LOG_JSON_PATH', 'php://stderr'),
+            ],
+            'formatter' => \App\Logging\StructuredLogFormatter::class,
+            'formatter_with' => [
+                'includeTrace' => (bool) env('LOG_JSON_TRACE', false),
+            ],
+        ],
+
         'stderr' => [
             'driver' => 'monolog',
             'level' => env('LOG_LEVEL', 'debug'),

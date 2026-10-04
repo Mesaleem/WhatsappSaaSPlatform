@@ -115,6 +115,7 @@ class ChatbotEngineService
 
             // Phase 7 Task 7 — a skipped redelivery of a message a Journey handled.
             if (($gate['reason'] ?? null) === 'duplicate') {
+                app(\App\Support\Observability\WebhookTally::class)->duplicates++;   // Phase 12 Task 3 — counted only
                 app(JourneyExecutionRecorder::class)->recordDuplicate($accountId, $gate['original_event_id'] ?? null, $provider ?? 'unknown');
             }
 
@@ -125,6 +126,7 @@ class ChatbotEngineService
             // the retry is a clean first attempt, still de-duplicated by the
             // event key.
             if (($gate['reason'] ?? null) === 'busy') {
+                app(\App\Support\Observability\WebhookTally::class)->busy++;   // Phase 12 Task 3 — counted only
                 $this->deferBusyMessage($accountId, $senderPhone, $incomingMessage, $referral, $provider, $eventKey, $attempt, $runningSynchronously);
             }
 

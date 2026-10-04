@@ -8,6 +8,12 @@ import type { ClientApiKey } from '../../types/templates';
 import { indigo, activeGradient, cardShadow, ROLE_BADGE_CLASS, roleLabel } from '../../theme/signalIndigo';
 import { extractErrorMessage as extractMessage } from '../../utils/apiError';
 import ConfirmModal from '../common/ConfirmModal';
+import ServerBindingFields, {
+  emptyServerBinding,
+  toServerBindingPayload,
+  validateServerBinding,
+  type ServerBindingValue,
+} from '../developer/ServerBindingFields';
 import DismissibleAlert from '../common/DismissibleAlert';
 
 const inputClass =
@@ -40,6 +46,9 @@ export default function ProfileModal({ onClose }: { onClose: () => void }) {
   // plaintext key, so a key can be copied/revealed only immediately after it is (re)generated.
   const [revealedPlainKey, setRevealedPlainKey] = useState<string | null>(null);
   const [showKey, setShowKey] = useState(false);
+  const [binding, setBinding] = useState<ServerBindingValue>(emptyServerBinding);
+  const [bindingErrors, setBindingErrors] = useState<Record<string, string>>({});
+  const [revealedCredential, setRevealedCredential] = useState<string | null>(null);
   const [keyCopied, setKeyCopied] = useState(false);
 
   useEffect(() => {
@@ -69,11 +78,15 @@ export default function ProfileModal({ onClose }: { onClose: () => void }) {
 
   const confirmRegenerateKey = async () => {
     setKeyError(null);
+    const found = validateServerBinding(binding);
+    setBindingErrors(found);
+    if (Object.keys(found).length) return;
     setIsRegenerating(true);
     try {
-      const result = await templateService.regenerateApiKey();
+      const result = await templateService.regenerateApiKey(toServerBindingPayload(binding));
       setApiKey(result.data);
       setRevealedPlainKey(result.plain_text_key);
+      setRevealedCredential(result.installation_credential ?? null);
       setShowKey(true);
       setShowRegenerateConfirm(false);
     } catch (err) {
@@ -260,6 +273,12 @@ export default function ProfileModal({ onClose }: { onClose: () => void }) {
                       </span>
                     </div>
                   )}
+                  {revealedCredential && (
+                    <p className="break-all rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                      <strong>Installation credential (shown once):</strong>{' '}
+                      <code data-testid="profile-installation-credential">{revealedCredential}</code> — send it in the X-Client-Installation header from your authorized server.
+                    </p>
+                  )}
                   <div className="flex items-center gap-2">
                     <code className="flex-1 overflow-x-auto rounded-lg border border-slate-300 bg-slate-50 px-3 py-2 text-xs text-slate-900">
                       {showKey
@@ -290,6 +309,11 @@ export default function ProfileModal({ onClose }: { onClose: () => void }) {
                       {keyCopied ? 'Copied' : 'Copy'}
                     </button>
                   </div>
+                  {apiKey?.server_binding?.status === 'unbound' && (
+                    <p role="note" className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                      This API key requires server authorization before it can be used. Open Developer API &gt; API Access to register your authorized server — your existing key keeps working from it.
+                    </p>
+                  )}
                   <div className="flex items-center justify-between">
                     <p className="text-[11px]" style={{ color: indigo.muted }}>
                       {apiKey?.last_used_at
@@ -363,9 +387,14 @@ export default function ProfileModal({ onClose }: { onClose: () => void }) {
       <ConfirmModal
         title={apiKey ? 'Regenerate API key' : 'Generate API key'}
         message={
-          apiKey
-            ? 'Regenerate your Client API Key? The current key will stop working immediately for any integration using it.'
-            : 'Generate a Client API Key for this account?'
+          <div className="space-y-3 text-left">
+            <p>
+              {apiKey
+                ? 'Regenerate your Client API Key? The current key will stop working immediately for any integration using it.'
+                : 'Generate a Client API Key for this account?'}
+            </p>
+            <ServerBindingFields value={binding} onChange={setBinding} errors={bindingErrors} idPrefix="profile" />
+          </div>
         }
         confirmLabel={apiKey ? 'Regenerate' : 'Generate'}
         variant={apiKey ? 'danger' : 'default'}

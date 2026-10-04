@@ -94,7 +94,8 @@ class SendWhatsAppTemplateJob implements ShouldQueue
             Log::warning('SendWhatsAppTemplateJob: bulk recipient did not send.', [
                 'account_id' => $this->accountId,
                 'template_id' => $this->templateId,
-                'recipient_phone' => $this->recipientPhone,
+                // Phase 12 Task 3: the recipient's number is PII — masked (last 4 digits) in the operational log.
+                'recipient_phone' => \App\Logging\Redactor::maskPhone((string) $this->recipientPhone),
                 'status' => $result['status'],
                 'message' => $result['message'] ?? null,
             ]);

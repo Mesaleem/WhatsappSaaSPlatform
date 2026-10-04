@@ -36,6 +36,8 @@ use Tests\TestCase;
  */
 class MetaSendMessageTest extends TestCase
 {
+    use \Tests\Concerns\AllowsUnboundApiKeys;
+
     use RefreshDatabase;
 
 

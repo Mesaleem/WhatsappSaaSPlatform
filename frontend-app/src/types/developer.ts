@@ -31,6 +31,71 @@ export interface ApiKey {
    * account:id,company_name only on that branch.
    */
   account?: { id: number; company_name: string } | null;
+  /** Authorized-server binding summary (ApiKeyBindingService::summary()); absent on old API responses. */
+  server_binding?: ServerBindingSummary;
+}
+
+/** Public API authorized-server binding. */
+export type IpPolicy = 'NONE' | 'SINGLE_IP' | 'IP_ALLOWLIST';
+export type BindingStatus = 'unbound' | 'pending_activation' | 'active' | 'revoked' | 'disabled';
+
+export interface ServerBinding {
+  id: number;
+  status: 'pending_activation' | 'active' | 'revoked';
+  label: string | null;
+  ip_policy: IpPolicy;
+  authorized_ips: string[];
+  registered_ip: string | null;
+  registered_at: string | null;
+  last_success_ip: string | null;
+  last_success_at: string | null;
+  credential_issued: boolean;
+  revoked_at: string | null;
+  created_at: string | null;
+}
+
+export interface ServerChangeRequest {
+  id: number;
+  api_key_id: number;
+  status: 'pending' | 'approved' | 'rejected';
+  current_label: string | null;
+  current_ip: string | null;
+  requested_label: string | null;
+  requested_ip_policy: IpPolicy;
+  requested_ips: string[];
+  reason: string;
+  decision_note: string | null;
+  decided_at: string | null;
+  created_at: string | null;
+}
+
+export interface ServerBindingSummary {
+  status: BindingStatus;
+  enforced: boolean;
+  /** true => this key cannot call /api/v1/* until its owner registers an authorized server (legacy key, no binding yet). */
+  binding_required?: boolean;
+  binding: ServerBinding | null;
+  access_disabled: boolean;
+  access_disabled_reason: string | null;
+  /** True when the authorized server has no installation credential yet (after an approval/rebind) — the owner must issue one. */
+  credential_pending: boolean;
+  pending_change_request: ServerChangeRequest | null;
+  last_change_request: ServerChangeRequest | null;
+}
+
+/** Fields the buyer supplies when a key is created / a legacy key is registered. */
+export interface ServerBindingPayload {
+  acknowledge_server_binding: boolean;
+  server_label?: string;
+  ip_policy?: Exclude<IpPolicy, 'NONE'>;
+  authorized_ips?: string[];
+}
+
+export interface RequestServerChangePayload {
+  reason: string;
+  requested_label?: string;
+  ip_policy?: Exclude<IpPolicy, 'NONE'>;
+  requested_ips: string[];
 }
 
 /** GET /api/developer/api-keys response. 'account' = one tenant; 'global' = every tenant, Super Admin only. */
@@ -39,10 +104,12 @@ export type DeveloperScope = 'account' | 'global';
 export interface ApiKeysResponse {
   data: ApiKey[];
   scope: DeveloperScope;
+  /** The licence warning shown at key creation. */
+  server_binding_warning?: string;
 }
 
 /** POST /api/developer/api-keys */
-export interface CreateApiKeyPayload {
+export interface CreateApiKeyPayload extends ServerBindingPayload {
   name: string;
   expires_at?: string | null;
 }
@@ -57,7 +124,26 @@ export interface CreateApiKeyResponse {
    * Shown exactly ONCE, same one-time-reveal contract as plain_text_key.
    */
   plain_text_secret: string;
+  /** Shown exactly ONCE. Sent by the authorized server in the `X-Client-Installation` header. */
+  installation_credential: string;
+  installation_header: string;
+  warning: string;
   api_key: ApiKey;
+}
+
+/** POST /api/developer/api-keys/{id}/server-binding (legacy key registration) */
+export interface RegisterServerResponse {
+  message: string;
+  installation_credential: string;
+  installation_header: string;
+  data: ServerBindingSummary;
+}
+
+/** POST /api/developer/api-keys/{id}/installation-credential */
+export interface InstallationCredentialResponse {
+  message: string;
+  installation_credential: string;
+  installation_header: string;
 }
 
 /**
@@ -127,4 +213,32 @@ export interface WebhookDelivery {
   attempt: number;
   created_at: string;
   updated_at: string;
+}
+
+/** Super Admin API-access console (GET /api/admin/api-access). */
+export interface AdminApiAccessRow {
+  id: number;
+  name: string;
+  key_prefix: string;
+  account_id: number;
+  account_name: string | null;
+  revoked_at: string | null;
+  last_used_at: string | null;
+  server_binding: ServerBindingSummary;
+}
+
+export interface AdminChangeRequestRow extends ServerChangeRequest {
+  account_id: number;
+  account_name: string | null;
+  key_name: string | null;
+  key_prefix: string | null;
+}
+
+export interface ApiSecurityEvent {
+  id: number;
+  event: string;
+  ip: string | null;
+  binding_id: number | null;
+  context: Record<string, unknown> | null;
+  created_at: string;
 }

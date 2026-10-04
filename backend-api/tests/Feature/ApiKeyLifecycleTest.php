@@ -37,6 +37,8 @@ use Tests\TestCase;
  */
 class ApiKeyLifecycleTest extends TestCase
 {
+    use \Tests\Concerns\AllowsUnboundApiKeys;
+
     use RefreshDatabase;
 
     private const KEY_PREFIX = 'wasaas_live_';
@@ -128,7 +130,7 @@ class ApiKeyLifecycleTest extends TestCase
         $this->giveActiveSubscription($account); // POST is mutating -> subscription.guard requires this
         $admin = $this->makeAdmin($account);
 
-        $response = $this->actingAs($admin)->postJson('/api/developer/api-keys', ['name' => 'CRM Integration']);
+        $response = $this->actingAs($admin)->postJson('/api/developer/api-keys', ['name' => 'CRM Integration', 'acknowledge_server_binding' => true]);
 
         $response->assertCreated();
         $response->assertJsonStructure(['message', 'plain_text_key', 'plain_text_secret', 'api_key' => ['id', 'name', 'key_prefix']]);
@@ -160,6 +162,7 @@ class ApiKeyLifecycleTest extends TestCase
             'name' => 'Spoof Attempt',
             'account_id' => $tenantB->id,
             'tenant_id' => $tenantB->id,
+            'acknowledge_server_binding' => true,
         ]);
 
         $response->assertCreated();
@@ -206,7 +209,7 @@ class ApiKeyLifecycleTest extends TestCase
         // named row (as issueApiKey() makes) is invisible to this
         // endpoint by design and show() would correctly return
         // {"data": null} for it -- not a leak, just the wrong fixture.
-        $regenerate = $this->actingAs($admin)->postJson('/api/account/api-key/regenerate');
+        $regenerate = $this->actingAs($admin)->postJson('/api/account/api-key/regenerate', ['acknowledge_server_binding' => true]);
         $regenerate->assertOk();
         $plainKey = $regenerate->json('plain_text_key');
         $keyHash = ApiKey::where('account_id', $account->id)->firstOrFail()->key_hash;

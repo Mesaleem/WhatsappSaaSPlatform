@@ -67,6 +67,8 @@ use Tests\TestCase;
  */
 class PublicApiAuthorizationTest extends TestCase
 {
+    use \Tests\Concerns\AllowsUnboundApiKeys;
+
     use RefreshDatabase, GrantsNativeWhatsAppGroups;
 
 

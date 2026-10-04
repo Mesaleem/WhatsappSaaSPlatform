@@ -1365,13 +1365,21 @@ export default function TemplateManagerPage() {
                         check needed client-side, same as the pre-existing
                         Edit button before this feature.
                       */}
-                      <button
-                        onClick={() => setModalState({ open: true, template: t })}
-                        className="flex items-center gap-1 text-xs font-medium text-indigo-600 hover:text-indigo-700"
-                      >
-                        <Pencil className="h-3.5 w-3.5" />
-                        Edit
-                      </button>
+                      {viewerIsAgent && t.account_id === null ? (
+                        // A Global Template is the platform's one shared record: an Agent can read/use it but the
+                        // server refuses every write, so no Edit is offered.
+                        <span className="text-xs font-medium text-slate-400" title="Global templates are managed by the platform.">
+                          Read-only
+                        </span>
+                      ) : (
+                        <button
+                          onClick={() => setModalState({ open: true, template: t })}
+                          className="flex items-center gap-1 text-xs font-medium text-indigo-600 hover:text-indigo-700"
+                        >
+                          <Pencil className="h-3.5 w-3.5" />
+                          Edit
+                        </button>
+                      )}
                       {viewerIsSuperAdmin && (
                         <button
                           onClick={() => handleDelete(t)}

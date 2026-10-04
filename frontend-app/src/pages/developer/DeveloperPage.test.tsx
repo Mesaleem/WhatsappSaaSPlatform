@@ -240,6 +240,7 @@ describe('create API key', () => {
     await openCreateModal(user);
 
     await user.type(screen.getByLabelText(/^name/i), 'CRM integration');
+    await user.click(screen.getByRole('checkbox', { name: /authorized server/i }));
     await user.click(screen.getByRole('button', { name: /generate key/i }));
 
     expect(await screen.findByRole('heading', { name: 'API key created' })).toBeInTheDocument();
@@ -248,7 +249,10 @@ describe('create API key', () => {
     // The "you will not see this again" warning is present for both.
     expect(screen.getAllByText(/will not be shown again/i).length).toBeGreaterThanOrEqual(2);
 
-    expect(service.createApiKey).toHaveBeenCalledWith({ name: 'CRM integration', expires_at: null }, undefined);
+    expect(service.createApiKey).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'CRM integration', expires_at: null, acknowledge_server_binding: true, ip_policy: 'SINGLE_IP' }),
+      undefined,
+    );
   });
 
   it('does not submit twice when the button is clicked repeatedly', async () => {
@@ -265,6 +269,7 @@ describe('create API key', () => {
     await openCreateModal(user);
     await user.type(screen.getByLabelText(/^name/i), 'CRM');
 
+    await user.click(screen.getByRole('checkbox', { name: /authorized server/i }));
     const submit = screen.getByRole('button', { name: /generate key/i });
     await user.click(submit);
     expect(submit).toBeDisabled();
@@ -293,6 +298,7 @@ describe('create API key', () => {
     await waitFor(() => expect(service.listApiKeys).toHaveBeenCalledTimes(1));
     await openCreateModal(user);
     await user.type(screen.getByLabelText(/^name/i), 'CRM integration');
+    await user.click(screen.getByRole('checkbox', { name: /authorized server/i }));
     await user.click(screen.getByRole('button', { name: /generate key/i }));
 
     await user.click(await screen.findByRole('button', { name: 'Done' }));
@@ -314,6 +320,7 @@ describe('create API key', () => {
     // explicit check behind it.
     const today = new Date().toISOString().slice(0, 10);
     fireEvent.change(screen.getByLabelText(/expires at/i), { target: { value: today } });
+    await user.click(screen.getByRole('checkbox', { name: /authorized server/i }));
     await user.click(screen.getByRole('button', { name: /generate key/i }));
 
     expect(await screen.findByText('Expiry must be a future date.')).toBeInTheDocument();
@@ -332,6 +339,7 @@ describe('one-time reveal', () => {
     renderPage();
     await openCreateModal(user);
     await user.type(screen.getByLabelText(/^name/i), 'CRM');
+    await user.click(screen.getByRole('checkbox', { name: /authorized server/i }));
     await user.click(screen.getByRole('button', { name: /generate key/i }));
     await screen.findByRole('heading', { name: 'API key created' });
   }
@@ -414,6 +422,7 @@ describe('backend error handling', () => {
     renderPage();
     await openCreateModal(user);
     await user.type(screen.getByLabelText(/^name/i), 'Duplicate');
+    await user.click(screen.getByRole('checkbox', { name: /authorized server/i }));
     await user.click(screen.getByRole('button', { name: /generate key/i }));
 
     expect(await screen.findByText('The name has already been taken.')).toBeInTheDocument();
@@ -634,6 +643,7 @@ describe('credential hygiene and tenant safety', () => {
     renderPage();
     await openCreateModal(user);
     await user.type(screen.getByLabelText(/^name/i), 'CRM');
+    await user.click(screen.getByRole('checkbox', { name: /authorized server/i }));
     await user.click(screen.getByRole('button', { name: /generate key/i }));
     await screen.findByRole('heading', { name: 'API key created' });
     await user.click(screen.getByRole('button', { name: 'Copy API key' }));
@@ -661,12 +671,15 @@ describe('credential hygiene and tenant safety', () => {
     renderPage();
     await openCreateModal(user);
     await user.type(screen.getByLabelText(/^name/i), 'CRM');
+    await user.click(screen.getByRole('checkbox', { name: /authorized server/i }));
     await user.click(screen.getByRole('button', { name: /generate key/i }));
 
     await waitFor(() => expect(service.createApiKey).toHaveBeenCalled());
     const [payload, accountId] = service.createApiKey.mock.calls[0];
     expect(accountId).toBeUndefined();
-    expect(Object.keys(payload)).toEqual(['name', 'expires_at']);
+    expect(Object.keys(payload)).toEqual(['name', 'expires_at', 'acknowledge_server_binding', 'ip_policy']);
+    expect(payload.acknowledge_server_binding).toBe(true);
+    expect(payload.ip_policy).toBe('SINGLE_IP');
     // The form never offers an account/tenant field to a tenant admin.
     expect(screen.queryByLabelText(/client account/i)).not.toBeInTheDocument();
   });

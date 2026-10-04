@@ -41,6 +41,8 @@ use Tests\TestCase;
  */
 class MetaTemplateSendTest extends TestCase
 {
+    use \Tests\Concerns\AllowsUnboundApiKeys;
+
     use RefreshDatabase;
 
 

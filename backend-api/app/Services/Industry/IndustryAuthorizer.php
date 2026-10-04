@@ -4,6 +4,7 @@ namespace App\Services\Industry;
 
 use App\Models\Account;
 use App\Models\User;
+use App\Services\Access\DenialScope;
 use App\Services\Social\SocialTargetGate;
 
 /**
@@ -31,6 +32,20 @@ class IndustryAuthorizer
      */
     public function denial(Account $account, string $industry, ?string $module = null, bool $read = true, ?User $user = null, ?bool $superAdmin = null): ?array
     {
+        // Phase 12 Task 4 — one scope per decision: the industry check and the required-capability check
+        // share one fresh target load, discarded when this call returns.
+        return $this->denialWithin(new DenialScope(), $account, $industry, $module, $read, $user, $superAdmin);
+    }
+
+    /**
+     * Same decision as denial(), sharing a caller-owned scope across several READ-ONLY calls in one pass
+     * (IndustryModuleResolver::contextFor). The public denial() signature stays as it was.
+     *
+     * @return array{code: string, message: string, status: int}|null
+     */
+    public function denialWithin(DenialScope $scope, Account $account, string $industry, ?string $module = null, bool $read = true, ?User $user = null, ?bool $superAdmin = null): ?array
+    {
+
         if (! $this->registry->exists($industry)) {
             return ['code' => 'INDUSTRY_UNKNOWN', 'message' => 'This industry does not exist.', 'status' => 404];
         }
@@ -52,6 +67,7 @@ class IndustryAuthorizer
             ],
             $superAdmin,
             $read,
+            $scope,
         );
         if ($target !== null) {
             return $target + ['status' => 403];
@@ -69,13 +85,14 @@ class IndustryAuthorizer
                 ['CAPABILITY_NOT_ENTITLED' => 'Your current plan does not include Billing & Collections. Please upgrade your subscription to unlock it.'],
                 $superAdmin,
                 $read,
+                $scope,
             );
             if ($shared !== null) {
                 return $shared + ['status' => 403];
             }
         }
 
-        if (! $this->resolver->has($account, $industry)) {
+        if (! $scope->remember("has:{$account->id}:{$industry}", fn () => $this->resolver->has($account, $industry))) {
             return ['code' => 'INDUSTRY_NOT_ASSIGNED', 'message' => "The {$label} industry is not set up for this account.", 'status' => 403];
         }
 

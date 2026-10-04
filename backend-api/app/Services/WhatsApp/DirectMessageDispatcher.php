@@ -84,7 +84,15 @@ class DirectMessageDispatcher
             $result = $driver->sendMessage($normalizedPhone, $body, []);
             $preview = $body;
         } else {
-            [$driverMessage, $metaData] = WhatsAppMediaPayloadBuilder::build($engineType, $content);
+            try {
+                [$driverMessage, $metaData] = WhatsAppMediaPayloadBuilder::build($engineType, $content);
+            } catch (\App\Support\Security\UnsafeOutboundUrlException $e) {
+                $msg = 'The media URL was refused: '.$e->getMessage();
+                MessageDispatchLog::record($accountId, $source, $normalizedPhone, success: false, errorReason: $msg, apiKeyId: $apiKeyId, referenceType: $messageType, hasMedia: true, mediaUrl: $content['url'] ?? null);
+
+                return ['status' => 'failed', 'message' => $msg];
+            }
+
             $result = $driver->sendMessage($normalizedPhone, $driverMessage, $metaData);
             $preview = $content['caption'] ?? '['.($content['media_type'] ?? 'media').']';
         }

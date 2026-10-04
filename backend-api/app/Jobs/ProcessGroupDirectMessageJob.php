@@ -384,7 +384,11 @@ class ProcessGroupDirectMessageJob implements ShouldQueue
             return $driver->sendMessage($to, (string) ($this->content['body'] ?? ''), []);
         }
 
-        [$driverMessage, $metaData] = WhatsAppMediaPayloadBuilder::build($engineType, $this->content);
+        try {
+            [$driverMessage, $metaData] = WhatsAppMediaPayloadBuilder::build($engineType, $this->content);
+        } catch (\App\Support\Security\UnsafeOutboundUrlException $e) {
+            return ['success' => false, 'error' => 'The media URL was refused: '.$e->getMessage()];
+        }
 
         return $driver->sendMessage($to, $driverMessage, $metaData);
     }

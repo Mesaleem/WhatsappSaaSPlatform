@@ -2104,7 +2104,18 @@ class WhatsAppJourneyEngine
             'filename' => $mediaType === 'document' ? (($data['filename'] ?? null) ?: null) : null,
         ];
 
-        [$driverMessage, $metaData] = WhatsAppMediaPayloadBuilder::build($subscription?->engine_type, $content);
+        try {
+            [$driverMessage, $metaData] = WhatsAppMediaPayloadBuilder::build($subscription?->engine_type, $content);
+        } catch (\App\Support\Security\UnsafeOutboundUrlException $e) {
+            // Phase 12 Task 2 (H7): a non-public media URL is a permanent failure of this node, never retried.
+            $this->lastSendError = 'The media URL was refused: '.$e->getMessage();
+            $this->lastSendCategory = 'provider_failure';
+            $this->lastSendRetryable = false;
+            Log::warning("WhatsAppJourneyEngine: account #{$account->id} media URL refused — send skipped.", ['reason' => $e->getMessage()]);
+            $this->lastDispatchLogId = (int) MessageDispatchLog::record($account->id, 'journey', $phone, success: false, errorReason: $this->lastSendError, referenceType: 'whatsapp_flow', referenceId: $flowId, messagePreview: $content['caption'] ?? "[{$mediaType}]", hasMedia: true, mediaUrl: $content['url'])->id;
+
+            return false;
+        }
 
         return $this->send($account, $subscription, $phone, $driverMessage, $metaData, $flowId, $content['caption'] ?? "[{$mediaType}]", $content['url']);
     }

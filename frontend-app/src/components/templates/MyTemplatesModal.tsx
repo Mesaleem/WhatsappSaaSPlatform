@@ -83,7 +83,7 @@ export default function MyTemplatesModal({ onClose }: { onClose: () => void }) {
             <XCircle className="h-5 w-5" />
           </button>
         </div>
-        <p className="mt-1 text-sm text-slate-500">Every template you've requested for this account, and its current status.</p>
+        <p className="mt-1 text-sm text-slate-500">Global templates shared by the platform, plus every template you've requested for this account.</p>
 
         <div className="mt-4 flex-1 overflow-y-auto">
           {templates === null && !error && (
@@ -103,13 +103,22 @@ export default function MyTemplatesModal({ onClose }: { onClose: () => void }) {
           {templates !== null && templates.length === 0 && (
             <div className="flex flex-col items-center gap-2 rounded-lg border border-dashed border-slate-300 py-8 text-center text-sm text-slate-500">
               <FileText className="h-6 w-6 text-slate-300" />
-              You haven't requested a template yet.
+              No templates yet.
             </div>
           )}
 
           {templates !== null && templates.length > 0 && (
+            <div className="space-y-4">
+              {[
+                { heading: 'Global Templates', rows: templates.filter((t) => t.is_global) },
+                { heading: 'My Templates', rows: templates.filter((t) => !t.is_global) },
+              ]
+                .filter((g) => g.rows.length > 0)
+                .map((g) => (
+                  <section key={g.heading} aria-label={g.heading}>
+                    <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">{g.heading}</h4>
             <ul className="space-y-2">
-              {templates.map((t) => (
+              {g.rows.map((t) => (
                 <li key={t.id} className="rounded-lg border border-slate-200 p-3">
                   <div className="flex items-start justify-between gap-3">
                     <div>
@@ -140,10 +149,13 @@ export default function MyTemplatesModal({ onClose }: { onClose: () => void }) {
                   {t.status === 'rejected' && t.rejection_reason && (
                     <p className="mt-2 text-xs text-red-700">Reason: {t.rejection_reason}</p>
                   )}
-                  <p className="mt-2 text-xs text-slate-400">Requested {formatDate(t.created_at)}</p>
+                  <p className="mt-2 text-xs text-slate-400">{t.is_global ? 'Shared by the platform' : `Requested ${formatDate(t.created_at)}`}</p>
                 </li>
               ))}
             </ul>
+                  </section>
+                ))}
+            </div>
           )}
         </div>
 

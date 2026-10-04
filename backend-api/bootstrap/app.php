@@ -28,6 +28,11 @@ return Application::configure(basePath: dirname(__DIR__))
         api: __DIR__.'/../routes/api.php',
         commands: __DIR__.'/../routes/console.php',
         health: '/up',
+        // Phase 12 Task 3 — GET /ready (readiness; /up stays the lightweight liveness probe). Registered here with
+        // no middleware group on purpose: no session, cookie or auth work for a probe.
+        then: function () {
+            \Illuminate\Support\Facades\Route::get('/ready', \App\Http\Controllers\ReadinessController::class)->name('ops.ready');
+        },
     )
     ->withMiddleware(function (Middleware $middleware) {
         $middleware->alias([
@@ -109,6 +114,15 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->prependToPriorityList(ThrottleRequests::class, LogApiRequestMiddleware::class);
         $middleware->prependToPriorityList(ThrottleRequests::class, AuthenticateApiKey::class);
         $middleware->prependToPriorityList(ThrottleRequests::class, ApiAuthMiddleware::class);
+
+        // Phase 12 Task 2 (M5) — baseline security headers on every API response (see its docblock).
+        // Global (outermost) so a 401/403/404/429 raised before the route's own middleware still carries them; the
+        // middleware itself only acts on /api/* requests.
+        $middleware->append(\App\Http\Middleware\ApiSecurityHeaders::class);
+
+        // Phase 12 Task 3 — correlation id for every /api/* request (see its docblock). Prepended so it is the
+        // outermost middleware: every log line written during the request, and every response, carries the id.
+        $middleware->prepend(\App\Http\Middleware\AssignRequestId::class);
     })
     ->withExceptions(function (Exceptions $exceptions) {
         // All-Module Form & API Validation Audit — Laravel's default

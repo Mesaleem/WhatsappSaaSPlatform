@@ -33,6 +33,8 @@ use Tests\TestCase;
  */
 class CrmLeadAssignmentTest extends TestCase
 {
+    use \Tests\Concerns\AllowsUnboundApiKeys;
+
     use RefreshDatabase;
 
     private const LEADS = '/api/crm/leads';

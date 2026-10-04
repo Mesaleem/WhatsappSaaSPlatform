@@ -37,6 +37,8 @@ use Tests\TestCase;
  */
 class CrmEntitlementRbacApiTest extends TestCase
 {
+    use \Tests\Concerns\AllowsUnboundApiKeys;
+
     use RefreshDatabase;
 
     private const V1 = '/api/v1/crm/leads';

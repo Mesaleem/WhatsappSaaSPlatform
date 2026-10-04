@@ -39,6 +39,8 @@ use Tests\TestCase;
  */
 class PublicApiIdempotencyTest extends TestCase
 {
+    use \Tests\Concerns\AllowsUnboundApiKeys;
+
     use RefreshDatabase;
 
 

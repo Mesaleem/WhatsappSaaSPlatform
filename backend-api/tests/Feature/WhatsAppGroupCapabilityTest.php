@@ -40,6 +40,8 @@ use Tests\TestCase;
  */
 class WhatsAppGroupCapabilityTest extends TestCase
 {
+    use \Tests\Concerns\AllowsUnboundApiKeys;
+
     use RefreshDatabase, GrantsNativeWhatsAppGroups;
 
     private const MEMBER = '919999999999';

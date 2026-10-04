@@ -5,6 +5,8 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Concerns\ResolvesTenantAccount;
 use App\Http\Controllers\Controller;
 use App\Models\ApiKey;
+use App\Services\ApiAccess\ApiKeyBindingService;
+use InvalidArgumentException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
@@ -28,6 +30,10 @@ use Illuminate\Support\Str;
 class ClientApiKeyController extends Controller
 {
     use ResolvesTenantAccount;
+
+    public function __construct(private readonly ApiKeyBindingService $bindings)
+    {
+    }
 
     private const PRIMARY_KEY_NAME = 'Client API Key';
     private const KEY_PREFIX = 'wasaas_live_';
@@ -56,6 +62,20 @@ class ClientApiKeyController extends Controller
     {
         $account = $this->requireAccount($request, 'Select a client/tenant account first (pass ?account_id=).');
 
+        // Same licence acknowledgement and authorized-server registration as the Developer Portal's key creation.
+        $data = $request->validate([
+            'acknowledge_server_binding' => ['accepted'],
+            'server_label' => ['nullable', 'string', 'max:100'],
+            'ip_policy' => ['nullable', 'string', 'in:SINGLE_IP,IP_ALLOWLIST'],
+            'authorized_ips' => ['nullable', 'array', 'max:20'],
+            'authorized_ips.*' => ['string', 'max:64'],
+        ], ['acknowledge_server_binding.accepted' => (string) config('api_binding.warning')]);
+        try {
+            $this->bindings->normalizePolicy($data['ip_policy'] ?? null, $data['authorized_ips'] ?? []);
+        } catch (InvalidArgumentException $e) {
+            return response()->json(['message' => $e->getMessage(), 'errors' => ['authorized_ips' => [$e->getMessage()]]], 422);
+        }
+
         $existing = $this->primaryKeyFor($account->id);
         if ($existing && ! $existing->isRevoked()) {
             $existing->forceFill(['revoked_at' => now()])->save();
@@ -69,10 +89,19 @@ class ClientApiKeyController extends Controller
             'key_prefix' => substr($plainTextKey, 0, 20),
             'key_hash' => ApiKey::hashKey($plainTextKey),
         ]);
+        $provisioned = $this->bindings->provision($key, [
+            'label' => $data['server_label'] ?? null,
+            'ip_policy' => $data['ip_policy'] ?? null,
+            'authorized_ips' => $data['authorized_ips'] ?? [],
+        ], $request->user());
+        $this->bindings->record(ApiKeyBindingService::EV_KEY_CREATED, $key, $provisioned['binding'], null, [], actor: $request->user());
 
         return response()->json([
-            'message' => 'Client API Key regenerated. Copy it now — it will not be shown again.',
+            'message' => 'Client API Key regenerated. Copy the key and installation credential now — neither will be shown again.',
             'plain_text_key' => $plainTextKey,
+            'installation_credential' => $provisioned['credential'],
+            'installation_header' => config('api_binding.installation_header'),
+            'warning' => config('api_binding.warning'),
             'data' => $this->present($key),
         ]);
     }
@@ -96,6 +125,7 @@ class ClientApiKeyController extends Controller
             'key_prefix' => $key->key_prefix,
             'created_at' => $key->created_at,
             'last_used_at' => $key->last_used_at,
+            'server_binding' => $this->bindings->summary($key),
         ];
     }
 }
