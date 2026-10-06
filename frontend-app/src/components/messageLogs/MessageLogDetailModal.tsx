@@ -6,7 +6,7 @@ import type { MessageDispatchLogDetail } from '../../types/messageLog';
 import type { ApiErrorResponse } from '../../types/auth';
 
 const SOURCE_LABEL: Record<string, string> = {
-  web_ui: 'Web (Send Alert)',
+  web_ui: 'Web (Send Notification)',
   web_template: 'Web (Template)',
   api: 'API',
   chatbot: 'Chatbot',

@@ -66,12 +66,12 @@ export default function ContactFormModal({
         <div className="mt-4 space-y-3">
           <label className="block text-xs font-medium text-slate-600">
             Phone number *
-            <input className={inputClass} value={phone} onChange={(e) => setPhone(e.target.value)} required maxLength={32} />
+            <span className="text-red-500" aria-hidden="true"> *</span><input className={inputClass} value={phone} onChange={(e) => setPhone(e.target.value)} required maxLength={32} />
             {field('phone_number')}
           </label>
           <label className="block text-xs font-medium text-slate-600">
             Name
-            <input className={inputClass} value={name} onChange={(e) => setName(e.target.value)} maxLength={255} />
+            <span className="text-red-500" aria-hidden="true"> *</span><input className={inputClass} value={name} onChange={(e) => setName(e.target.value)} maxLength={255} />
             {field('name')}
           </label>
           <label className="block text-xs font-medium text-slate-600">

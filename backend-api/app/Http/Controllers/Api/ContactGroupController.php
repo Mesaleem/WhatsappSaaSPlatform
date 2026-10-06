@@ -7,6 +7,9 @@ use App\Http\Controllers\Controller;
 use App\Jobs\CreateNativeWhatsAppGroupJob;
 use App\Jobs\SyncNativeWhatsAppGroupParticipantsJob;
 use App\Models\Account;
+use App\Models\ScheduledMessage;
+use App\Services\Scheduling\ScheduledMessageException;
+use App\Services\Scheduling\ScheduledMessageService;
 use App\Models\ContactGroup;
 use App\Models\ContactGroupMember;
 use App\Services\Crm\ContactGroupContactLinker;
@@ -43,6 +46,40 @@ class ContactGroupController extends Controller
     use ResolvesTenantAccount;
 
     /** GET /api/groups — every contact group for the active account, with members_count. */
+    /**
+     * POST /api/groups/keep  body: { keep_ids: [..] } — after a downgrade, the client chooses which of
+     * its groups stay open for the term. The others stay locked until the next term starts.
+     */
+    public function keep(Request $request): JsonResponse
+    {
+        $account = $this->requireAccount($request);
+        $data = $request->validate(['keep_ids' => ['required', 'array'], 'keep_ids.*' => ['integer']]);
+
+        try {
+            app(\App\Services\Billing\CustomGroupAccessService::class)->keep($account, $data['keep_ids']);
+        } catch (\InvalidArgumentException|\RuntimeException $e) {
+            return response()->json(['message' => $e->getMessage(), 'error_code' => 'invalid_selection'], 422);
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Your groups are set. The others stay locked until your next term starts.',
+        ]);
+    }
+
+    /**
+     * The groups a paid Custom Contact Groups term counts: the client's own internal groups. The
+     * default "All Contacts" group and native WhatsApp groups are not counted.
+     */
+    private function customGroupCount(Account $account): int
+    {
+        return ContactGroup::query()
+            ->where('account_id', $account->id)
+            ->where('is_default', false)
+            ->where('group_type', ContactGroup::GROUP_TYPE_INTERNAL)
+            ->count();
+    }
+
     public function index(Request $request): JsonResponse
     {
         $account = $this->requireAccount($request);
@@ -54,9 +91,16 @@ class ContactGroupController extends Controller
             ->orderBy('name')
             ->get();
 
+        $limit = app(\App\Services\Billing\ModuleAddonService::class)->activeUnitLimit($account, 'contact_groups');
+
         return response()->json([
             'success' => true,
             'data' => $groups,
+            'usage' => [
+                'used' => $this->customGroupCount($account),
+                'limit' => $limit,
+                'selection_required' => app(\App\Services\Billing\CustomGroupAccessService::class)->selectionRequired($account),
+            ],
         ]);
     }
 
@@ -117,7 +161,7 @@ class ContactGroupController extends Controller
 
         // A paid Custom Contact Groups term allows its included number of groups (the offer's units).
         $limit = app(\App\Services\Billing\ModuleAddonService::class)->activeUnitLimit($account, 'contact_groups');
-        if ($limit !== null && ContactGroup::query()->where('account_id', $account->id)->count() >= $limit) {
+        if ($limit !== null && $this->customGroupCount($account) >= $limit) {
             return response()->json([
                 'message' => "Your plan includes {$limit} contact groups. Renew or upgrade to add more.",
                 'error_code' => 'group_limit_reached',
@@ -488,7 +532,30 @@ class ContactGroupController extends Controller
         $data = $request->validate([
             'template_id' => ['required', 'integer', 'exists:message_templates,id'],
             'variables' => ['sometimes', 'array'],
+            // Optional: send to the group at a later time instead of now.
+            'scheduled_at' => ['sometimes', 'nullable', 'date'],
         ]);
+
+        $sendAt = ScheduledMessageService::parseSendAt($data['scheduled_at'] ?? null);
+        if ($sendAt !== null) {
+            try {
+                $row = app(ScheduledMessageService::class)->schedule(
+                    $account,
+                    ScheduledMessage::KIND_TEMPLATE_GROUP,
+                    ['group_id' => $id, 'template_id' => (int) $data['template_id'], 'variables' => $data['variables'] ?? []],
+                    $sendAt,
+                    'web_template',
+                );
+            } catch (ScheduledMessageException $e) {
+                return response()->json(['success' => false, 'message' => $e->getMessage(), 'error_code' => $e->errorCode], $e->status);
+            }
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Group message scheduled.',
+                'scheduled' => ['id' => $row->id, 'send_at' => $row->send_at->toIso8601String()],
+            ], 202);
+        }
 
         $result = GroupMessageDispatcher::dispatch(
             $account->id,

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Gauge, KeyRound, Loader2, Pencil, Plus, Power, PowerOff, RefreshCw, Timer } from 'lucide-react';
-import accountService from '../../services/accountService';
+import { Gauge, KeyRound, Loader2, Pencil, Plus, Power, PowerOff, RefreshCw, RotateCcw, Timer } from 'lucide-react';
+import accountService, { type AgentSummaryResponse } from '../../services/accountService';
 import type { Account, AccountStatus } from '../../types/account';
 import { useAuth } from '../../core/context/AuthContext';
 import type { BillingModel, EngineType } from '../../types/subscription';
@@ -174,9 +174,30 @@ export default function AccountsPage() {
   };
 
   const [pendingToggle, setPendingToggle] = useState<Account | null>(null);
+  // Super Admin only: free reset of a client's server-IP edit count (shared-hosting IP changes).
+  const [pendingIpReset, setPendingIpReset] = useState<Account | null>(null);
+  const [ipResetBusy, setIpResetBusy] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
 
   const handleToggleStatus = (account: Account) => {
     setPendingToggle(account);
+  };
+
+  const confirmIpReset = async () => {
+    if (!pendingIpReset) return;
+    setIpResetBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const result = await accountService.resetIpEditCount(pendingIpReset.id);
+      setNotice(`${pendingIpReset.company_name}: ${result.message}`);
+      setPendingIpReset(null);
+    } catch (err) {
+      setError(extractErrorMessage(err, 'Could not reset the IP edit count.'));
+      setPendingIpReset(null);
+    } finally {
+      setIpResetBusy(false);
+    }
   };
 
   const confirmToggleStatus = async () => {
@@ -196,6 +217,19 @@ export default function AccountsPage() {
       setBusyId(null);
     }
   };
+
+  // Super Admin only: every Agent with its login and client counts (the server refuses anyone else).
+  const [summary, setSummary] = useState<AgentSummaryResponse | null>(null);
+  useEffect(() => {
+    if (!superAdmin) return;
+    accountService
+      .agentSummary()
+      .then(setSummary)
+      .catch(() => setSummary(null));
+  }, [superAdmin, accounts.length]);
+
+  // The Agent column and the summary are Super Admin views: an Agent never sees who else manages a client.
+  const columnCount = superAdmin ? 9 : 8;
 
   const hasActiveFilters = search !== '' || statusFilter !== '' || from !== '' || to !== '' || agentFilter !== '';
   const clearFilters = () => {
@@ -277,10 +311,72 @@ export default function AccountsPage() {
         <ClearFiltersButton active={hasActiveFilters} onClear={clearFilters} />
       </div>
 
+      {notice && (
+        <p className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">{notice}</p>
+      )}
+
       {error && (
         <DismissibleAlert className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
           {error}
         </DismissibleAlert>
+      )}
+
+      {superAdmin && summary && (
+        <div className="mt-6">
+          <TableCard>
+            <div className="px-4 py-3 text-sm font-semibold text-slate-900">Clients per agent</div>
+            <table className="w-full min-w-[720px] divide-y divide-slate-200 text-sm">
+              <thead className="bg-slate-50">
+                <tr className="text-left text-xs font-medium uppercase tracking-wide text-slate-500">
+                  <th className="px-4 py-3">Agent</th>
+                  <th className="px-4 py-3">Agent login</th>
+                  <th className="px-4 py-3 text-right">Clients</th>
+                  <th className="px-4 py-3 text-right">Active</th>
+                  <th className="px-4 py-3 text-right">Suspended</th>
+                  <th className="px-4 py-3 text-right">Expired</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {summary.agents.length === 0 && (
+                  <tr>
+                    <td colSpan={6} className="px-4 py-6 text-center text-slate-400">No agents yet.</td>
+                  </tr>
+                )}
+                {summary.agents.map((agent) => (
+                  <tr
+                    key={agent.id}
+                    onClick={() => setAgentFilter(agent.id)}
+                    className="cursor-pointer hover:bg-slate-50"
+                    title="Show this agent's clients"
+                  >
+                    <td className="px-4 py-3 font-medium text-slate-900">{agent.company_name}</td>
+                    <td className="px-4 py-3 text-slate-600">
+                      {agent.login ? (
+                        <>
+                          <div>{agent.login.name}</div>
+                          <div className="text-xs text-slate-500">{agent.login.email}</div>
+                        </>
+                      ) : (
+                        <span className="text-slate-400">No login</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-right font-semibold text-slate-900">{agent.clients.total}</td>
+                    <td className="px-4 py-3 text-right text-slate-600">{agent.clients.active}</td>
+                    <td className="px-4 py-3 text-right text-slate-600">{agent.clients.suspended}</td>
+                    <td className="px-4 py-3 text-right text-slate-600">{agent.clients.expired}</td>
+                  </tr>
+                ))}
+                <tr className="bg-slate-50/60">
+                  <td className="px-4 py-3 font-medium text-slate-700" colSpan={2}>Direct clients (no agent)</td>
+                  <td className="px-4 py-3 text-right font-semibold text-slate-900">{summary.direct_clients.total}</td>
+                  <td className="px-4 py-3 text-right text-slate-600">{summary.direct_clients.active}</td>
+                  <td className="px-4 py-3 text-right text-slate-600">{summary.direct_clients.suspended}</td>
+                  <td className="px-4 py-3 text-right text-slate-600">{summary.direct_clients.expired}</td>
+                </tr>
+              </tbody>
+            </table>
+          </TableCard>
+        </div>
       )}
 
       <div className="mt-6">
@@ -289,6 +385,7 @@ export default function AccountsPage() {
           <thead className="bg-slate-50">
             <tr className="text-left text-xs font-medium uppercase tracking-wide text-slate-500">
               <th className="px-4 py-3">Company</th>
+              {superAdmin && <th className="px-4 py-3">Agent</th>}
               <th className="px-4 py-3">Owner Phone</th>
               <th className="px-4 py-3">Engine</th>
               <th className="px-4 py-3">Billing Model</th>
@@ -300,10 +397,10 @@ export default function AccountsPage() {
           </thead>
           <tbody className="divide-y divide-slate-100">
             {isLoading ? (
-              <TableSkeletonRows columns={8} />
+              <TableSkeletonRows columns={columnCount} />
             ) : accounts.length === 0 ? (
               <tr>
-                <td colSpan={8} className="px-4 py-10 text-center text-slate-400">
+                <td colSpan={columnCount} className="px-4 py-10 text-center text-slate-400">
                   No clients yet. Click "New Client" to provision one.
                 </td>
               </tr>
@@ -322,6 +419,11 @@ export default function AccountsPage() {
                         <div className="text-xs text-slate-500">{account.owner.email}</div>
                       )}
                     </td>
+                    {superAdmin && (
+                      <td className="px-4 py-3 text-slate-600">
+                        {account.agent ? account.agent.company_name : <span className="text-slate-400">Direct</span>}
+                      </td>
+                    )}
                     <td className="px-4 py-3 text-slate-600">{account.primary_phone ?? '—'}</td>
                     <td className="px-4 py-3">
                       {sub ? (
@@ -404,6 +506,16 @@ export default function AccountsPage() {
                         >
                           <KeyRound className="h-4 w-4" />
                         </button>
+                        {superAdmin && (
+                          <button
+                            onClick={() => setPendingIpReset(account)}
+                            className="rounded-md p-1.5 text-slate-500 hover:bg-slate-100 hover:text-slate-700"
+                            aria-label="Reset IP edit count"
+                            title="Reset IP edit count (shared hosting)"
+                          >
+                            <RotateCcw className="h-4 w-4" />
+                          </button>
+                        )}
                         {isAgentViewer && (
                           <button
                             onClick={() => openEditQuota(account)}
@@ -465,6 +577,18 @@ export default function AccountsPage() {
 
       {quotaModalAccount && (
         <UpdateQuotaModal account={quotaModalAccount} onClose={closeQuotaModal} onSaved={handleQuotaSaved} />
+      )}
+
+      {pendingIpReset && (
+        <ConfirmModal
+          title="Reset IP edit count?"
+          message={`Reset the server-IP edit count for ${pendingIpReset.company_name}? The client gets one free IP change again. Use this only after you confirm the client's host changed their outbound IP.`}
+          confirmLabel="Reset count"
+          variant="default"
+          isLoading={ipResetBusy}
+          onConfirm={() => void confirmIpReset()}
+          onCancel={() => setPendingIpReset(null)}
+        />
       )}
 
       {pendingToggle && (

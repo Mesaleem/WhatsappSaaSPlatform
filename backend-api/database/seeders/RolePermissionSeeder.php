@@ -211,6 +211,12 @@ class RolePermissionSeeder extends Seeder
             // that device). See TemplateService's docblock for the full
             // approval-routing design.
             'manage-templates',
+            // Payments for the Agent's own clients: an agent records a manual payment and can
+            // pay online on a client's behalf. Scoped to its own clients by the controllers
+            // (WhatsAppAddonService::assertCanRecord, tenant.isolation), not by this permission.
+            'manage-subscriptions',
+            // The Developer API key comes with the agent's own account's plan, like any client.
+            'manage-developer-settings',
         ],
         // Social Media Marketing & Meta Ads Automation Expansion (Phase 1).
         // Deliberately restricted to ONLY these four permissions — this

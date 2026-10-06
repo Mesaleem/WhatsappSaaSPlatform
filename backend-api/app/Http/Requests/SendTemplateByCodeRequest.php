@@ -74,6 +74,8 @@ class SendTemplateByCodeRequest extends FormRequest
             // see that class's docblock for why this is not validated
             // as a strict URL.
             'media_url' => ['sometimes', 'nullable', 'string', 'max:2048'],
+            // Optional: send later. ISO 8601 with a timezone, for example 2026-10-07T10:00:00+05:30.
+            'scheduled_at' => ['sometimes', 'nullable', 'date'],
             // Developer API "No template" sentinel (owner request 2026-10-05, see
             // MessageTemplate::NO_TEMPLATE_CODE) -- template_code=no_template sends this
             // free text instead of a template; ignored (optional) for a real template_code.

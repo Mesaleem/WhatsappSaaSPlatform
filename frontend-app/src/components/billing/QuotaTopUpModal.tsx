@@ -104,7 +104,7 @@ export default function QuotaTopUpModal({
             <div>
               <label htmlFor="requested-topup-amount" className="text-sm font-medium text-slate-700">
                 Amount to Add (₹)
-              </label>
+              <span className="text-red-500" aria-hidden="true"> *</span></label>
               <input
                 id="requested-topup-amount"
                 type="number"
@@ -121,7 +121,7 @@ export default function QuotaTopUpModal({
             <div>
               <label htmlFor="requested-extra-messages" className="text-sm font-medium text-slate-700">
                 Requested Extra Messages
-              </label>
+              <span className="text-red-500" aria-hidden="true"> *</span></label>
               <input
                 id="requested-extra-messages"
                 type="number"

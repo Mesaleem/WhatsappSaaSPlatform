@@ -188,6 +188,175 @@ class SimplePdfWriter
     }
 
     /**
+     * A tax invoice laid out as a page: a brand bar, the company and the document title, the
+     * billed-to and details blocks, an items table, the totals, the payment record, and a footer.
+     * Built only from the operators render() already uses (rectangles, lines, text), and kept
+     * separate from render() so the existing exports are unchanged. Text is ASCII only: the
+     * built-in Helvetica font cannot draw the rupee sign, so amounts are written as "INR".
+     *
+     * @param array{
+     *   company: string, accent: ?string, title: string, number: string, issued_on: string,
+     *   status: string, status_color: ?string, billed_to: list<string>,
+     *   details: list<array{0: string, 1: string}>,
+     *   items: list<array{0: string, 1: string, 2: string, 3: string}>,
+     *   subtotal: string, tax: string, tax_note: ?string, total: string,
+     *   payment: ?list<array{0: string, 1: string}>, footer: list<string>
+     * } $doc
+     */
+    public static function renderInvoice(array $doc): string
+    {
+        $ascii = static fn (string $s): string => preg_replace('/[^\x20-\x7E]/', '', str_replace(['₹', '—', '–', '’'], ['Rs. ', '-', '-', "'"], $s)) ?? '';
+        $escape = static fn (string $s): string => str_replace(['\\', '(', ')'], ['\\\\', '\\(', '\\)'], $ascii($s));
+        $width = static fn (string $s, int $size): float => strlen($ascii($s)) * $size * 0.5;
+
+        $ops = [];
+        $text = function (string $s, float $x, float $y, int $size = 10, bool $bold = false, ?string $color = null, string $align = 'left') use (&$ops, $escape, $width) {
+            if ($align === 'right') {
+                $x -= $width($s, $size);
+            } elseif ($align === 'center') {
+                $x -= $width($s, $size) / 2;
+            }
+            $font = $bold ? '/F2' : '/F1';
+            $ops[] = 'q';
+            if ($color !== null) {
+                $ops[] = $color.' rg';
+            }
+            $ops[] = 'BT '.$font.' '.$size.' Tf '.sprintf('%.2f %.2f', $x, $y).' Td ('.$escape($s).') Tj ET';
+            $ops[] = 'Q';
+        };
+        $rect = function (float $x, float $y, float $w, float $h, string $color) use (&$ops) {
+            $ops[] = 'q '.$color.' rg '.sprintf('%.2f %.2f %.2f %.2f', $x, $y, $w, $h).' re f Q';
+        };
+        $line = function (float $x1, float $y1, float $x2, float $y2, string $color = '0.85 0.85 0.87', float $weight = 0.6) use (&$ops) {
+            $ops[] = 'q '.$color.' RG '.$weight.' w '.sprintf('%.2f %.2f m %.2f %.2f l S', $x1, $y1, $x2, $y2).' Q';
+        };
+
+        // Colour components only ("r g b"): text() and rect() each add their own operator.
+        $accent = str_replace(' rg', '', self::hexToRgbOperator($doc['accent'] ?? null));
+        $accentText = $accent;
+        $ink = '0.13 0.15 0.22';
+        $muted = '0.45 0.47 0.52';
+        $white = '1 1 1';
+        $statusColor = str_replace(' rg', '', self::hexToRgbOperator($doc['status_color'] ?? null));
+
+        // Brand bar and heading.
+        $rect(0, 780, 612, 12, $accent);
+        $text($doc['company'], 50, 738, 18, true, $accentText);
+        $text((string) ($doc['subtitle'] ?? ''), 50, 722, 8, false, $muted);
+        $text($doc['title'], 562, 738, 22, true, $ink, 'right');
+        $text('Invoice no: '.$doc['number'], 562, 720, 9, false, $ink, 'right');
+        $text('Issued on: '.$doc['issued_on'], 562, 706, 9, false, $ink, 'right');
+
+        // Status stamp.
+        $rect(470, 668, 92, 20, $statusColor);
+        $text($doc['status'], 516, 674, 9, true, $white, 'center');
+
+        $line(50, 652, 562, 652, '0.80 0.80 0.83', 0.8);
+
+        // Billed to and details.
+        $text('BILLED TO', 50, 634, 8, true, $muted);
+        $y = 618;
+        foreach ($doc['billed_to'] as $index => $value) {
+            $text($value, 50, $y, $index === 0 ? 11 : 9, $index === 0, $index === 0 ? $ink : null);
+            $y -= $index === 0 ? 16 : 13;
+        }
+
+        $text('DETAILS', 330, 634, 8, true, $muted);
+        $y = 618;
+        foreach ($doc['details'] as [$label, $value]) {
+            $text($label, 330, $y, 9, false, $muted);
+            $text($value, 562, $y, 9, false, $ink, 'right');
+            $y -= 14;
+        }
+
+        // Items table.
+        $tableTop = 500;
+        $rect(50, $tableTop - 6, 512, 24, $accent);
+        $text('DESCRIPTION', 60, $tableTop + 2, 8, true, $white);
+        $text('QTY', 380, $tableTop + 2, 8, true, $white, 'right');
+        $text('RATE', 470, $tableTop + 2, 8, true, $white, 'right');
+        $text('AMOUNT', 552, $tableTop + 2, 8, true, $white, 'right');
+
+        $rowY = $tableTop - 24;
+        foreach (array_slice($doc['items'], 0, 10) as [$description, $qty, $rate, $amount]) {
+            $text($description, 60, $rowY, 9, false, $ink);
+            $text($qty, 380, $rowY, 9, false, $ink, 'right');
+            $text($rate, 470, $rowY, 9, false, $ink, 'right');
+            $text($amount, 552, $rowY, 9, false, $ink, 'right');
+            $rowY -= 6;
+            $line(50, $rowY, 562, $rowY);
+            $rowY -= 16;
+        }
+        if (count($doc['items']) > 10) {
+            $text('More lines are on the billing page.', 60, $rowY, 8, false, $muted);
+            $rowY -= 16;
+        }
+
+        // Totals: the GST row, then the total box below it with clear space between them.
+        $y = $rowY - 8;
+        $text('Subtotal', 440, $y, 9, false, $muted, 'right');
+        $text($doc['subtotal'], 552, $y, 9, false, $ink, 'right');
+        $y -= 16;
+        $text($doc['tax_note'] ?? 'GST', 440, $y, 9, false, $muted, 'right');
+        $text($doc['tax'], 552, $y, 9, false, $ink, 'right');
+        $boxTop = $y - 12;
+        $rect(330, $boxTop - 28, 232, 28, '0.95 0.95 0.99');
+        $text('Total payable', 340, $boxTop - 18, 11, true, $ink);
+        $text('INR '.$doc['total'], 552, $boxTop - 18, 11, true, $accentText, 'right');
+        $y = $boxTop - 28 - 30;
+
+        // Payment record, when there is one.
+        if ($doc['payment'] !== null) {
+            $text('PAYMENT RECORD', 50, $y, 8, true, $muted);
+            $y -= 16;
+            foreach ($doc['payment'] as [$label, $value]) {
+                $text($label, 50, $y, 9, false, $muted);
+                $text($value, 200, $y, 9, false, $ink);
+                $y -= 14;
+            }
+        }
+
+        // Footer.
+        $line(50, 90, 562, 90, '0.80 0.80 0.83', 0.6);
+        $fy = 76;
+        foreach ($doc['footer'] as $index => $value) {
+            $text($value, 50, $fy, $index === 0 ? 9 : 8, $index === 0, $index === 0 ? $ink : $muted);
+            $fy -= 12;
+        }
+
+        $contentStream = implode("\n", $ops);
+
+        $objectBodies = [
+            '<< /Type /Catalog /Pages 2 0 R >>',
+            '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+            '<< /Type /Page /Parent 2 0 R /Resources << /Font << /F1 4 0 R /F2 6 0 R >> >> /MediaBox [0 0 612 792] /Contents 5 0 R >>',
+            '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+            '<< /Length '.strlen($contentStream)." >>\nstream\n{$contentStream}\nendstream",
+            '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>',
+        ];
+
+        $buffer = "%PDF-1.4\n";
+        $offsets = [];
+        foreach ($objectBodies as $i => $body) {
+            $offsets[] = strlen($buffer);
+            $buffer .= ($i + 1)." 0 obj\n{$body}\nendobj\n";
+        }
+
+        $xrefOffset = strlen($buffer);
+        $n = count($objectBodies);
+        $buffer .= "xref\n0 ".($n + 1)."\n";
+        $buffer .= "0000000000 65535 f \n";
+        foreach ($offsets as $offset) {
+            $buffer .= sprintf("%010d 00000 n \n", $offset);
+        }
+
+        $buffer .= "trailer\n<< /Size ".($n + 1)." /Root 1 0 R >>\n";
+        $buffer .= "startxref\n{$xrefOffset}\n%%EOF";
+
+        return $buffer;
+    }
+
+    /**
      * Converts a 6-hex-digit color (with or without a leading '#') into a
      * PDF content-stream `rg` (nonstroking/fill RGB) operator string,
      * e.g. "0.310 0.275 0.898 rg". Falls back to the platform's own

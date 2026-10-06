@@ -2,6 +2,7 @@
 
 namespace App\Services\ApiAccess;
 
+use App\Models\Account;
 use App\Models\ApiKey;
 use App\Models\ApiKeyBinding;
 use App\Models\ApiKeyChangeRequest;
@@ -65,7 +66,13 @@ class ApiKeyBindingService
 
     // ---- request enforcement -----------------------------------------------------------------------------------
 
-    /** @return JsonResponse|null null = allowed. */
+    /**
+     * Request gate for every Developer API key: the key must be live, and the request must come from the account's
+     * registered server IP (see ServerIpBindingService). The IP is the connecting socket address, never a header.
+     * A denial is generic, so a caller cannot tell which check failed or read the registered IP.
+     *
+     * @return JsonResponse|null null = allowed.
+     */
     public function gate(Request $request, ApiKey $key): ?JsonResponse
     {
         $ip = IpMatcher::normalize($request->ip());
@@ -76,119 +83,41 @@ class ApiKeyBindingService
             return self::denial(self::DISABLED, 'API access for this key is currently disabled.');
         }
 
-        $binding = $key->liveBinding();
+        $account = Account::query()->find($key->account_id);
 
-        if (! $binding) {
-            if (! $key->bindings()->exists()) {
-                // A legacy key (no binding row was ever created). It is NOT silently bound by first use - that would
-                // let anyone holding a leaked key claim it. The owner enrolls a server through the authenticated
-                // dashboard (ApiKeyController::registerServer) or a Super Admin rebinds it.
-                if (config('api_binding.allow_legacy_unbound', false)) {
-                    $this->record(self::EV_LEGACY_OVERRIDE_USED, $key, null, $ip, [], dedupe: true);
+        // Temporary emergency override (config/api_binding.php, default off). Test suites that exercise
+        // unrelated API contracts turn it on; production never does.
+        if ($account && $account->authorized_server_ip === null && config('api_binding.allow_legacy_unbound', false)) {
+            $this->record(self::EV_LEGACY_OVERRIDE_USED, $key, null, $ip, [], dedupe: true);
 
-                    return null; // temporary emergency override only - see config/api_binding.php
-                }
-                $this->record(self::EV_BINDING_REQUIRED, $key, null, $ip, [], dedupe: true);
-
-                return self::denial(self::BINDING_REQUIRED, 'This API key requires server authorization before it can be used.');
-            }
-            $this->record(self::EV_UNAUTH_SERVER, $key, null, $ip, ['reason' => 'no_active_binding'], dedupe: true);
-
-            return self::denial();
+            return null;
         }
 
-        $presented = trim((string) $request->header((string) config('api_binding.installation_header', 'X-Client-Installation'), ''));
-        if ($presented === '' || ! $binding->hasCredential() || ! hash_equals((string) $binding->installation_hash, ApiKeyBinding::hashCredential($presented))) {
-            $this->record(self::EV_UNAUTH_SERVER, $key, $binding, $ip, ['reason' => $presented === '' ? 'credential_missing' : 'credential_mismatch'], dedupe: true);
+        if (! $account || $account->authorized_server_ip === null) {
+            $this->record(self::EV_BINDING_REQUIRED, $key, null, $ip, [], dedupe: true);
 
-            return self::denial();
+            return self::denial(self::BINDING_REQUIRED, 'Set your server IP under Profile → API key before you use this key.');
         }
 
-        if ($binding->status === ApiKeyBinding::STATUS_PENDING) {
-            return $this->activate($key, $binding, $ip);
+        if (! app(ServerIpBindingService::class)->allows($account, $ip)) {
+            $this->record(self::EV_UNAUTH_IP, $key, null, $ip, ['ip_policy' => 'SINGLE_IP'], dedupe: true);
+
+            // The flag tells the caller what to do, for example after a shared host changed the outbound IP.
+            return self::denial(self::DENIED, null, [
+                'action' => 'verify_server_ip',
+                'help' => 'If your server IP has changed (for example, your shared hosting provider moved your site), verify the new IP in your WapHub dashboard under Profile → API key, or contact support.',
+            ]);
         }
-
-        if (! $this->ipAllowed($binding, $ip)) {
-            $this->record(self::EV_UNAUTH_IP, $key, $binding, $ip, ['ip_policy' => $binding->ip_policy], dedupe: true);
-
-            return self::denial();
-        }
-
-        $this->touchSuccess($key, $binding, $ip);
 
         return null;
     }
 
-    /** First request from the credentialed server: capture its IP (or check the declared one) and make the binding active - once. */
-    private function activate(ApiKey $key, ApiKeyBinding $binding, ?string $ip): ?JsonResponse
-    {
-        $result = DB::transaction(function () use ($binding, $ip) {
-            $locked = ApiKeyBinding::lockForUpdate()->find($binding->id);
-            if (! $locked || ! $locked->isLive()) {
-                return 'denied';
-            }
-            if ($locked->status === ApiKeyBinding::STATUS_ACTIVE) {
-                return $this->ipAllowed($locked, $ip) ? 'ok' : 'denied_ip';
-            }
-            $declared = $locked->authorized_ips ?? [];
-            if ($ip === null) {
-                return 'denied_ip';
-            }
-            if ($declared !== [] && ! IpMatcher::matches($ip, $declared)) {
-                return 'denied_ip';
-            }
-            $locked->forceFill([
-                'status' => ApiKeyBinding::STATUS_ACTIVE,
-                'registered_ip' => $ip,
-                'registered_at' => now(),
-                'authorized_ips' => $declared !== [] ? $declared : ($locked->ip_policy === ApiKeyBinding::POLICY_NONE ? [] : [$ip]),
-            ])->save();
-
-            return 'activated';
-        });
-
-        if ($result === 'denied' || $result === 'denied_ip') {
-            $this->record($result === 'denied_ip' ? self::EV_UNAUTH_IP : self::EV_UNAUTH_SERVER, $key, $binding, $ip, [], dedupe: true);
-
-            return self::denial();
-        }
-        $fresh = $binding->fresh();
-        if ($result === 'activated') {
-            $this->record(self::EV_SERVER_REGISTERED, $key, $fresh, $ip, ['label' => $fresh->label, 'ip_policy' => $fresh->ip_policy]);
-        }
-        $this->touchSuccess($key, $fresh, $ip);
-
-        return null;
-    }
-
-    private function ipAllowed(ApiKeyBinding $binding, ?string $ip): bool
-    {
-        return match ($binding->ip_policy) {
-            ApiKeyBinding::POLICY_NONE => true,
-            ApiKeyBinding::POLICY_SINGLE_IP => $ip !== null && IpMatcher::matches($ip, array_slice($binding->authorized_ips ?? [], 0, 1)),
-            ApiKeyBinding::POLICY_ALLOWLIST => $ip !== null && IpMatcher::matches($ip, $binding->authorized_ips ?? []),
-            default => false,
-        };
-    }
-
-    /** Best-effort, throttled: one write per binding per minute unless the IP changed. */
-    private function touchSuccess(ApiKey $key, ApiKeyBinding $binding, ?string $ip): void
-    {
-        $stale = $binding->last_success_at === null
-            || $binding->last_success_ip !== $ip
-            || $binding->last_success_at->diffInSeconds(now()) >= (int) config('api_binding.success_touch_seconds', 60);
-        if (! $stale) {
-            return;
-        }
-        $binding->forceFill(['last_success_ip' => $ip, 'last_success_at' => now(), 'last_success_client' => $binding->installation_prefix])->save();
-        $this->record(self::EV_AUTH_OK, $key, $binding, $ip, [], dedupe: true);
-    }
-
-    public static function denial(string $code = self::DENIED, ?string $message = null): JsonResponse
+    /** @param array<string, mixed> $extra additional fields for the caller; never secrets or the registered IP */
+    public static function denial(string $code = self::DENIED, ?string $message = null, array $extra = []): JsonResponse
     {
         $message ??= 'This API key is not authorized for this server.';
 
-        return response()->json(['success' => false, 'status' => false, 'code' => $code, 'error_code' => $code, 'message' => $message], 403);
+        return response()->json(['success' => false, 'status' => false, 'code' => $code, 'error_code' => $code, 'message' => $message] + $extra, 403);
     }
 
     // ---- provisioning ------------------------------------------------------------------------------------------

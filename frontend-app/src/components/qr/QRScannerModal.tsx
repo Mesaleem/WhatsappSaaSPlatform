@@ -48,6 +48,11 @@ interface QRScannerModalProps {
    * Admin's test device, which has no slot.
    */
   numberId?: number | null;
+  /**
+   * The number this slot was added with (digits, country code first). A QR scanned from any
+   * other WhatsApp account is refused, and the phone box is locked to this number.
+   */
+  expectedPhone?: string | null;
 }
 
 function formatPairingCode(code: string): string {
@@ -59,7 +64,9 @@ function extractErrorMessage(err: unknown, fallback: string): string {
   return data?.errors?.phone_number?.[0] ?? data?.message ?? fallback;
 }
 
-export default function QRScannerModal({ accountId, onClose, onConnected, startSession, numberId }: QRScannerModalProps) {
+export default function QRScannerModal({ accountId, onClose, onConnected, startSession, numberId, expectedPhone = null }: QRScannerModalProps) {
+  const expectedDigits = expectedPhone ? expectedPhone.replace(/\D/g, '') : null;
+  const expectedLabel = expectedDigits ? `+${expectedDigits}` : 'the number added for this slot';
   const startSessionRequest = startSession ?? (() => whatsappService.startSession(accountId, undefined, numberId));
   const phoneLoginAvailable = !startSession;
 
@@ -71,7 +78,7 @@ export default function QRScannerModal({ accountId, onClose, onConnected, startS
   const socketRef = useRef<Socket | null>(null);
 
   // Phone-number login state.
-  const [phoneInput, setPhoneInput] = useState('');
+  const [phoneInput, setPhoneInput] = useState(expectedDigits ?? '');
   const [phoneDigits, setPhoneDigits] = useState<string | null>(null);
   const [pairingCode, setPairingCode] = useState<string | null>(null);
   const [phoneBusy, setPhoneBusy] = useState(false);
@@ -149,6 +156,15 @@ export default function QRScannerModal({ accountId, onClose, onConnected, startS
         setPhoneBusy(false);
         setPhoneError(
           'WhatsApp did not return a code for that number. Check that it includes the country code and is a WhatsApp account, then try again.',
+        );
+        return;
+      }
+      if (payload.error === 'number_mismatch') {
+        // A QR scanned from another WhatsApp account. The engine has logged that account out.
+        setQr(null);
+        setPairingCode(null);
+        setSocketError(
+          `This WhatsApp account is not ${expectedLabel}, so it was refused and logged out. Scan the QR with ${expectedLabel} instead.`,
         );
         return;
       }
@@ -232,7 +248,12 @@ export default function QRScannerModal({ accountId, onClose, onConnected, startS
 
   const handlePhoneSubmit = (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    const digits = phoneInput.replace(/\D/g, '');
+    // A slot's number is fixed: whatever is in the box, the code is requested for that number.
+    const digits = expectedDigits ?? phoneInput.replace(/\D/g, '');
+    if (expectedDigits) {
+      requestPairingCode(expectedDigits);
+      return;
+    }
     if (digits.length === 10) {
       // A 10-digit number is almost always missing its country code; WhatsApp
       // cannot find an account for it, so no code would ever come back.
@@ -298,6 +319,12 @@ export default function QRScannerModal({ accountId, onClose, onConnected, startS
           </div>
         )}
 
+        {expectedDigits && mode === 'qr' && (
+          <p className="mt-4 rounded-lg bg-slate-50 px-3 py-2 text-center text-xs text-slate-600">
+            Scan with the WhatsApp on <strong>{expectedLabel}</strong>. A QR scanned from any other number is refused.
+          </p>
+        )}
+
         <div className="mt-6 flex min-h-[240px] flex-col items-center justify-center">
           {socketError && mode === 'qr' ? (
             <div className="flex flex-col items-center gap-3 text-red-600">
@@ -360,17 +387,20 @@ export default function QRScannerModal({ accountId, onClose, onConnected, startS
                     type="tel"
                     inputMode="numeric"
                     autoComplete="tel"
-                    value={phoneInput}
+                    value={expectedDigits ?? phoneInput}
                     onChange={(e) => setPhoneInput(e.target.value)}
+                    readOnly={!!expectedDigits}
                     placeholder="919876543210"
-                    className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none"
+                    className={`rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none ${expectedDigits ? 'bg-slate-50 text-slate-600' : ''}`}
                   />
                   <p className="text-xs text-slate-400">
-                    Full number with country code, no + or spaces. Example: 91 for India, then the 10-digit number.
+                    {expectedDigits
+                      ? `This slot is for ${expectedLabel}. Only that number can connect here.`
+                      : 'Full number with country code, no + or spaces. Example: 91 for India, then the 10-digit number.'}
                   </p>
                   <button
                     type="submit"
-                    disabled={!phoneInput.replace(/\D/g, '')}
+                    disabled={!(expectedDigits ?? phoneInput.replace(/\D/g, ''))}
                     className="rounded-lg bg-indigo-600 px-3 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     Get pairing code

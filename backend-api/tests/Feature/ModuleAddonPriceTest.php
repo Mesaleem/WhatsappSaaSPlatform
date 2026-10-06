@@ -45,22 +45,26 @@ class ModuleAddonPriceTest extends TestCase
     public function test_super_admin_changes_the_price_and_new_approvals_use_it_while_issued_invoices_keep_theirs(): void
     {
         [, $first] = $this->client();
-        $firstRequest = $this->actingAs($first)->postJson('/api/module-addons/request', ['module' => 'contact_groups'])->assertCreated()->json('data.id');
+        $firstRequest = $this->actingAs($first)->postJson('/api/module-addons/request', ['module' => 'contact_groups', 'units' => 3])->assertCreated()->json('data.id');
         $this->actingAs($this->superAdmin())->postJson("/api/admin/module-addons/{$firstRequest}/approve")->assertOk();
         $firstInvoice = Invoice::findOrFail(ModuleAddonRequest::find($firstRequest)->invoice_id);
 
-        $this->actingAs($this->superAdmin())->putJson('/api/admin/module-offers/contact_groups', [
-            'label' => 'Custom Contact Groups', 'price' => 150, 'term_months' => 1, 'units_included' => 5, 'is_active' => true,
+        // Super Admin raises the 1 to 5 group tier to ₹150. Groups are priced by tier, not the flat price.
+        $this->actingAs($this->superAdmin())->putJson('/api/admin/module-offers/contact_groups/tiers', [
+            'tiers' => [
+                ['from_units' => 1, 'to_units' => 5, 'price' => 150],
+                ['from_units' => 6, 'to_units' => null, 'price' => 199],
+            ],
         ])->assertOk();
 
         [, $second] = $this->client();
-        $secondRequest = $this->actingAs($second)->postJson('/api/module-addons/request', ['module' => 'contact_groups'])->assertCreated()->json('data.id');
+        $secondRequest = $this->actingAs($second)->postJson('/api/module-addons/request', ['module' => 'contact_groups', 'units' => 3])->assertCreated()->json('data.id');
         $this->actingAs($this->superAdmin())->postJson("/api/admin/module-addons/{$secondRequest}/approve")->assertOk();
         $secondInvoice = Invoice::findOrFail(ModuleAddonRequest::find($secondRequest)->invoice_id);
 
         $this->assertSame(150.0, (float) $secondInvoice->total_amount);
         $this->assertSame(99.0, (float) $firstInvoice->fresh()->total_amount, 'an issued invoice keeps its price');
-        $this->assertStringContainsString('includes 5 units', $secondInvoice->lineItems->first()->description);
+        $this->assertStringContainsString('up to 3 group chats', $secondInvoice->lineItems->first()->description);
     }
 
     public function test_a_paid_term_limits_the_account_to_its_included_groups_and_no_term_means_no_add_on_limit(): void

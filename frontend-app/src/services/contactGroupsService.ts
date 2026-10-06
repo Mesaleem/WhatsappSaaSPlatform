@@ -24,6 +24,18 @@ const contactGroupsService = {
       .then((res) => res.data.data);
   },
 
+  /** After a downgrade: keep exactly the allowed groups open for this term; the rest lock. */
+  keepGroups(keepIds: number[]) {
+    return axiosInstance.post<{ success: boolean; message: string }>('/groups/keep', { keep_ids: keepIds }).then((res) => res.data);
+  },
+
+  /** The groups plus this client's usage against its paid group limit (null limit = no paid term). */
+  listWithUsage() {
+    return axiosInstance
+      .get<{ success: boolean; data: ContactGroup[]; usage: { used: number; limit: number | null; selection_required: boolean } }>('/groups')
+      .then((res) => res.data);
+  },
+
   /**
    * Native WhatsApp Group Re-Architecture: `payload` now supports
    * `group_type`/`contacts` (both optional — omitting them keeps the

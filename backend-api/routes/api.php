@@ -38,6 +38,8 @@ use App\Http\Controllers\Api\Internal\WhatsAppNumberLookupController;
 use App\Http\Controllers\Api\WhatsAppNumberController;
 use App\Http\Controllers\Api\WhatsAppAddonController;
 use App\Http\Controllers\Api\ModuleAddonController;
+use App\Http\Controllers\Api\BillingPaymentController;
+use App\Http\Controllers\Api\WhatsAppNumberChangeController;
 use App\Http\Controllers\Api\ChatbotRuleController;
 use App\Http\Controllers\Api\WhatsAppFlowController;
 use App\Http\Controllers\Api\ChatbotLogController;
@@ -173,10 +175,12 @@ Route::post('/webhooks/stripe', [PaymentWebhookController::class, 'stripe']);
 // /v1 route now honours that switch. Placed after throttle so a refused
 // call is still rate-limited and logged, before idempotency so nothing
 // is stored for it.
-Route::middleware(['log.apirequest', 'auth.apikey', 'throttle:external-api', 'module.apikey:developer_api', 'idempotency'])->prefix('v1')->group(function () {
+Route::middleware(['log.apirequest', 'auth.apikey', 'throttle:external-api', 'api.key.access', 'idempotency'])->prefix('v1')->group(function () {
     Route::post('/messages/send-payment-alert', [ExternalAlertController::class, 'sendPaymentAlert']);
     // Dynamic Templates & Variables System.
     Route::post('/messages/send-template', [TemplateMessageController::class, 'send']);
+    // Scheduled messages: cancel one that has not been sent yet (send with scheduled_at to create one).
+    Route::delete('/scheduled-messages/{id}', [TemplateMessageController::class, 'cancelScheduled'])->whereNumber('id');
     // Group Messaging Phase 4 — Developer Send Message API. Same
     // auth.apikey/throttle:external-api gate as the two routes above;
     // recipient_type-based routing (individual vs group) happens
@@ -231,7 +235,7 @@ Route::middleware(['log.apirequest', 'auth.apikey', 'throttle:external-api', 'mo
 // innermost for the same reasons (ApiAuthMiddleware resolves
 // api_account_id before it runs).
 // Phase 5 P5-B -- same 'module.apikey:developer_api' gate as the /v1 group above.
-Route::middleware(['log.apirequest', 'auth.apisecret', 'throttle:external-api', 'module.apikey:developer_api', 'idempotency'])->prefix('v1/whatsapp')->group(function () {
+Route::middleware(['log.apirequest', 'auth.apisecret', 'throttle:external-api', 'api.key.access', 'idempotency'])->prefix('v1/whatsapp')->group(function () {
     Route::post('/groups/create', [V1GroupController::class, 'create']);
     Route::post('/messages/send', [UnifiedMessageController::class, 'send']);
 });
@@ -265,6 +269,10 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/plans', [PaymentGatewayController::class, 'plans']);
         Route::post('/create-order', [PaymentGatewayController::class, 'createOrder']);
         Route::post('/verify-payment', [PaymentGatewayController::class, 'verifyPayment']);
+        // Plans without a gateway: the client requests an invoice, paid by hand and recorded by
+        // a Super Admin or agent. And online payment of a pending plan invoice.
+        Route::post('/manual-checkout', [BillingPaymentController::class, 'manualCheckout']);
+        Route::post('/invoices/{id}/pay', [BillingPaymentController::class, 'payInvoice'])->whereNumber('id');
         Route::get('/invoices', [BillingController::class, 'index']);
         // Phase 8 Task 1 — the resolved account's OWN credits (read-only;
         // credits change only through CreditService). See CreditController.
@@ -310,8 +318,10 @@ Route::middleware('auth:sanctum')->group(function () {
     // Developer API module is off can neither see nor mint this key.
     // Regenerating additionally needs an active subscription
     // (subscription.guard), like creating a key under /developer does.
-    Route::middleware(['tenant.isolation', 'permission:manage-developer-settings', 'module.guard:developer_api'])->prefix('account/api-key')->group(function () {
+    Route::middleware(['tenant.isolation', 'permission:manage-developer-settings', 'api.key.access'])->prefix('account/api-key')->group(function () {
         Route::get('/', [ClientApiKeyController::class, 'show']);
+        // The one server IP allowed to send with this account's keys (first save free, then the 14-day / paid rules).
+        Route::put('/server-ip', [ClientApiKeyController::class, 'setServerIp']);
         Route::post('/regenerate', [ClientApiKeyController::class, 'regenerate'])->middleware('subscription.guard');
     });
 
@@ -355,6 +365,7 @@ Route::middleware('auth:sanctum')->group(function () {
     // Outside subscription.guard: a lapsed client must still be able to ask and pay.
     Route::middleware(['tenant.isolation', 'permission:manage-subscriptions'])->prefix('module-addons')->group(function () {
         Route::get('/', [ModuleAddonController::class, 'index']);
+        Route::get('/history', [ModuleAddonController::class, 'history']);
         Route::post('/request', [ModuleAddonController::class, 'request']);
         Route::post('/invoices/{id}/pay', [ModuleAddonController::class, 'payInvoice'])->whereNumber('id');
     });
@@ -362,8 +373,10 @@ Route::middleware('auth:sanctum')->group(function () {
     // Only a Super Admin changes them; a change applies to new requests, not to issued invoices.
     Route::middleware(['role:super_admin|agent'])->get('/admin/module-offers', [ModuleAddonController::class, 'offers']);
     Route::middleware(['role:super_admin'])->put('/admin/module-offers/{module}', [ModuleAddonController::class, 'updateOffer']);
+    Route::middleware(['role:super_admin'])->put('/admin/module-offers/{module}/tiers', [ModuleAddonController::class, 'updateTiers']);
     Route::middleware(['role:super_admin|agent'])->prefix('admin/module-addons')->group(function () {
         Route::get('/pending', [ModuleAddonController::class, 'pending']);
+        Route::get('/history', [ModuleAddonController::class, 'history']);
         Route::post('/{id}/approve', [ModuleAddonController::class, 'approve'])->whereNumber('id');
         Route::post('/{id}/reject', [ModuleAddonController::class, 'reject'])->whereNumber('id');
         Route::post('/{id}/record-payment', [ModuleAddonController::class, 'recordPayment'])->whereNumber('id');
@@ -380,12 +393,27 @@ Route::middleware('auth:sanctum')->group(function () {
         ->whereNumber('id');
     Route::middleware(['tenant.isolation', 'role:super_admin|agent'])
         ->get('/admin/whatsapp/addon-invoices/pending', [WhatsAppAddonController::class, 'pending']);
+    // The extra WhatsApp number price: the Super Admin changes it; invoices already issued keep theirs.
+    Route::middleware(['role:super_admin'])->put('/admin/whatsapp/addon-price', [WhatsAppAddonController::class, 'updatePrice']);
+    // Number change requests: a Super Admin, or the agent for its own client, approves or rejects.
+    Route::middleware(['tenant.isolation', 'role:super_admin|agent'])->prefix('admin/whatsapp/number-change-requests')->group(function () {
+        Route::get('/', [WhatsAppNumberChangeController::class, 'pending']);
+        Route::post('/{id}/approve', [WhatsAppNumberChangeController::class, 'approve'])->whereNumber('id');
+        Route::post('/{id}/reject', [WhatsAppNumberChangeController::class, 'reject'])->whereNumber('id');
+    });
 
     // Online payment for an add-on invoice (only when a gateway is configured). Outside
     // subscription.guard too: paying is how a lapsed subscription is renewed.
     Route::middleware(['tenant.isolation', 'permission:manage-subscriptions'])
         ->post('/whatsapp/addon-invoices/{id}/pay', [WhatsAppAddonController::class, 'pay'])
         ->whereNumber('id');
+
+    // Pending invoices for a Super Admin (all) or an agent (its own clients), and the manual
+    // payment record for any invoice. Outside subscription.guard, like the add-on payments.
+    Route::middleware(['tenant.isolation', 'role:super_admin|agent'])->prefix('admin/billing')->group(function () {
+        Route::get('/pending-invoices', [BillingPaymentController::class, 'pending']);
+        Route::post('/invoices/{id}/record-payment', [BillingPaymentController::class, 'recordPayment'])->whereNumber('id');
+    });
 
     Route::middleware(['tenant.isolation', 'subscription.guard'])->group(function () {
         Route::middleware('permission:manage-roles')->group(function () {
@@ -441,6 +469,9 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::post('/numbers', [WhatsAppNumberController::class, 'store']);
             Route::put('/numbers/{id}/default', [WhatsAppNumberController::class, 'setDefault'])->whereNumber('id');
             Route::delete('/numbers/{id}', [WhatsAppNumberController::class, 'destroy'])->whereNumber('id');
+            // A slot holding a wrongly entered number: the client asks for a change; a Super Admin or agent decides.
+            Route::get('/numbers/change-requests', [WhatsAppNumberChangeController::class, 'index']);
+            Route::post('/numbers/{id}/change-requests', [WhatsAppNumberChangeController::class, 'store'])->whereNumber('id');
 
             // Paid extra numbers (one-month term each). Buying and cancelling need the
             // same permission as the rest of billing.
@@ -1122,6 +1153,8 @@ Route::middleware('auth:sanctum')->group(function () {
         // same tenant.isolation/subscription.guard group as every other
         // internal page instead, at /api/groups* (no /v1).
         Route::middleware(['permission:send-messages', 'module.guard:contact_groups'])->prefix('groups')->group(function () {
+            // After a downgrade: the client chooses which of its groups stay open for the term.
+            Route::post('/keep', [ContactGroupController::class, 'keep']);
             Route::get('/', [ContactGroupController::class, 'index']);
             Route::post('/create', [ContactGroupController::class, 'store']);
             // [New, "select an existing group"]: lists the tenant's REAL
@@ -1263,10 +1296,16 @@ Route::middleware('auth:sanctum')->group(function () {
         // route immediately below it — otherwise Laravel would match
         // "expiring-soon" as the {id} segment first and this route would
         // never be reached.
+        // Agent summary: every Agent with its login and client counts, plus the direct
+        // clients. Super Admin only (an Agent also holds manage-accounts). Registered before
+        // '/accounts/{id}' so 'agent-summary' is not read as an id.
+        Route::middleware('role:super_admin')->get('/accounts/agent-summary', [AccountController::class, 'agentSummary']);
         Route::get('/accounts/expiring-soon', [AccountController::class, 'expiringSoon']);
         Route::get('/accounts/{id}', [AccountController::class, 'show']);
         Route::put('/accounts/{id}', [AccountController::class, 'update']);
         Route::put('/accounts/{id}/subscription', [AccountController::class, 'updateSubscription']);
+        // Support's free server-IP reset for a shared-hosting client (Super Admin only, audited).
+        Route::middleware('role:super_admin')->post('/accounts/{id}/reset-ip-edit-count', [\App\Http\Controllers\Api\Admin\ServerIpAdminController::class, 'resetEditCount'])->whereNumber('id');
         // 3-Tier Hierarchy & Agent-Client Scope Engine (Phase 4) —
         // Agent Quota Pool & Allocation. Same permission:manage-accounts
         // gate as every other route in this group; the actual

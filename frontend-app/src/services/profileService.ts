@@ -3,9 +3,11 @@ import type { User } from '../types/auth';
 
 export interface UpdateProfilePayload {
   name: string;
-  email: string;
-  /** Omit (or leave blank) to keep the current password unchanged. */
+  phone_number?: string | null;
+  /** Required with a new password: the server checks it. */
+  current_password?: string;
   password?: string;
+  password_confirmation?: string;
 }
 
 /**

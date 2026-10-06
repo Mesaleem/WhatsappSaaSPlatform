@@ -79,6 +79,8 @@ class SendBulkTemplateMessageRequest extends FormRequest
         return [
             'template_id' => ['required', 'integer'],
             'recipient_phones' => ['required', 'array', 'min:1', 'max:'.self::MAX_RECIPIENTS],
+            // Optional: schedule every recipient, staggered, instead of sending now.
+            'scheduled_at' => ['sometimes', 'nullable', 'date'],
             'recipient_phones.*' => ['required', 'string', 'max:20'],
             'variables' => ['sometimes', 'array'],
             // Media Templates override -- same contract as

@@ -8,7 +8,10 @@ use App\Models\Account;
 use App\Models\AgentCommission;
 use App\Models\AgentCommissionPayout;
 use App\Models\Invoice;
+use App\Models\InvoiceLineItem;
+use App\Models\ManualPayment;
 use App\Services\Billing\AgentPayoutService;
+use App\Services\Billing\ManualPaymentService;
 use App\Services\Pdf\SimplePdfWriter;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -41,6 +44,10 @@ class BillingController extends Controller
             ->orderByDesc('created_at')
             ->paginate($perPage);
 
+        // Each invoice's term, so a payment form can show when the plan or add-on ends.
+        $payments = app(\App\Services\Billing\ManualPaymentService::class);
+        $invoices->getCollection()->transform(fn (Invoice $invoice) => $invoice->setAttribute('term', $payments->termFor($invoice)));
+
         return response()->json($invoices);
     }
 
@@ -57,28 +64,7 @@ class BillingController extends Controller
         $invoice = Invoice::forAccount($account->id)->find($id);
         abort_if(! $invoice, 404, 'Invoice not found.');
 
-        $lines = [
-            'WhatsApp SaaS Platform - Invoice',
-            'Invoice Number: '.$invoice->invoice_number,
-            'Account: '.$account->company_name.' (ID '.$account->id.')',
-            '',
-            'Plan: '.$invoice->plan_label.' ('.$invoice->plan_key.')',
-            'Payment Gateway: '.ucfirst($invoice->payment_gateway),
-            'Status: '.strtoupper($invoice->status),
-            '',
-            'Amount: '.$invoice->currency.' '.number_format((float) $invoice->amount, 2),
-            'Tax: '.$invoice->currency.' '.number_format((float) $invoice->tax_amount, 2),
-            'Total: '.$invoice->currency.' '.number_format((float) $invoice->total_amount, 2),
-            '',
-            $invoice->gateway_order_id ? 'Gateway Order ID: '.$invoice->gateway_order_id : null,
-            $invoice->gateway_payment_id ? 'Gateway Payment ID: '.$invoice->gateway_payment_id : null,
-            $invoice->paid_at ? 'Paid At: '.$invoice->paid_at->toDateTimeString() : 'Paid At: -',
-            '',
-            'Invoice Created: '.$invoice->created_at->toDateTimeString(),
-            'Generated: '.now()->toDateTimeString(),
-        ];
-
-        $pdf = SimplePdfWriter::render($lines);
+        $pdf = SimplePdfWriter::renderInvoice($this->invoiceDocument($invoice, $account));
         $filename = sprintf('invoice-%s.pdf', $invoice->invoice_number);
 
         return response($pdf, 200, [
@@ -86,6 +72,110 @@ class BillingController extends Controller
             'Content-Disposition' => 'attachment; filename="'.$filename.'"',
             'Content-Length' => (string) strlen($pdf),
         ]);
+    }
+
+    /**
+     * The invoice as the PDF writer lays it out: who it is from and to, the items, the totals,
+     * and the payment record when it was paid by hand or online.
+     *
+     * @return array<string, mixed>
+     */
+    private function invoiceDocument(Invoice $invoice, Account $account): array
+    {
+        $money = static fn ($value): string => number_format((float) $value, 2);
+        $dateOf = static fn ($value): string => $value ? Carbon::parse($value)->format('d M Y') : '-';
+
+        $status = match ($invoice->status) {
+            'paid' => ['PAID', '#059669'],
+            'pending' => ['PAYMENT PENDING', '#D97706'],
+            'failed' => ['NOT PAID', '#DC2626'],
+            default => [strtoupper((string) $invoice->status), '#6B7280'],
+        };
+
+        $items = InvoiceLineItem::query()->where('invoice_id', $invoice->id)->orderBy('id')->get()
+            ->map(fn (InvoiceLineItem $line) => [
+                (string) $line->description,
+                (string) $line->quantity,
+                $money($line->unit_amount),
+                $money($line->amount),
+            ])
+            ->values()
+            ->all();
+
+        if ($items === []) {
+            $items = [[(string) $invoice->plan_label, '1', $money($invoice->amount), $money($invoice->amount)]];
+        }
+
+        $payments = app(ManualPaymentService::class);
+        $term = $payments->termFor($invoice);
+        $termText = $term === null
+            ? null
+            : (isset($term['days']) ? $term['days'].' days' : $term['months'].' month'.($term['months'] === 1 ? '' : 's'));
+
+        $manual = ManualPayment::query()->where('invoice_id', $invoice->id)->latest('id')->first();
+
+        $payment = null;
+        if ($invoice->status === 'paid') {
+            $payment = $manual
+                ? [
+                    ['Amount received', 'INR '.$money($manual->amount)],
+                    ['Method', ucwords(str_replace('_', ' ', (string) $manual->method))],
+                    ['Transaction ID', (string) $manual->transaction_id],
+                    ['Date paid', $dateOf($manual->paid_on)],
+                    ['Term starts', $dateOf($manual->term_starts_on)],
+                ]
+                : [
+                    ['Gateway', ucfirst((string) $invoice->payment_gateway)],
+                    ['Payment ID', (string) ($invoice->gateway_payment_id ?? '-')],
+                    ['Date paid', $dateOf($invoice->paid_at)],
+                ];
+            if ($termText !== null) {
+                $payment[] = ['Term', $termText];
+                $start = $manual?->term_starts_on ?? $invoice->paid_at;
+                if ($start !== null && $term !== null) {
+                    $startDay = Carbon::parse($start)->startOfDay();
+                    $end = isset($term['days']) ? $startDay->copy()->addDays($term['days']) : $startDay->copy()->addMonthsNoOverflow($term['months']);
+                    $payment[] = ['Term ends', $dateOf($end)];
+                }
+            }
+        }
+
+        $payMode = $manual
+            ? 'Manual ('.ucwords(str_replace('_', ' ', (string) $manual->method)).')'
+            : ($invoice->payment_gateway === 'manual' ? 'Manual payment' : 'Online ('.ucfirst((string) $invoice->payment_gateway).')');
+
+        return [
+            'company' => 'WapHub',
+            'subtitle' => 'Business messaging platform',
+            'accent' => '#4F46E5',
+            'title' => 'TAX INVOICE',
+            'number' => (string) $invoice->invoice_number,
+            'issued_on' => $dateOf($invoice->created_at),
+            'status' => $status[0],
+            'status_color' => $status[1],
+            'billed_to' => array_values(array_filter([
+                (string) $account->company_name,
+                $account->owner?->email ? 'Email: '.$account->owner->email : null,
+                $account->primary_phone ? 'Phone: '.$account->primary_phone : null,
+            ])),
+            'details' => [
+                ['Invoice date', $dateOf($invoice->created_at)],
+                ['Payment mode', $payMode],
+                ['Currency', (string) $invoice->currency],
+                ['Paid on', $invoice->paid_at ? $dateOf($invoice->paid_at) : 'Not paid yet'],
+            ],
+            'items' => $items,
+            'subtotal' => $money($invoice->amount),
+            'tax' => $money($invoice->tax_amount),
+            'tax_note' => (float) $invoice->tax_amount > 0 ? 'GST' : 'GST (included in the total)',
+            'total' => $money($invoice->total_amount),
+            'payment' => $payment,
+            'footer' => [
+                'Thank you for your business.',
+                'Questions about this invoice? Contact your Super Admin or account manager.',
+                'This is a computer-generated invoice and does not need a signature.',
+            ],
+        ];
     }
 
     /**

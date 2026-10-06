@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Concerns\ResolvesTenantAccount;
 use App\Http\Controllers\Controller;
 use App\Models\Invoice;
+use App\Models\PlatformSetting;
 use App\Models\WhatsAppNumber;
 use App\Models\PaymentGatewaySetting;
 use App\Services\Payment\PaymentGatewayFactory;
@@ -28,6 +29,19 @@ class WhatsAppAddonController extends Controller
     }
 
     /** GET /api/whatsapp/numbers/addon-price — the price shown before buying. */
+    /** PUT /api/admin/whatsapp/addon-price  body: { price } — Super Admin only (route). */
+    public function updatePrice(Request $request): JsonResponse
+    {
+        $data = $request->validate(['price' => ['required', 'numeric', 'min:1', 'max:100000']]);
+
+        PlatformSetting::put(PlatformSetting::WHATSAPP_ADDON_PRICE, number_format((float) $data['price'], 2, '.', ''));
+
+        return response()->json([
+            'message' => 'Price updated. New purchases use it; invoices already issued keep their price.',
+            'price' => $this->addons->price(),
+        ]);
+    }
+
     public function price(): JsonResponse
     {
         return response()->json([

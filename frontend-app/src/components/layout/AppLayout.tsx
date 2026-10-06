@@ -18,6 +18,7 @@ import {
   Inbox,
   LayoutDashboard,
   Layers,
+  Puzzle,
   Megaphone,
   MessageSquare,
   QrCode,
@@ -168,7 +169,7 @@ const NAV_ITEMS: NavItem[] = [
   { label: 'My Clients', to: '/admin/accounts', icon: Building2, tint: NAV_TINTS.accounts, agentOnly: true },
   { label: 'Team Users', to: '/users', icon: Users, tint: NAV_TINTS.team, permission: 'manage-team', requiresModule: 'team_management' },
   { label: 'WhatsApp Setup', to: '/settings/whatsapp', icon: QrCode, tint: NAV_TINTS.whatsapp, requiresAccount: true, requiresModule: 'whatsapp_setup', hiddenForRoles: ['social_marketer'] },
-  { label: 'Send Alert', to: '/alerts/send', icon: Send, tint: NAV_TINTS.send, permission: 'send-messages', requiresModule: 'send_alert', hiddenForSuperAdmin: true },
+  { label: 'Send Notification', to: '/alerts/send', icon: Send, tint: NAV_TINTS.send, permission: 'send-messages', requiresModule: 'send_alert', hiddenForSuperAdmin: true },
   // Group Messaging — Module-to-UI Sync architecture rule (explicit
   // instruction): gated by requiresModule: 'contact_groups' like every
   // other module-backed item in this list. [Disclosed, superseded
@@ -235,6 +236,7 @@ const NAV_ITEMS: NavItem[] = [
   // Education (Task 2): Students and Classes/Batches are one landing page, gated by the students module key.
   { label: 'Education', to: '/education', icon: GraduationCap, tint: NAV_TINTS.social, permission: 'view-education', requiresIndustryModule: 'education.students' },
   { label: 'Billing & Plans', to: '/billing', icon: CreditCard, tint: NAV_TINTS.billing, permission: 'manage-subscriptions', requiresModule: 'billing' },
+  { label: 'Add-ons', to: '/add-ons', icon: Puzzle, tint: NAV_TINTS.billing, requiresModule: 'billing' },
   // BUILD: Fully Dynamic Categorized Route Master & Nested Permission
   // Matrix UI — Super-Admin-only, same tier as the other platform-admin
   // nav items above/below it.

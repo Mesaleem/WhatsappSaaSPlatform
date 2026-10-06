@@ -4,9 +4,12 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Concerns\ResolvesTenantAccount;
 use App\Http\Controllers\Controller;
+use App\Models\Account;
 use App\Models\Invoice;
 use App\Models\ModuleAddonOffer;
 use App\Models\ModuleAddonRequest;
+use App\Models\ModuleAddonTier;
+use Illuminate\Support\Facades\DB;
 use App\Models\PaymentGatewaySetting;
 use App\Services\Payment\PaymentGatewayFactory;
 use Illuminate\Support\Facades\Log;
@@ -46,6 +49,28 @@ class ModuleAddonController extends Controller
         ]);
     }
 
+    /**
+     * GET /api/module-addons/history[?account_id=] — every add-on request and paid WhatsApp
+     * number purchase the caller may see (a client: its own account; an agent: its clients;
+     * a Super Admin: all, or one client when account_id is given).
+     */
+    public function history(Request $request): JsonResponse
+    {
+        $account = null;
+        if ($request->filled('account_id')) {
+            $account = Account::query()->find((int) $request->query('account_id'));
+            if ($account === null) {
+                return response()->json(['message' => 'Client not found.', 'error_code' => 'not_found'], 404);
+            }
+        }
+
+        try {
+            return response()->json($this->service->historyFor($request->user(), $account) + ['gateways' => $this->readyGateways()]);
+        } catch (WhatsAppNumberException $e) {
+            return $this->error($e);
+        }
+    }
+
     /** POST /api/module-addons/request  body: { module, reason? } */
     public function request(Request $request): JsonResponse
     {
@@ -53,10 +78,11 @@ class ModuleAddonController extends Controller
         $data = $request->validate([
             'module' => ['required', 'string', Rule::in($this->service->offers()->pluck('module')->all())],
             'reason' => ['nullable', 'string', 'max:500'],
+            'units' => ['nullable', 'integer', 'min:1', 'max:100000'],
         ]);
 
         try {
-            $row = $this->service->request($account, $request->user(), $data['module'], $data['reason'] ?? null);
+            $row = $this->service->request($account, $request->user(), $data['module'], $data['reason'] ?? null, $data['units'] ?? null);
         } catch (WhatsAppNumberException $e) {
             return $this->error($e);
         }
@@ -161,6 +187,52 @@ class ModuleAddonController extends Controller
     }
 
     /**
+     * PUT /api/admin/module-offers/{module}/tiers  body: { tiers: [{from_units, to_units|null, price}] }
+     * Super Admin only. The tiers must start at 1, not overlap, and the last may be open-ended.
+     */
+    public function updateTiers(Request $request, string $module): JsonResponse
+    {
+        $data = $request->validate([
+            'tiers' => ['required', 'array', 'min:1', 'max:20'],
+            'tiers.*.from_units' => ['required', 'integer', 'min:1', 'max:100000'],
+            'tiers.*.to_units' => ['nullable', 'integer', 'min:1', 'max:100000'],
+            'tiers.*.price' => ['required', 'numeric', 'min:0', 'max:1000000'],
+        ]);
+
+        $tiers = collect($data['tiers'])->sortBy('from_units')->values();
+
+        foreach ($tiers as $i => $tier) {
+            $to = $tier['to_units'] ?? null;
+            if ($to !== null && $to < $tier['from_units']) {
+                return response()->json(['message' => 'A tier must end at or after the units it starts from.', 'error_code' => 'invalid_tier'], 422);
+            }
+            $next = $tiers[$i + 1] ?? null;
+            if ($next !== null && ($to === null || $to >= $next['from_units'])) {
+                return response()->json(['message' => 'Tiers must not overlap.', 'error_code' => 'overlapping_tiers'], 422);
+            }
+        }
+
+        DB::transaction(function () use ($module, $tiers): void {
+            ModuleAddonTier::query()->where('module', $module)->delete();
+            foreach ($tiers as $tier) {
+                ModuleAddonTier::query()->create([
+                    'module' => $module,
+                    'from_units' => $tier['from_units'],
+                    'to_units' => $tier['to_units'] ?? null,
+                    'price' => $tier['price'],
+                ]);
+            }
+        });
+
+        Log::info('Module add-on tiers changed', ['module' => $module, 'by' => $request->user()->id]);
+
+        return response()->json([
+            'message' => 'Prices updated. New requests use them; issued invoices keep their price.',
+            'data' => ModuleAddonOffer::query()->where('module', $module)->first() ? $this->presentOffer(ModuleAddonOffer::query()->where('module', $module)->first()) : null,
+        ]);
+    }
+
+    /**
      * POST /api/module-addons/invoices/{id}/pay  body: { gateway }
      * Online payment for a module add-on invoice. Refused until a gateway is configured.
      */
@@ -240,6 +312,9 @@ class ModuleAddonController extends Controller
     private function presentOffer(ModuleAddonOffer $o): array
     {
         return [
+            'tiers' => ModuleAddonTier::query()->where('module', $o->module)->orderBy('from_units')->get()
+                ->map(fn (ModuleAddonTier $t) => ['from_units' => (int) $t->from_units, 'to_units' => $t->to_units, 'price' => (float) $t->price])
+                ->values(),
             'module' => $o->module,
             'label' => $o->label,
             'price' => (float) $o->price,
@@ -269,6 +344,7 @@ class ModuleAddonController extends Controller
             'status' => $row->status,
             'reason' => $row->reason,
             'invoice_id' => $row->invoice_id,
+            'units' => $row->units,
             'total_amount' => $row->invoice ? (float) $row->invoice->total_amount : null,
             'term_starts_at' => $row->term_starts_at?->toIso8601String(),
             'term_ends_at' => $row->term_ends_at?->toIso8601String(),

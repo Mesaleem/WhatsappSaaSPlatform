@@ -16,6 +16,26 @@ import type { ExpiringSoonAccount } from '../types/analytics';
 
 const BASE = '/admin/accounts';
 
+export interface ClientCounts {
+  total: number;
+  active: number;
+  suspended: number;
+  expired: number;
+}
+
+export interface AgentSummaryRow {
+  id: number;
+  company_name: string;
+  status: string;
+  login: { name: string; email: string } | null;
+  clients: ClientCounts;
+}
+
+export interface AgentSummaryResponse {
+  agents: AgentSummaryRow[];
+  direct_clients: ClientCounts;
+}
+
 export interface ListAccountsParams {
   page?: number;
   per_page?: number;
@@ -69,6 +89,11 @@ const accountService = {
     return axiosInstance
       .get<PaginatedResponse<Account>>(BASE, { params: { account_type: 'agent', per_page: 100 } })
       .then((res) => res.data.data);
+  },
+
+  /** Super Admin only (server-enforced): every Agent with its login and client counts, plus the direct clients. */
+  agentSummary() {
+    return axiosInstance.get<AgentSummaryResponse>('/admin/accounts/agent-summary').then((res) => res.data);
   },
 
   get(id: number) {
@@ -140,6 +165,13 @@ const accountService = {
   },
 
   /** Super Admin Dashboard Enhancement — "Expiring in 7 Days" modal's list. */
+  /** Super Admin: give the client one free server-IP change again (shared-hosting host IP changes). */
+  resetIpEditCount(id: number) {
+    return axiosInstance
+      .post<{ success: boolean; message: string }>(`${BASE}/${id}/reset-ip-edit-count`)
+      .then((res) => res.data);
+  },
+
   expiringSoon() {
     return axiosInstance
       .get<{ data: ExpiringSoonAccount[] }>(`${BASE}/expiring-soon`)

@@ -155,7 +155,7 @@ export default function UpdateQuotaModal({
             <div className="mt-4">
               <label htmlFor="quota-total-allocated" className="text-sm font-medium text-slate-700">
                 Message Quota (Total Allocated Messages)
-              </label>
+              <span className="text-red-500" aria-hidden="true"> *</span></label>
               <input
                 id="quota-total-allocated"
                 type="number"

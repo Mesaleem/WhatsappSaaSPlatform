@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import moduleAddonService, { type ModuleAddonRow } from '../../services/moduleAddonService';
+import ConfirmModal from '../common/ConfirmModal';
 import RecordAddonPaymentModal from './RecordAddonPaymentModal';
 
 function errorMessage(err: unknown, fallback: string): string {
@@ -12,15 +13,20 @@ function errorMessage(err: unknown, fallback: string): string {
  * creates its invoice), reject it, or record the payment. The server decides which
  * clients each person may act on.
  */
-export default function ModuleAddonQueueCard() {
+export default function ModuleAddonQueueCard({ onChanged }: { onChanged?: () => void } = {}) {
   const [rows, setRows] = useState<ModuleAddonRow[] | null>(null);
   const [busyId, setBusyId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [paying, setPaying] = useState<ModuleAddonRow | null>(null);
+  const [rejecting, setRejecting] = useState<ModuleAddonRow | null>(null);
+  // Each module's term in months, so the payment form can show when the add-on ends.
+  const [termMonths, setTermMonths] = useState<Record<string, number>>({});
 
   const load = useCallback(async () => {
     try {
       setRows(await moduleAddonService.pending());
+      const offers = await moduleAddonService.offers();
+      setTermMonths(Object.fromEntries(offers.map((o) => [o.module, o.term_months])));
     } catch (err) {
       setError(errorMessage(err, 'Could not load the add-on requests.'));
     }
@@ -36,6 +42,7 @@ export default function ModuleAddonQueueCard() {
     try {
       await action();
       await load();
+      onChanged?.();
     } catch (err) {
       setError(errorMessage(err, fallback));
     } finally {
@@ -60,7 +67,9 @@ export default function ModuleAddonQueueCard() {
                 {row.label} · {row.account?.name ?? `Account ${row.account?.id ?? ''}`}
               </p>
               <p className="text-xs text-slate-500">
+                {row.units ? `${row.units} ${row.units === 1 ? 'group' : 'groups'} · ` : ''}
                 {row.status === 'requested' ? 'Waiting for approval' : 'Invoice sent. Waiting for payment'}
+                {row.total_amount !== null ? ` · ₹${Number(row.total_amount).toFixed(2)} (GST included)` : ''}
                 {row.reason ? ` · "${row.reason}"` : ''}
               </p>
             </div>
@@ -78,7 +87,7 @@ export default function ModuleAddonQueueCard() {
                   <button
                     type="button"
                     disabled={busyId === row.id}
-                    onClick={() => void run(row.id, () => moduleAddonService.reject(row.id), 'Could not reject this request.')}
+                    onClick={() => setRejecting(row)}
                     className="rounded-lg border border-red-200 px-3 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50 disabled:opacity-60"
                   >
                     Reject
@@ -99,16 +108,36 @@ export default function ModuleAddonQueueCard() {
         ))}
       </ul>
 
+      {rejecting && (
+        <ConfirmModal
+          title="Reject this request?"
+          message={
+            <>
+              <strong>{rejecting.label}</strong> for {rejecting.account?.name ?? `account ${rejecting.account?.id ?? ''}`} will not be approved and no invoice will be created.
+            </>
+          }
+          confirmLabel="Reject request"
+          isLoading={busyId === rejecting.id}
+          onCancel={() => setRejecting(null)}
+          onConfirm={() => {
+            const row = rejecting;
+            void run(row.id, () => moduleAddonService.reject(row.id), 'Could not reject this request.').then(() => setRejecting(null));
+          }}
+        />
+      )}
+
       {paying && (
         <RecordAddonPaymentModal
           invoiceId={paying.id}
           accountId={paying.account?.id ?? 0}
           invoiceNumber={`${paying.label} request #${paying.id}`}
           totalAmount={Number(paying.total_amount ?? 0)}
+          term={termMonths[paying.module] ? { months: termMonths[paying.module] } : null}
           onClose={() => setPaying(null)}
           onRecorded={() => {
             setPaying(null);
             void load();
+            onChanged?.();
           }}
           submit={(body) => moduleAddonService.recordPayment(paying.id, body)}
         />

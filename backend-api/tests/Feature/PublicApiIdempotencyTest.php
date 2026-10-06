@@ -63,6 +63,15 @@ class PublicApiIdempotencyTest extends TestCase
     private const SECRET_PREFIX = 'wasaas_secret_';
 
     /** Mirrors ApiKeyController::store()'s own key/secret minting convention exactly. */
+    /** The Developer API is part of the plan: the account gets the external_api entitlement a paid plan carries. */
+    private function grantApiPlan(Account $account): void
+    {
+        \App\Models\AccountEntitlement::firstOrCreate(
+            ['account_id' => $account->id, 'capability_id' => \App\Models\Capability::where('slug', 'external_api')->firstOrFail()->id],
+            ['source' => 'plan', 'granted_by_account_id' => null],
+        );
+    }
+
     private function issueApiKey(Account $account, bool $withSecret = true, array $overrides = []): array
     {
         $plainKey = self::KEY_PREFIX.Str::random(40);
@@ -76,6 +85,8 @@ class PublicApiIdempotencyTest extends TestCase
             'secret_prefix' => $withSecret ? substr($plainSecret, 0, 20) : null,
             'secret_hash' => $withSecret ? ApiKey::hashSecret($plainSecret) : null,
         ], $overrides));
+
+        $this->grantApiPlan($account);
 
         return ['model' => $apiKey, 'key' => $plainKey, 'secret' => $plainSecret];
     }

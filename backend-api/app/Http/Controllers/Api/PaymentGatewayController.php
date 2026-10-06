@@ -22,7 +22,7 @@ class PaymentGatewayController extends Controller
      * or jurisdiction was given. This is a constant specifically so it's a
      * one-line change if the real rate differs.]
      */
-    private const TAX_RATE = 0.18;
+    public const TAX_RATE = 0.18;
 
     /*
      * Phase 5 Task 11 — checkout resolves plans from the DATABASE now,

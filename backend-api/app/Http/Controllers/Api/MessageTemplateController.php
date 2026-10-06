@@ -4,9 +4,13 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Concerns\ResolvesTenantAccount;
 use App\Http\Controllers\Controller;
+use App\Models\Account;
+use App\Models\ScheduledMessage;
+use App\Services\Scheduling\ScheduledMessageException;
+use App\Services\Scheduling\ScheduledMessageService;
+use Carbon\Carbon;
 use App\Http\Requests\SendBulkTemplateMessageRequest;
 use App\Http\Requests\SendTemplateMessageRequest;
-use App\Models\Account;
 use App\Models\MessageTemplate;
 use App\Models\User;
 use App\Services\PaymentAlerts\PaymentAlertDispatcher;
@@ -153,6 +157,16 @@ class MessageTemplateController extends Controller
 
         $data = $request->validated();
 
+        $sendAt = ScheduledMessageService::parseSendAt($data['scheduled_at'] ?? null);
+        if ($sendAt !== null) {
+            return $this->scheduleOne($account, ScheduledMessage::KIND_TEMPLATE_INDIVIDUAL, [
+                'template_id' => (int) $data['template_id'],
+                'recipient_phone' => $data['recipient_phone'],
+                'variables' => $data['variables'] ?? [],
+                'media_url' => $data['media_url'] ?? null,
+            ], $sendAt);
+        }
+
         $result = TemplateMessageDispatcher::dispatch(
             $account->id,
             $data['template_id'],
@@ -194,6 +208,21 @@ class MessageTemplateController extends Controller
      * silently queuing N jobs that would each independently fail the
      * exact same way.
      */
+    /** Stores one scheduled message and answers 202 with its id and time. */
+    private function scheduleOne(Account $account, string $kind, array $payload, Carbon $sendAt): JsonResponse
+    {
+        try {
+            $row = app(ScheduledMessageService::class)->schedule($account, $kind, $payload, $sendAt, 'web_template');
+        } catch (ScheduledMessageException $e) {
+            return response()->json(['message' => $e->getMessage(), 'error_code' => $e->errorCode], $e->status);
+        }
+
+        return response()->json([
+            'message' => 'Message scheduled.',
+            'scheduled' => ['id' => $row->id, 'send_at' => $row->send_at->toIso8601String()],
+        ], 202);
+    }
+
     public function sendBulk(SendBulkTemplateMessageRequest $request): JsonResponse
     {
         $account = $this->requireAccount($request, 'Select a client/tenant account to send from (pass ?account_id=).');
@@ -220,6 +249,28 @@ class MessageTemplateController extends Controller
 
         if (! $template) {
             return response()->json(['message' => 'This template does not exist, is not approved, or is not available to this account.'], 404);
+        }
+
+        $sendAt = ScheduledMessageService::parseSendAt($data['scheduled_at'] ?? null);
+        if ($sendAt !== null) {
+            $service = app(ScheduledMessageService::class);
+            $scheduled = [];
+            foreach (array_values($data['recipient_phones']) as $index => $phone) {
+                try {
+                    $row = $service->schedule(
+                        $account,
+                        ScheduledMessage::KIND_TEMPLATE_INDIVIDUAL,
+                        ['template_id' => $template->id, 'recipient_phone' => (string) $phone, 'variables' => $data['variables'] ?? []],
+                        $sendAt->copy()->addSeconds($index * ScheduledMessageService::BULK_STAGGER_SECONDS),
+                        'web_template',
+                    );
+                } catch (ScheduledMessageException $e) {
+                    return response()->json(['message' => $e->getMessage(), 'error_code' => $e->errorCode], $e->status);
+                }
+                $scheduled[] = ['id' => $row->id, 'recipient_phone' => $row->payload['recipient_phone'], 'send_at' => $row->send_at->toIso8601String()];
+            }
+
+            return response()->json(['message' => 'Messages scheduled.', 'scheduled' => $scheduled], 202);
         }
 
         $result = BulkMessageDispatcher::dispatch(

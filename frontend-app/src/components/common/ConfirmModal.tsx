@@ -25,6 +25,7 @@ export default function ConfirmModal({
   cancelLabel = 'Cancel',
   variant = 'danger',
   isLoading = false,
+  confirmDisabled = false,
   onConfirm,
   onCancel,
 }: {
@@ -35,6 +36,8 @@ export default function ConfirmModal({
   /** 'danger' (red, default) for a destructive action like delete; 'default' (indigo) for a non-destructive one like recreate. */
   variant?: 'danger' | 'default';
   isLoading?: boolean;
+  /** Keeps the confirm button disabled until a condition holds, for example an acknowledgment checkbox. */
+  confirmDisabled?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
 }) {
@@ -68,7 +71,7 @@ export default function ConfirmModal({
           </button>
           <button
             onClick={onConfirm}
-            disabled={isLoading}
+            disabled={isLoading || confirmDisabled}
             className={`flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold text-white shadow-sm disabled:opacity-60 ${confirmButtonClass}`}
           >
             {isLoading && <Loader2 className="h-4 w-4 animate-spin" />}

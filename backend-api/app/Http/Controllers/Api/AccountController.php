@@ -165,6 +165,54 @@ class AccountController extends Controller
     }
 
     /**
+     * GET /api/admin/accounts/agent-summary — Super Admin only (route). Every Agent with its login
+     * and how many clients it manages, by status, plus the direct clients (no agent), so
+     * the Super Admin can see who manages what. Counts only: no client details here.
+     */
+    public function agentSummary(): JsonResponse
+    {
+        $empty = fn () => ['total' => 0, 'active' => 0, 'suspended' => 0, 'expired' => 0];
+
+        $counts = Account::query()
+            ->where('account_type', 'client')
+            ->selectRaw('agent_id, status, COUNT(*) as aggregate')
+            ->groupBy('agent_id', 'status')
+            ->get()
+            ->groupBy(fn ($row) => $row->agent_id === null ? 'direct' : (string) $row->agent_id);
+
+        $tally = function (string $key) use ($counts, $empty): array {
+            $out = $empty();
+            foreach ($counts->get($key, collect()) as $row) {
+                $out['total'] += (int) $row->aggregate;
+                if (array_key_exists($row->status, $out)) {
+                    $out[$row->status] += (int) $row->aggregate;
+                }
+            }
+
+            return $out;
+        };
+
+        $agents = Account::query()
+            ->where('account_type', 'agent')
+            ->with('owner:id,name,email,account_id')
+            ->orderBy('company_name')
+            ->get(['id', 'company_name', 'status', 'account_type'])
+            ->map(fn (Account $agent) => [
+                'id' => $agent->id,
+                'company_name' => $agent->company_name,
+                'status' => $agent->status,
+                'login' => $agent->owner ? ['name' => $agent->owner->name, 'email' => $agent->owner->email] : null,
+                'clients' => $tally((string) $agent->id),
+            ])
+            ->values();
+
+        return response()->json([
+            'agents' => $agents,
+            'direct_clients' => $tally('direct'),
+        ]);
+    }
+
+    /**
      * GET /api/admin/accounts/expiring-soon — Super Admin Dashboard's
      * "Expiring in 7 Days" metric card + its detail modal. Window is
      * [now, now+7 days] inclusive, current-subscription-status 'active'

@@ -179,14 +179,31 @@ class AuthController extends Controller
         /** @var User $user */
         $user = $request->user();
 
+        // The email is the login ID: it cannot be changed from the profile.
+        if ($request->has('email') && (string) $request->input('email') !== (string) $user->email) {
+            return response()->json([
+                'message' => 'Your email is your login ID, so it cannot be changed. Contact support if you need a different login.',
+                'error_code' => 'email_locked',
+            ], 422);
+        }
+
         $data = $request->validate([
             'name' => ['required', 'string', 'max:255'],
-            'email' => ['required', 'email', 'max:255', Rule::unique('users', 'email')->ignore($user->id)],
-            'password' => ['sometimes', 'nullable', 'string', 'min:8'],
+            'phone_number' => ['nullable', 'string', 'max:25'],
+            'current_password' => ['required_with:password', 'nullable', 'string'],
+            'password' => ['sometimes', 'nullable', 'string', 'min:8', 'confirmed'],
         ]);
 
+        // A password change needs the current one, checked on the server.
+        if (! empty($data['password']) && ! Hash::check((string) ($data['current_password'] ?? ''), (string) $user->password)) {
+            return response()->json([
+                'message' => 'The current password is not correct.',
+                'errors' => ['current_password' => ['The current password is not correct.']],
+            ], 422);
+        }
+
         $user->name = $data['name'];
-        $user->email = $data['email'];
+        $user->phone_number = $data['phone_number'] ?? null;
 
         if (! empty($data['password'])) {
             $user->password = $data['password'];
@@ -234,6 +251,13 @@ class AuthController extends Controller
         // so the frontend's hasModule() can honor the live Agent-Client
         // hierarchy cap without re-implementing the intersection itself.
         $user->account?->setAttribute('effective_modules', $user->account->effectiveModules());
+
+        // The API key is part of the plan (external_api capability), not a separate module. The key stays
+        // with the client after the plan ends; sending from it is refused until the plan is renewed.
+        if ($user->account !== null) {
+            $user->account->setAttribute('api_access', app(\App\Services\Access\AccessControlService::class)->hasApiKeyAccess($user->account));
+            $user->account->setAttribute('subscription_active', $user->account->hasActiveSubscription());
+        }
 
         return [
             'id' => $user->id,

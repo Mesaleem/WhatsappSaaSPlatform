@@ -267,6 +267,10 @@ class Account extends Model
             'allow_instagram' => 'boolean',
             'allow_linkedin' => 'boolean',
             'allow_youtube' => 'boolean',
+            // Developer API server IP binding (see the add_server_ip_binding_to_accounts migration).
+            'ip_edit_count' => 'integer',
+            'ip_registered_at' => 'datetime',
+            'last_ip_updated_at' => 'datetime',
             // Same Crypt::encryptString/decryptString transparent cast
             // used for SocialProviderConfig's secret columns.
             'gemini_api_key' => 'encrypted',

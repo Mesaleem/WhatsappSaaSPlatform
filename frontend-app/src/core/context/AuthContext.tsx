@@ -116,8 +116,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const logout = useCallback(async () => {
+    // Wait for the server for at most a moment: a slow server must not keep the user signed in.
     try {
-      await axiosInstance.post('/auth/logout');
+      await Promise.race([
+        axiosInstance.post('/auth/logout'),
+        new Promise((resolve) => setTimeout(resolve, 1500)),
+      ]);
+    } catch {
+      // The session is cleared below either way.
     } finally {
       clearSession();
     }

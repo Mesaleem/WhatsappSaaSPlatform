@@ -120,6 +120,7 @@ export default function CreateAccountModal({ account, onClose, onSaved }: Create
     isEditMode && account?.agent_id != null ? String(account.agent_id) : '',
   );
   const [agents, setAgents] = useState<Account[]>([]);
+  const [agentsError, setAgentsError] = useState<string | null>(null);
   // Section 2 — Primary Client Admin Credentials (create mode only).
   const [adminName, setAdminName] = useState('');
   const [adminEmail, setAdminEmail] = useState('');
@@ -194,8 +195,8 @@ export default function CreateAccountModal({ account, onClose, onSaved }: Create
         if (!cancelled) setAgents(data);
       })
       .catch(() => {
-        // Non-critical: the "Parent Agent" dropdown just stays empty
-        // (Super Admin can still create/keep a direct/platform client).
+        // The "Parent Agent" dropdown then stays empty; say why instead of showing nothing.
+        if (!cancelled) setAgentsError('Could not load the agent list. Refresh the page and try again.');
       });
     return () => {
       cancelled = true;
@@ -570,6 +571,7 @@ export default function CreateAccountModal({ account, onClose, onSaved }: Create
                             </option>
                           ))}
                       </select>
+                      {agentsError && <p className="mt-1 text-xs text-red-600">{agentsError}</p>}
                     </Field>
                   )}
                 </>

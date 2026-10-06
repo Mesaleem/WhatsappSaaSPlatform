@@ -32,7 +32,9 @@ export default function DismissibleAlert({ as: Tag = 'div', children, className 
   if (dismissedSignature === signature) return null;
 
   return (
-    <Tag className={className} {...rest}>
+    // The close button sits in the top-right corner, outside the message flow, and the text
+    // keeps clear space for it.
+    <Tag className={`relative pr-9 ${className}`} {...rest}>
       {children}
       <button
         type="button"
@@ -40,7 +42,7 @@ export default function DismissibleAlert({ as: Tag = 'div', children, className 
           setDismissedSignature(signature);
           onDismiss?.();
         }}
-        className="ml-auto flex-shrink-0 self-start rounded p-0.5 opacity-60 hover:opacity-100 focus:opacity-100 focus:outline-none focus:ring-2 focus:ring-current"
+        className="absolute right-2 top-2 rounded p-0.5 opacity-60 hover:opacity-100 focus:opacity-100 focus:outline-none focus:ring-2 focus:ring-current"
         aria-label="Close message"
         title="Close"
         data-testid="alert-dismiss"

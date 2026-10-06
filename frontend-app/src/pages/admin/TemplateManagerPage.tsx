@@ -492,7 +492,7 @@ function TemplateModal({
             </p>
             <div className="mt-3 grid grid-cols-1 gap-4 md:grid-cols-3">
               <div>
-                <label htmlFor="tpl-language" className="text-sm font-medium text-slate-700">Language</label>
+                <label htmlFor="tpl-language" className="text-sm font-medium text-slate-700">Language<span className="text-red-500" aria-hidden="true"> *</span></label>
                 <input
                   id="tpl-language"
                   value={language}
@@ -502,7 +502,7 @@ function TemplateModal({
                 />
               </div>
               <div>
-                <label htmlFor="tpl-category" className="text-sm font-medium text-slate-700">Category</label>
+                <label htmlFor="tpl-category" className="text-sm font-medium text-slate-700">Category<span className="text-red-500" aria-hidden="true"> *</span></label>
                 <select
                   id="tpl-category"
                   value={category}
@@ -516,7 +516,7 @@ function TemplateModal({
                 </select>
               </div>
               <div>
-                <label htmlFor="tpl-meta-name" className="text-sm font-medium text-slate-700">Meta template name</label>
+                <label htmlFor="tpl-meta-name" className="text-sm font-medium text-slate-700">Meta template name<span className="text-red-500" aria-hidden="true"> *</span></label>
                 <input
                   id="tpl-meta-name"
                   value={metaTemplateName}

@@ -58,6 +58,16 @@ class AccessControlService
      * of which user is asking. No $user context needed — used by
      * write-time entitlement checks for a single capability.
      */
+    /**
+     * Whether this account may hold and use a Developer API key: any account that has bought a plan, including a
+     * lapsed one (the key is kept; sending is then refused by the subscription rule). Other capabilities keep their
+     * real entitlement check through canTenant().
+     */
+    public function hasApiKeyAccess(Account $account): bool
+    {
+        return $account->currentSubscription !== null || $this->canTenant($account, 'external_api');
+    }
+
     public function canTenant(Account $account, string $capability): bool
     {
         return $account->entitlements()

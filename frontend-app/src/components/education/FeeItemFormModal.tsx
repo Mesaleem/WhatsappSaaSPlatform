@@ -67,7 +67,7 @@ export default function FeeItemFormModal({
         <div className="mt-4 space-y-3">
           <label className="block text-xs font-medium text-slate-600">
             Name *
-            <input className={inputClass} value={name} onChange={(e) => setName(e.target.value)} required maxLength={120} />
+            <span className="text-red-500" aria-hidden="true"> *</span><input className={inputClass} value={name} onChange={(e) => setName(e.target.value)} required maxLength={120} />
             {field('name')}
           </label>
           <label className="block text-xs font-medium text-slate-600">

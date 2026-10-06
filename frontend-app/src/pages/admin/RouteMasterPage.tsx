@@ -447,11 +447,11 @@ function CategoryFormModal({ category, onClose, onSaved }: { category: RouteCate
         )}
         <label className="block text-sm font-medium text-slate-700">
           Category Name
-          <input className={inputClass} value={name} onChange={(event) => setName(event.target.value)} required />
+          <span className="text-red-500" aria-hidden="true"> *</span><input className={inputClass} value={name} onChange={(event) => setName(event.target.value)} required />
         </label>
         <label className="block text-sm font-medium text-slate-700">
           Category Code
-          <input
+          <span className="text-red-500" aria-hidden="true"> *</span><input
             className={inputClass}
             value={code}
             onChange={(event) => setCode(event.target.value)}
@@ -539,7 +539,7 @@ function RouteFormModal({
         )}
         <label className="block text-sm font-medium text-slate-700">
           Category
-          <select className={inputClass} value={categoryId} onChange={(event) => setCategoryId(Number(event.target.value))} required>
+          <span className="text-red-500" aria-hidden="true"> *</span><select className={inputClass} value={categoryId} onChange={(event) => setCategoryId(Number(event.target.value))} required>
             {categories.map((category) => (
               <option key={category.id} value={category.id}>
                 {category.category_name}
@@ -549,11 +549,11 @@ function RouteFormModal({
         </label>
         <label className="block text-sm font-medium text-slate-700">
           Route Title
-          <input className={inputClass} value={title} onChange={(event) => setTitle(event.target.value)} required />
+          <span className="text-red-500" aria-hidden="true"> *</span><input className={inputClass} value={title} onChange={(event) => setTitle(event.target.value)} required />
         </label>
         <label className="block text-sm font-medium text-slate-700">
           Permission Key
-          <input
+          <span className="text-red-500" aria-hidden="true"> *</span><input
             className={inputClass}
             value={permissionKey}
             onChange={(event) => setPermissionKey(event.target.value)}
@@ -567,7 +567,7 @@ function RouteFormModal({
         </label>
         <label className="block text-sm font-medium text-slate-700">
           Route Path
-          <input className={inputClass} value={path} onChange={(event) => setPath(event.target.value)} placeholder="e.g. /settings/whatsapp" />
+          <span className="text-red-500" aria-hidden="true"> *</span><input className={inputClass} value={path} onChange={(event) => setPath(event.target.value)} placeholder="e.g. /settings/whatsapp" />
         </label>
         <label className="flex items-center gap-2 text-sm font-medium text-slate-700">
           <input type="checkbox" checked={isAgentAssignable} onChange={(event) => setIsAgentAssignable(event.target.checked)} className="h-4 w-4 rounded border-slate-300 text-indigo-600" />

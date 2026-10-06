@@ -186,6 +186,8 @@ export interface SendTemplateMessagePayload {
   template_id: number;
   recipient_phone: string;
   variables: Record<string, string>;
+  /** Optional ISO 8601 time: send later instead of now. */
+  scheduled_at?: string;
   /**
    * Media Templates (send-time override, QR/Baileys-only) -- ONE
    * optional key, no separate type field alongside it (the backend
@@ -215,6 +217,8 @@ export interface SendBulkTemplateMessagePayload {
   template_id: number;
   recipient_phones: string[];
   variables: Record<string, string>;
+  /** Optional ISO 8601 time: schedule every recipient (staggered) instead of sending now. */
+  scheduled_at?: string;
   /** Same send-time media override contract as SendTemplateMessagePayload.media_url. */
   media_url?: string;
 }
@@ -256,7 +260,28 @@ export interface ClientApiKey {
   key_prefix: string;
   created_at: string;
   last_used_at: string | null;
-  server_binding?: import('./developer').ServerBindingSummary;
+}
+
+/** The account's one authorized server IP and when it may next change (GET /api/account/api-key). */
+export interface ClientServerIp {
+  authorized_server_ip: string | null;
+  ip_edit_count: number;
+  ip_registered_at: string | null;
+  last_ip_updated_at: string | null;
+  /** True when the IP can be saved now (first save, the free change, or a paid recharge). */
+  can_edit: boolean;
+  /** When the free change opens, if it is still waiting. */
+  edit_available_at: string | null;
+  /** True after the one free change: a plan recharge is needed before the next change. */
+  require_payment: boolean;
+  /** The price of the current plan, shown on the recharge prompt. */
+  recharge_price: number;
+}
+
+/** GET /api/account/api-key */
+export interface ClientApiKeyResponse {
+  data: ClientApiKey | null;
+  server_ip: ClientServerIp;
 }
 
 /** POST /api/account/api-key/regenerate */
@@ -264,8 +289,6 @@ export interface RegenerateClientApiKeyResponse {
   message: string;
   /** Shown exactly ONCE — never retrievable again after this response. */
   plain_text_key: string;
-  /** Shown exactly ONCE; sent in the `X-Client-Installation` header by the authorized server. */
-  installation_credential: string;
-  installation_header: string;
   data: ClientApiKey;
+  server_ip: ClientServerIp;
 }

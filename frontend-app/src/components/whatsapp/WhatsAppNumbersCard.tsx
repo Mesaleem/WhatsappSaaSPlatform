@@ -182,7 +182,7 @@ export default function WhatsAppNumbersCard({ accountId, onConnected, reloadKey 
             <div className="space-y-3">
               <label htmlFor="addon-numbers" className="block text-sm font-medium text-slate-900">
                 Extra WhatsApp numbers
-              </label>
+              <span className="text-red-500" aria-hidden="true"> *</span></label>
               <textarea
                 id="addon-numbers"
                 rows={3}
@@ -330,6 +330,7 @@ export default function WhatsAppNumbersCard({ accountId, onConnected, reloadKey 
         <QRScannerModal
           accountId={accountId}
           numberId={connectingRow.id}
+          expectedPhone={connectingRow.phone_number}
           onClose={() => setConnectingId(null)}
           onConnected={() => {
             setConnectingId(null);

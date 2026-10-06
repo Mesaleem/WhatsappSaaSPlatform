@@ -16,6 +16,7 @@ import { ClearFiltersButton, Pagination, SearchInput, StatusFilterSelect } from 
 import { TableSkeletonRows } from '../../components/common/Skeleton';
 import DismissibleAlert from '../../components/common/DismissibleAlert';
 import MessageLogDetailModal from '../../components/messageLogs/MessageLogDetailModal';
+import ApiKeySetupBanner from '../../components/profile/ApiKeySetupBanner';
 
 /** Same pattern as AuditLogsPage.tsx's extractMessage() — surfaces the backend's real error (e.g. a missing-table 500 before the message_dispatch_logs migration has run) instead of a fixed generic string. */
 function extractMessage(err: unknown, fallback: string): string {
@@ -32,7 +33,7 @@ const STATUS_OPTIONS: { value: MessageDispatchStatus; label: string }[] = [
 ];
 
 const SOURCE_OPTIONS: { value: MessageDispatchSource; label: string }[] = [
-  { value: 'web_ui', label: 'Web (Send Alert)' },
+  { value: 'web_ui', label: 'Web (Send Notification)' },
   { value: 'web_template', label: 'Web (Template)' },
   { value: 'api', label: 'Developer API' },
   { value: 'chatbot', label: 'Chatbot' },
@@ -167,7 +168,7 @@ export default function MessageLogsPage() {
       <PageHeader
         icon={ClipboardList}
         title="Message Logs"
-        subtitle="Every outbound WhatsApp send attempt, across Send Alert, Send Template, Chatbot and Journey Builder — web and Developer API alike."
+        subtitle="Every outbound WhatsApp send attempt, across Send Notification, Send Template, Chatbot and Journey Builder — web and Developer API alike."
         actions={
           <button
             onClick={() => void load(page)}
@@ -179,6 +180,8 @@ export default function MessageLogsPage() {
           </button>
         }
       />
+
+      <ApiKeySetupBanner />
 
       <div className="flex flex-wrap items-center gap-3">
         <SearchInput value={search} onChange={setSearch} placeholder="Search by phone, template, or group name…" />

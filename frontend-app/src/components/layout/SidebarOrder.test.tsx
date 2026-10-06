@@ -33,13 +33,13 @@ vi.mock('../../core/context/AuthContext', () => ({
 const WORKFLOW = [
   'Dashboard', 'Analytics', 'Message Logs', 'Notifications',
   'Manage Clients', 'My Clients', 'Team Users',
-  'WhatsApp Setup', 'Send Alert', 'Contact Groups', 'Template Manager', 'Chatbot Rules', 'Journey Builder',
+  'WhatsApp Setup', 'Send Notification', 'Contact Groups', 'Template Manager', 'Chatbot Rules', 'Journey Builder',
   'Developer API',
   'Social Accounts', 'Social Inbox', 'Comment Rules', 'Social Analytics', 'Social Reports',
   'Meta Ads Launcher', 'Ads Dashboard',
   'Instant Lead CRM', 'CRM Leads', 'CRM Pipeline', 'CRM Contacts', 'CRM Tags', 'CRM Analytics',
   'Education',
-  'Billing & Plans', 'Plans', 'Admin Gateway Settings', 'Social Gateway Settings', 'Device Settings', 'Route Master', 'Activity Logs', 'Audit Logs', 'Quota Top-Up Requests',
+  'Billing & Plans', 'Add-ons', 'Plans', 'Admin Gateway Settings', 'Social Gateway Settings', 'Device Settings', 'Route Master', 'Activity Logs', 'Audit Logs', 'Quota Top-Up Requests',
 ];
 
 function sidebarLabels(): string[] {

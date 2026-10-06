@@ -210,3 +210,15 @@ Schedule::command('modules:enforce-addons')
     ->hourly()
     ->onOneServer()
     ->withoutOverlapping(30);
+
+// Plan expiry reminders: once a day, one server only. Each reminder is recorded, so a rerun never resends it.
+Schedule::command('subscriptions:send-expiry-reminders')
+    ->dailyAt('09:00')
+    ->onOneServer()
+    ->withoutOverlapping();
+
+// Scheduled messages: send each message at its time. Every minute, one server only, never overlapping.
+Schedule::command('messages:dispatch-scheduled')
+    ->everyMinute()
+    ->onOneServer()
+    ->withoutOverlapping();

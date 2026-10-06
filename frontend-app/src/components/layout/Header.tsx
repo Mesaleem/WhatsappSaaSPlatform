@@ -4,9 +4,10 @@ import { useAuth } from '../../core/context/AuthContext';
 import { useTenant } from '../../core/context/TenantContext';
 import { indigo, activeGradient } from '../../theme/signalIndigo';
 import QuotaTopUpModal from '../billing/QuotaTopUpModal';
-import ProfileModal from './ProfileModal';
+import AvatarMenu from './AvatarMenu';
 import NotificationBell from './NotificationBell';
 import ExpiryWarningBanner from './ExpiryWarningBanner';
+import ExpiryHeaderChip from './ExpiryHeaderChip';
 import SocialConnectionWarningBanner from './SocialConnectionWarningBanner';
 
 /**
@@ -131,26 +132,8 @@ function ClientSwitcher() {
   );
 }
 
-/** Icon-only avatar trigger — initial letter, no name/chevron. Opens ProfileModal. */
-function ProfileTrigger({ onClick }: { onClick: () => void }) {
-  const { user } = useAuth();
-
-  return (
-    <button
-      onClick={onClick}
-      aria-label="Open profile"
-      title={user?.name}
-      className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full font-display text-sm font-bold text-white transition hover:opacity-90"
-      style={{ background: activeGradient }}
-    >
-      {(user?.name ?? '?').slice(0, 1).toUpperCase()}
-    </button>
-  );
-}
-
 export default function Header({ pageTitle }: { pageTitle: string }) {
   const { canSwitchClients } = useTenant();
-  const [isProfileOpen, setIsProfileOpen] = useState(false);
 
   return (
     <>
@@ -166,12 +149,12 @@ export default function Header({ pageTitle }: { pageTitle: string }) {
 
       <div className="flex items-center gap-4">
         {canSwitchClients && <ClientSwitcher />}
+        <ExpiryHeaderChip />
         <QuotaBadge />
         <NotificationBell />
-        <ProfileTrigger onClick={() => setIsProfileOpen(true)} />
+        <AvatarMenu />
       </div>
 
-        {isProfileOpen && <ProfileModal onClose={() => setIsProfileOpen(false)} />}
       </header>
       <ExpiryWarningBanner />
       <SocialConnectionWarningBanner />

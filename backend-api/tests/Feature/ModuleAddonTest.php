@@ -64,7 +64,7 @@ class ModuleAddonTest extends TestCase
 
     private function requestFor(User $user): int
     {
-        return $this->actingAs($user)->postJson('/api/module-addons/request', ['module' => 'contact_groups'])
+        return $this->actingAs($user)->postJson('/api/module-addons/request', ['module' => 'contact_groups', 'units' => 3])
             ->assertCreated()
             ->json('data.id');
     }
@@ -88,11 +88,11 @@ class ModuleAddonTest extends TestCase
     {
         [, $user] = $this->client();
 
-        $this->actingAs($user)->postJson('/api/module-addons/request', ['module' => 'contact_groups', 'reason' => 'Vendor groups'])
+        $this->actingAs($user)->postJson('/api/module-addons/request', ['module' => 'contact_groups', 'units' => 3, 'reason' => 'Vendor groups'])
             ->assertCreated()
             ->assertJsonPath('data.status', 'requested');
 
-        $this->actingAs($user)->postJson('/api/module-addons/request', ['module' => 'contact_groups'])
+        $this->actingAs($user)->postJson('/api/module-addons/request', ['module' => 'contact_groups', 'units' => 3])
             ->assertStatus(409)
             ->assertJsonPath('error_code', 'request_pending');
     }
@@ -110,7 +110,7 @@ class ModuleAddonTest extends TestCase
         [$account, $user] = $this->client();
         $account->forceFill(['allowed_modules' => ['dashboard', 'contact_groups']])->save();
 
-        $this->actingAs($user)->postJson('/api/module-addons/request', ['module' => 'contact_groups'])
+        $this->actingAs($user)->postJson('/api/module-addons/request', ['module' => 'contact_groups', 'units' => 3])
             ->assertUnprocessable()
             ->assertJsonPath('error_code', 'already_enabled');
     }
@@ -300,7 +300,7 @@ class ModuleAddonTest extends TestCase
             'label' => 'Custom Contact Groups', 'price' => 99, 'term_months' => 1, 'units_included' => 5, 'is_active' => false,
         ])->assertOk();
 
-        $this->actingAs($user)->postJson('/api/module-addons/request', ['module' => 'contact_groups'])
+        $this->actingAs($user)->postJson('/api/module-addons/request', ['module' => 'contact_groups', 'units' => 3])
             ->assertUnprocessable();
     }
 

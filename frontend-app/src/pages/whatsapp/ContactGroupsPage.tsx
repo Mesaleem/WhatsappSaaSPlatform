@@ -24,6 +24,8 @@ import { PageHeader, PageShell } from '../../components/common/PageShell';
 import { Card, TableCard, inputClass } from '../../components/common/Card';
 import ConfirmModal from '../../components/common/ConfirmModal';
 import ModuleAddonCard from '../../components/common/ModuleAddonCard';
+import PlanLockedAction from '../../components/common/PlanLockedAction';
+import KeepGroupsModal from '../../components/groups/KeepGroupsModal';
 import DismissibleAlert from '../../components/common/DismissibleAlert';
 
 /** Same pattern as MessageLogsPage.tsx's extractMessage() — surfaces the backend's real error (e.g. GROUP_MODULE_DISABLED's exact copy) instead of a fixed generic string. */
@@ -54,6 +56,8 @@ export default function ContactGroupsPage() {
   const moduleEnabled = hasModule('contact_groups');
 
   const [groups, setGroups] = useState<ContactGroup[]>([]);
+  const [usage, setUsage] = useState<{ used: number; limit: number | null; selection_required: boolean } | null>(null);
+  const [choosingGroups, setChoosingGroups] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -76,8 +80,9 @@ export default function ContactGroupsPage() {
     setIsLoading(true);
     setError(null);
     try {
-      const data = await contactGroupsService.list();
-      setGroups(data);
+      const res = await contactGroupsService.listWithUsage();
+      setGroups(res.data);
+      setUsage(res.usage);
     } catch (err) {
       setError(extractMessage(err, 'Failed to load contact groups.'));
     } finally {
@@ -187,6 +192,45 @@ export default function ContactGroupsPage() {
       />
 
       <ModuleAddonCard module="contact_groups" enabled={moduleEnabled} />
+
+      {usage && usage.limit !== null && (
+        <p className="mb-4 text-sm text-slate-600" data-testid="group-usage">
+          <strong className="text-slate-900">
+            {usage.used} of {usage.limit}
+          </strong>{' '}
+          custom groups used.
+          {usage.used >= usage.limit && (
+            <span className="ml-1 text-amber-700">All groups in your plan are in use. Upgrade to add more.</span>
+          )}
+        </p>
+      )}
+
+      {usage?.selection_required && usage.limit !== null && (
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          <p>
+            Your plan now includes {usage.limit} {usage.limit === 1 ? 'group' : 'groups'}. Choose which groups stay open for this term.
+          </p>
+          <button
+            type="button"
+            onClick={() => setChoosingGroups(true)}
+            className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-700"
+          >
+            Choose groups
+          </button>
+        </div>
+      )}
+
+      {choosingGroups && usage?.limit != null && (
+        <KeepGroupsModal
+          groups={groups.filter((g) => !g.is_default && g.group_type === 'internal_segment')}
+          limit={usage.limit}
+          onClose={() => setChoosingGroups(false)}
+          onSaved={() => {
+            setChoosingGroups(false);
+            void load();
+          }}
+        />
+      )}
 
       {!moduleEnabled ? (
         <LockedCard />
@@ -459,16 +503,24 @@ function CreateGroupModal({ onClose, onCreated }: { onClose: () => void; onCreat
   const [availableGroups, setAvailableGroups] = useState<AvailableNativeGroup[]>([]);
   const [isLoadingAvailable, setIsLoadingAvailable] = useState(false);
   const [availableError, setAvailableError] = useState<string | null>(null);
+  // True when the plan does not include native groups (the server's CAPABILITY_NOT_ENTITLED refusal).
+  const [availableLocked, setAvailableLocked] = useState(false);
   const [selectedJid, setSelectedJid] = useState('');
 
   const loadAvailableGroups = useCallback(async () => {
     setIsLoadingAvailable(true);
     setAvailableError(null);
+    setAvailableLocked(false);
     try {
       const data = await contactGroupsService.availableNative();
       setAvailableGroups(data);
     } catch (err) {
-      setAvailableError(extractMessage(err, 'Could not list your existing WhatsApp groups.'));
+      const code = (err as { response?: { data?: { error_code?: string } } })?.response?.data?.error_code;
+      if (code === 'CAPABILITY_NOT_ENTITLED') {
+        setAvailableLocked(true);
+      } else {
+        setAvailableError(extractMessage(err, 'Could not list your existing WhatsApp groups.'));
+      }
     } finally {
       setIsLoadingAvailable(false);
     }
@@ -658,6 +710,8 @@ function CreateGroupModal({ onClose, onCreated }: { onClose: () => void; onCreat
                     <p className="mt-2 flex items-center gap-2 text-sm text-slate-500">
                       <Loader2 className="h-4 w-4 animate-spin" /> Looking up your WhatsApp groups…
                     </p>
+                  ) : availableLocked ? (
+                    <PlanLockedAction module="whatsapp_groups" featureLabel="Native WhatsApp Groups" />
                   ) : availableError ? (
                     <DismissibleAlert as="p" className="mt-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
                       {availableError}
@@ -802,10 +856,11 @@ function ImportContactsModal({
             >
               <option value="">Select a group…</option>
               {groups.map((g) => (
-                <option key={g.id} value={g.id}>
+                <option key={g.id} value={g.id} disabled={!!g.locked_at}>
                   {g.name}
                   {g.is_default ? ' (Default)' : ''}
                   {g.group_type === 'native_wa_group' ? ' (Native WA Group)' : ''}
+                  {g.locked_at ? ' (Locked for this term)' : ''}
                 </option>
               ))}
             </select>

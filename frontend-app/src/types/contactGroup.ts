@@ -17,6 +17,8 @@ export interface ContactGroup {
   /** Developer API: unique (per-account), human-readable lookup key for POST /api/v1/send-message (recipient_type: "group"). Null only on a row from before this feature existed and not yet resaved -- see ContactGroup::generateGroupCode() and the backend migration's backfill. */
   group_code: string | null;
   is_default: boolean;
+  /** Set while the group is outside the groups the client's paid term allows (after a downgrade). */
+  locked_at?: string | null;
   /** Added via ContactGroupController::index()'s withCount('members'). */
   members_count: number;
   /** Defaults to 'internal_segment' server-side for every group created before this re-architecture. */
@@ -54,6 +56,8 @@ export interface CreateContactGroupPayload {
 export interface SendGroupTemplatePayload {
   template_id: number;
   variables: Record<string, string>;
+  /** Optional ISO 8601 time: send to the group later instead of now. */
+  scheduled_at?: string;
 }
 
 /**

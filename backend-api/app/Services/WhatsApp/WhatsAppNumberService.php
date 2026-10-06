@@ -165,7 +165,17 @@ class WhatsAppNumberService
             throw new WhatsAppNumberException('Only a number that has not been paid for can be removed.', 'number_in_use');
         }
 
-        $target->delete();
+        // The number is removed and its invoice repriced in one step, so the bill always
+        // matches the numbers still in the purchase (and an empty purchase is cancelled).
+        DB::transaction(function () use ($target): void {
+            $invoiceId = $target->addon_invoice_id;
+            $phone = $target->phone_number;
+            $target->delete();
+
+            if ($invoiceId !== null) {
+                app(WhatsAppAddonService::class)->dropNumberFromInvoice((int) $invoiceId, (string) $phone);
+            }
+        });
     }
 
     /**

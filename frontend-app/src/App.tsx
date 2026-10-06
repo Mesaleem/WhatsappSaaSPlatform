@@ -15,6 +15,7 @@ import SendAlertPage from './pages/alerts/SendAlertPage';
 import AnalyticsPage from './pages/analytics/AnalyticsPage';
 import MessageLogsPage from './pages/analytics/MessageLogsPage';
 import BillingPage from './pages/billing/BillingPage';
+import AddOnsPage from './pages/billing/AddOnsPage';
 import GatewaySettingsPage from './pages/admin/GatewaySettingsPage';
 import QuotaRequestsPage from './pages/admin/QuotaRequestsPage';
 import ApiAccessPage from './pages/admin/ApiAccessPage';
@@ -212,6 +213,14 @@ export default function App() {
               element={
                 <ProtectedRoute permission="manage-subscriptions" module="billing">
                   <BillingPage />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/add-ons"
+              element={
+                <ProtectedRoute module="billing">
+                  <AddOnsPage />
                 </ProtectedRoute>
               }
             />

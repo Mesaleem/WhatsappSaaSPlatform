@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent 
 import { Link } from 'react-router-dom';
 import { AlertTriangle, CheckCircle2, Code2, Copy, Download, Loader2, Send, ShieldCheck, Sparkles, Upload, Users, XCircle } from 'lucide-react';
 import { useAuth } from '../../core/context/AuthContext';
+import ScheduleField, { EMPTY_SCHEDULE, formatSchedule, scheduleError, scheduleToIso, type ScheduleValue } from '../../components/common/ScheduleField';
 import { useTenant } from '../../core/context/TenantContext';
 import MyTemplatesModal from '../../components/templates/MyTemplatesModal';
 import RequestTemplateModal from '../../components/templates/RequestTemplateModal';
@@ -13,6 +14,7 @@ import type { ContactGroup } from '../../types/contactGroup';
 import type { AvailableTemplate } from '../../types/templates';
 import { extractCooldownRemainingSeconds, extractErrorMessage } from '../../utils/apiError';
 import DismissibleAlert from '../../components/common/DismissibleAlert';
+import ApiKeySetupBanner from '../../components/profile/ApiKeySetupBanner';
 
 /**
  * Client-side mirror of the backend's TemplateRenderer::render(), as
@@ -166,10 +168,14 @@ export default function SendAlertPage() {
   return (
     <div className="p-6">
       <div className="w-full">
-        <h1 className="text-xl font-semibold text-slate-900">Send Payment Alert</h1>
+        <h1 className="text-xl font-semibold text-slate-900">Send Notification</h1>
         <p className="mt-1 text-sm text-slate-500">
-          Notify a customer over WhatsApp that their payment was received, using an approved template.
+          Send an approved WhatsApp template message to a customer or contact group.
         </p>
+
+        <div className="mt-6">
+          <ApiKeySetupBanner />
+        </div>
 
         {isDisconnected && (
           <div className="mt-6 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm">
@@ -237,6 +243,10 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
   const [csvError, setCsvError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [mediaUrl, setMediaUrl] = useState('');
+  // Optional send time for template sends (empty = send now).
+  const [schedule, setSchedule] = useState<ScheduleValue>(EMPTY_SCHEDULE);
+  const scheduledIso = scheduleToIso(schedule);
+  const scheduleProblem = scheduleError(schedule);
   const [variables, setVariables] = useState<Record<string, string>>({});
   const [copied, setCopied] = useState(false);
 
@@ -487,6 +497,7 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
         recipient_type: 'group',
         group_code: selectedGroup?.group_code ?? '<group_code>',
         variables: sampleVariables,
+        scheduled_at: scheduledIso ?? '',
       };
     }
     return {
@@ -507,8 +518,11 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
       // but unreachable/invalid, the server falls back to text automatically
       // rather than failing the send (see MediaUrl handling below).
       media_url: mediaUrl.trim() || 'https://example.com/invoice.pdf',
+      // Optional send time: null sends now (the server treats null as "no time").
+      // Shows the chosen time from the Send later field once one is set.
+      scheduled_at: scheduledIso ?? '',
     };
-  }, [noTemplate, directMessage, selectedTemplate, recipientType, recipientPhones, selectedGroupIds, groups, sampleVariables, mediaUrl]);
+  }, [noTemplate, directMessage, selectedTemplate, recipientType, recipientPhones, selectedGroupIds, groups, sampleVariables, mediaUrl, scheduledIso]);
 
   const handleCopyPayload = async () => {
     if (!samplePayload) return;
@@ -591,6 +605,11 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
       return;
     }
 
+    if (!noTemplate && scheduleProblem) {
+      setSendError(scheduleProblem);
+      return;
+    }
+
     setIsSending(true);
     try {
       if (noTemplate) {
@@ -665,7 +684,11 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
           // native group still mid-sync) doesn't stop the others sending.
           const results = await Promise.allSettled(
             selectedGroupIds.map((groupId) =>
-              contactGroupsService.sendTemplate(groupId, { template_id: template.id, variables }),
+              contactGroupsService.sendTemplate(groupId, {
+                template_id: template.id,
+                variables,
+                ...(scheduledIso ? { scheduled_at: scheduledIso } : {}),
+              }),
             ),
           );
           const groupName = (id: number) => groups.find((g) => g.id === id)?.name ?? `#${id}`;
@@ -674,7 +697,12 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
             .filter((x): x is { r: PromiseRejectedResult; groupId: number } => x.r.status === 'rejected');
 
           if (failures.length === 0) {
-            setSendSuccess(`Queued for ${results.length} group${results.length === 1 ? '' : 's'}.`);
+            setSendSuccess(
+              scheduledIso
+                ? `Scheduled for ${results.length} group${results.length === 1 ? '' : 's'} on ${formatSchedule(schedule)}.`
+                : `Queued for ${results.length} group${results.length === 1 ? '' : 's'}.`,
+            );
+            setSchedule(EMPTY_SCHEDULE);
             setSelectedGroupIds([]);
             setVariables(Object.fromEntries(template.variables_schema.map((f) => [f.key, ''])));
           } else if (failures.length === results.length) {
@@ -704,13 +732,15 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
             template_id: template.id,
             recipient_phones: recipientPhones,
             variables,
+            ...(scheduledIso ? { scheduled_at: scheduledIso } : {}),
             // Omit the key entirely when blank rather than sending an empty
             // string — the backend only overrides the template's own media
             // when this key is present at all.
             ...(mediaUrl.trim() ? { media_url: mediaUrl.trim() } : {}),
           });
           setBulkQueued(true);
-          setSendSuccess(response.message);
+          setSendSuccess(scheduledIso ? `Scheduled ${recipientPhones.length} message(s) for ${formatSchedule(schedule)}.` : response.message);
+          setSchedule(EMPTY_SCHEDULE);
           // Strict Bulk Messaging Limit & Tier-Based Cooldown -- a dispatch
           // that used the full 150-recipient cap starts a cooldown on the
           // backend (BulkMessageCooldown::lock(), inside sendBulk()); this
@@ -733,9 +763,11 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
             template_id: template.id,
             recipient_phone: recipientPhones[0],
             variables,
+            ...(scheduledIso ? { scheduled_at: scheduledIso } : {}),
             ...(mediaUrl.trim() ? { media_url: mediaUrl.trim() } : {}),
           });
-          setSendSuccess('Sent to 1 recipient.');
+          setSendSuccess(scheduledIso ? `Scheduled for ${formatSchedule(schedule)}.` : 'Sent to 1 recipient.');
+          setSchedule(EMPTY_SCHEDULE);
           setRecipientPhone('');
           setMediaUrl('');
           setVariables(Object.fromEntries(template.variables_schema.map((f) => [f.key, ''])));
@@ -991,6 +1023,7 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
                 className={inputClass}
               />
             </div>
+            <ScheduleField value={schedule} onChange={setSchedule} disabled={isSending} />
           </div>
         ) : (
           <div>
@@ -1157,7 +1190,7 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
           className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:opacity-60"
         >
           {isSending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-          {isSending ? 'Sending…' : noTemplate ? (recipientType === 'group' ? 'Send to Group(s)' : 'Send Message') : recipientType === 'group' ? 'Send to Group(s)' : 'Send Template'}
+          {isSending ? 'Sending…' : noTemplate ? (recipientType === 'group' ? 'Send to Group(s)' : 'Send Message') : scheduledIso ? 'Schedule message' : recipientType === 'group' ? 'Send to Group(s)' : 'Send Template'}
         </button>
       </form>
 
@@ -1204,7 +1237,10 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
                 Content-Type: application/json
               </p>
               <p className="mt-1 text-xs text-slate-500">
-                Find your key under Profile → Client API Key.
+                Find your key under Profile → API key. Calls are accepted only from your registered server IP.
+              </p>
+              <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                ⚠️ Security Notice: Requests are strictly authorized only from your registered Server IP. Calls from unauthorized domains/servers will be rejected automatically.
               </p>
             </div>
             <div>
@@ -1251,6 +1287,14 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
                     className="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-500"
                   >
                     media_url — optional (string)
+                  </span>
+                )}
+                {!noTemplate && (
+                  <span
+                    title="Format: yyyy-mm-dd hh:mm:ss in Indian Standard Time (IST), for example 2026-10-08 09:35:00. Leave empty to send now."
+                    className="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-500"
+                  >
+                    scheduled_at — optional (yyyy-mm-dd hh:mm:ss, IST)
                   </span>
                 )}
               </div>

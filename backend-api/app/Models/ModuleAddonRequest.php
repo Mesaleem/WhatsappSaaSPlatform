@@ -19,11 +19,13 @@ class ModuleAddonRequest extends Model
     protected $fillable = [
         'account_id',
         'module',
+        'units',
         'status',
         'reason',
         'requested_by_user_id',
         'decided_by_user_id',
         'decision_note',
+        'decided_at',
         'invoice_id',
         'term_starts_at',
         'term_ends_at',
@@ -34,6 +36,7 @@ class ModuleAddonRequest extends Model
         return [
             'term_starts_at' => 'datetime',
             'term_ends_at' => 'datetime',
+            'decided_at' => 'datetime',
         ];
     }
 

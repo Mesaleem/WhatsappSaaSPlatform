@@ -61,6 +61,7 @@ return Application::configure(basePath: dirname(__DIR__))
             // (which /api/v1/* deliberately does not run). See its own
             // docblock for why capability.guard cannot simply be reused.
             'capability.apikey' => EnsureApiKeyCapability::class,
+            'api.key.access' => \App\Http\Middleware\EnsureApiKeyAccess::class,
             // Phase 6 CRM Task 11 — module.guard and subscription.guard for
             // the Developer API, reading the API key's account (neither UI
             // guard can run on /v1: one falls through without

@@ -3,13 +3,18 @@
 namespace App\Services\Billing;
 
 use App\Models\Account;
+use App\Models\AccountEntitlement;
+use App\Models\Capability;
 use App\Models\InAppNotification;
 use App\Models\Invoice;
 use App\Models\ModuleAddonOffer;
+use App\Models\ModuleAddonTier;
 use App\Models\InvoiceLineItem;
 use App\Models\ManualPayment;
 use App\Models\ModuleAddonRequest;
 use App\Models\User;
+use App\Models\WhatsAppNumber;
+use App\Services\Access\AccessControlService;
 use App\Services\WhatsApp\WhatsAppAddonService;
 use App\Services\WhatsApp\WhatsAppNumberException;
 use Carbon\Carbon;
@@ -29,6 +34,12 @@ use Illuminate\Support\Facades\DB;
  */
 class ModuleAddonService
 {
+    /** The reason a renewal invoice is created with, so a new choice can replace an unpaid one. */
+    public const RENEWAL_REASON = 'Renewal of an ended term';
+
+    /** The entitlement source written for a capability granted by a paid add-on. */
+    public const ADDON_SOURCE = 'addon:module_addon';
+
     public function __construct(private readonly WhatsAppAddonService $addons)
     {
     }
@@ -61,11 +72,43 @@ class ModuleAddonService
         return ModuleAddonOffer::query()->where('is_active', true)->orderBy('id')->get();
     }
 
-    public function request(Account $account, User $actor, string $module, ?string $reason): ModuleAddonRequest
+    public function request(Account $account, User $actor, string $module, ?string $reason, ?int $units = null): ModuleAddonRequest
     {
         $this->offer($module);
 
-        if ($account->hasModuleEnabled($module)) {
+        // Add-ons are bought while the plan is active. A lapsed plan renews first.
+        if (! $account->hasActiveSubscription()) {
+            throw new WhatsAppNumberException('Your plan is not active. Renew it first, then you can add this.', 'plan_not_active', 422);
+        }
+
+        // A tiered offer needs the units; the tier that holds them must exist.
+        if ($this->tiers($module)->isNotEmpty()) {
+            if ($units === null || $units < 1) {
+                throw new WhatsAppNumberException('Tell us how many units you need.', 'units_required', 422);
+            }
+            $this->priceFor($module, $units);
+        }
+
+        // A tiered module with a term running: a bigger tier is an upgrade (allowed at any time); a
+        // smaller or equal one waits for the running term to end. Otherwise the module is already on.
+        $runningUnits = $units !== null && $this->hasTiers($module)
+            ? ModuleAddonRequest::query()
+                ->where('account_id', $account->id)
+                ->where('module', $module)
+                ->where('status', ModuleAddonRequest::PAID)
+                ->where('term_ends_at', '>', now())
+                ->max('units')
+            : null;
+
+        if ($runningUnits !== null) {
+            if ($units <= (int) $runningUnits) {
+                throw new WhatsAppNumberException(
+                    "Your current term includes {$runningUnits} groups. A smaller plan can start when this term ends.",
+                    'downgrade_after_term',
+                    422,
+                );
+            }
+        } elseif ($this->alreadyIncluded($account, $module)) {
             throw new WhatsAppNumberException('This module is already included in your account.', 'already_enabled', 422);
         }
 
@@ -73,9 +116,21 @@ class ModuleAddonService
             ->where('account_id', $account->id)
             ->where('module', $module)
             ->whereIn('status', [ModuleAddonRequest::REQUESTED, ModuleAddonRequest::INVOICED])
-            ->exists();
+            ->get();
 
-        if ($open) {
+        // An unpaid renewal is replaced by the client's new choice (for example a smaller tier). Any
+        // other open request still blocks: it is waiting for approval or payment.
+        if ($open->isNotEmpty() && $open->every(fn (ModuleAddonRequest $r) => $r->reason === self::RENEWAL_REASON)) {
+            foreach ($open as $renewal) {
+                if ($renewal->invoice_id !== null) {
+                    Invoice::query()->whereKey($renewal->invoice_id)->where('status', 'pending')->update(['status' => 'failed']);
+                }
+                $renewal->forceFill(['status' => ModuleAddonRequest::REJECTED, 'decision_note' => 'Replaced by a new choice.'])->save();
+            }
+            $open = collect();
+        }
+
+        if ($open->isNotEmpty()) {
             throw new WhatsAppNumberException('A request for this module is already waiting for approval or payment.', 'request_pending', 409);
         }
 
@@ -85,6 +140,7 @@ class ModuleAddonService
             'status' => ModuleAddonRequest::REQUESTED,
             'reason' => $reason,
             'requested_by_user_id' => $actor->id,
+            'units' => $units,
         ]);
     }
 
@@ -107,6 +163,104 @@ class ModuleAddonService
         return $query->whereHas('account', fn ($q) => $q->where('agent_id', $actor->account_id))->get();
     }
 
+    /**
+     * The history the caller may see, newest first: every add-on request (requested, approved,
+     * paid, rejected, term) and every paid WhatsApp number purchase. A Super Admin sees all
+     * clients, an agent its own clients, and any other user only its own account, whatever
+     * account it names. $account narrows the result to one client.
+     *
+     * @return array{requests: array<int, array<string, mixed>>, number_purchases: array<int, array<string, mixed>>}
+     */
+    public function historyFor(User $actor, ?Account $account = null): array
+    {
+        $visible = $this->visibleAccountIds($actor);
+
+        if ($account !== null) {
+            if ($visible !== null && ! in_array($account->id, $visible, true)) {
+                throw new WhatsAppNumberException('Client not found.', 'not_found', 404);
+            }
+            $visible = [$account->id];
+        }
+
+        $offerLabels = ModuleAddonOffer::query()->pluck('label', 'module');
+
+        $requests = ModuleAddonRequest::query()
+            ->with(['account:id,company_name', 'invoice:id,invoice_number,total_amount,paid_at'])
+            ->when($visible !== null, fn ($q) => $q->whereIn('account_id', $visible))
+            ->orderByDesc('id')
+            ->get()
+            ->map(fn (ModuleAddonRequest $r) => [
+                'id' => $r->id,
+                'client' => $r->account?->company_name,
+                'module' => $r->module,
+                'label' => $offerLabels[$r->module] ?? $r->module,
+                'status' => $r->status,
+                'units' => $r->units,
+                'reason' => $r->reason,
+                'decision_note' => $r->decision_note,
+                'requested_at' => $r->created_at?->toIso8601String(),
+                'decided_at' => $r->decided_at?->toIso8601String(),
+                'paid_at' => $r->invoice?->paid_at?->toIso8601String(),
+                'term_starts_at' => $r->term_starts_at?->toIso8601String(),
+                'term_ends_at' => $r->term_ends_at?->toIso8601String(),
+                'invoice_number' => $r->invoice?->invoice_number,
+                'total_amount' => $r->invoice ? (float) $r->invoice->total_amount : null,
+            ])
+            ->values()
+            ->all();
+
+        // One WhatsApp add-on purchase = one invoice with one line per number bought.
+        $numbers = WhatsAppNumber::query()
+            ->with('account:id,company_name')
+            ->where('is_included', false)
+            ->whereNotNull('addon_invoice_id')
+            ->when($visible !== null, fn ($q) => $q->whereIn('account_id', $visible))
+            ->orderByDesc('id')
+            ->get();
+
+        $invoices = Invoice::query()
+            ->whereIn('id', $numbers->pluck('addon_invoice_id')->unique())
+            ->get(['id', 'invoice_number', 'status', 'total_amount', 'created_at', 'paid_at'])
+            ->keyBy('id');
+
+        $purchases = $numbers->groupBy('addon_invoice_id')->map(function ($group, $invoiceId) use ($invoices) {
+            $invoice = $invoices->get((int) $invoiceId);
+            $first = $group->first();
+            $termEnds = $group->pluck('term_ends_at')->filter()->map(fn ($d) => $d->timestamp)->max();
+
+            return [
+                'invoice_id' => $invoice?->id,
+                'account_id' => $first->account_id,
+                'invoice_number' => $invoice?->invoice_number,
+                'client' => $first->account?->company_name,
+                'number_count' => $group->count(),
+                'numbers' => $group->map(fn (WhatsAppNumber $n) => ['phone_number' => $n->phone_number, 'status' => $n->status])->values()->all(),
+                'status' => $invoice?->status,
+                'total_amount' => $invoice ? (float) $invoice->total_amount : null,
+                'bought_at' => ($invoice?->created_at ?? $first->created_at)?->toIso8601String(),
+                'paid_at' => $invoice?->paid_at?->toIso8601String(),
+                'term_months' => (int) config('whatsapp_numbers.addon_term_months'),
+                'term_ends_at' => $termEnds === null ? null : Carbon::createFromTimestamp($termEnds)->toIso8601String(),
+            ];
+        })->values()->all();
+
+        return ['requests' => $requests, 'number_purchases' => $purchases];
+    }
+
+    /** null = every account (Super Admin); otherwise the account ids the actor may see. */
+    private function visibleAccountIds(User $actor): ?array
+    {
+        if ($actor->hasRole('super_admin')) {
+            return null;
+        }
+
+        if ($actor->hasRole('agent')) {
+            return Account::query()->where('agent_id', $actor->account_id)->pluck('id')->map(fn ($id) => (int) $id)->all();
+        }
+
+        return $actor->account_id === null ? [] : [(int) $actor->account_id];
+    }
+
     public function approve(ModuleAddonRequest $request, User $actor): ModuleAddonRequest
     {
         $account = $this->accountOf($request);
@@ -125,7 +279,7 @@ class ModuleAddonService
         $offer = $this->offer($request->module);
 
         return DB::transaction(function () use ($request, $account, $decidedBy, $offer): ModuleAddonRequest {
-            $total = round($offer['price'], 2);
+            $total = round($this->priceForRequest($request), 2);
 
             $invoice = Invoice::query()->create([
                 'account_id' => $account->id,
@@ -144,7 +298,7 @@ class ModuleAddonService
             InvoiceLineItem::query()->create([
                 'invoice_id' => $invoice->id,
                 'description' => $offer['label']
-                    .($offer['units_included'] > 0 ? ' — includes '.$offer['units_included'].' units' : '')
+                    .($request->units ? ' — up to '.$request->units.' '.$this->unitName($request->module) : '')
                     .' ('.$offer['term_months'].' month'.($offer['term_months'] === 1 ? '' : 's').')',
                 'quantity' => 1,
                 'unit_amount' => $total,
@@ -155,7 +309,17 @@ class ModuleAddonService
                 'status' => ModuleAddonRequest::INVOICED,
                 'invoice_id' => $invoice->id,
                 'decided_by_user_id' => $decidedBy,
+                'decided_at' => now(),
             ])->save();
+
+            // A free tier (price 0) has nothing to pay: the invoice is recorded as paid and the
+            // add-on starts now, so the request does not wait for a payment that cannot be made.
+            if ($total <= 0) {
+                $invoice->forceFill(['status' => 'paid', 'paid_at' => now(), 'payment_gateway' => 'free'])->save();
+                $this->activate($request->refresh(), now());
+
+                return $request->refresh();
+            }
 
             $this->notifyRequester($request, 'Invoice ready: '.$offer['label'], 'Your invoice '.$invoice->invoice_number.' for ₹'.number_format($total, 2).' (GST included) is ready. Pay it on the Billing page.');
 
@@ -175,6 +339,7 @@ class ModuleAddonService
             'status' => ModuleAddonRequest::REJECTED,
             'decided_by_user_id' => $actor->id,
             'decision_note' => $note,
+            'decided_at' => now(),
         ])->save();
 
         $this->notifyRequester($request, 'Request not approved', 'Your request for '.$this->label($request->module).' was not approved.'.($note ? ' Note: '.$note : ''));
@@ -264,13 +429,18 @@ class ModuleAddonService
                 ->exists();
 
             $account = Account::query()->find($request->account_id);
+            if ($account !== null && $request->module === 'contact_groups') {
+                // The term ended: a smaller term still running may mean the client has to choose again.
+                app(CustomGroupAccessService::class)->applyAllowance($account, false);
+            }
             if ($account !== null && ! $stillRunningNow) {
                 // Renewal: a new invoice at the current price. The module comes back when it is paid.
                 $renewal = ModuleAddonRequest::query()->create([
                     'account_id' => $request->account_id,
                     'module' => $request->module,
                     'status' => ModuleAddonRequest::REQUESTED,
-                    'reason' => 'Renewal of an ended term',
+                    'reason' => self::RENEWAL_REASON,
+                    'units' => $request->units,
                     'requested_by_user_id' => $request->requested_by_user_id,
                 ]);
                 $this->issueInvoice($renewal, $account, null);
@@ -290,8 +460,7 @@ class ModuleAddonService
             if (! $stillRunning) {
                 $account = Account::query()->find($request->account_id);
                 if ($account !== null) {
-                    $modules = array_values(array_diff((array) $account->allowed_modules, [$request->module]));
-                    $account->forceFill(['allowed_modules' => $modules])->save();
+                    $this->switchOff($account, $request->module);
                 }
             }
         }
@@ -304,14 +473,26 @@ class ModuleAddonService
         $offer = $this->offer($request->module);
         $account = $this->accountOf($request);
 
-        $modules = array_values(array_unique(array_merge((array) $account->allowed_modules, [$request->module])));
-        $account->forceFill(['allowed_modules' => $modules])->save();
+        $this->switchOn($account, $request->module);
+
+        // A term is "fresh" when no other paid term for the module is running (an upgrade is not).
+        $otherRunning = ModuleAddonRequest::query()
+            ->where('account_id', $account->id)
+            ->where('module', $request->module)
+            ->where('status', ModuleAddonRequest::PAID)
+            ->where('term_ends_at', '>', now())
+            ->whereKeyNot($request->id)
+            ->exists();
 
         $request->forceFill([
             'status' => ModuleAddonRequest::PAID,
             'term_starts_at' => $termStart,
-            'term_ends_at' => $termStart->copy()->addMonths($offer['term_months']),
+            'term_ends_at' => $termStart->copy()->addMonthsNoOverflow($offer['term_months']),
         ])->save();
+
+        if ($request->module === 'contact_groups') {
+            app(CustomGroupAccessService::class)->applyAllowance($account, ! $otherRunning);
+        }
 
         $this->notifyRequester($request, $offer['label'].' is active', $offer['label'].' is active until '.$request->term_ends_at->toDateString().'.');
 
@@ -360,9 +541,116 @@ class ModuleAddonService
             'title' => $title,
             'body' => $body,
             'category' => 'billing',
-            'link' => '/billing',
+            'link' => '/add-ons',
             'is_read' => false,
         ]);
+    }
+
+    /** The price tiers of a module, lowest first. Empty when the offer is a flat price. */
+    public function tiers(string $module): \Illuminate\Support\Collection
+    {
+        return ModuleAddonTier::query()->where('module', $module)->orderBy('from_units')->get();
+    }
+
+    /** The price for a number of units, from the tier that holds it. */
+    public function priceFor(string $module, int $units): float
+    {
+        $tiers = $this->tiers($module);
+
+        if ($tiers->isEmpty()) {
+            return (float) $this->offer($module)['price'];
+        }
+
+        $tier = $tiers->first(fn (ModuleAddonTier $t) => $units >= $t->from_units && ($t->to_units === null || $units <= $t->to_units));
+
+        if ($tier === null) {
+            throw new WhatsAppNumberException('No price is set for that number of units. Choose another amount.', 'no_tier', 422);
+        }
+
+        return (float) $tier->price;
+    }
+
+    /** The price a request is invoiced at: its units' tier, or the flat price. */
+    private function priceForRequest(ModuleAddonRequest $request): float
+    {
+        return $request->units !== null ? $this->priceFor($request->module, (int) $request->units) : (float) $this->offer($request->module)['price'];
+    }
+
+    private function unitName(string $module): string
+    {
+        return $module === 'contact_groups' ? 'group chats' : 'units';
+    }
+
+    /** True when the account already has what the offer sells: the module, or the capability for a capability offer. */
+    private function hasTiers(string $module): bool
+    {
+        return ModuleAddonTier::query()->where('module', $module)->exists();
+    }
+
+    private function alreadyIncluded(Account $account, string $module): bool
+    {
+        $offer = ModuleAddonOffer::query()->where('module', $module)->first();
+
+        if ($offer !== null && $offer->kind === ModuleAddonOffer::KIND_CAPABILITY) {
+            return app(AccessControlService::class)->canTenant($account, (string) $offer->capability_slug);
+        }
+
+        return $account->hasModuleEnabled($module);
+    }
+
+    /** Switches the offer on: adds the module, or grants the capability (unless the account already holds it). */
+    private function switchOn(Account $account, string $module): void
+    {
+        $offer = ModuleAddonOffer::query()->where('module', $module)->first();
+
+        if ($offer !== null && $offer->kind === ModuleAddonOffer::KIND_CAPABILITY) {
+            $capability = Capability::query()->where('slug', $offer->capability_slug)->first();
+            if ($capability === null) {
+                throw new WhatsAppNumberException('This capability is not set up on the platform.', 'capability_missing', 422);
+            }
+
+            // A grant the plan or the Super Admin already holds is left alone: only an add-on grant is ours to end.
+            $held = AccountEntitlement::query()
+                ->where('account_id', $account->id)
+                ->where('capability_id', $capability->id)
+                ->whereNull('revoked_at')
+                ->exists();
+
+            if (! $held) {
+                AccountEntitlement::query()->updateOrCreate(
+                    ['account_id' => $account->id, 'capability_id' => $capability->id],
+                    ['source' => self::ADDON_SOURCE, 'revoked_at' => null],
+                );
+            }
+
+            return;
+        }
+
+        $modules = array_values(array_unique(array_merge((array) $account->allowed_modules, [$module])));
+        $account->forceFill(['allowed_modules' => $modules])->save();
+    }
+
+    /** Switches the offer off at the end of its last term. A capability is revoked only when this add-on granted it. */
+    private function switchOff(Account $account, string $module): void
+    {
+        $offer = ModuleAddonOffer::query()->where('module', $module)->first();
+
+        if ($offer !== null && $offer->kind === ModuleAddonOffer::KIND_CAPABILITY) {
+            $capability = Capability::query()->where('slug', $offer->capability_slug)->first();
+            if ($capability !== null) {
+                AccountEntitlement::query()
+                    ->where('account_id', $account->id)
+                    ->where('capability_id', $capability->id)
+                    ->where('source', self::ADDON_SOURCE)
+                    ->whereNull('revoked_at')
+                    ->update(['revoked_at' => now()]);
+            }
+
+            return;
+        }
+
+        $modules = array_values(array_diff((array) $account->allowed_modules, [$module]));
+        $account->forceFill(['allowed_modules' => $modules])->save();
     }
 
     /**
@@ -380,6 +668,17 @@ class ModuleAddonService
 
         if (! $running) {
             return null;
+        }
+
+        $paidUnits = ModuleAddonRequest::query()
+            ->where('account_id', $account->id)
+            ->where('module', $module)
+            ->where('status', ModuleAddonRequest::PAID)
+            ->where('term_ends_at', '>', now())
+            ->max('units');
+
+        if ($paidUnits !== null) {
+            return (int) $paidUnits;
         }
 
         return (int) (ModuleAddonOffer::query()->where('module', $module)->value('units_included') ?? 0);

@@ -197,6 +197,7 @@ class TemplateService
                 ? sprintf('"%s" was rejected: %s', $template->title, $template->rejection_reason)
                 : sprintf('"%s" was rejected.', $template->title),
             'category' => 'template_review',
+            'link' => '/admin/templates',
             'is_read' => false,
         ]);
     }

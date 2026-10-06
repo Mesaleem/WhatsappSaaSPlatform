@@ -103,7 +103,7 @@ export type AccountModule = (typeof ACCOUNT_MODULES)[number];
 export const ACCOUNT_MODULE_LABELS: Record<AccountModule, string> = {
   dashboard: 'Dashboard',
   whatsapp_setup: 'WhatsApp Setup',
-  send_alert: 'Send Alert',
+  send_alert: 'Send Notification',
   analytics: 'Analytics',
   chatbot: 'Chatbot Rules',
   billing: 'Billing & Plans',
@@ -205,6 +205,10 @@ export interface Account {
    * accounts list).
    */
   effective_modules?: AccountModule[];
+  /** True when the plan includes API access (the external_api capability). */
+  api_access?: boolean;
+  /** False once the plan has expired: the key is kept, but sending from it is paused. */
+  subscription_active?: boolean;
   /** White-Label Automated PDF Reporting — Final Phase. Both nullable; unset = no branding applied (SimplePdfWriter::renderBrandedReport() falls back to a default accent color and omits the logo line). */
   logo_url: string | null;
   brand_accent_color: string | null;

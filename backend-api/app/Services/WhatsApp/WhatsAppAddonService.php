@@ -5,6 +5,7 @@ namespace App\Services\WhatsApp;
 use App\Models\Account;
 use App\Models\Invoice;
 use App\Models\InvoiceLineItem;
+use App\Models\PlatformSetting;
 use App\Models\ManualPayment;
 use App\Models\User;
 use App\Models\WhatsAppNumber;
@@ -34,9 +35,15 @@ class WhatsAppAddonService
     {
     }
 
+    /**
+     * The price of one extra number, GST included. The Super Admin can change it; invoices issued
+     * before a change keep the price they were issued at.
+     */
     public function price(): float
     {
-        return (float) config('whatsapp_numbers.addon_price');
+        $stored = PlatformSetting::get(PlatformSetting::WHATSAPP_ADDON_PRICE);
+
+        return $stored !== null ? (float) $stored : (float) config('whatsapp_numbers.addon_price');
     }
 
     /**
@@ -60,6 +67,11 @@ class WhatsAppAddonService
         }
         if (! WhatsAppNumber::query()->where('account_id', $account->id)->where('is_included', true)->exists()) {
             throw new WhatsAppNumberException('Your plan number must be set up before you add extra numbers.', 'no_included_number');
+        }
+
+        // Extra numbers are added while the plan is active. A lapsed plan renews first.
+        if (! $account->hasActiveSubscription()) {
+            throw new WhatsAppNumberException('Your plan is not active. Renew it first, then you can add extra numbers.', 'plan_not_active', 422);
         }
 
         $unit = $this->price();
@@ -90,14 +102,30 @@ class WhatsAppAddonService
                         'amount' => $unit,
                     ]);
 
-                    WhatsAppNumber::query()->create([
-                        'account_id' => $account->id,
-                        'phone_number' => $phone,
-                        'is_included' => false,
-                        'is_default' => false,
-                        'status' => WhatsAppNumber::STATUS_PENDING_PAYMENT,
-                        'addon_invoice_id' => $invoice->id,
-                    ]);
+                    // A number whose term ended is paused on its own slot: buying it again reuses that slot.
+                    $paused = WhatsAppNumber::query()
+                        ->where('account_id', $account->id)
+                        ->where('phone_number', $phone)
+                        ->where('is_included', false)
+                        ->where('status', WhatsAppNumber::STATUS_PAUSED)
+                        ->first();
+
+                    if ($paused !== null) {
+                        $paused->forceFill([
+                            'status' => WhatsAppNumber::STATUS_PENDING_PAYMENT,
+                            'addon_invoice_id' => $invoice->id,
+                            'term_ends_at' => null,
+                        ])->save();
+                    } else {
+                        WhatsAppNumber::query()->create([
+                            'account_id' => $account->id,
+                            'phone_number' => $phone,
+                            'is_included' => false,
+                            'is_default' => false,
+                            'status' => WhatsAppNumber::STATUS_PENDING_PAYMENT,
+                            'addon_invoice_id' => $invoice->id,
+                        ]);
+                    }
                 }
 
                 return $invoice->load('lineItems');
@@ -117,6 +145,41 @@ class WhatsAppAddonService
     }
 
     /** Cancels an unpaid add-on purchase and releases its reserved numbers. */
+    /**
+     * A number was removed from an unpaid purchase: drop its line and reprice the invoice to
+     * the lines that remain. With no line left, the purchase is cancelled, like cancelPending().
+     * Paid or cancelled invoices are never changed.
+     */
+    public function dropNumberFromInvoice(int $invoiceId, string $phone): void
+    {
+        $invoice = Invoice::query()->lockForUpdate()->find($invoiceId);
+        if ($invoice === null || $invoice->status !== 'pending') {
+            return;
+        }
+
+        InvoiceLineItem::query()
+            ->where('invoice_id', $invoice->id)
+            ->where('description', 'Extra WhatsApp number +'.$phone)
+            ->delete();
+
+        $remaining = InvoiceLineItem::query()->where('invoice_id', $invoice->id)->get();
+
+        if ($remaining->isEmpty()) {
+            $invoice->forceFill(['status' => 'failed'])->save();
+
+            return;
+        }
+
+        $total = round((float) $remaining->sum('amount'), 2);
+        $count = $remaining->count();
+
+        $invoice->forceFill([
+            'amount' => $total,
+            'total_amount' => $total,
+            'plan_label' => 'WhatsApp extra number'.($count > 1 ? 's ('.$count.')' : ''),
+        ])->save();
+    }
+
     public function cancelPending(Account $account, int $invoiceId): void
     {
         $invoice = $this->findAddonInvoice($account, $invoiceId);
@@ -318,7 +381,7 @@ class WhatsAppAddonService
         $this->disconnectEngine($slot);
     }
 
-    private function disconnectEngine(WhatsAppNumber $slot): void
+    public function disconnectEngine(WhatsAppNumber $slot): void
     {
         $baseUrl = rtrim((string) config('services.qr_engine.url'), '/');
 
@@ -420,7 +483,7 @@ class WhatsAppAddonService
      */
     private function activateSlots(Invoice $invoice, Carbon $termStart): void
     {
-        $termEnd = $termStart->copy()->addMonths((int) config('whatsapp_numbers.addon_term_months'));
+        $termEnd = $termStart->copy()->addMonthsNoOverflow((int) config('whatsapp_numbers.addon_term_months'));
 
         WhatsAppNumber::query()
             ->where('addon_invoice_id', $invoice->id)

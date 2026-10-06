@@ -4,6 +4,8 @@ import { AlertTriangle, Check, Loader2, Pencil, Plus, Power, PowerOff, RefreshCw
 import planService from '../../services/planService';
 import { TableCard, inputClass } from '../../components/common/Card';
 import ConfirmModal from '../../components/common/ConfirmModal';
+import ModuleOfferAdminCard from '../../components/billing/ModuleOfferAdminCard';
+import WhatsAppNumberPriceCard from '../../components/billing/WhatsAppNumberPriceCard';
 import { extractErrorMessage } from '../../utils/apiError';
 import { indigo, activeGradient } from '../../theme/signalIndigo';
 import type {
@@ -376,7 +378,7 @@ function PlanFormModal({
 
             <label className="block text-xs font-medium text-slate-700">
               Name
-              <input
+              <span className="text-red-500" aria-hidden="true"> *</span><input
                 type="text"
                 data-testid="plan-label"
                 className={inputClass}
@@ -388,7 +390,7 @@ function PlanFormModal({
 
             <label className="block text-xs font-medium text-slate-700">
               Slug
-              <input
+              <span className="text-red-500" aria-hidden="true"> *</span><input
                 type="text"
                 data-testid="plan-slug"
                 className={inputClass}
@@ -402,7 +404,7 @@ function PlanFormModal({
 
             <label className="block text-xs font-medium text-slate-700">
               Engine
-              <select
+              <span className="text-red-500" aria-hidden="true"> *</span><select
                 data-testid="plan-engine"
                 className={inputClass}
                 value={form.engine_type}
@@ -419,7 +421,7 @@ function PlanFormModal({
 
             <label className="block text-xs font-medium text-slate-700">
               Billing model
-              <select
+              <span className="text-red-500" aria-hidden="true"> *</span><select
                 data-testid="plan-billing-model"
                 className={inputClass}
                 value={form.billing_model}
@@ -436,7 +438,7 @@ function PlanFormModal({
 
             <label className="block text-xs font-medium text-slate-700">
               Price
-              <input
+              <span className="text-red-500" aria-hidden="true"> *</span><input
                 type="number"
                 min={0}
                 step="0.01"
@@ -450,7 +452,7 @@ function PlanFormModal({
 
             <label className="block text-xs font-medium text-slate-700">
               Duration (days)
-              <input
+              <span className="text-red-500" aria-hidden="true"> *</span><input
                 type="number"
                 min={1}
                 data-testid="plan-duration"
@@ -779,6 +781,10 @@ export default function PlanManagementPage() {
           </table>
         )}
       </TableCard>
+
+      <ModuleOfferAdminCard />
+
+      <WhatsAppNumberPriceCard />
 
       {editing && (
         <PlanFormModal

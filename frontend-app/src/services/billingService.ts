@@ -48,6 +48,21 @@ async function extractErrorMessage(err: unknown, fallback: string): Promise<stri
   return fallback;
 }
 
+/** An invoice waiting for payment, as the Super Admin or an agent sees it. */
+export interface PendingInvoice {
+  term: { days: number } | { months: number } | null;
+  id: number;
+  invoice_number: string;
+  account_id: number;
+  plan_key: string;
+  client: string | null;
+  kind: 'plan' | 'whatsapp_addon' | 'module_addon';
+  label: string;
+  total_amount: number;
+  payment_gateway: string;
+  created_at: string | null;
+}
+
 const billingService = {
   getPlans() {
     return axiosInstance.get<PlansResponse>('/billing/plans').then((res) => res.data);
@@ -59,6 +74,32 @@ const billingService = {
 
   verifyPayment(payload: VerifyPaymentPayload) {
     return axiosInstance.post<VerifyPaymentResponse>('/billing/verify-payment', payload).then((res) => res.data);
+  },
+
+  /** No gateway configured: request an invoice for a plan, paid by hand and recorded by a Super Admin or agent. */
+  manualCheckout(planKey: string) {
+    return axiosInstance
+      .post<{ message: string; invoice: Invoice }>('/billing/manual-checkout', { plan_key: planKey })
+      .then((res) => res.data);
+  },
+
+  /** Online payment of a pending plan invoice. Refused (422) until that gateway is configured. */
+  payPlanInvoice(invoiceId: number, gateway: 'razorpay' | 'stripe', accountId?: number) {
+    return axiosInstance
+      .post<CreateOrderResponse>(`/billing/invoices/${invoiceId}/pay`, { gateway }, accountId ? { params: { account_id: accountId } } : undefined)
+      .then((res) => res.data);
+  },
+
+  /** Pending invoices the caller may act on: all for a Super Admin, its own clients for an agent. */
+  pendingInvoices() {
+    return axiosInstance
+      .get<{ data: PendingInvoice[]; gateways: string[] }>('/admin/billing/pending-invoices')
+      .then((res) => res.data);
+  },
+
+  /** A manual payment for any invoice (plan, WhatsApp number or module add-on). Same rules for all. */
+  recordInvoicePayment(invoiceId: number, body: Record<string, unknown>) {
+    return axiosInstance.post<{ message: string }>(`/admin/billing/invoices/${invoiceId}/record-payment`, body).then((res) => res.data);
   },
 
   getInvoices(page = 1, perPage = 10) {

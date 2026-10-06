@@ -7,9 +7,12 @@ use Illuminate\Database\Eloquent\Model;
 /** A paid module offer a Super Admin can change. See the module_addon_offers migration. */
 class ModuleAddonOffer extends Model
 {
+    public const KIND_MODULE = 'module';
+    public const KIND_CAPABILITY = 'capability';
+
     protected $table = 'module_addon_offers';
 
-    protected $fillable = ['module', 'label', 'price', 'term_months', 'units_included', 'is_active'];
+    protected $fillable = ['module', 'label', 'price', 'term_months', 'units_included', 'is_active', 'kind', 'capability_slug'];
 
     protected function casts(): array
     {

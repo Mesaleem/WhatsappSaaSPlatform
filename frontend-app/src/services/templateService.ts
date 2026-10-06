@@ -2,7 +2,8 @@ import axiosInstance from '../core/api/axiosInstance';
 import type {
   AvailableTemplate,
   BulkCooldownStatusResponse,
-  ClientApiKey,
+  ClientApiKeyResponse,
+  ClientServerIp,
   MessageTemplate,
   MyTemplateSummary,
   RegenerateClientApiKeyResponse,
@@ -120,11 +121,23 @@ const templateService = {
 
   // --- Profile "Client API Key" section ---
   getApiKey() {
-    return axiosInstance.get<{ data: ClientApiKey | null }>('/account/api-key').then((res) => res.data.data);
+    return axiosInstance.get<ClientApiKeyResponse>('/account/api-key').then((res) => res.data);
   },
 
-  regenerateApiKey(payload: import('../types/developer').ServerBindingPayload) {
-    return axiosInstance.post<RegenerateClientApiKeyResponse>('/account/api-key/regenerate', payload).then((res) => res.data);
+  /** Saves the one server IP that may send with this account's keys. Rejections carry error + message. */
+  saveServerIp(authorizedServerIp: string) {
+    return axiosInstance
+      .put<{ success: boolean; message: string; server_ip: ClientServerIp }>('/account/api-key/server-ip', {
+        authorized_server_ip: authorizedServerIp,
+      })
+      .then((res) => res.data);
+  },
+
+  /** The caller must have the user's acknowledgment of the IP restriction; the server refuses without it. */
+  regenerateApiKey() {
+    return axiosInstance
+      .post<RegenerateClientApiKeyResponse>('/account/api-key/regenerate', { acknowledge_ip_restriction: true })
+      .then((res) => res.data);
   },
 };
 

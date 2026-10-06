@@ -55,6 +55,7 @@ class ContactGroup extends Model
         // generateGroupCode() below.
         'group_code',
         'is_default',
+        'locked_at',
         'group_type',
         'wa_group_jid',
         'invite_link',
@@ -67,6 +68,7 @@ class ContactGroup extends Model
         return [
             'account_id' => 'integer',
             'is_default' => 'boolean',
+            'locked_at' => 'datetime',
         ];
     }
 
@@ -78,6 +80,12 @@ class ContactGroup extends Model
     public function members(): HasMany
     {
         return $this->hasMany(ContactGroupMember::class, 'group_id');
+    }
+
+    /** Outside the groups the client's paid term allows: it cannot be sent to until the client chooses it again. */
+    public function isLocked(): bool
+    {
+        return $this->locked_at !== null;
     }
 
     public function isNative(): bool

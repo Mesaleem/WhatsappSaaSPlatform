@@ -99,6 +99,14 @@ class GroupMessageDispatcher
             return ['status' => 'not_found', 'message' => 'Contact group not found.'];
         }
 
+        // Outside the groups the paid term allows (a downgrade): it stays closed until the client chooses it again.
+        if ($group->isLocked()) {
+            return [
+                'status' => 'group_locked',
+                'message' => 'This group is not part of your current plan. Choose the groups to keep under Contact Groups to send to it.',
+            ];
+        }
+
         if ($group->isNative()) {
             // Phase 5 P5-C -- sending to a Native WhatsApp Group needs the
             // account's `whatsapp_groups` capability; checked before any

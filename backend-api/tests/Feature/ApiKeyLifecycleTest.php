@@ -127,6 +127,7 @@ class ApiKeyLifecycleTest extends TestCase
     public function test_api_key_creation_generates_hashed_credentials_and_reveals_plaintext_once(): void
     {
         $account = Account::factory()->create();
+        $this->grantApiPlan($account);
         $this->giveActiveSubscription($account); // POST is mutating -> subscription.guard requires this
         $admin = $this->makeAdmin($account);
 
@@ -154,7 +155,9 @@ class ApiKeyLifecycleTest extends TestCase
     public function test_api_key_creation_ignores_injected_account_id_and_stays_scoped_to_caller_tenant(): void
     {
         $tenantA = Account::factory()->create();
+        $this->grantApiPlan($tenantA);
         $tenantB = Account::factory()->create();
+        $this->grantApiPlan($tenantB);
         $this->giveActiveSubscription($tenantA);
         $admin = $this->makeAdmin($tenantA);
 
@@ -177,6 +180,7 @@ class ApiKeyLifecycleTest extends TestCase
     public function test_listing_endpoint_never_exposes_hash_or_secret(): void
     {
         $account = Account::factory()->create();
+        $this->grantApiPlan($account);
         $admin = $this->makeAdmin($account);
         $issued = $this->issueApiKey($account);
 
@@ -198,6 +202,7 @@ class ApiKeyLifecycleTest extends TestCase
     public function test_client_api_key_show_endpoint_never_exposes_hash(): void
     {
         $account = Account::factory()->create();
+        $this->grantApiPlan($account);
         // P5-B — regenerating now also needs an active subscription (subscription.guard).
         \App\Models\Subscription::factory()->create(['account_id' => $account->id]);
         $admin = $this->makeAdmin($account);
@@ -209,7 +214,8 @@ class ApiKeyLifecycleTest extends TestCase
         // named row (as issueApiKey() makes) is invisible to this
         // endpoint by design and show() would correctly return
         // {"data": null} for it -- not a leak, just the wrong fixture.
-        $regenerate = $this->actingAs($admin)->postJson('/api/account/api-key/regenerate', ['acknowledge_server_binding' => true]);
+        $account->forceFill(['authorized_server_ip' => '203.0.113.10'])->save();
+        $regenerate = $this->actingAs($admin)->postJson('/api/account/api-key/regenerate', ['acknowledge_ip_restriction' => true]);
         $regenerate->assertOk();
         $plainKey = $regenerate->json('plain_text_key');
         $keyHash = ApiKey::where('account_id', $account->id)->firstOrFail()->key_hash;
@@ -230,6 +236,7 @@ class ApiKeyLifecycleTest extends TestCase
     public function test_revocation_denies_authentication_immediately(): void
     {
         $account = Account::factory()->create();
+        $this->grantApiPlan($account);
         $this->giveActiveSubscription($account);
         $this->makeApprovedTemplate($account->id, 'STILL_VALID');
         $issued = $this->issueApiKey($account);
@@ -253,8 +260,10 @@ class ApiKeyLifecycleTest extends TestCase
     // tenant_id, agent_id).
     public function test_cross_tenant_override_via_query_string_and_header_is_rejected(): void
     {
-        $tenantA = Account::factory()->create(); // deliberately no active subscription
+        $tenantA = Account::factory()->create();
+        $this->grantApiPlan($tenantA); // deliberately no active subscription
         $tenantB = Account::factory()->create();
+        $this->grantApiPlan($tenantB);
         $this->giveActiveSubscription($tenantB); // Tenant B DOES have quota
         $this->makeApprovedTemplate(null, 'GLOBAL_PROMO'); // global template, reachable by either tenant
         $issuedA = $this->issueApiKey($tenantA);
@@ -283,6 +292,7 @@ class ApiKeyLifecycleTest extends TestCase
     public function test_dual_factor_valid_key_and_secret_authenticates_successfully(): void
     {
         $account = Account::factory()->create();
+        $this->grantApiPlan($account);
         $this->giveActiveSubscription($account); // 'starter' -> qr engine, no session ever connected
         $issued = $this->issueApiKey($account);
 
@@ -301,5 +311,14 @@ class ApiKeyLifecycleTest extends TestCase
         // 'disconnected' condition (no WhatsApp session ever connected).
         $response->assertStatus(422);
         $response->assertJson(['success' => false, 'error_code' => 'WHATSAPP_DISCONNECTED']);
+    }
+
+    /** API access comes with the plan (external_api capability), not the module list. */
+    private function grantApiPlan(Account $account): void
+    {
+        \App\Models\AccountEntitlement::firstOrCreate(
+            ['account_id' => $account->id, 'capability_id' => \App\Models\Capability::where('slug', 'external_api')->firstOrFail()->id],
+            ['source' => 'plan', 'granted_by_account_id' => null],
+        );
     }
 }

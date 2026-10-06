@@ -997,7 +997,7 @@ function TenantDashboard({ impersonatedAccountName }: { impersonatedAccountName?
             Quick Actions
           </h3>
           <div className="grid gap-3 sm:grid-cols-3">
-            {showWhatsApp && canSendAlerts && <QuickAction to="/alerts/send" label="Send Payment Alert" icon={Send} tint={NAV_TINTS.send} />}
+            {showWhatsApp && canSendAlerts && <QuickAction to="/alerts/send" label="Send Notification" icon={Send} tint={NAV_TINTS.send} />}
             {canManageTeam && <QuickAction to="/users" label="Manage Team" icon={Users} tint={NAV_TINTS.team} />}
             {canManageBilling && <QuickAction to="/billing" label="Upgrade / Renew Plan" icon={CreditCard} tint={NAV_TINTS.billing} />}
             {showWhatsApp && canManageChatbot && <QuickAction to="/chatbot" label="Manage Chatbot" icon={Bot} tint={NAV_TINTS.chatbot} />}

@@ -18,11 +18,10 @@ import billingService from '../../services/billingService';
 import StripeCardModal from '../../components/billing/StripeCardModal';
 import QuotaTopUpModal from '../../components/billing/QuotaTopUpModal';
 import RecordAddonPaymentModal from '../../components/billing/RecordAddonPaymentModal';
-import ModuleAddonQueueCard from '../../components/billing/ModuleAddonQueueCard';
-import whatsappService from '../../services/whatsappService';
-import moduleAddonService from '../../services/moduleAddonService';
-import ModuleOfferAdminCard from '../../components/billing/ModuleOfferAdminCard';
+import { useOnlineInvoicePayment } from '../../components/billing/useOnlineInvoicePayment';
 import ClientBillingSummaryTable from '../../components/billing/ClientBillingSummaryTable';
+import PendingInvoicesCard from '../../components/billing/PendingInvoicesCard';
+import AmountsDueCard from '../../components/billing/AmountsDueCard';
 import { PageHeader, PageShell } from '../../components/common/PageShell';
 import { TableSkeletonRows } from '../../components/common/Skeleton';
 import { loadRazorpayScript } from '../../utils/loadRazorpayScript';
@@ -119,7 +118,6 @@ export default function BillingPage() {
   const [isLoadingInvoices, setIsLoadingInvoices] = useState(true);
   const [downloadingId, setDownloadingId] = useState<number | null>(null);
   const [recordingInvoice, setRecordingInvoice] = useState<Invoice | null>(null);
-  const [payingInvoiceId, setPayingInvoiceId] = useState<number | null>(null);
   // Online payment is available only when Super Admin has configured a gateway
   // (the plans endpoint lists only fully configured ones). Manual payment is separate.
   const gatewayReady = (plansData?.available_gateways ?? []).some((gw) => gw !== 'manual');
@@ -157,6 +155,14 @@ export default function BillingPage() {
       setIsLoadingInvoices(false);
     }
   }, []);
+
+  const { payOnline, payingId: payingInvoiceId, stripeCard: invoiceStripeCard } = useOnlineInvoicePayment({
+    onPaid: () => {
+      setCheckoutSuccess('Payment confirmed. The invoice is now paid.');
+      void loadInvoices(invoicePage);
+    },
+    onError: setCheckoutError,
+  });
 
   useEffect(() => {
     if (!account) {
@@ -213,6 +219,22 @@ export default function BillingPage() {
     }
   };
 
+  /** No online gateway: ask for an invoice for this plan, paid by hand and recorded by a Super Admin or agent. */
+  const handleManualRequest = async (plan: Plan) => {
+    setCheckoutError(null);
+    setCheckoutSuccess(null);
+    setCheckoutPlanKey(plan.key);
+    try {
+      const res = await billingService.manualCheckout(plan.key);
+      setCheckoutSuccess(res.message);
+      void loadInvoices(invoicePage);
+    } catch (err) {
+      setCheckoutError(extractMessage(err, 'Could not create the invoice for this plan. Please try again.'));
+    } finally {
+      setCheckoutPlanKey(null);
+    }
+  };
+
   const handleUpgrade = async (plan: Plan) => {
     if (!selectedGateway) return;
     setCheckoutError(null);
@@ -266,58 +288,14 @@ export default function BillingPage() {
   };
 
   /**
-   * Pay an extra-numbers invoice online. Enabled only when a gateway is configured;
-   * the server refuses otherwise. Reuses the plan checkout's Razorpay and Stripe steps.
+   * Pay a pending invoice online (plan, WhatsApp number or module add-on). The shared hook does
+   * the gateway steps; it is refused by the server until a gateway is configured.
    */
-  const handlePayAddon = async (invoice: Invoice) => {
+  const handlePayAddon = (invoice: Invoice) => {
     const gateway = selectedGateway ?? plansData?.available_gateways[0] ?? null;
-    if (!gateway || gateway === 'manual') return;
-
+    if (gateway !== 'razorpay' && gateway !== 'stripe') return;
     setCheckoutError(null);
-    setPayingInvoiceId(invoice.id);
-    try {
-      // A module add-on invoice (for example Custom Contact Groups) pays through its own endpoint.
-      const order = invoice.plan_key.startsWith('module_addon:')
-        ? await moduleAddonService.payInvoice(invoice.id, gateway, invoice.account_id)
-        : await whatsappService.payAddonInvoice(invoice.id, gateway, invoice.account_id);
-
-      if (gateway === 'razorpay') {
-        const loaded = await loadRazorpayScript();
-        if (!loaded || !window.Razorpay || !order.key_id) {
-          setCheckoutError('Could not load the Razorpay checkout. Please check your connection and try again.');
-          return;
-        }
-        const rzp = new window.Razorpay({
-          key: order.key_id,
-          amount: order.amount,
-          currency: order.currency,
-          name: 'WhatsApp SaaS Platform',
-          description: invoice.plan_label,
-          order_id: order.order_id,
-          handler: (response) => {
-            void handleRazorpaySuccess(order.invoice_id, response).then(() => loadInvoices(invoicePage));
-          },
-          theme: { color: '#4f46e5' },
-        });
-        rzp.open();
-      } else {
-        if (!order.client_secret || !order.key_id) {
-          setCheckoutError('Stripe did not return the data needed to continue. Please try again.');
-          return;
-        }
-        setStripeModal({
-          invoiceId: order.invoice_id,
-          clientSecret: order.client_secret,
-          publishableKey: order.key_id,
-          planLabel: invoice.plan_label,
-          amountDisplay: `${order.currency} ${(order.amount / 100).toFixed(2)}`,
-        });
-      }
-    } catch (err) {
-      setCheckoutError(extractMessage(err, 'Could not start the payment for this invoice. Please try again.'));
-    } finally {
-      setPayingInvoiceId(null);
-    }
+    void payOnline({ id: invoice.id, account_id: invoice.account_id, plan_key: invoice.plan_key, plan_label: invoice.plan_label }, gateway);
   };
 
   const handleDownload = async (invoice: Invoice) => {
@@ -342,6 +320,7 @@ export default function BillingPage() {
       <PageShell maxWidthClassName="max-w-full">
         <PageHeader title="Billing & Plans" subtitle="Platform-wide billing overview across every client." />
         <ClientBillingSummaryTable />
+        <PendingInvoicesCard />
       </PageShell>
     );
   }
@@ -532,11 +511,16 @@ export default function BillingPage() {
             )}
           </div>
 
-          {plansData && plansData.available_gateways.length === 0 && (
+          <p className="mt-2 text-xs text-slate-500">
+            Your plan is the only thing you must buy. Extra WhatsApp numbers and groups are optional: skip them now and add them
+            any time while your plan is active.
+          </p>
+
+          {plansData && !gatewayReady && (
             <div className="mt-3 flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
               <AlertTriangle className="h-4 w-4 flex-shrink-0" />
-              No payment gateway is configured yet. Ask your Super Admin to enable Razorpay or Stripe in Payment
-              Gateway Settings before you can upgrade.
+              Online payment is not set up yet. You can still request an invoice for a plan and pay it by bank transfer,
+              UPI or cash. Your Super Admin or agent records the payment and starts the plan.
             </div>
           )}
 
@@ -563,26 +547,38 @@ export default function BillingPage() {
                     <li>{plan.total_allocated_messages?.toLocaleString() ?? 'Unlimited'} messages</li>
                     <li className="uppercase">{plan.engine_type} engine</li>
                   </ul>
-                  <button
-                    onClick={() => void handleUpgrade(plan)}
-                    disabled={!selectedGateway || checkoutPlanKey === plan.key}
-                    className="mt-5 flex items-center justify-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:opacity-60"
-                  >
-                    {checkoutPlanKey === plan.key ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                    ) : (
-                      <CreditCard className="h-4 w-4" />
-                    )}
-                    Upgrade Plan
-                  </button>
+                  {gatewayReady ? (
+                    <button
+                      onClick={() => void handleUpgrade(plan)}
+                      disabled={!selectedGateway || checkoutPlanKey === plan.key}
+                      className="mt-5 flex items-center justify-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:opacity-60"
+                    >
+                      {checkoutPlanKey === plan.key ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <CreditCard className="h-4 w-4" />
+                      )}
+                      Upgrade Plan
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => void handleManualRequest(plan)}
+                      disabled={checkoutPlanKey === plan.key}
+                      className="mt-5 flex items-center justify-center gap-2 rounded-lg border border-indigo-600 bg-white px-4 py-2 text-sm font-semibold text-indigo-700 shadow-sm hover:bg-indigo-50 disabled:opacity-60"
+                    >
+                      {checkoutPlanKey === plan.key ? <Loader2 className="h-4 w-4 animate-spin" /> : <CreditCard className="h-4 w-4" />}
+                      Request invoice
+                    </button>
+                  )}
                 </div>
               ))}
             </div>
           )}
         </div>
 
-        {isSuperAdmin() && <ModuleOfferAdminCard />}
-        {canRecordPayment && <ModuleAddonQueueCard />}
+        <AmountsDueCard />
+
+        {canRecordPayment && <PendingInvoicesCard />}
 
         {/* Invoice history */}
         <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
@@ -617,8 +613,7 @@ export default function BillingPage() {
                       </td>
                       <td className="px-6 py-3 text-slate-700">{formatDate(invoice.paid_at)}</td>
                       <td className="px-6 py-3 text-right">
-                        {(invoice.plan_key === 'whatsapp_addon' || invoice.plan_key.startsWith('module_addon:')) &&
-                        invoice.status === 'pending' ? (
+                        {invoice.status === 'pending' ? (
                           <div className="flex justify-end gap-2">
                             <button
                               onClick={() => void handlePayAddon(invoice)}
@@ -632,7 +627,7 @@ export default function BillingPage() {
                             >
                               {payingInvoiceId === invoice.id ? 'Starting…' : 'Pay Invoice'}
                             </button>
-                            {canRecordPayment && invoice.plan_key === 'whatsapp_addon' && (
+                            {canRecordPayment && (
                               <button
                                 onClick={() => setRecordingInvoice(invoice)}
                                 className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
@@ -679,6 +674,9 @@ export default function BillingPage() {
               accountId={recordingInvoice.account_id}
               invoiceNumber={recordingInvoice.invoice_number}
               totalAmount={Number(recordingInvoice.total_amount)}
+              term={recordingInvoice.term ?? null}
+              startLabel={recordingInvoice.plan_key.startsWith('module_addon:') || recordingInvoice.plan_key === 'whatsapp_addon' ? 'Term starts on' : 'Plan starts on'}
+              submit={(body) => billingService.recordInvoicePayment(recordingInvoice.id, body)}
               onClose={() => setRecordingInvoice(null)}
               onRecorded={() => {
                 setRecordingInvoice(null);
@@ -716,6 +714,8 @@ export default function BillingPage() {
           Payments are processed directly by Razorpay/Stripe — card details never touch our servers.
         </p>
       </div>
+
+      {invoiceStripeCard}
 
       {stripeModal && (
         <StripeCardModal

@@ -20,6 +20,21 @@ const BASE = '/whatsapp';
  * ever forward to qr-engine-service (see backend-api/AccountController);
  * the live QR/status stream itself comes over Socket.IO — see QRScannerModal.
  */
+/** A request to change the number a WhatsApp slot holds (a wrongly entered number). */
+export interface NumberChangeRequest {
+  id: number;
+  whatsapp_number_id: number;
+  old_phone: string;
+  new_phone: string;
+  reason: string;
+  status: 'requested' | 'approved' | 'rejected';
+  decision_note: string | null;
+  created_at: string | null;
+  decided_at: string | null;
+  /** Set on the Super Admin's and agent's list only. */
+  account?: { id: number; name: string | null };
+}
+
 const whatsappService = {
   /**
    * Super Admin WhatsApp Device Integration — `accountId` lets a Super
@@ -193,6 +208,50 @@ const whatsappService = {
       .post<TestMetaConnectionResult>(`${BASE}/meta-config/test-connection`, payload)
       .then((res) => res.data);
   },
+  /** Super Admin only. The price of one extra number, GST included. */
+  setAddonPrice(price: number) {
+    return axiosInstance
+      .put<{ message: string; price: number }>('/admin/whatsapp/addon-price', { price })
+      .then((res) => res.data);
+  },
+
+  /** This account's own change requests, newest first. */
+  listNumberChanges(accountId?: number) {
+    return axiosInstance
+      .get<{ data: NumberChangeRequest[] }>(`${BASE}/numbers/change-requests`, accountId ? { params: { account_id: accountId } } : undefined)
+      .then((res) => res.data.data);
+  },
+
+  /** Ask for the slot to hold a different number. Nothing changes until a Super Admin or agent approves. */
+  requestNumberChange(id: number, newPhone: string, reason: string, accountId?: number) {
+    return axiosInstance
+      .post<{ message: string; data: NumberChangeRequest }>(
+        `${BASE}/numbers/${id}/change-requests`,
+        { new_phone: newPhone, reason },
+        accountId ? { params: { account_id: accountId } } : undefined,
+      )
+      .then((res) => res.data);
+  },
+
+  /** Requests the caller may decide: all for a Super Admin, its own clients for an agent. */
+  pendingNumberChanges() {
+    return axiosInstance
+      .get<{ data: NumberChangeRequest[] }>('/admin/whatsapp/number-change-requests')
+      .then((res) => res.data.data);
+  },
+
+  approveNumberChange(id: number) {
+    return axiosInstance
+      .post<{ message: string }>(`/admin/whatsapp/number-change-requests/${id}/approve`)
+      .then((res) => res.data);
+  },
+
+  rejectNumberChange(id: number, note?: string) {
+    return axiosInstance
+      .post<{ message: string }>(`/admin/whatsapp/number-change-requests/${id}/reject`, { note: note || undefined })
+      .then((res) => res.data);
+  },
+
 };
 
 export default whatsappService;

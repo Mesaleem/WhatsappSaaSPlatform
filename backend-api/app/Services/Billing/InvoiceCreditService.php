@@ -14,6 +14,7 @@ use App\Support\EntitlementAuditContext;
 use App\Services\Access\ProviderCapabilityService;
 use App\Services\Billing\PlanRepository;
 use App\Services\Credits\PlanCreditAllocator;
+use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
@@ -44,9 +45,9 @@ class InvoiceCreditService
      *         to win the race); false if it was a no-op (already paid, or
      *         the invoice/plan couldn't be resolved).
      */
-    public function markPaidAndCreditQuota(int $invoiceId, string $gatewayPaymentId, ?array $rawResponse = null): bool
+    public function markPaidAndCreditQuota(int $invoiceId, string $gatewayPaymentId, ?array $rawResponse = null, ?Carbon $periodStart = null): bool
     {
-        return DB::transaction(function () use ($invoiceId, $gatewayPaymentId, $rawResponse) {
+        return DB::transaction(function () use ($invoiceId, $gatewayPaymentId, $rawResponse, $periodStart) {
             $invoice = Invoice::query()->lockForUpdate()->find($invoiceId);
 
             if (! $invoice) {
@@ -179,9 +180,10 @@ class InvoiceCreditService
             // active plan stacks on top of the current expiry rather than
             // resetting the clock to "now + duration"; a lapsed/absent
             // subscription starts a fresh period from now.
-            $baseExpiry = ($subscription->expires_at && $subscription->expires_at->isFuture())
-                ? $subscription->expires_at
-                : now();
+            // A manual payment may set the term start ($periodStart) for a lapsed or new plan; a
+            // still-running plan is always extended from its own expiry, never restarted.
+            $isRunning = $subscription->expires_at && $subscription->expires_at->isFuture();
+            $baseExpiry = $isRunning ? $subscription->expires_at : ($periodStart ?? now());
 
             // "Credit allocated message quotas" (spec, literal): additive,
             // not a reset — a tenant upgrading mid-period keeps whatever
@@ -197,7 +199,7 @@ class InvoiceCreditService
                 : ($subscription->total_allocated_messages ?? 0) + (int) $terms['total_allocated_messages'];
             $subscription->price_paid = (float) ($subscription->price_paid ?? 0) + (float) $invoice->total_amount;
             $subscription->payment_mode = $invoice->payment_gateway;
-            $subscription->starts_at = $subscription->starts_at ?? now();
+            $subscription->starts_at = ($periodStart && ! $isRunning) ? $periodStart : ($subscription->starts_at ?? now());
             $subscription->expires_at = $baseExpiry->copy()->addDays($terms['duration_days']);
             $subscription->status = 'active';
             $subscription->save();

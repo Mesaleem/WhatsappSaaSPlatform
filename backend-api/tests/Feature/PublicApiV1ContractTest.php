@@ -90,6 +90,7 @@ class PublicApiV1ContractTest extends TestCase
         $actual = $routes->map(fn ($r) => implode('|', array_diff($r->methods(), ['HEAD'])).' '.$r->uri())->sort()->values()->all();
         $this->assertSame([
             'DELETE api/v1/crm/leads/{id}/tags/{tag}',
+            'DELETE api/v1/scheduled-messages/{id}',
             'GET api/v1/crm/leads/{id}',
             'PATCH api/v1/crm/leads/{id}/assignee',
             'PATCH api/v1/crm/leads/{id}/status',
@@ -106,7 +107,7 @@ class PublicApiV1ContractTest extends TestCase
         foreach ($routes as $r) {
             $mw = $r->gatherMiddleware();
             $this->assertNotNull($tierOf($r), $r->uri().' has no API-key authentication');
-            foreach (['log.apirequest', 'throttle:external-api', 'module.apikey:developer_api', 'idempotency'] as $required) {
+            foreach (['log.apirequest', 'throttle:external-api', 'api.key.access', 'idempotency'] as $required) {
                 $this->assertContains($required, $mw, "{$r->uri()} lacks {$required}");
             }
             $this->assertNotContains('auth:sanctum', $mw, "{$r->uri()} must not accept session tokens");
@@ -170,9 +171,9 @@ class PublicApiV1ContractTest extends TestCase
         $this->send('POST', '/api/v1/messages/send-template', ['template_code' => 'X', 'recipient_phone' => '919999999999'], ['X-API-KEY' => $suspended['key']])
             ->assertStatus(401);
 
-        $noDev = $this->issue($this->account(attributes: ['allowed_modules' => ['dashboard', 'send_alert']]));
+        $noDev = $this->issue($this->account(subscribed: false, attributes: ['allowed_modules' => ['dashboard', 'send_alert']]));
         $r = $this->send('POST', '/api/v1/messages/send-template', ['template_code' => 'X', 'recipient_phone' => '919999999999'], ['X-API-KEY' => $noDev['key']]);
-        $this->assertContains($r->getStatusCode(), [402, 403], 'a disabled developer_api module must be refused');
+        $this->assertContains($r->getStatusCode(), [402, 403], 'an account that never bought a plan must be refused');
         $this->assertStringNotContainsString($noDev['key'], $r->getContent());
     }
 
@@ -217,7 +218,8 @@ class PublicApiV1ContractTest extends TestCase
 
     public function test_quota_exhaustion_is_refused_with_each_endpoints_existing_status_and_code(): void
     {
-        $account = $this->account(subscribed: false);
+        $account = $this->account();
+        Subscription::query()->where('account_id', $account->id)->update(['status' => 'expired', 'expires_at' => now()->subDay()]);
         $this->template($account);
         $k = $this->issue($account);
 
@@ -248,7 +250,8 @@ class PublicApiV1ContractTest extends TestCase
 
     public function test_crm_writes_need_an_active_subscription_but_reads_do_not(): void
     {
-        $account = $this->account(subscribed: false);
+        $account = $this->account();
+        Subscription::query()->where('account_id', $account->id)->update(['status' => 'expired', 'expires_at' => now()->subDay()]);
         $lead = CrmLead::factory()->forContact(Contact::factory()->forAccount($account)->create())->create();
         $k = $this->issue($account);
         $h = ['X-API-KEY' => $k['key']];

@@ -88,6 +88,8 @@ export interface Invoice {
   paid_at: string | null;
   created_at: string;
   updated_at: string;
+  /** How long the purchase runs: days for a plan, months for an add-on. Null when there is no fixed term. */
+  term?: { days: number } | { months: number } | null;
 }
 
 /**

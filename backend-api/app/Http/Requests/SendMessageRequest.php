@@ -83,6 +83,8 @@ class SendMessageRequest extends FormRequest
             // sendToGroup(), unchanged) -- same lenient, never-422-on-bad-URL
             // rule as SendTemplateMessageRequest's own media_url.
             'media_url' => ['sometimes', 'nullable', 'string', 'max:2048'],
+            // Optional send time for a template send (individual or group); null or empty sends now.
+            'scheduled_at' => ['sometimes', 'nullable', 'date'],
             // Developer API "No template" sentinel (owner request 2026-10-05, see
             // MessageTemplate::NO_TEMPLATE_CODE) -- template_code=no_template sends this
             // free text instead of a template; ignored (optional) for a real template_code.

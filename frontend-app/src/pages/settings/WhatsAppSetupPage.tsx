@@ -6,6 +6,7 @@ import QRScannerModal from '../../components/qr/QRScannerModal';
 import WhatsAppNumbersCard from '../../components/whatsapp/WhatsAppNumbersCard';
 import MetaConfigCard from '../../components/settings/MetaConfigCard';
 import type { WhatsAppStatus } from '../../types/whatsapp';
+import ApiKeySetupBanner from '../../components/profile/ApiKeySetupBanner';
 
 const STATUS_META: Record<WhatsAppStatus, { label: string; dot: string }> = {
   connected: { label: 'Connected', dot: 'bg-emerald-500' },
@@ -85,6 +86,10 @@ export default function WhatsAppSetupPage() {
       <div className="w-full">
         <h1 className="text-xl font-semibold text-slate-900">WhatsApp Setup</h1>
         <p className="mt-1 text-sm text-slate-500">Manage how this account connects to WhatsApp.</p>
+
+        <div className="mt-6">
+          <ApiKeySetupBanner />
+        </div>
 
         <div className="mt-6 rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
           <div className="flex items-center justify-between">

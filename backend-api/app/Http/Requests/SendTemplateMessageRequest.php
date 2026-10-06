@@ -89,6 +89,8 @@ class SendTemplateMessageRequest extends FormRequest
             'template_id' => ['required', 'integer'],
             'recipient_phone' => ['required', 'string', 'max:20'],
             'variables' => ['sometimes', 'array'],
+            // Optional: send later instead of now (ISO 8601 with a time zone).
+            'scheduled_at' => ['sometimes', 'nullable', 'date'],
             // Media Templates (send-time override, QR/Baileys-only) --
             // ONE optional key, deliberately with no separate media_type
             // field: TemplateMessageDispatcher::resolveMediaMetaData()
