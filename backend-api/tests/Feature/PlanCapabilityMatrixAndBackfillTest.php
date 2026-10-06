@@ -237,8 +237,9 @@ class PlanCapabilityMatrixAndBackfillTest extends TestCase
 
     public function test_pricing_quota_and_engine_are_untouched(): void
     {
-        // The brief's explicit pricing boundary.
-        $this->assertSame(499.00, PlanCatalog::find('starter')['price']);
+        // The pricing boundary. Starter is ₹599 base; GST (18%) is added on top at checkout
+        // (agreed 2026-10-05, replacing the earlier ₹499).
+        $this->assertSame(599.00, PlanCatalog::find('starter')['price']);
         $this->assertSame(1999.00, PlanCatalog::find('growth')['price']);
         $this->assertSame(7999.00, PlanCatalog::find('business')['price']);
         $this->assertSame('qr', PlanCatalog::find('starter')['engine_type']);

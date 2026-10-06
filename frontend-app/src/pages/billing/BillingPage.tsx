@@ -17,6 +17,11 @@ import { useAuth } from '../../core/context/AuthContext';
 import billingService from '../../services/billingService';
 import StripeCardModal from '../../components/billing/StripeCardModal';
 import QuotaTopUpModal from '../../components/billing/QuotaTopUpModal';
+import RecordAddonPaymentModal from '../../components/billing/RecordAddonPaymentModal';
+import ModuleAddonQueueCard from '../../components/billing/ModuleAddonQueueCard';
+import whatsappService from '../../services/whatsappService';
+import moduleAddonService from '../../services/moduleAddonService';
+import ModuleOfferAdminCard from '../../components/billing/ModuleOfferAdminCard';
 import ClientBillingSummaryTable from '../../components/billing/ClientBillingSummaryTable';
 import { PageHeader, PageShell } from '../../components/common/PageShell';
 import { TableSkeletonRows } from '../../components/common/Skeleton';
@@ -85,7 +90,10 @@ interface StripeModalState {
  * StripeCardModal.
  */
 export default function BillingPage() {
-  const { user, isSuperAdmin } = useAuth();
+  const { user, isSuperAdmin, hasRole } = useAuth();
+  // Who may record a manual payment: Super Admin, or an Agent (for its own clients;
+  // the server enforces that and refuses the rest).
+  const canRecordPayment = isSuperAdmin() || hasRole('agent');
   const account = user?.account ?? null;
   // Wallet Visibility for Agents, disclosed: an Agent (Reseller) keeps its
   // own self-service checkout/invoice UI below exactly as before — this
@@ -110,6 +118,11 @@ export default function BillingPage() {
   const [invoicePage, setInvoicePage] = useState(1);
   const [isLoadingInvoices, setIsLoadingInvoices] = useState(true);
   const [downloadingId, setDownloadingId] = useState<number | null>(null);
+  const [recordingInvoice, setRecordingInvoice] = useState<Invoice | null>(null);
+  const [payingInvoiceId, setPayingInvoiceId] = useState<number | null>(null);
+  // Online payment is available only when Super Admin has configured a gateway
+  // (the plans endpoint lists only fully configured ones). Manual payment is separate.
+  const gatewayReady = (plansData?.available_gateways ?? []).some((gw) => gw !== 'manual');
 
   const [checkoutPlanKey, setCheckoutPlanKey] = useState<string | null>(null);
   const [checkoutError, setCheckoutError] = useState<string | null>(null);
@@ -193,6 +206,7 @@ export default function BillingPage() {
       });
       setStripeModal(null);
       applyPaymentResult(result.invoice, result.subscription);
+      void loadInvoices(invoicePage);
     } catch (err) {
       setCheckoutError(extractMessage(err, 'Payment could not be verified. If money was deducted, it will still be reconciled automatically.'));
       setStripeModal(null);
@@ -248,6 +262,61 @@ export default function BillingPage() {
       setCheckoutError(extractMessage(err, 'Could not start checkout for this plan. Please try again.'));
     } finally {
       setCheckoutPlanKey(null);
+    }
+  };
+
+  /**
+   * Pay an extra-numbers invoice online. Enabled only when a gateway is configured;
+   * the server refuses otherwise. Reuses the plan checkout's Razorpay and Stripe steps.
+   */
+  const handlePayAddon = async (invoice: Invoice) => {
+    const gateway = selectedGateway ?? plansData?.available_gateways[0] ?? null;
+    if (!gateway || gateway === 'manual') return;
+
+    setCheckoutError(null);
+    setPayingInvoiceId(invoice.id);
+    try {
+      // A module add-on invoice (for example Custom Contact Groups) pays through its own endpoint.
+      const order = invoice.plan_key.startsWith('module_addon:')
+        ? await moduleAddonService.payInvoice(invoice.id, gateway, invoice.account_id)
+        : await whatsappService.payAddonInvoice(invoice.id, gateway, invoice.account_id);
+
+      if (gateway === 'razorpay') {
+        const loaded = await loadRazorpayScript();
+        if (!loaded || !window.Razorpay || !order.key_id) {
+          setCheckoutError('Could not load the Razorpay checkout. Please check your connection and try again.');
+          return;
+        }
+        const rzp = new window.Razorpay({
+          key: order.key_id,
+          amount: order.amount,
+          currency: order.currency,
+          name: 'WhatsApp SaaS Platform',
+          description: invoice.plan_label,
+          order_id: order.order_id,
+          handler: (response) => {
+            void handleRazorpaySuccess(order.invoice_id, response).then(() => loadInvoices(invoicePage));
+          },
+          theme: { color: '#4f46e5' },
+        });
+        rzp.open();
+      } else {
+        if (!order.client_secret || !order.key_id) {
+          setCheckoutError('Stripe did not return the data needed to continue. Please try again.');
+          return;
+        }
+        setStripeModal({
+          invoiceId: order.invoice_id,
+          clientSecret: order.client_secret,
+          publishableKey: order.key_id,
+          planLabel: invoice.plan_label,
+          amountDisplay: `${order.currency} ${(order.amount / 100).toFixed(2)}`,
+        });
+      }
+    } catch (err) {
+      setCheckoutError(extractMessage(err, 'Could not start the payment for this invoice. Please try again.'));
+    } finally {
+      setPayingInvoiceId(null);
     }
   };
 
@@ -512,6 +581,9 @@ export default function BillingPage() {
           )}
         </div>
 
+        {isSuperAdmin() && <ModuleOfferAdminCard />}
+        {canRecordPayment && <ModuleAddonQueueCard />}
+
         {/* Invoice history */}
         <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
           <div className="border-b border-slate-200 px-6 py-4">
@@ -545,19 +617,49 @@ export default function BillingPage() {
                       </td>
                       <td className="px-6 py-3 text-slate-700">{formatDate(invoice.paid_at)}</td>
                       <td className="px-6 py-3 text-right">
-                        <button
-                          onClick={() => void handleDownload(invoice)}
-                          disabled={downloadingId === invoice.id}
-                          title="Downloads the invoice PDF. Client Billing & Invoice Notification: no separate gateway checkout exists yet for a Super-Admin-generated top-up invoice — see the Quota Top-Up audit report."
-                          className="inline-flex items-center gap-1 text-xs font-medium text-indigo-600 hover:text-indigo-700 disabled:opacity-60"
-                        >
-                          {downloadingId === invoice.id ? (
-                            <Loader2 className="h-3 w-3 animate-spin" />
-                          ) : (
-                            <Download className="h-3 w-3" />
-                          )}
-                          {invoice.status === 'paid' ? 'View Bill' : 'Pay Invoice'}
-                        </button>
+                        {(invoice.plan_key === 'whatsapp_addon' || invoice.plan_key.startsWith('module_addon:')) &&
+                        invoice.status === 'pending' ? (
+                          <div className="flex justify-end gap-2">
+                            <button
+                              onClick={() => void handlePayAddon(invoice)}
+                              disabled={!gatewayReady || payingInvoiceId === invoice.id}
+                              title={
+                                gatewayReady
+                                  ? 'Pay this invoice online.'
+                                  : 'Online payment is not available yet: no payment gateway has been configured.'
+                              }
+                              className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+                            >
+                              {payingInvoiceId === invoice.id ? 'Starting…' : 'Pay Invoice'}
+                            </button>
+                            {canRecordPayment && invoice.plan_key === 'whatsapp_addon' && (
+                              <button
+                                onClick={() => setRecordingInvoice(invoice)}
+                                className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                              >
+                                Record payment
+                              </button>
+                            )}
+                          </div>
+                        ) : (
+                          <button
+                            onClick={() => void handleDownload(invoice)}
+                            disabled={downloadingId === invoice.id}
+                            title={
+                              invoice.status === 'paid'
+                                ? 'Download the invoice PDF.'
+                                : 'Download the invoice PDF. Online payment is not available yet: no payment gateway is configured.'
+                            }
+                            className="inline-flex items-center gap-1 text-xs font-medium text-indigo-600 hover:text-indigo-700 disabled:opacity-60"
+                          >
+                            {downloadingId === invoice.id ? (
+                              <Loader2 className="h-3 w-3 animate-spin" />
+                            ) : (
+                              <Download className="h-3 w-3" />
+                            )}
+                            {invoice.status === 'paid' ? 'View Bill' : 'View invoice'}
+                          </button>
+                        )}
                       </td>
                     </tr>
                   ))
@@ -571,6 +673,19 @@ export default function BillingPage() {
               </tbody>
             </table>
           </div>
+          {recordingInvoice && (
+            <RecordAddonPaymentModal
+              invoiceId={recordingInvoice.id}
+              accountId={recordingInvoice.account_id}
+              invoiceNumber={recordingInvoice.invoice_number}
+              totalAmount={Number(recordingInvoice.total_amount)}
+              onClose={() => setRecordingInvoice(null)}
+              onRecorded={() => {
+                setRecordingInvoice(null);
+                void loadInvoices(invoicePage);
+              }}
+            />
+          )}
           {invoices && invoices.last_page > 1 && (
             <div className="flex items-center justify-between border-t border-slate-200 px-6 py-3 text-sm text-slate-600">
               <span>

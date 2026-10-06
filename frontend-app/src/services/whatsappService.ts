@@ -1,8 +1,11 @@
 import axiosInstance from '../core/api/axiosInstance';
+import type { CreateOrderResponse } from '../types/billing';
 import type {
   AdminWhatsAppDevice,
   WhatsAppStatus,
   WhatsAppStatusResponse,
+  WhatsAppNumbersResponse,
+  AddonInvoice,
   MetaConfigResponse,
   SaveMetaConfigPayload,
   SaveMetaConfigResponse,
@@ -34,12 +37,21 @@ const whatsappService = {
       .then((res) => res.data);
   },
 
-  startSession(accountId?: number) {
+  /**
+   * `phoneNumber` (digits, country code included) starts pairing-code login
+   * instead of QR. The code arrives on the Socket.IO stream as `pairing_code`,
+   * not in this response. Omitted, this is the unchanged QR flow.
+   */
+  startSession(accountId?: number, phoneNumber?: string, numberId?: number | null) {
+    const params = {
+      ...(accountId ? { account_id: accountId } : {}),
+      ...(numberId ? { number_id: numberId } : {}),
+    };
     return axiosInstance
-      .post<{ message: string }>(
+      .post<{ message: string; status?: string }>(
         `${BASE}/start-session`,
-        undefined,
-        accountId ? { params: { account_id: accountId } } : undefined,
+        phoneNumber ? { phone_number: phoneNumber } : undefined,
+        Object.keys(params).length ? { params } : undefined,
       )
       .then((res) => res.data);
   },
@@ -47,6 +59,91 @@ const whatsappService = {
   logout(accountId?: number) {
     return axiosInstance
       .post<{ message: string }>(`${BASE}/logout`, undefined, accountId ? { params: { account_id: accountId } } : undefined)
+      .then((res) => res.data);
+  },
+
+  /** WhatsApp number slots of the account (included number + paid add-ons). */
+  listNumbers(accountId?: number) {
+    return axiosInstance
+      .get<WhatsAppNumbersResponse>(`${BASE}/numbers`, accountId ? { params: { account_id: accountId } } : undefined)
+      .then((res) => res.data);
+  },
+
+  setDefaultNumber(id: number, accountId?: number) {
+    return axiosInstance
+      .put(`${BASE}/numbers/${id}/default`, undefined, accountId ? { params: { account_id: accountId } } : undefined)
+      .then((res) => res.data);
+  },
+
+  removeNumber(id: number, accountId?: number) {
+    return axiosInstance
+      .delete(`${BASE}/numbers/${id}`, accountId ? { params: { account_id: accountId } } : undefined)
+      .then((res) => res.data);
+  },
+
+  /** Price of one extra number per term (GST included), and the term length. */
+  addonPrice() {
+    return axiosInstance
+      .get<{ price: number; currency: string; includes_gst: boolean; term_months: number; max_per_purchase: number }>(
+        `${BASE}/numbers/addon-price`,
+      )
+      .then((res) => res.data);
+  },
+
+  /** Creates one invoice for the chosen extra numbers. They are connected after payment. */
+  purchaseAddons(phoneNumbers: string[], accountId?: number) {
+    return axiosInstance
+      .post<{ message: string; invoice: AddonInvoice }>(
+        `${BASE}/numbers/purchase`,
+        { phone_numbers: phoneNumbers },
+        accountId ? { params: { account_id: accountId } } : undefined,
+      )
+      .then((res) => res.data);
+  },
+
+  /**
+   * Records a manual payment for an add-on invoice (Super Admin, or an Agent for its
+   * own client). `accountId` is the invoice's account.
+   */
+  recordAddonPayment(
+    invoiceId: number,
+    accountId: number,
+    body: {
+      amount: number;
+      method: 'cash' | 'bank_transfer' | 'upi' | 'cheque' | 'other';
+      transaction_id: string;
+      paid_on: string;
+      term_starts_on?: string;
+      note?: string;
+    },
+  ) {
+    return axiosInstance
+      .post<{ message: string; invoice: AddonInvoice }>(
+        `/admin/whatsapp/addon-invoices/${invoiceId}/record-payment`,
+        body,
+        { params: { account_id: accountId } },
+      )
+      .then((res) => res.data);
+  },
+
+  /**
+   * Starts an online payment for an add-on invoice. Returns the same fields as the
+   * plan checkout, so the same Razorpay or Stripe checkout opens. Refused by the
+   * server (422 gateway_not_configured) until a gateway is configured.
+   */
+  payAddonInvoice(invoiceId: number, gateway: 'razorpay' | 'stripe', accountId?: number) {
+    return axiosInstance
+      .post<CreateOrderResponse>(
+        `${BASE}/addon-invoices/${invoiceId}/pay`,
+        { gateway },
+        accountId ? { params: { account_id: accountId } } : undefined,
+      )
+      .then((res) => res.data);
+  },
+
+  cancelAddonInvoice(invoiceId: number, accountId?: number) {
+    return axiosInstance
+      .delete(`${BASE}/addon-invoices/${invoiceId}`, accountId ? { params: { account_id: accountId } } : undefined)
       .then((res) => res.data);
   },
 

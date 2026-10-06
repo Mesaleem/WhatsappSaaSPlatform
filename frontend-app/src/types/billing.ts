@@ -8,7 +8,8 @@
 import type { EngineType, BillingModel, PaymentMode } from './subscription';
 import type { PaginatedResponse } from './account';
 
-export type PaymentGateway = 'razorpay' | 'stripe';
+/** 'manual' = recorded by a Super Admin or Agent (cash, bank transfer, UPI, cheque). */
+export type PaymentGateway = 'razorpay' | 'stripe' | 'manual';
 export type InvoiceStatus = 'pending' | 'paid' | 'failed';
 export type GatewayMode = 'test' | 'live';
 

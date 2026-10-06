@@ -103,15 +103,19 @@ class SocialAuthController extends Controller
             return $this->error($e->getMessage(), 'SOCIAL_PROVIDER_NOT_CONFIGURED', 422);
         }
 
+        $nonce = (string) Str::uuid();
+
         $state = Crypt::encryptString(json_encode([
             'account_id' => $account->id,
             'provider' => $provider,
             'user_id' => (int) $request->user()->id,
-            'nonce' => (string) Str::uuid(),
+            'nonce' => $nonce,
             'exp' => now()->addMinutes(self::STATE_TTL_MINUTES)->timestamp,
         ], JSON_THROW_ON_ERROR));
 
-        return response()->json(['url' => $driver->buildAuthorizationUrl($config, $state)]);
+        // `nonce` lets the SPA poll result() — the popup's window.opener postMessage is unreliable once the popup has been
+        // through facebook.com (Cross-Origin-Opener-Policy severs the opener), so the server keeps the outcome too.
+        return response()->json(['url' => $driver->buildAuthorizationUrl($config, $state), 'nonce' => $nonce]);
     }
 
     /** GET /api/social/callback/{provider} — public; see class docblock. */
@@ -124,6 +128,8 @@ class SocialAuthController extends Controller
         $driver = SocialOAuthProviderFactory::make($provider);
 
         if ($providerError = $driver->callbackError($request->query())) {
+            $this->rememberOutcome(is_string($request->query('state')) ? $request->query('state') : null, $providerError['cancelled'] ? 'cancelled' : 'error', $providerError['message']);
+
             return $this->popupResponse([
                 'type' => $providerError['cancelled'] ? 'social-oauth-cancelled' : 'social-oauth-error',
                 'message' => $providerError['message'],
@@ -151,6 +157,8 @@ class SocialAuthController extends Controller
         $account = Account::query()->find((int) ($state['account_id'] ?? 0));
 
         if (! $account || ! $driver->isEnabledFor($account)) {
+            $this->rememberOutcome($stateRaw, 'error', 'This account can no longer connect this provider.');
+
             return $this->popupResponse(['type' => 'social-oauth-error', 'message' => 'This account can no longer connect this provider.']);
         }
 
@@ -165,6 +173,8 @@ class SocialAuthController extends Controller
                 'provider' => $provider, 'account_id' => $account->id,
                 'exception' => class_basename($e), 'error' => mb_substr($e->getMessage(), 0, 300),
             ]);
+
+            $this->rememberOutcome($stateRaw, 'error', 'The connection could not be completed. Please try again, or ask a Super Admin to check the provider settings.');
 
             return $this->popupResponse(['type' => 'social-oauth-error', 'message' => 'The connection could not be completed. Please try again, or ask a Super Admin to check the provider settings.']);
         }
@@ -192,6 +202,58 @@ class SocialAuthController extends Controller
             'nonce' => $nonce,
             'assets' => array_map(fn (array $a) => array_intersect_key($a, array_flip(['asset_type', 'provider_id', 'name', 'avatar_url'])), $bindableAssets),
         ]);
+    }
+
+    /**
+     * GET /api/social/oauth/{provider}/result/{nonce} — the SPA polls this while the popup is open. Same outcome the popup
+     * tries to postMessage, readable only by the account AND user that started the attempt.
+     */
+    public function result(Request $request, string $provider, string $nonce): JsonResponse
+    {
+        $account = $this->requireTargetAccount($request);
+        $userId = (int) $request->user()->id;
+
+        $pending = Cache::get("social_oauth_pending:{$nonce}");
+
+        if (is_array($pending) && (int) $pending['account_id'] === (int) $account->id && (int) ($pending['user_id'] ?? 0) === $userId && ($pending['provider'] ?? null) === $provider) {
+            return response()->json([
+                'status' => 'success',
+                'provider' => $provider,
+                'nonce' => $nonce,
+                'assets' => array_map(fn (array $a) => array_intersect_key($a, array_flip(['asset_type', 'provider_id', 'name', 'avatar_url'])), $pending['assets'] ?? []),
+            ]);
+        }
+
+        $outcome = Cache::get("social_oauth_outcome:{$nonce}");
+
+        if (is_array($outcome) && (int) $outcome['account_id'] === (int) $account->id && (int) $outcome['user_id'] === $userId) {
+            return response()->json(['status' => $outcome['status'], 'message' => $outcome['message']]);
+        }
+
+        return response()->json(['status' => 'pending']);
+    }
+
+    /** Keep a failed/cancelled callback outcome for result() — best effort, never throws. */
+    private function rememberOutcome(?string $stateRaw, string $status, string $message): void
+    {
+        try {
+            if (! $stateRaw) {
+                return;
+            }
+
+            $state = json_decode(Crypt::decryptString($stateRaw), true, flags: JSON_THROW_ON_ERROR);
+
+            if (is_array($state) && ! empty($state['nonce'])) {
+                Cache::put("social_oauth_outcome:{$state['nonce']}", [
+                    'account_id' => (int) ($state['account_id'] ?? 0),
+                    'user_id' => (int) ($state['user_id'] ?? 0),
+                    'status' => $status,
+                    'message' => $message,
+                ], now()->addMinutes(self::STATE_TTL_MINUTES));
+            }
+        } catch (Throwable) {
+            // Unreadable state: nothing to key the outcome by.
+        }
     }
 
     /** POST /api/social/accounts/bind */

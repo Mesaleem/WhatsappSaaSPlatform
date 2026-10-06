@@ -219,7 +219,7 @@ class Phase1FoundationSeeder extends Seeder
      * cutover from PlanCatalog to `plans` is behaviour-preserving.
      */
     private const PLANS = [
-        'starter' => ['label' => 'Starter', 'price' => 499.00, 'duration_days' => 30, 'description' => '500 messages/month over the QR (Baileys) engine.', 'capability' => 'whatsapp_send', 'usage_limit' => 500, 'engine_type' => 'qr', 'billing_model' => 'flat_quota', 'rate_per_message' => null, 'total_allocated_messages' => 500, 'included_credits' => 0],
+        'starter' => ['label' => 'Starter', 'price' => 599.00, 'duration_days' => 30, 'description' => '500 messages/month over the QR (Baileys) engine.', 'capability' => 'whatsapp_send', 'usage_limit' => 500, 'engine_type' => 'qr', 'billing_model' => 'flat_quota', 'rate_per_message' => null, 'total_allocated_messages' => 500, 'included_credits' => 0],
         'growth' => ['label' => 'Growth', 'price' => 1999.00, 'duration_days' => 30, 'description' => '2,500 messages/month over the QR (Baileys) engine.', 'capability' => 'whatsapp_send', 'usage_limit' => 2500, 'engine_type' => 'qr', 'billing_model' => 'flat_quota', 'rate_per_message' => null, 'total_allocated_messages' => 2500, 'included_credits' => 0],
         'business' => ['label' => 'Business', 'price' => 7999.00, 'duration_days' => 30, 'description' => '10,000 messages/month over the official Meta Cloud API.', 'capability' => 'whatsapp_send', 'usage_limit' => 10000, 'engine_type' => 'meta', 'billing_model' => 'flat_quota', 'rate_per_message' => null, 'total_allocated_messages' => 10000, 'included_credits' => 0],
     ];

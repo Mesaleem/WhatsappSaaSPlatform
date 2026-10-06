@@ -18,6 +18,7 @@ class WhatsAppSession extends Model
         'account_id',
         'status',
         'last_connected_at',
+        'connected_phone_number',
         'meta_phone_number_id',
         'meta_waba_id',
         'meta_access_token',

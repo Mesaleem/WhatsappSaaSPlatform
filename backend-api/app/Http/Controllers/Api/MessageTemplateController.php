@@ -675,10 +675,8 @@ class MessageTemplateController extends Controller
      *
      * Super Admin: unchanged -- retains override permission to approve
      * ANY template directly regardless of its current status (Tiered
-     * Template Approval Workflow, Rule 3), still gated by the
-     * pre-existing Strict 1-Template-Per-Client & Testing Gate
-     * (is_super_admin_tested) and the single-approved-template-per-
-     * account check.
+     * Template Approval Workflow, Rule 3). A prior successful test-fire
+     * (is_super_admin_tested) is NOT required (owner request 2026-10-05).
      *
      * Agent: a NEW branch (Rule 1) -- may only "approve" a
      * 'pending_agent_review' template belonging to one of their own
@@ -695,10 +693,9 @@ class MessageTemplateController extends Controller
         $agentAccount = $this->agentAccountOrNull($user);
 
         if (! $agentAccount) {
-            if (! $template->is_super_admin_tested) {
-                abort(422, 'This template has not been successfully test-fired yet. Use POST /admin/templates/{id}/test before approving it.');
-            }
-
+            // [Changed, owner request 2026-10-05]: the Testing Gate no longer blocks approval. A Super Admin may approve
+            // before (or without) a test-fire; POST /admin/templates/{id}/test stays available and still records
+            // is_super_admin_tested / tested_at, but that flag is now informational only.
             // [Removed, disclosed]: approving used to be blocked when the
             // account already had a DIFFERENT approved template live.
             // Multiple approved templates per client are now allowed —

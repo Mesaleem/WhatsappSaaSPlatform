@@ -80,7 +80,15 @@ export interface SocialConnectionCheckResponse {
 /** GET /api/social/oauth/{provider}/redirect */
 export interface OAuthRedirectResponse {
   url: string;
+  /** Lets the page poll the server for the outcome (the popup's postMessage can be lost after facebook.com). */
+  nonce?: string;
 }
+
+/** GET /api/social/oauth/{provider}/result/{nonce} */
+export type OAuthResultResponse =
+  | { status: 'pending' }
+  | { status: 'success'; provider: SocialProvider; nonce: string; assets: OfferedAsset[] }
+  | { status: 'error' | 'cancelled'; message: string };
 
 /** One asset offered by the provider after a successful code exchange, not yet bound. */
 export interface OfferedAsset {

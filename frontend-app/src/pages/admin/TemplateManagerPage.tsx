@@ -5,6 +5,7 @@ import {
   Check,
   CheckCircle2,
   Copy,
+  Eye,
   ListChecks,
   Loader2,
   Pencil,
@@ -837,6 +838,63 @@ function TemplateModal({
 }
 
 /**
+ * Read-only template preview for Super Admin and Agent. Shows exactly what the server returned for a row the viewer is
+ * already allowed to list (index() scopes it), so no extra authorization is needed. Changes nothing.
+ */
+function ViewTemplateModal({ template, onClose }: { template: MessageTemplate; onClose: () => void }) {
+  const fields = useMemo(() => effectiveSchema(template), [template]);
+  const row = (label: string, value: string | null | undefined) => (
+    <div className="flex justify-between gap-4 border-b border-slate-100 py-1.5 text-sm">
+      <dt className="text-slate-500">{label}</dt>
+      <dd className="text-right font-medium text-slate-800">{value || '—'}</dd>
+    </div>
+  );
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4" role="dialog" aria-label="View template">
+      <div className="max-h-[92vh] w-full max-w-lg overflow-y-auto rounded-xl bg-white p-6 shadow-xl">
+        <div className="flex items-center justify-between">
+          <h3 className="text-base font-semibold text-slate-900">{template.title}</h3>
+          <button onClick={onClose} aria-label="Close" className="text-slate-400 hover:text-slate-600">
+            <XCircle className="h-5 w-5" />
+          </button>
+        </div>
+        <div className="mt-4 whitespace-pre-wrap rounded-lg bg-slate-50 p-3 text-sm text-slate-800">{template.template_body}</div>
+        <dl className="mt-4">
+          {row('Status', STATUS_LABEL[template.status])}
+          {row('Tested', template.is_super_admin_tested ? 'Yes' : 'Not tested')}
+          {row('Template code', template.template_code)}
+          {row('Client', template.account?.company_name ?? 'Global (every client)')}
+          {row('Industry', template.industry_type)}
+          {row('Header', template.header_type)}
+          {row('Language', template.language)}
+          {row('Category', template.category)}
+          {template.status === 'rejected' && row('Rejection reason', template.rejection_reason)}
+        </dl>
+        {fields.length > 0 && (
+          <div className="mt-4">
+            <h4 className="text-sm font-medium text-slate-700">Variables</h4>
+            <div className="mt-2 flex flex-wrap gap-1">
+              {fields.map((f) => (
+                <span key={f.key} className="rounded-full bg-indigo-50 px-2 py-0.5 text-[11px] font-medium text-indigo-700">
+                  {f.label || f.key} ({f.type}
+                  {f.required ? ', required' : ', optional'})
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+        <div className="mt-5 flex justify-end">
+          <button onClick={onClose} className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
  * Strict 1-Template-Per-Client & Testing Gate — "Send Template" test
  * action. Always fires through the Super Admin's OWN scanned WhatsApp
  * device (Account::platformDevice() server-side, never a client's — see
@@ -1034,6 +1092,7 @@ export default function TemplateManagerPage() {
   const [busyId, setBusyId] = useState<number | null>(null);
   // Strict 1-Template-Per-Client & Testing Gate — "Send Template" test action.
   const [testModalTemplate, setTestModalTemplate] = useState<MessageTemplate | null>(null);
+  const [viewTemplate, setViewTemplate] = useState<MessageTemplate | null>(null);
   // Developer API: unique `template_code` -- One-Click Copy button on the
   // datatable. copiedId briefly holds the row whose code was just
   // copied, purely to swap that one row's icon to a checkmark; auto-
@@ -1291,6 +1350,13 @@ export default function TemplateManagerPage() {
                         number, and delete rights were never part of this
                         feature's spec) -- hidden rather than shown-then-403.
                       */}
+                      <button
+                        onClick={() => setViewTemplate(t)}
+                        className="flex items-center gap-1 text-xs font-medium text-slate-600 hover:text-slate-800"
+                      >
+                        <Eye className="h-3.5 w-3.5" />
+                        View
+                      </button>
                       {viewerIsSuperAdmin && (
                         <button
                           onClick={() => setTestModalTemplate(t)}
@@ -1315,13 +1381,9 @@ export default function TemplateManagerPage() {
                       {viewerIsSuperAdmin && t.status !== 'approved' && (
                         <button
                           onClick={() => void handleApprove(t)}
-                          disabled={busyId === t.id || !t.is_super_admin_tested}
-                          title={
-                            t.is_super_admin_tested
-                              ? undefined
-                              : 'Send a test message first — approving is blocked until this template has been successfully test-fired.'
-                          }
-                          className="flex items-center gap-1 text-xs font-medium text-emerald-600 hover:text-emerald-700 disabled:cursor-not-allowed disabled:opacity-40"
+                          disabled={busyId === t.id}
+                          title="Approve now — sending a test message first is optional."
+                          className="flex items-center gap-1 text-xs font-medium text-emerald-600 hover:text-emerald-700 disabled:opacity-60"
                         >
                           <CheckCircle2 className="h-3.5 w-3.5" />
                           Approve
@@ -1426,6 +1488,8 @@ export default function TemplateManagerPage() {
           }}
         />
       )}
+
+      {viewTemplate && <ViewTemplateModal template={viewTemplate} onClose={() => setViewTemplate(null)} />}
 
       {testModalTemplate && (
         <TestTemplateModal

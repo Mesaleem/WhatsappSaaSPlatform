@@ -4,8 +4,8 @@ import crypto from 'node:crypto';
 import express from 'express';
 import cors from 'cors';
 import { Server as SocketIOServer } from 'socket.io';
-import { startSession, logoutSession, getStatus, getQr, sendMessage, createGroup, addGroupParticipants, listGroups, getGroupMetadata } from './services/sessionManager.js';
-import { verifyAccountAccess } from './services/backendClient.js';
+import { startSession, logoutSession, getStatus, getQr, getPairingCode, sendMessage, createGroup, addGroupParticipants, listGroups, getGroupMetadata, resumeAllSessions } from './services/sessionManager.js';
+import { verifyAccountAccess, verifyNumberOwner } from './services/backendClient.js';
 
 /**
  * [Cross-device boot-stall hardening, disclosed]: added because a "silent
@@ -106,6 +106,11 @@ const io = new SocketIOServer(httpServer, {
   cors: { origin: FRONTEND_ORIGIN },
 });
 
+/** Session key of a request: a WhatsApp number slot (session_id), else the legacy account id. */
+function sessionKeyFrom(source) {
+  return source?.session_id ?? source?.account_id;
+}
+
 function room(accountId) {
   return `account:${accountId}`;
 }
@@ -122,7 +127,7 @@ function broadcast(accountId, payload) {
  * receiving another tenant's QR code / connection status.
  */
 io.use(async (socket, next) => {
-  const { accountId, token } = socket.handshake.auth ?? {};
+  const { accountId, sessionId, token } = socket.handshake.auth ?? {};
 
   if (!accountId || !token) {
     return next(new Error('accountId and token are required'));
@@ -130,10 +135,15 @@ io.use(async (socket, next) => {
 
   try {
     const allowed = await verifyAccountAccess(token, accountId);
+    // A number slot must belong to the account the browser is acting for.
+    if (allowed && sessionId != null && !(await verifyNumberOwner(sessionId, accountId))) {
+      return next(new Error('forbidden'));
+    }
     if (!allowed) {
       return next(new Error('forbidden'));
     }
     socket.accountId = String(accountId);
+    socket.sessionKey = String(sessionId ?? accountId);
     next();
   } catch {
     next(new Error('token verification failed'));
@@ -141,13 +151,14 @@ io.use(async (socket, next) => {
 });
 
 io.on('connection', (socket) => {
-  socket.join(room(socket.accountId));
+  socket.join(room(socket.sessionKey));
 
   // Catch the client up immediately rather than making it wait for the
   // next Baileys event, which may never come if the session is idle/stable.
   socket.emit('connection:update', {
-    status: getStatus(socket.accountId),
-    qr: getQr(socket.accountId),
+    status: getStatus(socket.sessionKey),
+    qr: getQr(socket.sessionKey),
+    pairing_code: getPairingCode(socket.sessionKey),
   });
 });
 
@@ -210,10 +221,36 @@ app.post('/api/qr/start-session', requireInternalSecret, async (req, res) => {
   if (!accountId) {
     return res.status(422).json({ message: 'account_id is required.' });
   }
+  const sessionKey = String(sessionKeyFrom(req.body));
+
+  // Optional: present = pairing-code login for this number (digits only,
+  // country code included). backend-api validates it first; checked again
+  // here because this service is the one that talks to WhatsApp.
+  const rawPhone = req.body?.phone_number;
+  let phoneNumber = null;
+  if (rawPhone !== undefined && rawPhone !== null && rawPhone !== '') {
+    phoneNumber = String(rawPhone);
+    if (!/^[1-9][0-9]{7,14}$/.test(phoneNumber)) {
+      return res.status(422).json({ message: 'phone_number must be digits only, with country code.' });
+    }
+  }
 
   try {
-    const status = await startSession(accountId, broadcast);
-    res.status(202).json({ message: 'Session starting.', status });
+    // Answer at once and start in the background. Loading credentials and
+    // fetching the WhatsApp version can take longer than the backend's
+    // 5 s call window, and the QR / pairing code reaches the browser over
+    // Socket.IO anyway. A background failure is reported on that stream.
+    const alreadyConnected = getStatus(sessionKey) === 'connected';
+    startSession(sessionKey, broadcast, {
+      phoneNumber,
+      accountId,
+      slotBased: req.body?.session_id != null,
+      expectedPhone: req.body?.expected_phone ?? null,
+    }).catch((err) => {
+      console.error(`[server] start-session failed for session=${sessionKey}:`, err);
+      broadcast(sessionKey, { status: 'disconnected', qr: null, error: 'start_failed' });
+    });
+    res.status(202).json({ message: 'Session starting.', status: alreadyConnected ? 'connected' : 'connecting' });
   } catch (err) {
     console.error(`[server] start-session failed for account_id=${accountId}:`, err);
     res.status(500).json({ message: 'Failed to start WhatsApp session.' });
@@ -225,9 +262,10 @@ app.post('/api/qr/logout', requireInternalSecret, async (req, res) => {
   if (!accountId) {
     return res.status(422).json({ message: 'account_id is required.' });
   }
+  const sessionKey = String(sessionKeyFrom(req.body));
 
   try {
-    await logoutSession(accountId, broadcast);
+    await logoutSession(sessionKey, broadcast);
     res.json({ message: 'Session ended.' });
   } catch (err) {
     console.error(`[server] logout failed for account_id=${accountId}:`, err);
@@ -255,7 +293,8 @@ app.post('/api/qr/logout', requireInternalSecret, async (req, res) => {
 // convention of caption-is-part-of-the-media-object rather than a
 // separate text body).
 app.post('/api/message/send', requireInternalSecret, async (req, res) => {
-  const { account_id: accountId, to, message, media_type: mediaType, media_url: mediaUrl, caption, filename } = req.body ?? {};
+  const { account_id: accountIdRaw, to, message, media_type: mediaType, media_url: mediaUrl, caption, filename } = req.body ?? {};
+  const accountId = sessionKeyFrom(req.body) ?? accountIdRaw;
   const media = mediaType && mediaUrl ? { type: mediaType, url: mediaUrl, caption, filename } : null;
 
   if (!accountId || !to || (!message && !media)) {
@@ -290,7 +329,8 @@ app.post('/api/message/send', requireInternalSecret, async (req, res) => {
  * as /api/message/send.
  */
 app.post('/api/group/create', requireInternalSecret, async (req, res) => {
-  const { account_id: accountId, subject, participants } = req.body ?? {};
+  const { account_id: accountIdRaw, subject, participants } = req.body ?? {};
+  const accountId = sessionKeyFrom(req.body) ?? accountIdRaw;
   if (!accountId || !subject || !Array.isArray(participants) || participants.length === 0) {
     return res.status(422).json({ success: false, error: 'account_id, subject, and a non-empty participants array are required.' });
   }
@@ -312,7 +352,8 @@ app.post('/api/group/create', requireInternalSecret, async (req, res) => {
  * (HTTP 422) otherwise.
  */
 app.post('/api/group/add-participants', requireInternalSecret, async (req, res) => {
-  const { account_id: accountId, group_jid: groupJid, participants } = req.body ?? {};
+  const { account_id: accountIdRaw, group_jid: groupJid, participants } = req.body ?? {};
+  const accountId = sessionKeyFrom(req.body) ?? accountIdRaw;
   if (!accountId || !groupJid || !Array.isArray(participants) || participants.length === 0) {
     return res.status(422).json({ success: false, error: 'account_id, group_jid, and a non-empty participants array are required.' });
   }
@@ -339,7 +380,7 @@ app.post('/api/group/add-participants', requireInternalSecret, async (req, res) 
  * routes.
  */
 app.get('/api/group/list', requireInternalSecret, async (req, res) => {
-  const accountId = req.query.account_id;
+  const accountId = sessionKeyFrom(req.query);
   if (!accountId) {
     return res.status(422).json({ success: false, error: 'account_id is required.' });
   }
@@ -365,7 +406,7 @@ app.get('/api/group/list', requireInternalSecret, async (req, res) => {
  * otherwise.
  */
 app.get('/api/group/metadata', requireInternalSecret, async (req, res) => {
-  const accountId = req.query.account_id;
+  const accountId = sessionKeyFrom(req.query);
   const groupJid = req.query.group_jid;
   if (!accountId || !groupJid) {
     return res.status(422).json({ success: false, error: 'account_id and group_jid are required.' });
@@ -403,4 +444,22 @@ httpServer.on('error', (err) => {
 
 httpServer.listen(PORT, HOST, () => {
   console.log(`qr-engine-service listening on ${HOST}:${PORT}`);
+
+  // [Deploy-safe reconnect, disclosed — owner request 2026-10-05]: fired
+  // once, right after this process starts accepting connections, so a
+  // fresh deploy/restart picks every already-paired account's Baileys
+  // session back up from its stored creds with no QR re-scan and no user
+  // action — see resumeAllSessions()'s own docblock in sessionManager.js
+  // for the full reasoning (including why an explicitly-disconnected
+  // account is correctly never touched by this). Deliberately NOT
+  // awaited here: the HTTP server must start accepting /health and other
+  // requests immediately, not wait for however many tenant sessions there
+  // are to finish reconnecting one by one (RESUME_STAGGER_MS apart). A
+  // failure resuming any one account is caught and logged inside
+  // resumeAllSessions() itself and can never crash this process (the
+  // uncaughtException/unhandledRejection handlers at the top of this file
+  // are a second, redundant safety net, not the primary one).
+  resumeAllSessions(broadcast).catch((err) => {
+    console.error('[server] resumeAllSessions failed unexpectedly:', err);
+  });
 });

@@ -74,6 +74,10 @@ class SendTemplateByCodeRequest extends FormRequest
             // see that class's docblock for why this is not validated
             // as a strict URL.
             'media_url' => ['sometimes', 'nullable', 'string', 'max:2048'],
+            // Developer API "No template" sentinel (owner request 2026-10-05, see
+            // MessageTemplate::NO_TEMPLATE_CODE) -- template_code=no_template sends this
+            // free text instead of a template; ignored (optional) for a real template_code.
+            'text' => ['required_if:template_code,'.MessageTemplate::NO_TEMPLATE_CODE, 'string', 'max:4096'],
             ...MessageTemplate::variableValidationRules($this->targetSchema()),
         ];
     }
@@ -83,7 +87,9 @@ class SendTemplateByCodeRequest extends FormRequest
      */
     public function messages(): array
     {
-        $messages = [];
+        $messages = [
+            'text.required_if' => 'The "text" field is required when template_code is "'.MessageTemplate::NO_TEMPLATE_CODE.'".',
+        ];
 
         foreach ($this->targetSchema() as $field) {
             $attribute = 'variables.'.$field['key'];
@@ -114,7 +120,7 @@ class SendTemplateByCodeRequest extends FormRequest
     {
         $code = $this->input('template_code');
 
-        if (! is_string($code) || $code === '') {
+        if (! is_string($code) || $code === '' || $code === MessageTemplate::NO_TEMPLATE_CODE) {
             return [];
         }
 

@@ -7,6 +7,7 @@ import MyTemplatesModal from '../../components/templates/MyTemplatesModal';
 import RequestTemplateModal from '../../components/templates/RequestTemplateModal';
 import contactGroupsService from '../../services/contactGroupsService';
 import templateService from '../../services/templateService';
+import alertService from '../../services/alertService';
 import whatsappService from '../../services/whatsappService';
 import type { ContactGroup } from '../../types/contactGroup';
 import type { AvailableTemplate } from '../../types/templates';
@@ -215,6 +216,9 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
   const [loadError, setLoadError] = useState<string | null>(null);
 
   const [templateId, setTemplateId] = useState<number | ''>('');
+  // "No template" option (owner request 2026-10-05): a free-text send that bypasses templates entirely.
+  const [noTemplate, setNoTemplate] = useState(false);
+  const [directMessage, setDirectMessage] = useState('');
 
   // Group Messaging — Send Alert screen widening: recipientType decides
   // whether the form sends to one phone number (existing behavior,
@@ -356,6 +360,7 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
 
   const handleSelectTemplate = (id: number | '') => {
     setTemplateId(id);
+    setNoTemplate(false);
     setSendSuccess(null);
     setSendError(null);
     const tpl = templates.find((t) => t.id === id);
@@ -366,6 +371,14 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
     // Reset to one empty field per variable — never carries over stale
     // values from a previously selected, differently-shaped template.
     setVariables(Object.fromEntries(tpl.variables_schema.map((f) => [f.key, ''])));
+  };
+
+  const handleSelectNoTemplate = () => {
+    setTemplateId('');
+    setNoTemplate(true);
+    setVariables({});
+    setSendSuccess(null);
+    setSendError(null);
   };
 
   const recipientPhones = useMemo(() => parseRecipientPhones(recipientPhone), [recipientPhone]);
@@ -428,6 +441,33 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
   }, [selectedTemplate, variables]);
 
   const samplePayload = useMemo(() => {
+    if (noTemplate) {
+      // Developer API "No template" sentinel (MessageTemplate::NO_TEMPLATE_CODE server-side) -- same two
+      // endpoints as a real template, just with template_code fixed to "no_template" and a `text` key instead
+      // of `variables`. Mirrors the two recipient-type shapes below exactly.
+      const text = directMessage.trim() || 'Type the message to send…';
+      // media_url is always shown in the sample (falls back to a placeholder, same as the
+      // template-based payload below) so it doesn't look "missing" when the field is empty --
+      // it's still an optional key server-side (text.required_if:template_code,no_template means
+      // only one of text/media_url is actually required).
+      const sampleMediaUrl = mediaUrl.trim() || 'https://example.com/invoice.pdf';
+      if (recipientType === 'group') {
+        const selectedGroup = groups.find((g) => g.id === selectedGroupIds[0]);
+        return {
+          template_code: 'no_template',
+          recipient_type: 'group',
+          group_code: selectedGroup?.group_code ?? '<group_code>',
+          text,
+          media_url: sampleMediaUrl,
+        };
+      }
+      return {
+        template_code: 'no_template',
+        recipient_phone: recipientPhones[0] || '919876543210',
+        text,
+        media_url: sampleMediaUrl,
+      };
+    }
     if (!selectedTemplate) return null;
     if (recipientType === 'group') {
       // Group Messaging widening: mirrors POST /api/v1/send-message
@@ -468,7 +508,7 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
       // rather than failing the send (see MediaUrl handling below).
       media_url: mediaUrl.trim() || 'https://example.com/invoice.pdf',
     };
-  }, [selectedTemplate, recipientType, recipientPhones, selectedGroupIds, groups, sampleVariables, mediaUrl]);
+  }, [noTemplate, directMessage, selectedTemplate, recipientType, recipientPhones, selectedGroupIds, groups, sampleVariables, mediaUrl]);
 
   const handleCopyPayload = async () => {
     if (!samplePayload) return;
@@ -487,8 +527,12 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
     setSendSuccess(null);
     setBulkQueued(false);
 
-    if (!selectedTemplate) {
+    if (!noTemplate && !selectedTemplate) {
       setSendError('Select a template first.');
+      return;
+    }
+    if (noTemplate && directMessage.trim() === '' && !mediaUrl.trim()) {
+      setSendError('Enter a message, attach a media URL, or both.');
       return;
     }
     if (recipientType === 'individual' && recipientPhones.length === 0) {
@@ -522,15 +566,16 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
     // required-ness and basic type shape per field, so an invalid
     // submission is caught before a round trip, not just after a 422.
     // Shared by both recipient types — a template's variables_schema is
-    // the same regardless of who it's being sent to.
-    const missingRequired = selectedTemplate.variables_schema.filter(
+    // the same regardless of who it's being sent to. None of this applies
+    // to the "No template" free-text path -- there is no variables_schema.
+    const missingRequired = noTemplate ? [] : selectedTemplate!.variables_schema.filter(
       (f) => f.required && !variables[f.key]?.trim(),
     );
     if (missingRequired.length > 0) {
       setSendError(`Fill in: ${missingRequired.map((f) => f.label || f.key).join(', ')}`);
       return;
     }
-    const badType = selectedTemplate.variables_schema.find((f) => {
+    const badType = noTemplate ? undefined : selectedTemplate!.variables_schema.find((f) => {
       const value = variables[f.key]?.trim();
       if (!value) return false; // optional & blank — nothing to type-check
       if (f.type === 'number') return Number.isNaN(Number(value));
@@ -548,90 +593,153 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
 
     setIsSending(true);
     try {
-      if (recipientType === 'group') {
-        // One call per selected group — GroupMessageDispatcher (and the
-        // external /v1/send-message endpoint it also backs) only ever
-        // accepts one group per request (group_code in the external
-        // payload; GroupMessageDispatcher's own internal parameter is
-        // still the resolved integer group id) — there is no batch-send
-        // endpoint. Promise.allSettled so one group failing (e.g. a
-        // native group still mid-sync) doesn't stop the others sending.
-        const results = await Promise.allSettled(
-          selectedGroupIds.map((groupId) =>
-            contactGroupsService.sendTemplate(groupId, { template_id: selectedTemplate.id, variables }),
-          ),
-        );
-        const groupName = (id: number) => groups.find((g) => g.id === id)?.name ?? `#${id}`;
-        const failures = results
-          .map((r, i) => ({ r, groupId: selectedGroupIds[i] }))
-          .filter((x): x is { r: PromiseRejectedResult; groupId: number } => x.r.status === 'rejected');
+      if (noTemplate) {
+        // "No template" option (owner request 2026-10-05) -- same recipient-type branching as the
+        // template path above, but through alertService.sendDirect() (DirectMessageDispatcher /
+        // GroupDirectMessageDispatcher server-side) instead of TemplateMessageDispatcher. No
+        // variables_schema, no anti-spam paced bulk queue (that machinery is template-only) -- a
+        // phone list here is sent with one request per number, same as the group loop below.
+        const message = directMessage.trim() || undefined;
+        const media = mediaUrl.trim() || undefined;
 
-        if (failures.length === 0) {
-          setSendSuccess(`Queued for ${results.length} group${results.length === 1 ? '' : 's'}.`);
-          setSelectedGroupIds([]);
-          setVariables(Object.fromEntries(selectedTemplate.variables_schema.map((f) => [f.key, ''])));
-        } else if (failures.length === results.length) {
-          setSendError(extractErrorMessage(failures[0].r.reason, 'Could not queue this group dispatch.'));
+        if (recipientType === 'group') {
+            const results = await Promise.allSettled(
+              selectedGroupIds.map((groupId) =>
+                alertService.sendDirect({ recipient_type: 'group', group_ids: [groupId], message, media_url: media }),
+              ),
+            );
+            const groupName = (id: number) => groups.find((g) => g.id === id)?.name ?? `#${id}`;
+            const failures = results
+              .map((r, i) => ({ r, groupId: selectedGroupIds[i] }))
+              .filter((x): x is { r: PromiseRejectedResult; groupId: number } => x.r.status === 'rejected');
+
+            if (failures.length === 0) {
+              setSendSuccess(`Queued for ${results.length} group${results.length === 1 ? '' : 's'}.`);
+              setSelectedGroupIds([]);
+              setDirectMessage('');
+              setMediaUrl('');
+            } else if (failures.length === results.length) {
+              setSendError(extractErrorMessage(failures[0].r.reason, 'Could not queue this group dispatch.'));
+            } else {
+              const succeeded = results.length - failures.length;
+              const failedNames = failures.map((f) => groupName(f.groupId)).join(', ');
+              setSendSuccess(`Queued for ${succeeded} of ${results.length} group(s). Failed: ${failedNames}.`);
+              setSelectedGroupIds(failures.map((f) => f.groupId));
+            }
+        } else if (recipientPhones.length > 1) {
+          const results = await Promise.allSettled(
+            recipientPhones.map((phone) =>
+              alertService.sendDirect({ recipient_type: 'individual', recipient_phone: phone, message, media_url: media }),
+            ),
+          );
+          const failures = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
+
+          if (failures.length === 0) {
+            setSendSuccess(`Sent to ${results.length} recipients.`);
+            setRecipientPhone('');
+            setDirectMessage('');
+            setMediaUrl('');
+          } else if (failures.length === results.length) {
+            setSendError(extractErrorMessage(failures[0].reason, 'Could not send this message.'));
+          } else {
+            setSendSuccess(`Sent to ${results.length - failures.length} of ${results.length} recipient(s). ${failures.length} failed.`);
+          }
         } else {
-          // Partial failure: leave the failed groups selected so the
-          // user can just hit Send again for those, and name them
-          // rather than only counting them.
-          const succeeded = results.length - failures.length;
-          const failedNames = failures.map((f) => groupName(f.groupId)).join(', ');
-          setSendSuccess(`Queued for ${succeeded} of ${results.length} group(s). Failed: ${failedNames}.`);
-          setSelectedGroupIds(failures.map((f) => f.groupId));
+          await alertService.sendDirect({ recipient_type: 'individual', recipient_phone: recipientPhones[0], message, media_url: media });
+          setSendSuccess('Sent to 1 recipient.');
+          setRecipientPhone('');
+          setDirectMessage('');
+          setMediaUrl('');
         }
-      } else if (recipientPhones.length > 1) {
-        // Anti-Spam Bulk Dispatch — ONE call enqueues all N recipients as
-        // individually rate-limited, randomly-delayed background jobs
-        // (see MessageTemplateController::sendBulk()'s docblock) instead
-        // of firing N /alerts/send-template calls from here in parallel
-        // with no pacing at all — exactly the mechanical, fixed-cadence
-        // burst anti-ban jitter exists to avoid. There is nothing to
-        // await per-recipient any more: the backend returns as soon as
-        // the jobs are written, well before any of them actually send, so
-        // success here means "queued", not "delivered" — per-recipient
-        // delivery still lands on the existing Message Logs page as each
-        // job eventually runs.
-        const response = await templateService.sendBulkTemplateMessage({
-          template_id: selectedTemplate.id,
-          recipient_phones: recipientPhones,
-          variables,
-          // Omit the key entirely when blank rather than sending an empty
-          // string — the backend only overrides the template's own media
-          // when this key is present at all.
-          ...(mediaUrl.trim() ? { media_url: mediaUrl.trim() } : {}),
-        });
-        setBulkQueued(true);
-        setSendSuccess(response.message);
-        // Strict Bulk Messaging Limit & Tier-Based Cooldown -- a dispatch
-        // that used the full 150-recipient cap starts a cooldown on the
-        // backend (BulkMessageCooldown::lock(), inside sendBulk()); this
-        // mirrors that same 4h/6h decision client-side so the countdown
-        // banner appears immediately, without waiting for the next
-        // getBulkCooldownStatus() poll.
-        if (recipientPhones.length >= MAX_BULK_RECIPIENTS) {
-          const cooldownHours = hasGroupMessagingPermission ? 4 : 6;
-          setCooldownRemainingSeconds(cooldownHours * 3600);
-        }
-        setRecipientPhone('');
-        setMediaUrl('');
-        setVariables(Object.fromEntries(selectedTemplate.variables_schema.map((f) => [f.key, ''])));
       } else {
-        // Exactly one recipient — unchanged from before this feature: a
-        // single synchronous call with immediate send-or-fail feedback.
-        // Anti-spam pacing only matters once there's more than one
-        // message to space out.
-        await templateService.sendTemplateMessage({
-          template_id: selectedTemplate.id,
-          recipient_phone: recipientPhones[0],
-          variables,
-          ...(mediaUrl.trim() ? { media_url: mediaUrl.trim() } : {}),
-        });
-        setSendSuccess('Sent to 1 recipient.');
-        setRecipientPhone('');
-        setMediaUrl('');
-        setVariables(Object.fromEntries(selectedTemplate.variables_schema.map((f) => [f.key, ''])));
+        // noTemplate is false here, so selectedTemplate is non-null by construction (guarded above);
+        // this local const just gives TypeScript that same narrowing for the rest of this branch.
+        const template = selectedTemplate!;
+        if (recipientType === 'group') {
+          // One call per selected group — GroupMessageDispatcher (and the
+          // external /v1/send-message endpoint it also backs) only ever
+          // accepts one group per request (group_code in the external
+          // payload; GroupMessageDispatcher's own internal parameter is
+          // still the resolved integer group id) — there is no batch-send
+          // endpoint. Promise.allSettled so one group failing (e.g. a
+          // native group still mid-sync) doesn't stop the others sending.
+          const results = await Promise.allSettled(
+            selectedGroupIds.map((groupId) =>
+              contactGroupsService.sendTemplate(groupId, { template_id: template.id, variables }),
+            ),
+          );
+          const groupName = (id: number) => groups.find((g) => g.id === id)?.name ?? `#${id}`;
+          const failures = results
+            .map((r, i) => ({ r, groupId: selectedGroupIds[i] }))
+            .filter((x): x is { r: PromiseRejectedResult; groupId: number } => x.r.status === 'rejected');
+
+          if (failures.length === 0) {
+            setSendSuccess(`Queued for ${results.length} group${results.length === 1 ? '' : 's'}.`);
+            setSelectedGroupIds([]);
+            setVariables(Object.fromEntries(template.variables_schema.map((f) => [f.key, ''])));
+          } else if (failures.length === results.length) {
+            setSendError(extractErrorMessage(failures[0].r.reason, 'Could not queue this group dispatch.'));
+          } else {
+            // Partial failure: leave the failed groups selected so the
+            // user can just hit Send again for those, and name them
+            // rather than only counting them.
+            const succeeded = results.length - failures.length;
+            const failedNames = failures.map((f) => groupName(f.groupId)).join(', ');
+            setSendSuccess(`Queued for ${succeeded} of ${results.length} group(s). Failed: ${failedNames}.`);
+            setSelectedGroupIds(failures.map((f) => f.groupId));
+          }
+        } else if (recipientPhones.length > 1) {
+          // Anti-Spam Bulk Dispatch — ONE call enqueues all N recipients as
+          // individually rate-limited, randomly-delayed background jobs
+          // (see MessageTemplateController::sendBulk()'s docblock) instead
+          // of firing N /alerts/send-template calls from here in parallel
+          // with no pacing at all — exactly the mechanical, fixed-cadence
+          // burst anti-ban jitter exists to avoid. There is nothing to
+          // await per-recipient any more: the backend returns as soon as
+          // the jobs are written, well before any of them actually send, so
+          // success here means "queued", not "delivered" — per-recipient
+          // delivery still lands on the existing Message Logs page as each
+          // job eventually runs.
+          const response = await templateService.sendBulkTemplateMessage({
+            template_id: template.id,
+            recipient_phones: recipientPhones,
+            variables,
+            // Omit the key entirely when blank rather than sending an empty
+            // string — the backend only overrides the template's own media
+            // when this key is present at all.
+            ...(mediaUrl.trim() ? { media_url: mediaUrl.trim() } : {}),
+          });
+          setBulkQueued(true);
+          setSendSuccess(response.message);
+          // Strict Bulk Messaging Limit & Tier-Based Cooldown -- a dispatch
+          // that used the full 150-recipient cap starts a cooldown on the
+          // backend (BulkMessageCooldown::lock(), inside sendBulk()); this
+          // mirrors that same 4h/6h decision client-side so the countdown
+          // banner appears immediately, without waiting for the next
+          // getBulkCooldownStatus() poll.
+          if (recipientPhones.length >= MAX_BULK_RECIPIENTS) {
+            const cooldownHours = hasGroupMessagingPermission ? 4 : 6;
+            setCooldownRemainingSeconds(cooldownHours * 3600);
+          }
+          setRecipientPhone('');
+          setMediaUrl('');
+          setVariables(Object.fromEntries(template.variables_schema.map((f) => [f.key, ''])));
+        } else {
+          // Exactly one recipient — unchanged from before this feature: a
+          // single synchronous call with immediate send-or-fail feedback.
+          // Anti-spam pacing only matters once there's more than one
+          // message to space out.
+          await templateService.sendTemplateMessage({
+            template_id: template.id,
+            recipient_phone: recipientPhones[0],
+            variables,
+            ...(mediaUrl.trim() ? { media_url: mediaUrl.trim() } : {}),
+          });
+          setSendSuccess('Sent to 1 recipient.');
+          setRecipientPhone('');
+          setMediaUrl('');
+          setVariables(Object.fromEntries(template.variables_schema.map((f) => [f.key, ''])));
+        }
       }
     } catch (err) {
       // Strict Bulk Messaging Limit & Tier-Based Cooldown -- a 429 from
@@ -667,7 +775,7 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
     );
   }
 
-  if (templates.length === 0) {
+  if (templates.length === 0 && !noTemplate) {
     return (
       <div className="flex flex-col items-center gap-3 rounded-lg border border-dashed border-slate-300 py-10 text-center text-sm text-slate-500">
         <Sparkles className="h-6 w-6 text-slate-300" />
@@ -690,6 +798,13 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
             className="text-sm font-medium text-indigo-600 hover:text-indigo-700"
           >
             View My Templates
+          </button>
+          <button
+            type="button"
+            onClick={handleSelectNoTemplate}
+            className="text-sm font-medium text-slate-600 hover:text-slate-800"
+          >
+            Send without a template
           </button>
         </div>
         {showRequestTemplate && (
@@ -729,11 +844,15 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
             </span>
           </div>
           <select
-            value={templateId}
-            onChange={(e) => handleSelectTemplate(e.target.value === '' ? '' : Number(e.target.value))}
+            value={noTemplate ? 'none' : templateId}
+            onChange={(e) => {
+              if (e.target.value === 'none') handleSelectNoTemplate();
+              else handleSelectTemplate(e.target.value === '' ? '' : Number(e.target.value));
+            }}
             className={inputClass}
           >
             <option value="">Select a template…</option>
+            <option value="none">No template (write your own message)</option>
             {templates.map((t) => (
               <option key={t.id} value={t.id}>
                 {t.title}
@@ -920,6 +1039,24 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
           </div>
         )}
 
+        {noTemplate && (
+          <div>
+            <label className="text-sm font-medium text-slate-700">
+              Message
+              <span className="ml-1 text-xs font-normal text-slate-400">
+                (required unless a Media URL is attached below)
+              </span>
+            </label>
+            <textarea
+              rows={5}
+              value={directMessage}
+              onChange={(e) => setDirectMessage(e.target.value)}
+              placeholder="Type the message to send…"
+              className={inputClass}
+            />
+          </div>
+        )}
+
         {selectedTemplate && selectedTemplate.variables_schema.length > 0 && (
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             {selectedTemplate.variables_schema.map((field) => (
@@ -995,7 +1132,8 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
         <button
           type="submit"
           disabled={
-            !selectedTemplate ||
+            (!noTemplate && !selectedTemplate) ||
+            (noTemplate && directMessage.trim() === '' && !mediaUrl.trim()) ||
             isSending ||
             disabled ||
             readOnly ||
@@ -1019,7 +1157,7 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
           className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:opacity-60"
         >
           {isSending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-          {isSending ? 'Sending…' : recipientType === 'group' ? 'Send to Group(s)' : 'Send Template'}
+          {isSending ? 'Sending…' : noTemplate ? (recipientType === 'group' ? 'Send to Group(s)' : 'Send Message') : recipientType === 'group' ? 'Send to Group(s)' : 'Send Template'}
         </button>
       </form>
 
@@ -1028,7 +1166,7 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
           <Code2 className="h-4 w-4 text-indigo-600" />
           Developer API Documentation
         </div>
-        {!selectedTemplate ? (
+        {!noTemplate && !selectedTemplate ? (
           <p className="text-sm text-slate-500">Select a template to see its API integration details.</p>
         ) : (
           <>
@@ -1037,6 +1175,12 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
               <p className="mt-1 rounded-lg bg-slate-900 px-3 py-2 font-mono text-xs text-emerald-300">
                 {recipientType === 'group' ? 'POST /api/v1/send-message' : 'POST /api/v1/messages/send-template'}
               </p>
+              {noTemplate && (
+                <p className="mt-1 text-xs text-slate-500">
+                  Pass template_code as the literal string "no_template" to send free text with no template at all
+                  — the "text" key below replaces "variables".
+                </p>
+              )}
               {recipientType === 'group' && (
                 <p className="mt-1 text-xs text-slate-500">Sending to multiple groups? Call this endpoint once per group_code.</p>
               )}
@@ -1079,20 +1223,29 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
                 {JSON.stringify(samplePayload, null, 2)}
               </pre>
               <div className="mt-2 flex flex-wrap gap-1.5">
-                {selectedTemplate.variables_schema.map((field) => (
+                {noTemplate ? (
                   <span
-                    key={field.key}
-                    title={field.type}
-                    className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium ${
-                      field.required
-                        ? 'bg-red-50 text-red-600'
-                        : 'bg-slate-100 text-slate-500'
-                    }`}
+                    title="string"
+                    className="inline-flex items-center rounded-full bg-red-50 px-2 py-0.5 text-[11px] font-medium text-red-600"
                   >
-                    {field.key} — {field.required ? 'required' : 'optional'} ({field.type})
+                    text — required unless media_url is present (string)
                   </span>
-                ))}
-                {recipientType === 'individual' && (
+                ) : (
+                  selectedTemplate!.variables_schema.map((field) => (
+                    <span
+                      key={field.key}
+                      title={field.type}
+                      className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium ${
+                        field.required
+                          ? 'bg-red-50 text-red-600'
+                          : 'bg-slate-100 text-slate-500'
+                      }`}
+                    >
+                      {field.key} — {field.required ? 'required' : 'optional'} ({field.type})
+                    </span>
+                  ))
+                )}
+                {(recipientType === 'individual' || noTemplate) && (
                   <span
                     title="string"
                     className="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-500"

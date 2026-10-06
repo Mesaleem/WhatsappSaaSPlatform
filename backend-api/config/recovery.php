@@ -70,6 +70,9 @@ return [
         'mail_settings' => ['password'],
         'social_accounts' => ['access_token', 'refresh_token'],
         'whatsapp_sessions' => ['meta_access_token'],
+        // Baileys ('qr' engine) credentials. Losing APP_KEY means every WhatsApp
+        // connection must be re-paired, so this belongs in the escrow runbook.
+        'whatsapp_engine_auth_states' => ['value'],
         'accounts' => ['gemini_api_key'],
     ],
 

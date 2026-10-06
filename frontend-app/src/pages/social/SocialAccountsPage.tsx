@@ -114,6 +114,7 @@ export default function SocialAccountsPage() {
   const [justConnected, setJustConnected] = useState(false);
 
   const [pendingNonce, setPendingNonce] = useState<string | null>(null);
+  const [pollNonce, setPollNonce] = useState<string | null>(null);
   const [offeredAssets, setOfferedAssets] = useState<OfferedAsset[] | null>(null);
   const [isBinding, setIsBinding] = useState(false);
   const [bindError, setBindError] = useState<string | null>(null);
@@ -124,6 +125,8 @@ export default function SocialAccountsPage() {
   const [rowMessage, setRowMessage] = useState<{ id: number; text: string } | null>(null);
 
   const popupRef = useRef<Window | null>(null);
+  const pollNonceRef = useRef<string | null>(null);
+  pollNonceRef.current = pollNonce;
   const isConnecting = phase === 'connecting';
   const lastLoadedAt = useRef(0);
 
@@ -186,6 +189,37 @@ export default function SocialAccountsPage() {
     };
   }, [noTenantSelected, notEntitled, isConnecting, offeredAssets]);
 
+  /**
+   * One place that applies a connect outcome, whichever way it arrived: the popup's postMessage, or the server-side
+   * result the page polls (below). The postMessage is unreliable once the popup has been through facebook.com
+   * (its Cross-Origin-Opener-Policy severs window.opener and makes popup.closed read true), so polling is the
+   * source of truth and postMessage is just the fast path.
+   */
+  const applyOutcome = useCallback((data: OAuthPopupMessage) => {
+    if (data.type === 'social-oauth-cancelled') {
+      setPhase('cancelled');
+      setPhaseMessage(data.message);
+      return;
+    }
+
+    if (data.type === 'social-oauth-error') {
+      setPhase('failed');
+      setPhaseMessage(data.message);
+      return;
+    }
+
+    if (data.assets.length === 0) {
+      setPhase('failed');
+      setPhaseMessage('The provider returned no Page, Instagram account or Ad Account that this account may connect. Check the assets you granted, or ask a Super Admin which platforms are enabled for this account.');
+      return;
+    }
+
+    setPhase('idle');
+    setPhaseMessage(null);
+    setPendingNonce(data.nonce);
+    setOfferedAssets(data.assets);
+  }, []);
+
   useEffect(() => {
     const onMessage = (event: MessageEvent<OAuthPopupMessage>) => {
       const data = event.data;
@@ -193,42 +227,52 @@ export default function SocialAccountsPage() {
       // Only the popup this page opened may report a result.
       if (popupRef.current !== null && event.source !== null && event.source !== popupRef.current) return;
 
-      if (data.type === 'social-oauth-cancelled') {
-        setPhase('cancelled');
-        setPhaseMessage(data.message);
-        return;
-      }
-
-      if (data.type === 'social-oauth-error') {
-        setPhase('failed');
-        setPhaseMessage(data.message);
-        return;
-      }
-
-      if (data.assets.length === 0) {
-        setPhase('failed');
-        setPhaseMessage('The provider returned no Page, Instagram account or Ad Account that this account may connect. Check the assets you granted, or ask a Super Admin which platforms are enabled for this account.');
-        return;
-      }
-
-      setPhase('idle');
-      setPhaseMessage(null);
-      setPendingNonce(data.nonce);
-      setOfferedAssets(data.assets);
+      applyOutcome(data);
     };
 
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
-  }, []);
+  }, [applyOutcome]);
 
-  // A popup the user closed (or that never reported back) must not leave the
-  // page stuck in "connecting".
+  // Poll the server for the outcome of this attempt until it arrives or the attempt's 10-minute window ends.
+  useEffect(() => {
+    if (!pollNonce) return undefined;
+    let stopped = false;
+    const deadline = Date.now() + 10 * 60 * 1000;
+
+    const tick = () => {
+      socialService
+        .getOAuthResult('meta', pollNonce)
+        .then((result) => {
+          if (stopped || result.status === 'pending') return;
+          stopped = true;
+          window.clearInterval(timer);
+          setPollNonce(null);
+          if (result.status === 'success') applyOutcome({ type: 'social-oauth-success', provider: result.provider, nonce: result.nonce, assets: result.assets });
+          else applyOutcome({ type: result.status === 'cancelled' ? 'social-oauth-cancelled' : 'social-oauth-error', message: result.message });
+        })
+        .catch(() => undefined);
+      if (Date.now() > deadline) {
+        stopped = true;
+        window.clearInterval(timer);
+        setPollNonce(null);
+      }
+    };
+
+    const timer = window.setInterval(tick, 2000);
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+    };
+  }, [pollNonce, applyOutcome]);
+
+  // A popup the user closed (or that never reported back) must not leave the page stuck in "connecting". The wait
+  // is long enough for the server-side result to be polled in; if the result still arrives later it is accepted.
   useEffect(() => {
     if (!isConnecting) return;
     const timer = window.setInterval(() => {
       if (popupRef.current && popupRef.current.closed) {
         window.clearInterval(timer);
-        // Grace period: the callback page posts its message just before closing.
         window.setTimeout(() => {
           setPhase((current) => {
             if (current === 'connecting') {
@@ -237,7 +281,7 @@ export default function SocialAccountsPage() {
             }
             return current;
           });
-        }, 800);
+        }, pollNonceRef.current ? 6000 : 800);
       }
     }, 500);
     return () => window.clearInterval(timer);
@@ -250,8 +294,9 @@ export default function SocialAccountsPage() {
 
     socialService
       .getOAuthRedirectUrl('meta')
-      .then(({ url }) => {
+      .then(({ url, nonce }) => {
         popupRef.current = window.open(url, 'social-oauth-popup', 'width=600,height=720');
+        setPollNonce(nonce ?? null);
         if (!popupRef.current) {
           setPhase('failed');
           setPhaseMessage('Your browser blocked the connection window. Allow pop-ups for this site and try again.');

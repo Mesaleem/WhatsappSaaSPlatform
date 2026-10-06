@@ -197,3 +197,16 @@ Schedule::command('ops:prune-retention')
     ->dailyAt('03:20')
     ->onOneServer()
     ->withoutOverlapping(120);
+
+// Paid extra WhatsApp numbers: pause those whose one-month term ended, and the
+// included number while its plan is not active. Pausing never removes a number.
+Schedule::command('whatsapp:enforce-terms')
+    ->hourly()
+    ->onOneServer()
+    ->withoutOverlapping(30);
+
+// Paid module add-ons (for example Custom Contact Groups): switch off a module when its term ends.
+Schedule::command('modules:enforce-addons')
+    ->hourly()
+    ->onOneServer()
+    ->withoutOverlapping(30);

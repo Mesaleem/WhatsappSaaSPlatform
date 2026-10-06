@@ -80,6 +80,8 @@ export interface InAppNotification {
   title: string;
   body: string;
   category: string | null;
+  /** Page the notification is about (for example /billing); clicking it opens that page. */
+  link?: string | null;
   is_read: boolean;
   read_at: string | null;
   created_at: string;

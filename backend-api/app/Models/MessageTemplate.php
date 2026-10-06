@@ -34,6 +34,18 @@ class MessageTemplate extends Model
     /** Group Messaging Step 1 — matches the lowercase convention STATUSES above already uses on this same table. */
     public const HEADER_TYPES = ['text', 'image', 'document'];
 
+    /**
+     * Developer API sentinel (owner request 2026-10-05): a real template_code's syntax is
+     * `/^[A-Z0-9_]+$/` (see TemplateManagerPage's slug generator / this model's unique column
+     * rule), so this value can never collide with a genuine, approved template's own code.
+     * Passing this exact string as template_code to the template_code-based endpoints
+     * (`/api/v1/messages/send-template`, `/api/v1/send-message`) skips the template lookup
+     * entirely and sends the caller's own free-text `text` field instead -- no template,
+     * no variable substitution, no approval requirement. See
+     * App\Http\Controllers\Api\V1\TemplateMessageController for both call sites.
+     */
+    public const NO_TEMPLATE_CODE = 'no_template';
+
     /** Variable Configurator Panel field types the frontend may send per {{token}}. */
     public const VARIABLE_TYPES = ['string', 'number', 'date', 'select'];
 

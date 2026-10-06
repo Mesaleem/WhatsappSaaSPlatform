@@ -142,6 +142,21 @@ class GlobalTemplateVisibilityTest extends TestCase
         $this->assertArrayNotHasKey('account_id', $ra->json('data.0'), 'ownership ids are not exposed in the trimmed shape');
     }
 
+    public function test_the_my_templates_modal_shows_global_templates_to_an_agent_that_has_not_selected_a_client(): void
+    {
+        $agent = $this->agent();
+        $this->tpl(null, 'Global Modal Check');
+        $user = $this->agentUser($agent);
+
+        // The send form lists templates without a client; the modal must show the same globals.
+        $dropdown = $this->titles($this->as($user, 'GET', '/api/alerts/message-templates'));
+        $modal = $this->as($user, 'GET', '/api/alerts/message-templates/mine');
+
+        $modal->assertOk();
+        $this->assertContains('Global Modal Check', $dropdown);
+        $this->assertContains('Global Modal Check', $this->titles($modal));
+    }
+
     public function test_the_send_form_list_already_offers_global_and_own_only(): void
     {
         $a = $this->tenant();

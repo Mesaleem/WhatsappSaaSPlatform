@@ -6,11 +6,15 @@ use App\Http\Controllers\Concerns\ResolvesTenantAccount;
 use App\Http\Controllers\Controller;
 use App\Jobs\ProcessPaymentAlertJob;
 use App\Support\OutboundPacing;
+use App\Support\WhatsAppMediaPayloadBuilder;
 use App\Models\PaymentAlert;
+use App\Services\Groups\GroupDirectMessageDispatcher;
 use App\Services\PaymentAlerts\PaymentAlertDispatcher;
+use App\Services\WhatsApp\DirectMessageDispatcher;
 use Illuminate\Database\QueryException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Validation\Rule;
 
 class PaymentAlertController extends Controller
 {
@@ -201,6 +205,88 @@ class PaymentAlertController extends Controller
             'queued' => $queued,
             'skipped_duplicates' => $skippedDuplicates,
             'invalid_rows' => $invalidRows,
+        ]);
+    }
+
+
+    /**
+     * POST /api/alerts/send-direct -- Send Alert "No Template" option
+     * (owner request 2026-10-05). The template dropdown on Send Alert
+     * now offers a "No template" choice alongside every approved
+     * template; selecting it swaps the Dynamic Variables form for a
+     * free-text textarea and sends through DirectMessageDispatcher /
+     * GroupDirectMessageDispatcher (the same plain-text/media path the
+     * external Developer API and Social Inbox replies already use)
+     * instead of TemplateMessageDispatcher -- no template, no
+     * {{variable}} substitution, no template-approval requirement.
+     * media_url is unchanged from the template form: optional, sent
+     * with the text as its caption when present.
+     */
+    public function sendDirect(Request $request): JsonResponse
+    {
+        $account = $this->requireAccount($request, 'Select a client/tenant account to send alerts from (pass ?account_id=).');
+
+        $data = $request->validate([
+            'recipient_type' => ['required', Rule::in(['individual', 'group'])],
+            'recipient_phone' => ['required_if:recipient_type,individual', 'string', 'max:20'],
+            'group_ids' => ['required_if:recipient_type,group', 'array', 'min:1'],
+            'group_ids.*' => ['integer'],
+            'message' => ['nullable', 'string', 'max:4096'],
+            'media_url' => ['sometimes', 'nullable', 'string', 'max:2048'],
+        ]);
+
+        $message = trim((string) ($data['message'] ?? ''));
+        $mediaUrl = trim((string) ($data['media_url'] ?? ''));
+
+        if ($message === '' && $mediaUrl === '') {
+            return response()->json(['message' => 'Enter a message, attach a media URL, or both.'], 422);
+        }
+
+        if ($mediaUrl !== '') {
+            $messageType = 'media';
+            $content = [
+                'media_type' => WhatsAppMediaPayloadBuilder::inferMediaType($mediaUrl),
+                'url' => $mediaUrl,
+                'caption' => $message !== '' ? $message : null,
+            ];
+        } else {
+            $messageType = 'text';
+            $content = ['body' => $message];
+        }
+
+        if ($data['recipient_type'] === 'individual') {
+            $result = DirectMessageDispatcher::dispatch($account->id, $data['recipient_phone'], $messageType, $content, source: 'web_ui');
+
+            return match ($result['status']) {
+                'sent' => response()->json(['message' => 'Message sent.', 'dispatch_log_id' => $result['dispatch_log_id'] ?? null]),
+                'not_found' => response()->json(['message' => $result['message']], 404),
+                'disconnected' => response()->json(['message' => 'WhatsApp account is disconnected. Please connect your device first.'], 422),
+                'quota_exhausted' => response()->json(['message' => $result['message']], 402),
+                default => response()->json(['message' => $result['message'] ?? 'Could not send this message.'], 422),
+            };
+        }
+
+        $results = [];
+        foreach ($data['group_ids'] as $groupId) {
+            $results[] = GroupDirectMessageDispatcher::dispatch(
+                $account->id,
+                (int) $groupId,
+                $messageType,
+                $content,
+                source: 'web_ui',
+                superAdminBypass: (bool) $request->attributes->get('is_super_admin'),
+            );
+        }
+
+        $failed = array_values(array_filter($results, fn (array $r) => $r['status'] !== 'queued'));
+
+        if ($failed) {
+            return response()->json(['message' => $failed[0]['message'] ?? 'Could not queue this group dispatch.'], 422);
+        }
+
+        return response()->json([
+            'message' => 'Message queued for '.count($results).' group(s).',
+            'results' => $results,
         ]);
     }
 

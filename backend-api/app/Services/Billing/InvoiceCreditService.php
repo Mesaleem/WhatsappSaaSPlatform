@@ -73,6 +73,21 @@ class InvoiceCreditService
              * retiring the plan after checkout cannot change what an
              * already-placed order delivers.
              */
+            // A WhatsApp add-on invoice has no plan to credit: its payment activates
+            // the purchased numbers instead. Still inside this transaction and lock.
+            // A paid module add-on (for example Custom Contact Groups) switches its module on for one term.
+            if (app(ModuleAddonService::class)->isModuleInvoice($invoice)) {
+                app(ModuleAddonService::class)->activateOnlinePayment($invoice, $gatewayPaymentId);
+
+                return true;
+            }
+
+            if ($invoice->plan_key === (string) config('whatsapp_numbers.addon_plan_key')) {
+                app(\App\Services\WhatsApp\WhatsAppAddonService::class)->activateOnlinePayment($invoice, $gatewayPaymentId);
+
+                return true;
+            }
+
             $terms = $invoice->purchasedPlanTerms();
 
             if ($terms === null) {

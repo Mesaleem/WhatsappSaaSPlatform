@@ -7,8 +7,10 @@ use App\Http\Requests\SendMessageRequest;
 use App\Http\Requests\SendTemplateByCodeRequest;
 use App\Models\ContactGroup;
 use App\Models\MessageTemplate;
+use App\Services\Groups\GroupDirectMessageDispatcher;
 use App\Services\Groups\GroupMessageDispatcher;
 use App\Services\Templates\TemplateMessageDispatcher;
+use App\Services\WhatsApp\DirectMessageDispatcher;
 use Illuminate\Http\JsonResponse;
 
 /**
@@ -41,6 +43,29 @@ class TemplateMessageController extends Controller
 
         $apiKey = $request->attributes->get('api_key');
         $data = $request->validated();
+
+        // "No template" sentinel (owner request 2026-10-05, see MessageTemplate::NO_TEMPLATE_CODE) --
+        // sends $data['text'] as plain text (DirectMessageDispatcher), skipping the template lookup
+        // and variable substitution entirely. Same response envelope as the template path below.
+        if ($data['template_code'] === MessageTemplate::NO_TEMPLATE_CODE) {
+            $content = $this->directContent($data);
+            $result = DirectMessageDispatcher::dispatch(
+                (int) $accountId,
+                $data['recipient_phone'],
+                $content['message_type'],
+                $content['content'],
+                source: 'api',
+                apiKeyId: $apiKey?->id,
+            );
+
+            return match ($result['status']) {
+                'sent' => response()->json(['status' => true, 'message' => 'Message sent.']),
+                'not_found' => response()->json(['status' => false, 'message' => $result['message']], 404),
+                'disconnected' => response()->json(['status' => false, 'message' => $result['message'], 'error_code' => 'WHATSAPP_DISCONNECTED'], 422),
+                'quota_exhausted' => response()->json(['status' => false, 'message' => $result['message']], 403),
+                default => response()->json(['status' => false, 'message' => $result['message'] ?? 'Could not send this message.'], 422),
+            };
+        }
 
         $template = MessageTemplate::query()
             ->where('template_code', $data['template_code'])
@@ -105,6 +130,14 @@ class TemplateMessageController extends Controller
 
         $apiKey = $request->attributes->get('api_key');
         $data = $request->validated();
+
+        // "No template" sentinel -- same idea as send() above, branching on recipient_type the same
+        // way the template path below does (one call per request; individual synchronous, group queued).
+        if ($data['template_code'] === MessageTemplate::NO_TEMPLATE_CODE) {
+            return $data['recipient_type'] === 'group'
+                ? $this->sendDirectToGroup((int) $accountId, $apiKey?->id, $data)
+                : $this->sendDirectToIndividual((int) $accountId, $apiKey?->id, $data);
+        }
 
         $template = MessageTemplate::query()
             ->where('template_code', $data['template_code'])
@@ -214,5 +247,88 @@ class TemplateMessageController extends Controller
             ], 402),
             default => response()->json(['success' => false, 'error_code' => 'SEND_FAILED', 'message' => $result['message'] ?? 'Could not queue this group dispatch.'], 422),
         };
+    }
+
+    /** @return array{message_type: 'text'|'media', content: array<string, mixed>} */
+    private function directContent(array $data): array
+    {
+        $mediaUrl = trim((string) ($data['media_url'] ?? ''));
+
+        if ($mediaUrl !== '') {
+            return ['message_type' => 'media', 'content' => [
+                'media_type' => \App\Support\WhatsAppMediaPayloadBuilder::inferMediaType($mediaUrl),
+                'url' => $mediaUrl,
+                'caption' => $data['text'],
+            ]];
+        }
+
+        return ['message_type' => 'text', 'content' => ['body' => $data['text']]];
+    }
+
+    private function sendDirectToIndividual(int $accountId, ?int $apiKeyId, array $data): JsonResponse
+    {
+        $content = $this->directContent($data);
+
+        $result = DirectMessageDispatcher::dispatch(
+            $accountId,
+            $data['recipient_phone'],
+            $content['message_type'],
+            $content['content'],
+            source: 'api',
+            apiKeyId: $apiKeyId,
+        );
+
+        return match ($result['status']) {
+            'sent' => response()->json([
+                'success' => true,
+                'dispatch_id' => $result['dispatch_log_id'] ?? null,
+                'queued_recipients_count' => 1,
+            ]),
+            'not_found' => response()->json(['success' => false, 'error_code' => 'NOT_FOUND', 'message' => $result['message']], 404),
+            'disconnected' => response()->json(['success' => false, 'error_code' => 'WHATSAPP_DISCONNECTED', 'message' => $result['message']], 422),
+            'quota_exhausted' => response()->json(['success' => false, 'error_code' => 'INSUFFICIENT_QUOTA', 'message' => $result['message']], 402),
+            default => response()->json(['success' => false, 'error_code' => 'SEND_FAILED', 'message' => $result['message'] ?? 'Could not send this message.'], 422),
+        };
+    }
+
+    private function sendDirectToGroup(int $accountId, ?int $apiKeyId, array $data): JsonResponse
+    {
+        $group = $this->resolveGroupByCode($accountId, $data['group_code']);
+
+        if (! $group) {
+            return response()->json(['success' => false, 'error_code' => 'NOT_FOUND', 'message' => 'Invalid group_code for this account.'], 404);
+        }
+
+        $content = $this->directContent($data);
+
+        $result = GroupDirectMessageDispatcher::dispatch(
+            $accountId,
+            $group->id,
+            $content['message_type'],
+            $content['content'],
+            source: 'api',
+            apiKeyId: $apiKeyId,
+        );
+
+        return match ($result['status']) {
+            'queued' => response()->json([
+                'success' => true,
+                'dispatch_id' => $result['dispatch_id'],
+                'queued_recipients_count' => $result['queued_recipients_count'],
+            ]),
+            'group_access_denied' => response()->json(['success' => false, 'error_code' => 'GROUP_ACCESS_DENIED', 'message' => $result['message']], 403),
+            'empty_group' => response()->json(['success' => false, 'error_code' => 'EMPTY_GROUP', 'message' => $result['message']], 422),
+            'not_found' => response()->json(['success' => false, 'error_code' => 'NOT_FOUND', 'message' => $result['message']], 404),
+            'disconnected' => response()->json(['success' => false, 'error_code' => 'WHATSAPP_DISCONNECTED', 'message' => $result['message']], 422),
+            'group_not_synced' => response()->json(['success' => false, 'error_code' => 'GROUP_NOT_SYNCED', 'message' => $result['message']], 422),
+            'unsupported_engine' => response()->json(['success' => false, 'error_code' => 'UNSUPPORTED_ENGINE', 'message' => $result['message']], 422),
+            'quota_exhausted' => response()->json(['success' => false, 'error_code' => 'INSUFFICIENT_QUOTA', 'message' => $result['message']], 402),
+            default => response()->json(['success' => false, 'error_code' => 'SEND_FAILED', 'message' => $result['message'] ?? 'Could not queue this group dispatch.'], 422),
+        };
+    }
+
+    private function resolveGroupByCode(int $accountId, string $groupCode): ?ContactGroup
+    {
+        return ContactGroup::where('account_id', $accountId)->where('group_code', $groupCode)->first();
     }
 }

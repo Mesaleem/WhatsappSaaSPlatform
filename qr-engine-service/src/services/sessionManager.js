@@ -1,21 +1,29 @@
-import path from 'node:path';
-import fs from 'node:fs/promises';
-import { fileURLToPath } from 'node:url';
 import QRCode from 'qrcode';
 import pino from 'pino';
 import {
   makeWASocket,
-  useMultiFileAuthState,
   DisconnectReason,
   fetchLatestBaileysVersion,
   Browsers,
 } from '@whiskeysockets/baileys';
 import axios from 'axios';
-import { notifyBackend, notifyInboundMessage } from './backendClient.js';
+import { notifyBackend, notifyInboundMessage, registerSessionOwner, hasSessionOwner, fetchNumberOwner } from './backendClient.js';
+import { loadAuthState, drainAuthState, clearAuthState, listPairedAccountIds } from './authStore.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const SESSIONS_ROOT = path.join(__dirname, '../../sessions');
 const MAX_RECONNECT_ATTEMPTS = 5;
+// The number each number slot must link to, keyed by session key. A login on
+// any other number is refused and logged out (see the open handler).
+const expectedPhones = new Map();
+// WhatsApp issues a pairing code only while the socket is connecting; if
+// none arrives within this window the number is almost certainly wrong or
+// not a WhatsApp account, so the UI is told to say so instead of spinning.
+const PAIRING_CODE_TIMEOUT_MS = 45000;
+// Upper bound on waiting for WhatsApp to acknowledge a logout. The local
+// cleanup runs either way; see logoutSession().
+const LOGOUT_WAIT_MS = 5000;
+// A pairing request waits for the WhatsApp socket to open: up to 30 tries, 1 s apart.
+const PAIRING_REQUEST_RETRIES = 30;
+const PAIRING_REQUEST_RETRY_MS = 1000;
 
 const logger = pino({ level: process.env.LOG_LEVEL || 'silent' });
 
@@ -30,10 +38,6 @@ const logger = pino({ level: process.env.LOG_LEVEL || 'silent' });
  */
 const sessions = new Map();
 
-function sessionDirFor(accountId) {
-  return path.join(SESSIONS_ROOT, String(accountId));
-}
-
 function getSession(accountId) {
   return sessions.get(String(accountId));
 }
@@ -44,6 +48,10 @@ export function getStatus(accountId) {
 
 export function getQr(accountId) {
   return getSession(accountId)?.qr ?? null;
+}
+
+export function getPairingCode(accountId) {
+  return getSession(accountId)?.pairingCode ?? null;
 }
 
 /**
@@ -402,7 +410,88 @@ export async function getGroupMetadata(accountId, groupJid) {
 }
 
 async function clearSessionFiles(accountId) {
-  await fs.rm(sessionDirFor(accountId), { recursive: true, force: true });
+  await clearAuthState(accountId);
+}
+
+/**
+ * [Deploy-safe reconnect, disclosed]: qr-engine-service's `sessions` Map
+ * (in-memory) is the ONLY place a Baileys socket lives -- restarting this
+ * process (a new build deployed, a crash, a pod recreated) empties it
+ * completely, even though the credentials are still stored (in the
+ * backend database by default, see authStore.js) and are perfectly able
+ * to resume the same WhatsApp connection without any new QR scan. Before
+ * this function existed, nothing ever called startSession() again after
+ * such a restart -- the account just sat there reported as whatever
+ * backend-api's DB last knew (usually still 'connected', now stale and
+ * wrong) until a human opened the WhatsApp Setup page and clicked Connect
+ * themselves. That's exactly the "deploy -> WhatsApp looks disconnected ->
+ * customer frustration -> churn risk" scenario this was built to close
+ * (owner request 2026-10-05).
+ *
+ * Called once, from server.js, right after this process starts listening
+ * -- asks the auth store for every account whose credentials completed a
+ * real WhatsApp pairing, and calls the exact same startSession() the
+ * Connect button itself calls. Baileys then resumes from the stored keys
+ * with no QR and no user action at all.
+ *
+ * What this deliberately does NOT do, and why each is safe/correct:
+ *  - An account the user explicitly disconnected is never considered at
+ *    all, because logoutSession() already deletes its stored credentials
+ *    (clearAuthState) -- "disconnect -> stay disconnected across a
+ *    restart" (owner requirement 1) falls out of this for free.
+ *  - An account mid-pairing (QR shown, never scanned, or the process died
+ *    before creds were marked `registered`) is skipped, not resumed --
+ *    listPairedAccountIds() only returns registered credentials.
+ *  - A resumed account whose phone was unlinked from WhatsApp while this
+ *    process was down surfaces through the EXACT SAME path a live
+ *    disconnect already does: Baileys' connection.update close handler
+ *    (below, unchanged) sees DisconnectReason.loggedOut on the first
+ *    reconnect attempt, wipes the folder, and notifies backend-api --
+ *    no special-casing needed here.
+ *  - Never throws out of this function for one bad account: a single
+ *    corrupt/unreadable folder is logged and skipped so it can never
+ *    block every other tenant's reconnect.
+ *  - A small stagger between each resume (RESUME_STAGGER_MS) avoids
+ *    opening a burst of WhatsApp sockets in the same instant when many
+ *    tenants reconnect after the same deploy -- gentler on WhatsApp's own
+ *    rate limits and on this process's own startup CPU/network spike than
+ *    firing all of them concurrently.
+ */
+const RESUME_STAGGER_MS = 400;
+
+export async function resumeAllSessions(broadcast) {
+  let accountIds;
+  try {
+    accountIds = await listPairedAccountIds();
+  } catch (err) {
+    // Backend unreachable at boot: nothing can be resumed right now. The
+    // accounts are NOT lost (their credentials are stored), so the next
+    // process start, or a user clicking Connect, will bring them back.
+    console.error('[qr-engine] RESUME_ALL_SESSIONS could not list stored sessions, nothing resumed:', err?.message || err);
+    return;
+  }
+
+  if (accountIds.length === 0) {
+    console.log('[qr-engine] RESUME_ALL_SESSIONS no paired sessions stored, nothing to resume');
+    return;
+  }
+
+  console.log(`[qr-engine] RESUME_ALL_SESSIONS resuming ${accountIds.length} paired session(s)...`);
+
+  let resumed = 0;
+  for (const accountId of accountIds) {
+    console.log(`[qr-engine] RESUME_ALL_SESSIONS auto-resuming account_id=${accountId}`);
+    try {
+      await startSession(accountId, broadcast);
+      resumed += 1;
+    } catch (err) {
+      console.error(`[qr-engine] RESUME_ALL_SESSIONS failed to resume account_id=${accountId}:`, err?.message || err);
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, RESUME_STAGGER_MS));
+  }
+
+  console.log(`[qr-engine] RESUME_ALL_SESSIONS complete — resumed ${resumed} of ${accountIds.length} session folder(s)`);
 }
 
 /**
@@ -410,8 +499,94 @@ async function clearSessionFiles(accountId) {
  * `broadcast(accountId, payload)` is injected by server.js so this module
  * has no direct dependency on Socket.IO.
  */
-export async function startSession(accountId, broadcast, { isReconnect = false } = {}) {
+/**
+ * Asks WhatsApp for a pairing code for record.pairingPhone and broadcasts
+ * it. Issued once per socket: a code stays valid until the user enters it
+ * or it expires, and Baileys does not hand out a second one on the same
+ * socket. Never throws, so a failed request cannot take the socket down.
+ */
+async function requestPairingCode(record, id, broadcast, attempt = 0) {
+  if (record.pairingInFlight || record.pairingCode || !record.pairingPhone) return;
+  // Not gated on creds.registered: Baileys 7 sets it only for the phone-link flow, so a QR-paired account would look unpaired.
+
+  // The request is an iq over the WhatsApp socket. Sent before the socket is
+  // open it fails with 'Connection Closed' (seen in the log), so wait for the
+  // socket instead of giving up on the first 'connecting' event.
+  // sock.ws is Baileys' WebSocket wrapper; isOpen is true once it is connected.
+  const socketOpen = record.sock.ws?.isOpen === true;
+  if (!socketOpen) {
+    if (attempt < PAIRING_REQUEST_RETRIES && sessions.get(id) === record) {
+      setTimeout(() => requestPairingCode(record, id, broadcast, attempt + 1), PAIRING_REQUEST_RETRY_MS).unref?.();
+    }
+    return;
+  }
+
+  record.pairingInFlight = true;
+  try {
+    const code = await record.sock.requestPairingCode(record.pairingPhone);
+    record.pairingCode = code;
+    console.log(`[qr-engine] PAIRING_CODE_ISSUED account_id=${id}`);
+    broadcast(id, { status: record.status, qr: record.qr, pairing_code: code });
+  } catch (err) {
+    console.error(`[qr-engine] PAIRING_CODE_REQUEST_FAILED account_id=${id}:`, err?.message || err);
+  } finally {
+    record.pairingInFlight = false;
+  }
+}
+
+/**
+ * Ends a live socket without touching its stored credentials. Used when a
+ * phone-number link replaces a QR socket that is still waiting for a scan.
+ * Listeners go first so the old socket's close handler cannot start a
+ * reconnect or wipe the account.
+ */
+async function retireSocket(record) {
+  clearTimeout(record.pairingTimer);
+  record.sock.ev.removeAllListeners();
+  try {
+    record.sock.end(undefined);
+  } catch {
+    // Already closed: nothing to end.
+  }
+  await drainAuthState(record.accountId);
+}
+
+/**
+ * Starts (or resumes/reuses) the Baileys session for accountId.
+ * `broadcast(accountId, payload)` is injected by server.js so this module
+ * has no direct dependency on Socket.IO.
+ *
+ * `phoneNumber` (digits only, country code included) switches the session
+ * to pairing-code login: Baileys issues an 8-character code that the user
+ * types into WhatsApp (Linked devices -> Link with phone number). The code
+ * is broadcast as `pairing_code` on the same Socket.IO stream as the QR.
+ * It is ignored if this account is already paired.
+ */
+export async function startSession(
+  accountId,
+  broadcast,
+  { isReconnect = false, phoneNumber = null, accountId: ownerAccountId = null, slotBased = false, expectedPhone = null } = {},
+) {
   const id = String(accountId);
+
+  // Who owns this session, for the backend callbacks. Given on a start request;
+  // a reconnect keeps what the first start registered.
+  // A slot session that starts without its owner (a boot resume, or a reconnect after
+  // a restart) asks the backend which account owns it. Without this its status
+  // callbacks would go to the wrong account, and a disconnect would never reach the slot.
+  if (!hasSessionOwner(id)) {
+    const owner = await fetchNumberOwner(id);
+    if (owner) {
+      registerSessionOwner(id, { accountId: owner.accountId, slotBased: true });
+    }
+  }
+
+  if (ownerAccountId != null) {
+    registerSessionOwner(id, { accountId: ownerAccountId, slotBased });
+    if (expectedPhone) {
+      expectedPhones.set(id, String(expectedPhone).replace(/\D/g, ''));
+    }
+  }
   const existing = getSession(id);
 
   // isReconnect=true is set only by this module's own post-close retry
@@ -420,39 +595,83 @@ export async function startSession(accountId, broadcast, { isReconnect = false }
   // guard exists to stop a NEW external start-session call from racing an
   // in-progress one, not to block our own internal retry.
   if (!isReconnect && existing && (existing.status === 'connected' || existing.status === 'connecting')) {
-    // Already running — re-emit current state so a newly opened modal
-    // catches up instead of waiting indefinitely for the next event.
-    broadcast(id, { status: existing.status, qr: existing.qr ?? null });
-    return existing.status;
+    // A pairing-code request needs a socket that is still unpaired. If a QR
+    // socket is waiting for a scan, replace it with a fresh one; a connected
+    // session is never touched.
+    const canSwitchToPhone = !!phoneNumber && existing.status === 'connecting';
+    if (!canSwitchToPhone) {
+      // Already running — re-emit current state so a newly opened modal
+      // catches up instead of waiting indefinitely for the next event.
+      broadcast(id, { status: existing.status, qr: existing.qr ?? null, pairing_code: existing.pairingCode ?? null });
+      return existing.status;
+    }
+    await retireSocket(existing);
+    sessions.delete(id);
+  } else if (existing) {
+    // Reconnect path: the previous socket is already closed, but its last
+    // credential write may still be in flight. Wait for it so the new
+    // socket never loads state older than what the old one just saved.
+    await drainAuthState(id);
   }
 
-  const sessionDir = sessionDirFor(id);
-  // [Partial mitigation, disclosed]: mode 0o700 restricts the Baileys
-  // credential directory to the owning OS user on POSIX filesystems.
-  // This is NOT encryption at rest — the creds.json files underneath
-  // remain plaintext, and on Windows/NTFS (this platform's actual
-  // deployment target per the connected XAMPP environment) Node's
-  // POSIX mode bits are not honored the same way, so this has little
-  // to no effect there. Full encryption-at-rest for session credentials
-  // is a larger, disclosed business/design decision, not made here.
-  await fs.mkdir(sessionDir, { recursive: true, mode: 0o700 });
-  await fs.chmod(sessionDir, 0o700).catch(() => {});
-
-  const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
+  // [Credential storage, disclosed]: credentials live in the backend
+  // database by default (see authStore.js for why this is the only
+  // store that survives a pod recreation). Stored encrypted with the
+  // backend's APP_KEY, never in this process's own filesystem.
+  //
+  // [Phone login starts a new device, disclosed]: a number login registers
+  // a NEW linked device, so it must not reuse a stored login. Stale creds
+  // make WhatsApp answer 401 logged-out, which wipes them and kills the
+  // pairing request (seen as "PAIRING_CODE_REQUEST_FAILED: Connection
+  // Closed" followed by a logged-out close). Only reached when the account
+  // is not connected: a connected session returned earlier.
+  if (phoneNumber) {
+    await clearAuthState(id);
+  }
+  const authHandle = await loadAuthState(id);
+  const { state, saveCreds } = authHandle;
   const { version } = await fetchLatestBaileysVersion();
 
   const sock = makeWASocket({
     version,
     auth: state,
     logger,
-    browser: Browsers.ubuntu('WA SaaS Platform'),
+    // [Pairing-code browser, disclosed]: Baileys documents pairing codes with its
+    // default Chrome browser identity. A custom name ("WA SaaS Platform") was
+    // seen to fail with WhatsApp's "couldn't link device" after a correct code.
+    // One identity is used for every session, because the restart that follows
+    // pairing must present the same device as the request that started it.
+    browser: Browsers.ubuntu('Chrome'),
     printQRInTerminal: false,
   });
 
-  const record = { sock, status: 'connecting', qr: null, reconnectAttempts: 0 };
+  const record = {
+    accountId: id,
+    sock,
+    status: 'connecting',
+    qr: null,
+    reconnectAttempts: 0,
+    authHandle,
+    pairingCode: null,
+    pairingPhone: null,
+    pairingInFlight: false,
+    pairingTimer: null,
+  };
   sessions.set(id, record);
 
   sock.ev.on('creds.update', saveCreds);
+
+  // A number is only meaningful for an account that is not paired yet.
+  // Already-paired accounts keep their session and ignore the number.
+  if (phoneNumber) {
+    record.pairingPhone = String(phoneNumber).replace(/\D/g, '');
+    record.pairingTimer = setTimeout(() => {
+      if (sessions.get(id) !== record || record.pairingCode || record.status === 'connected') return;
+      console.log(`[qr-engine] PAIRING_CODE_TIMEOUT account_id=${id}`);
+      broadcast(id, { status: record.status, qr: record.qr, error: 'pairing_code_timeout' });
+    }, PAIRING_CODE_TIMEOUT_MS);
+    record.pairingTimer.unref?.();
+  }
 
   // Module 10 (qr-engine-service side, previously the disclosed "no
   // listener yet" gap): forwards inbound DM text/interactive-reply
@@ -516,6 +735,13 @@ export async function startSession(accountId, broadcast, { isReconnect = false }
     const { connection, lastDisconnect, qr } = update;
 
     try {
+      // Pairing-code login: retried on each event until WhatsApp accepts the
+      // request. A failed attempt (socket not ready yet) is not fatal; the
+      // next 'connecting' or 'qr' event tries again.
+      if (record.pairingPhone && (qr || connection === 'connecting')) {
+        await requestPairingCode(record, id, broadcast);
+      }
+
       if (qr) {
         record.qr = await QRCode.toDataURL(qr);
         record.status = 'connecting';
@@ -523,22 +749,58 @@ export async function startSession(accountId, broadcast, { isReconnect = false }
         // at LOG_LEVEL=silent by default) so ops can `tail`/`grep` these
         // three events without turning on verbose Baileys logging.
         console.log(`[qr-engine] QR_RECEIVED account_id=${id}`);
-        broadcast(id, { status: 'connecting', qr: record.qr });
+        broadcast(id, { status: 'connecting', qr: record.qr, pairing_code: record.pairingCode });
       }
 
       if (connection === 'open') {
+        // [Slot number check, disclosed]: a number slot links only to the number
+        // it was added with. A login on another number is logged out before it is
+        // reported as connected, so the wrong device is not left linked.
+        const linkedPhone = String(sock.user?.id ?? '').split(/[:@]/)[0].replace(/\D/g, '');
+        const expected = expectedPhones.get(id);
+        if (expected && linkedPhone && linkedPhone !== expected) {
+          console.log(`[qr-engine] NUMBER_MISMATCH session=${id}: linked a different number; logging it out`);
+          broadcast(id, { status: 'disconnected', qr: null, error: 'number_mismatch' });
+          await logoutSession(id, broadcast);
+          return;
+        }
+
         record.status = 'connected';
         record.qr = null;
+        record.pairingCode = null;
+        record.pairingPhone = null;
+        clearTimeout(record.pairingTimer);
         record.reconnectAttempts = 0;
         console.log(`[qr-engine] CONNECTION_OPEN account_id=${id}`);
+        // sock.user.id is "<digits>[:device]@s.whatsapp.net" — the linked number.
+        const phoneNumber = String(sock.user?.id ?? '').split(/[:@]/)[0].replace(/\D/g, '') || null;
+        // Saved before it is announced: a page that reloads its number list on the
+        // live event must already see the new status.
+        await notifyBackend(id, 'connected', { phone_number: phoneNumber });
         broadcast(id, { status: 'connected', qr: null });
-        await notifyBackend(id, 'connected');
       }
 
       if (connection === 'close') {
         const statusCode = lastDisconnect?.error?.output?.statusCode;
         const loggedOut = statusCode === DisconnectReason.loggedOut;
         console.log(`[qr-engine] CONNECTION_CLOSED account_id=${id} status_code=${statusCode ?? 'unknown'} logged_out=${loggedOut}`);
+
+        // [No reconnect after takeover or logout, disclosed]: a socket that was
+        // replaced, or is being logged out, must not reconnect. The earlier
+        // handler did, so each reconnect took the login back from the other
+        // client (440 "replaced" loop), and a logout that raced one was undone.
+        // The login is kept on "replaced" (the device is still linked); only the
+        // user's own logout removes it.
+        if (sessions.get(id) !== record || record.loggingOut) {
+          return;
+        }
+        if (statusCode === DisconnectReason.connectionReplaced) {
+          console.log(`[qr-engine] CONNECTION_REPLACED account_id=${id}: another client took over this WhatsApp login; not reconnecting`);
+          sessions.delete(id);
+          broadcast(id, { status: 'disconnected', qr: null, error: 'session_replaced' });
+          await notifyBackend(id, 'disconnected');
+          return;
+        }
 
         // [Corrupted-session cleanup, disclosed]: badSession means
         // Baileys itself has determined this account's auth state
@@ -571,16 +833,13 @@ export async function startSession(accountId, broadcast, { isReconnect = false }
 
         if (record.reconnectAttempts > MAX_RECONNECT_ATTEMPTS) {
           logger.error({ accountId: id }, 'giving up after max reconnect attempts');
-          console.log(`[qr-engine] CONNECTION_CLOSED account_id=${id} giving up after ${MAX_RECONNECT_ATTEMPTS} reconnect attempts, clearing session files`);
-          // [Corrupted-session cleanup, disclosed]: repeatedly failing to
-          // reconnect for a non-loggedOut, non-badSession reason (a flaky
-          // network, a hung Baileys handshake) still very often means the
-          // local auth files are in a state Baileys can't cleanly resume
-          // from. Previously these files were left on disk after giving
-          // up, so the NEXT start-session call would try to resume the
-          // same bad state and could fail the same way again. Clearing
-          // them here guarantees the next attempt always starts clean.
-          await clearSessionFiles(id);
+          console.log(`[qr-engine] CONNECTION_CLOSED account_id=${id} giving up after ${MAX_RECONNECT_ATTEMPTS} reconnect attempts; stored credentials KEPT (device not logged out)`);
+          // [Credentials kept, disclosed]: WhatsApp never said this device was
+          // logged out. A run of timeouts or network failures is not a reason to
+          // delete the login: the earlier version wiped it here, so a flaky
+          // network dropped the account from WhatsApp on the next restart. The
+          // stored login stays, the next boot or Connect resumes it, and only
+          // loggedOut / badSession (handled above) remove it.
           sessions.delete(id);
           broadcast(id, { status: 'disconnected', qr: null });
           await notifyBackend(id, 'disconnected');
@@ -594,6 +853,8 @@ export async function startSession(accountId, broadcast, { isReconnect = false }
         // so reflect the in-progress recovery immediately instead of only
         // notifying once it either succeeds (CONNECTION_OPEN) or gives up.
         await notifyBackend(id, 'connecting');
+        // Back off between attempts so a struggling connection is not hammered.
+        await new Promise((resolve) => setTimeout(resolve, Math.min(30000, 2000 * record.reconnectAttempts)));
         await startSession(id, broadcast, { isReconnect: true });
       }
     } catch (err) {
@@ -617,9 +878,19 @@ export async function logoutSession(accountId, broadcast) {
   const id = String(accountId);
   const record = getSession(id);
 
+  if (record) {
+    // Set before logout: the close that logout causes must not reconnect.
+    record.loggingOut = true;
+  }
+
   if (record?.sock) {
     try {
-      await record.sock.logout();
+      // Capped: sock.logout() waits on WhatsApp's servers, and a slow answer
+      // must not hold up the local cleanup or the UI's answer.
+      await Promise.race([
+        record.sock.logout(),
+        new Promise((resolve) => setTimeout(resolve, LOGOUT_WAIT_MS)),
+      ]);
     } catch (err) {
       logger.warn({ err, accountId: id }, 'sock.logout() failed, clearing session anyway');
     } finally {
@@ -628,11 +899,31 @@ export async function logoutSession(accountId, broadcast) {
   }
 
   sessions.delete(id);
-  await clearSessionFiles(id);
 
+  // [Logout must always finish, disclosed]: the live session is already gone
+  // at this point, so the UI has to hear about it even if the stored-credential
+  // delete fails. If the delete fails, the credentials stay behind, but
+  // sock.logout() already unlinked this device on WhatsApp's side. The next
+  // boot's resume then gets a loggedOut close and wipes them, so nothing
+  // reconnects silently.
   if (broadcast) {
     broadcast(id, { status: 'disconnected', qr: null });
   }
 
-  await notifyBackend(id, 'disconnected');
+  // [Logout answers before the backend is called, disclosed]: the backend is
+  // a single-threaded dev server here. While it waits for this answer it cannot
+  // serve the engine's storage delete or status callback, so awaiting them
+  // deadlocked both sides (5 s and 20 s timeouts in the log). The cleanup and the
+  // notification run in the background; the request returns as soon as WhatsApp
+  // has been asked to unlink the device. Failures are logged. A failed storage
+  // delete still leaves a safe state: the device is unlinked, so the next boot's
+  // resume gets a loggedOut close and wipes the leftovers.
+  void (async () => {
+    try {
+      await clearSessionFiles(id);
+    } catch (err) {
+      console.error(`[qr-engine] LOGOUT_STORAGE_CLEAR_FAILED account_id=${id}:`, err?.message || err);
+    }
+    await notifyBackend(id, 'disconnected');
+  })();
 }

@@ -9,6 +9,43 @@ export type WhatsAppStatus = 'disconnected' | 'connecting' | 'connected';
 export interface WhatsAppStatusResponse {
   status: WhatsAppStatus;
   last_connected_at: string | null;
+  /** Linked WhatsApp number (digits, country code first). Null unless connected. */
+  phone_number?: string | null;
+  /** The default number slot; the connect modal uses it to receive that slot's events. */
+  number_id?: number | null;
+}
+
+/** One WhatsApp number slot of an account (GET /api/whatsapp/numbers). */
+export type WhatsAppNumberStatus = 'pending_payment' | 'unlinked' | 'linked' | 'paused';
+
+export interface WhatsAppNumberRow {
+  id: number;
+  phone_number: string;
+  is_included: boolean;
+  is_default: boolean;
+  status: WhatsAppNumberStatus;
+  locked: boolean;
+  /** Server rule: linked, paid, every number linked, subscription active. */
+  can_set_default: boolean;
+  term_ends_at: string | null;
+}
+
+export interface WhatsAppNumbersResponse {
+  data: WhatsAppNumberRow[];
+  /** True once the plan + add-ons are paid: numbers and the default cannot change. */
+  locked: boolean;
+}
+
+/** An add-on purchase invoice (POST /api/whatsapp/numbers/purchase). */
+export interface AddonInvoice {
+  id: number;
+  invoice_number: string;
+  status: 'pending' | 'paid' | 'failed';
+  /** GST-inclusive total. No tax line is shown. */
+  total_amount: number;
+  currency: string;
+  items: { description: string; quantity: number; amount: number }[];
+  numbers: { id: number; phone_number: string; status: WhatsAppNumberStatus; term_ends_at: string | null }[];
 }
 
 /** Payload of the `connection:update` event emitted by qr-engine-service. */
@@ -16,6 +53,11 @@ export interface ConnectionUpdatePayload {
   status: WhatsAppStatus;
   /** Base64 data: URL PNG, present only while status === 'connecting'. */
   qr: string | null;
+  /**
+   * 8-character code from WhatsApp for phone-number login, present only after
+   * a start-session call with a phone number. Shown to the user as-is.
+   */
+  pairing_code?: string | null;
   error?: string;
 }
 

@@ -31,6 +31,14 @@ class WhatsAppController extends Controller
         return response()->json([
             'status' => $session->status ?? 'disconnected',
             'last_connected_at' => $session?->last_connected_at,
+            // Only meaningful while connected; the webhook clears it otherwise.
+            'phone_number' => ($session?->status === 'connected') ? $session?->connected_phone_number : null,
+            // The default number slot. The connect modal passes it to the live stream,
+            // which only delivers events for a slot this account owns.
+            'number_id' => \App\Models\WhatsAppNumber::query()
+                ->where('account_id', $account->id)
+                ->where('is_default', true)
+                ->value('id'),
         ]);
     }
 
@@ -114,7 +122,7 @@ class WhatsAppController extends Controller
     /** POST /api/admin/whatsapp/self-device/logout — see selfDeviceStatus()'s docblock. */
     public function selfDeviceLogout(): JsonResponse
     {
-        return $this->forwardToQrEngine('logout', Account::platformDevice()->id);
+        return $this->forwardToQrEngine('logout', Account::platformDevice()->id, [], 20);
     }
 
     /**
@@ -126,17 +134,104 @@ class WhatsAppController extends Controller
     {
         $account = $this->requireAccount($request, 'A WhatsApp session requires a selected tenant account (pass ?account_id=).');
 
-        return $this->forwardToQrEngine('start-session', $account->id);
+        // Optional phone_number switches this session to pairing-code login:
+        // WhatsApp shows an 8-character code for the user to enter on the phone
+        // (Linked devices -> Link with phone number). Without it, the QR flow
+        // runs exactly as before.
+        $data = $request->validate([
+            'phone_number' => [
+                'nullable',
+                'string',
+                'max:25',
+                function (string $attribute, mixed $value, \Closure $fail): void {
+                    $digits = (string) preg_replace('/\D+/', '', (string) $value);
+
+                    // Exactly 10 digits = a national number without its country code.
+                    if (strlen($digits) === 10) {
+                        $fail('This number is missing its country code. Add it in front, for example 91 for India.');
+
+                        return;
+                    }
+
+                    if (! preg_match('/^[1-9][0-9]{7,14}$/', $digits)) {
+                        $fail('Enter the full phone number with country code and no + or spaces, for example 919876543210.');
+                    }
+                },
+            ],
+        ]);
+
+        $slot = $this->resolveSlot($request, $account);
+        if ($slot instanceof JsonResponse) {
+            return $slot;
+        }
+
+        // A number slot links only to the number it was added with. A typed number
+        // that differs is refused here, before any WhatsApp call.
+        $typed = isset($data['phone_number']) ? preg_replace('/\D+/', '', $data['phone_number']) : null;
+        if ($typed !== null && $typed !== $slot->phone_number) {
+            return response()->json([
+                'message' => 'This number is not the one added to this WhatsApp slot.',
+                'error_code' => 'number_mismatch',
+            ], 422);
+        }
+
+        $extra = [
+            'session_id' => $slot->id,
+            'expected_phone' => $slot->phone_number,
+        ];
+        if ($typed !== null) {
+            $extra['phone_number'] = $typed;
+        }
+
+        return $this->forwardToQrEngine('start-session', $account->id, $extra);
     }
 
     /**
-     * POST /api/whatsapp/logout — ends the session and clears its auth files.
+     * POST /api/whatsapp/logout — ends the session of the requested number slot
+     * (or the default one) and clears its stored login.
      */
     public function logout(Request $request): JsonResponse
     {
         $account = $this->requireAccount($request, 'A WhatsApp session requires a selected tenant account (pass ?account_id=).');
 
-        return $this->forwardToQrEngine('logout', $account->id);
+        $slot = $this->resolveSlot($request, $account);
+        if ($slot instanceof JsonResponse) {
+            return $slot;
+        }
+
+        return $this->forwardToQrEngine('logout', $account->id, ['session_id' => $slot->id], 20);
+    }
+
+    /**
+     * The number slot a session request is about: the one named by `number_id`
+     * (must belong to this account), or the account's default slot. Returns a
+     * JSON error when there is none. Accounts without slots fall back to the
+     * legacy account-keyed session, so Super Admin's test device keeps working.
+     *
+     * @return \App\Models\WhatsAppNumber|JsonResponse|null
+     */
+    private function resolveSlot(Request $request, Account $account): \App\Models\WhatsAppNumber|JsonResponse|null
+    {
+        $numberId = $request->query('number_id', $request->input('number_id'));
+
+        $query = \App\Models\WhatsAppNumber::query()->where('account_id', $account->id);
+
+        if ($numberId !== null && $numberId !== '') {
+            $slot = (clone $query)->whereKey((int) $numberId)->first();
+
+            return $slot ?? response()->json(['message' => 'WhatsApp number not found.', 'error_code' => 'not_found'], 404);
+        }
+
+        $default = (clone $query)->where('is_default', true)->first();
+
+        if ($default === null && ! (clone $query)->exists()) {
+            return response()->json([
+                'message' => 'Add a WhatsApp number to this account first.',
+                'error_code' => 'no_number',
+            ], 422);
+        }
+
+        return $default ?? (clone $query)->orderBy('id')->first();
     }
 
     /**
@@ -181,7 +276,7 @@ class WhatsAppController extends Controller
      * hung TCP connect could silently eat the full 10s before the
      * generic timeout ever kicked in.
      */
-    private function forwardToQrEngine(string $path, int $accountId): JsonResponse
+    private function forwardToQrEngine(string $path, int $accountId, array $extra = [], int $timeoutSeconds = 5): JsonResponse
     {
         $baseUrl = rtrim((string) config('services.qr_engine.url'), '/');
         $secret = config('services.qr_engine.internal_secret');
@@ -198,8 +293,8 @@ class WhatsAppController extends Controller
         try {
             $response = Http::withHeaders(['X-Internal-Secret' => $secret])
                 ->connectTimeout(5)
-                ->timeout(5)
-                ->post("{$baseUrl}/api/qr/{$path}", ['account_id' => $accountId]);
+                ->timeout($timeoutSeconds)
+                ->post("{$baseUrl}/api/qr/{$path}", ['account_id' => $accountId, ...$extra]);
         } catch (Throwable $e) {
             Log::error('qr-engine-service is unreachable — connection or request timed out or failed outright.', [
                 'path' => $path,

@@ -80,3 +80,23 @@ export interface ParsedCsvRow {
   amount: string;
   payment_ref: string;
 }
+
+/**
+ * POST /api/alerts/send-direct — Send Alert "No template" option (owner
+ * request 2026-10-05). Free-text (+ optional media_url) send that
+ * bypasses templates entirely; group_ids mirrors how the template form
+ * already dispatches once per selected group.
+ */
+export interface SendDirectPayload {
+  recipient_type: 'individual' | 'group';
+  recipient_phone?: string;
+  group_ids?: number[];
+  message?: string;
+  media_url?: string;
+}
+
+export interface SendDirectResponse {
+  message: string;
+  dispatch_log_id?: number;
+  results?: Array<{ status: string; message?: string }>;
+}

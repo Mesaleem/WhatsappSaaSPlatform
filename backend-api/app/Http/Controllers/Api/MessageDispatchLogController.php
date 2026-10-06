@@ -6,6 +6,8 @@ use App\Http\Controllers\Concerns\ResolvesTenantAccount;
 use App\Http\Controllers\Controller;
 use App\Models\MessageDispatchLog;
 use App\Models\MessageTemplate;
+use App\Services\WhatsApp\DirectMessageDispatcher;
+use App\Support\WhatsAppMediaPayloadBuilder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
@@ -114,6 +116,92 @@ class MessageDispatchLogController extends Controller
         unset($data['api_key_id']);
 
         return response()->json(['data' => $data, 'scope' => $account ? 'account' : 'global']);
+    }
+
+    /**
+     * POST /api/message-logs/{id}/resend — "Resend" action (owner request
+     * 2026-10-05: "if someone user failed the message so need to one
+     * button for resend in ui in message logs").
+     *
+     * Deliberately resends the ALREADY-RESOLVED text the failed attempt
+     * carried (message_body, falling back to message_preview for a row
+     * logged before that column existed) rather than re-rendering from a
+     * template. That's what makes this work identically no matter which
+     * pathway produced the original row (Send Alert with a template,
+     * Send Alert's "No template" option, chatbot, journey, or the
+     * Developer API) -- message_body/message_preview already hold the
+     * final, fully-resolved text for every one of those, and a template
+     * row's own template could since have been edited, unapproved, or
+     * deleted, which would make a live re-render unreliable anyway.
+     *
+     * Writes a BRAND NEW MessageDispatchLog row for this attempt via
+     * DirectMessageDispatcher (the same dispatcher Send Alert's "No
+     * template" option and the Developer API's no_template sentinel both
+     * already use) -- the original failed row is left exactly as it was,
+     * so the audit trail keeps both the original failure and this retry
+     * as separate, honest entries.
+     *
+     * Scoped the same as show()/index() for WHICH rows are visible
+     * (tenant isolation via resolveAccount()), plus the route's own
+     * additional permission:send-messages gate -- view-logs alone lets a
+     * role see this grid, but resending is a real outbound send and
+     * costs quota, so it needs the same permission Send Alert itself
+     * requires.
+     */
+    public function resend(Request $request, int $id): JsonResponse
+    {
+        $account = $this->resolveAccount($request);
+
+        $log = ($account ? MessageDispatchLog::forAccount($account->id) : MessageDispatchLog::query())
+            ->findOrFail($id);
+
+        if ($log->status !== 'failed') {
+            return response()->json(['message' => 'Only a failed message can be resent.'], 422);
+        }
+
+        // Group Messaging's aggregate batch row ('group') has no single
+        // recipient -- recipient_phone is the "group:{id}" placeholder,
+        // not a real number. A 'group_recipient' row (one member of a
+        // batch) DOES carry a real recipient_phone and is resendable like
+        // any individual send.
+        if ($log->recipient_type === 'group' || str_starts_with((string) $log->recipient_phone, 'group:')) {
+            return response()->json(['message' => "A group batch can't be resent as a whole — resend its individual recipients instead."], 422);
+        }
+
+        $text = trim((string) ($log->message_body ?? $log->message_preview ?? ''));
+        $mediaUrl = trim((string) ($log->media_url ?? ''));
+
+        if ($text === '' && $mediaUrl === '') {
+            return response()->json(['message' => 'This message has no stored content to resend (it was logged before full message text was kept).'], 422);
+        }
+
+        if ($mediaUrl !== '') {
+            $messageType = 'media';
+            $content = [
+                'media_type' => WhatsAppMediaPayloadBuilder::inferMediaType($mediaUrl),
+                'url' => $mediaUrl,
+                'caption' => $text !== '' ? $text : null,
+            ];
+        } else {
+            $messageType = 'text';
+            $content = ['body' => $text];
+        }
+
+        $result = DirectMessageDispatcher::dispatch(
+            $log->account_id,
+            $log->recipient_phone,
+            $messageType,
+            $content,
+            source: 'web_ui',
+        );
+
+        return match ($result['status']) {
+            'sent' => response()->json(['message' => 'Message resent.', 'dispatch_log_id' => $result['dispatch_log_id'] ?? null]),
+            'not_found' => response()->json(['message' => $result['message']], 404),
+            'disconnected' => response()->json(['message' => 'WhatsApp account is disconnected. Please connect your device first.'], 422),
+            'quota_exhausted' => response()->json(['message' => $result['message']], 402),
+            default => response()->json(['message' => $result['message'] ?? 'Could not resend this message.'], 422),
+        };
     }
 
     /** @return array{has_media: bool, name: ?string, type: ?string, url: ?string} */

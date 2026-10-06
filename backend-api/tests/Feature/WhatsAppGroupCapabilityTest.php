@@ -233,6 +233,20 @@ class WhatsAppGroupCapabilityTest extends TestCase
         Queue::assertNotPushed(SyncNativeWhatsAppGroupParticipantsJob::class);
     }
 
+    public function test_super_admin_may_send_to_a_native_group_of_a_client_without_the_capability(): void
+    {
+        $account = $this->qrTenant(entitled: false);
+        $group = $this->nativeGroup($account);
+        $template = $this->template($account);
+        $superAdmin = User::factory()->create(['account_id' => null]);
+        $superAdmin->assignRole('super_admin');
+
+        $response = $this->actingAs($superAdmin)->postJson("/api/groups/{$group->id}/send-template?account_id={$account->id}", ['template_id' => $template->id]);
+
+        $this->assertNotSame(403, $response->status(), 'the Super Admin bypass applies to UI sends');
+        Queue::assertPushed(ProcessGroupDispatchJob::class);
+    }
+
     public function test_a_native_group_send_from_the_ui_needs_the_capability_and_reserves_nothing(): void
     {
         $account = $this->qrTenant(entitled: false);

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AxiosError } from 'axios';
-import { ClipboardList, Eye, RefreshCw, Users } from 'lucide-react';
+import { ClipboardList, Eye, RefreshCw, Send, Users } from 'lucide-react';
 import messageLogsService from '../../services/messageLogsService';
 import type {
   MessageDispatchLog,
@@ -102,6 +102,9 @@ export default function MessageLogsPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [viewingId, setViewingId] = useState<number | null>(null);
+  // "Resend" action (owner request 2026-10-05).
+  const [resendingId, setResendingId] = useState<number | null>(null);
+  const [resendNotice, setResendNotice] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   const filters: MessageDispatchLogFilters = useMemo(
     () => ({ search, status, source, recipient_type: recipientType, from, to }),
@@ -142,6 +145,20 @@ export default function MessageLogsPage() {
   useEffect(() => {
     void load(1);
   }, [load]);
+
+  const handleResend = async (id: number) => {
+    setResendingId(id);
+    setResendNotice(null);
+    try {
+      const res = await messageLogsService.resend(id);
+      setResendNotice({ type: 'success', text: res.message || 'Message resent.' });
+      void load(page);
+    } catch (err) {
+      setResendNotice({ type: 'error', text: extractMessage(err, 'Could not resend this message.') });
+    } finally {
+      setResendingId(null);
+    }
+  };
 
   const showClientColumn = scope === 'global';
 
@@ -206,6 +223,18 @@ export default function MessageLogsPage() {
 
       {error && (
         <DismissibleAlert className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</DismissibleAlert>
+      )}
+
+      {resendNotice && (
+        <DismissibleAlert
+          className={
+            resendNotice.type === 'success'
+              ? 'rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700'
+              : 'rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700'
+          }
+        >
+          {resendNotice.text}
+        </DismissibleAlert>
       )}
 
       <TableCard>
@@ -276,15 +305,30 @@ export default function MessageLogsPage() {
                   </td>
                   <td className="px-4 py-3 text-slate-600">{formatDateTime(log.created_at)}</td>
                   <td className="px-4 py-3 text-right">
-                    <button
-                      type="button"
-                      onClick={() => setViewingId(log.id)}
-                      aria-label={`View message ${log.id}`}
-                      className="inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
-                    >
-                      <Eye className="h-3.5 w-3.5" />
-                      View
-                    </button>
+                    <div className="flex items-center justify-end gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setViewingId(log.id)}
+                        aria-label={`View message ${log.id}`}
+                        className="inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                      >
+                        <Eye className="h-3.5 w-3.5" />
+                        View
+                      </button>
+                      {/* "Resend" action (owner request 2026-10-05): only for a failed, non-group-aggregate row — mirrors resend()'s own backend guard. */}
+                      {log.status === 'failed' && log.recipient_type !== 'group' && (
+                        <button
+                          type="button"
+                          onClick={() => void handleResend(log.id)}
+                          disabled={resendingId === log.id}
+                          aria-label={`Resend message ${log.id}`}
+                          className="inline-flex items-center gap-1 rounded-lg border border-indigo-300 bg-indigo-50 px-2.5 py-1 text-xs font-medium text-indigo-700 hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          <Send className="h-3.5 w-3.5" />
+                          {resendingId === log.id ? 'Resending…' : 'Resend'}
+                        </button>
+                      )}
+                    </div>
                   </td>
                 </tr>
               ))

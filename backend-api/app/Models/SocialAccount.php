@@ -71,8 +71,8 @@ class SocialAccount extends Model
             'metadata' => 'array',
             // Same Crypt::encryptString/decryptString transparent cast as
             // WhatsAppSession.meta_access_token / webhook_subscriptions.secret.
-            'access_token' => 'encrypted',
-            'refresh_token' => 'encrypted',
+            'access_token' => \App\Casts\EncryptedOrNull::class,
+            'refresh_token' => \App\Casts\EncryptedOrNull::class,
         ];
     }
 

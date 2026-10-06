@@ -1,5 +1,5 @@
 import axiosInstance from '../core/api/axiosInstance';
-import type { BulkUploadResponse, SendAlertPayload, SendAlertResponse } from '../types/alert';
+import type { BulkUploadResponse, SendAlertPayload, SendAlertResponse, SendDirectPayload, SendDirectResponse } from '../types/alert';
 
 const BASE = '/alerts';
 
@@ -11,6 +11,11 @@ const BASE = '/alerts';
 const alertService = {
   send(payload: SendAlertPayload) {
     return axiosInstance.post<SendAlertResponse>(`${BASE}/send`, payload).then((res) => res.data);
+  },
+
+  /** "No template" option -- free text (+ optional media), no template involved. */
+  sendDirect(payload: SendDirectPayload) {
+    return axiosInstance.post<SendDirectResponse>(`${BASE}/send-direct`, payload).then((res) => res.data);
   },
 
   bulkUpload(file: File) {

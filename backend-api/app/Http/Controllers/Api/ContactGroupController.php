@@ -115,6 +115,15 @@ class ContactGroupController extends Controller
             return $this->storeNativeGroup($account, $data);
         }
 
+        // A paid Custom Contact Groups term allows its included number of groups (the offer's units).
+        $limit = app(\App\Services\Billing\ModuleAddonService::class)->activeUnitLimit($account, 'contact_groups');
+        if ($limit !== null && ContactGroup::query()->where('account_id', $account->id)->count() >= $limit) {
+            return response()->json([
+                'message' => "Your plan includes {$limit} contact groups. Renew or upgrade to add more.",
+                'error_code' => 'group_limit_reached',
+            ], 422);
+        }
+
         $group = ContactGroup::create([
             'account_id' => $account->id,
             'name' => $data['name'],
@@ -487,6 +496,7 @@ class ContactGroupController extends Controller
             $data['template_id'],
             $data['variables'] ?? [],
             source: 'web_template',
+            superAdminBypass: (bool) $request->attributes->get('is_super_admin'),
         );
 
         return match ($result['status']) {

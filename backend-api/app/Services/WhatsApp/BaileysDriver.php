@@ -2,6 +2,7 @@
 
 namespace App\Services\WhatsApp;
 
+use App\Models\WhatsAppNumber;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Throwable;
@@ -38,6 +39,7 @@ class BaileysDriver implements WhatsAppDriverInterface
                 ->timeout(15)
                 ->post("{$baseUrl}/api/message/send", [
                     'account_id' => $this->accountId,
+                    ...$this->sessionPayload(),
                     'to' => $jid,
                     'message' => $message,
                     ...$metaData,
@@ -85,5 +87,22 @@ class BaileysDriver implements WhatsAppDriverInterface
             'message_id' => $body['message_id'] ?? null,
             'raw' => $body,
         ];
+    }
+
+    /**
+     * The number slot this driver sends through: the account's default slot. Sends
+     * are keyed by slot in qr-engine-service; without a slot the legacy
+     * account-keyed session is used (no session_id).
+     *
+     * @return array{session_id?: int}
+     */
+    private function sessionPayload(): array
+    {
+        $slotId = WhatsAppNumber::query()
+            ->where('account_id', $this->accountId)
+            ->where('is_default', true)
+            ->value('id');
+
+        return $slotId === null ? [] : ['session_id' => (int) $slotId];
     }
 }

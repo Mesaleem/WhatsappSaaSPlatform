@@ -3,6 +3,7 @@ import { MessageCircle, Radio } from 'lucide-react';
 import { useAuth } from '../../core/context/AuthContext';
 import whatsappService from '../../services/whatsappService';
 import QRScannerModal from '../../components/qr/QRScannerModal';
+import WhatsAppNumbersCard from '../../components/whatsapp/WhatsAppNumbersCard';
 import MetaConfigCard from '../../components/settings/MetaConfigCard';
 import type { WhatsAppStatus } from '../../types/whatsapp';
 
@@ -17,6 +18,10 @@ export default function WhatsAppSetupPage() {
   const engineType = user?.account?.current_subscription?.engine_type ?? null;
 
   const [status, setStatus] = useState<WhatsAppStatus>('disconnected');
+  const [phoneNumber, setPhoneNumber] = useState<string | null>(null);
+  const [numberId, setNumberId] = useState<number | null>(null);
+  // Bumped on every connect or disconnect, so the numbers list reloads its slot statuses.
+  const [numbersVersion, setNumbersVersion] = useState(0);
   const [isLoadingStatus, setIsLoadingStatus] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
@@ -27,6 +32,8 @@ export default function WhatsAppSetupPage() {
     try {
       const res = await whatsappService.status();
       setStatus(res.status);
+      setPhoneNumber(res.phone_number ?? null);
+      setNumberId(res.number_id ?? null);
     } catch {
       // Leave status as-is — the page still renders, just possibly stale.
     } finally {
@@ -51,6 +58,9 @@ export default function WhatsAppSetupPage() {
     setStatus('connected');
     setIsModalOpen(false);
     showToast('WhatsApp connected successfully.');
+    // The linked number comes from the status endpoint, not the socket event.
+    void loadStatus();
+    setNumbersVersion((v) => v + 1);
   };
 
   const handleLogout = async () => {
@@ -58,6 +68,8 @@ export default function WhatsAppSetupPage() {
     try {
       await whatsappService.logout();
       setStatus('disconnected');
+      setPhoneNumber(null);
+      setNumbersVersion((v) => v + 1);
       showToast('WhatsApp disconnected.');
     } catch {
       showToast('Failed to disconnect. Please try again.');
@@ -108,6 +120,11 @@ export default function WhatsAppSetupPage() {
                   <span className="text-sm font-medium text-slate-900">
                     {isLoadingStatus ? 'Checking status…' : meta.label}
                   </span>
+                  {status === 'connected' && phoneNumber && (
+                    <span className="ml-2 text-sm text-slate-500" data-testid="linked-phone">
+                      · +{phoneNumber}
+                    </span>
+                  )}
                 </div>
 
                 {status === 'connected' ? (
@@ -139,9 +156,21 @@ export default function WhatsAppSetupPage() {
         </div>
       </div>
 
+      {engineType === 'qr' && user?.account_id && (
+        <WhatsAppNumbersCard
+          accountId={user.account_id}
+          reloadKey={numbersVersion}
+          onConnected={() => {
+            void loadStatus();
+            setNumbersVersion((v) => v + 1);
+          }}
+        />
+      )}
+
       {isModalOpen && user?.account_id && (
         <QRScannerModal
           accountId={user.account_id}
+          numberId={numberId}
           onClose={() => setIsModalOpen(false)}
           onConnected={handleConnected}
         />

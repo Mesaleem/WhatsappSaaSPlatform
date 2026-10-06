@@ -44,6 +44,9 @@ class GroupDirectMessageDispatcher
         array $content,
         string $source = 'api',
         ?int $apiKeyId = null,
+        // A Super Admin acting in the UI may send to a native group of a client that
+        // lacks the capability. Never set for API keys or agents.
+        bool $superAdminBypass = false,
     ): array {
         $account = Account::with(['currentSubscription', 'whatsAppSession'])->find($accountId);
 
@@ -72,7 +75,7 @@ class GroupDirectMessageDispatcher
             // Phase 5 P5-C -- sending to a Native WhatsApp Group needs the
             // account's `whatsapp_groups` capability; checked before any
             // quota is reserved. Reuses the existing 403 status.
-            if (! NativeGroupEntitlement::allows($account, 'groups.send_native', $source)) {
+            if (! NativeGroupEntitlement::allows($account, 'groups.send_native', $source, $superAdminBypass)) {
                 return ['status' => 'group_access_denied', 'message' => NativeGroupEntitlement::MESSAGE];
             }
 

@@ -82,9 +82,9 @@ class SocialProviderConfig extends Model
             'is_active' => 'boolean',
             // Same Crypt::encryptString/decryptString transparent cast used
             // for PaymentGatewaySetting's key/secret columns.
-            'client_id' => 'encrypted',
-            'client_secret' => 'encrypted',
-            'webhook_verify_token' => 'encrypted',
+            'client_id' => \App\Casts\EncryptedOrNull::class,
+            'client_secret' => \App\Casts\EncryptedOrNull::class,
+            'webhook_verify_token' => \App\Casts\EncryptedOrNull::class,
         ];
     }
 

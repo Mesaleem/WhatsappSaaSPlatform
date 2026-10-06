@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Bell } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import notificationService from '../../services/notificationService';
 import type { InAppNotification } from '../../types/notifications';
 import { indigo } from '../../theme/signalIndigo';
@@ -69,6 +70,17 @@ export default function NotificationBell() {
     }
   };
 
+  const navigate = useNavigate();
+
+  // Opens the page a notification is about, after marking it read. Only in-app paths are followed.
+  const openNotification = (n: InAppNotification) => {
+    void handleMarkRead(n.id);
+    if (n.link && n.link.startsWith('/') && !n.link.startsWith('//')) {
+      setIsOpen(false);
+      navigate(n.link);
+    }
+  };
+
   const handleMarkRead = async (id: number) => {
     setItems((prev) => prev.map((n) => (n.id === id ? { ...n, is_read: true } : n)));
     try {
@@ -128,7 +140,7 @@ export default function NotificationBell() {
               items.map((n) => (
                 <button
                   key={n.id}
-                  onClick={() => void handleMarkRead(n.id)}
+                  onClick={() => openNotification(n)}
                   className={`block w-full border-b px-3 py-2.5 text-left text-sm last:border-b-0 hover:bg-slate-50 ${
                     n.is_read ? '' : 'bg-indigo-50/50'
                   }`}

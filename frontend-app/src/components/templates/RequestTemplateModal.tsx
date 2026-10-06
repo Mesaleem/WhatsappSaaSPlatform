@@ -3,7 +3,6 @@ import { AxiosError } from 'axios';
 import { FileText, Loader2, XCircle } from 'lucide-react';
 import templateService from '../../services/templateService';
 import type { ApiErrorResponse } from '../../types/auth';
-import type { TemplateHeaderType } from '../../types/templates';
 import DismissibleAlert from '../common/DismissibleAlert';
 
 function extractMessage(err: unknown, fallback: string): string {
@@ -13,13 +12,6 @@ function extractMessage(err: unknown, fallback: string): string {
 
 const inputClass =
   'mt-1.5 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100';
-
-/** Media Templates (QR/Baileys-only) -- same options as TemplateManagerPage.tsx's TemplateModal, for consistency. */
-const HEADER_TYPE_OPTIONS: { value: TemplateHeaderType; label: string; hint: string }[] = [
-  { value: 'text', label: 'Text', hint: 'Plain message, no attachment.' },
-  { value: 'image', label: 'Image', hint: 'e.g. a photo.' },
-  { value: 'document', label: 'Document', hint: 'e.g. a PDF bill.' },
-];
 
 /**
  * Tiered Template Approval Workflow — "Request a Template" modal. A
@@ -47,8 +39,6 @@ export default function RequestTemplateModal({
   const [title, setTitle] = useState('');
   const [industryType, setIndustryType] = useState('');
   const [templateBody, setTemplateBody] = useState('');
-  const [headerType, setHeaderType] = useState<TemplateHeaderType>('text');
-  const [headerMediaUrl, setHeaderMediaUrl] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -66,8 +56,8 @@ export default function RequestTemplateModal({
         title: title.trim(),
         industry_type: industryType.trim() || undefined,
         template_body: templateBody.trim(),
-        header_type: headerType,
-        header_media_url: headerType === 'text' ? undefined : headerMediaUrl.trim() || undefined,
+        // Requests are plain text only; attachments are not offered on this form.
+        header_type: 'text',
       });
       onSubmitted(result.message);
     } catch (err) {
@@ -138,52 +128,6 @@ export default function RequestTemplateModal({
               Use <code className="rounded bg-slate-100 px-1 py-0.5">{'{{variable_name}}'}</code> for anything that
               changes per message, like a customer name or order ID.
             </p>
-          </div>
-
-          <div>
-            <label className="text-sm font-medium text-slate-700">Attach a file? <span className="font-normal text-slate-400">(optional)</span></label>
-            <div className="mt-1 grid grid-cols-1 gap-2 sm:grid-cols-3">
-              {HEADER_TYPE_OPTIONS.map((opt) => (
-                <button
-                  type="button"
-                  key={opt.value}
-                  onClick={() => setHeaderType(opt.value)}
-                  className={`rounded-lg border px-3 py-2 text-left text-sm ${
-                    headerType === opt.value
-                      ? 'border-indigo-500 bg-indigo-50 text-indigo-700'
-                      : 'border-slate-300 text-slate-700 hover:bg-slate-50'
-                  }`}
-                >
-                  <div className="font-medium">{opt.label}</div>
-                  <div className="text-xs text-slate-500">{opt.hint}</div>
-                </button>
-              ))}
-            </div>
-
-            {headerType !== 'text' && (
-              <div className="mt-3">
-                <label htmlFor="template-request-media-url" className="text-sm font-medium text-slate-700">
-                  Media URL
-                  <span className="ml-1 text-xs font-normal text-slate-400">
-                    (optional default — a direct link to the {headerType === 'image' ? 'image' : 'PDF/document'};
-                    your message text above becomes the caption. Can be left blank, or overridden per-send via
-                    the API's media_url field — the message still sends as plain text if no URL ends up
-                    available.)
-                  </span>
-                </label>
-                <input
-                  id="template-request-media-url"
-                  value={headerMediaUrl}
-                  onChange={(e) => setHeaderMediaUrl(e.target.value)}
-                  placeholder={
-                    headerType === 'image'
-                      ? 'https://example.com/files/photo.jpg'
-                      : 'https://example.com/files/bill.pdf'
-                  }
-                  className={inputClass}
-                />
-              </div>
-            )}
           </div>
         </div>
 

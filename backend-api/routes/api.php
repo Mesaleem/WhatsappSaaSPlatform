@@ -33,6 +33,11 @@ use App\Http\Controllers\Api\ClientApiKeyController;
 use App\Http\Controllers\Api\MessageTemplateController;
 use App\Http\Controllers\Api\Internal\WhatsAppStatusController;
 use App\Http\Controllers\Api\Internal\WhatsAppInboundController;
+use App\Http\Controllers\Api\Internal\WhatsAppAuthStateController;
+use App\Http\Controllers\Api\Internal\WhatsAppNumberLookupController;
+use App\Http\Controllers\Api\WhatsAppNumberController;
+use App\Http\Controllers\Api\WhatsAppAddonController;
+use App\Http\Controllers\Api\ModuleAddonController;
 use App\Http\Controllers\Api\ChatbotRuleController;
 use App\Http\Controllers\Api\WhatsAppFlowController;
 use App\Http\Controllers\Api\ChatbotLogController;
@@ -96,6 +101,20 @@ Route::middleware('internal.secret')->post('/internal/whatsapp-status', [WhatsAp
 // gap (no listener yet calls this). Same internal.secret gate as the
 // status endpoint above; still no Laravel user/session.
 Route::middleware('internal.secret')->post('/internal/whatsapp-inbound', [WhatsAppInboundController::class, 'handle']);
+
+// Baileys ('qr' engine) credential storage for qr-engine-service — see
+// WhatsAppAuthStateController. Same internal.secret gate. Without this,
+// every redeploy or pod recreation would disconnect every QR-engine account.
+// Which account owns a WhatsApp number slot (qr-engine-service checks this before
+// it shows a slot's QR or status to a browser). Same internal.secret gate.
+Route::middleware('internal.secret')->get('/internal/whatsapp-numbers/{id}', [WhatsAppNumberLookupController::class, 'show'])->whereNumber('id');
+
+Route::middleware('internal.secret')->prefix('internal/whatsapp-auth')->group(function () {
+    Route::get('/paired', [WhatsAppAuthStateController::class, 'paired']);
+    Route::get('/{accountId}', [WhatsAppAuthStateController::class, 'show'])->whereNumber('accountId');
+    Route::put('/{accountId}', [WhatsAppAuthStateController::class, 'update'])->whereNumber('accountId');
+    Route::delete('/{accountId}', [WhatsAppAuthStateController::class, 'destroy'])->whereNumber('accountId');
+});
 
 // Module 5: Meta Cloud API webhook receiver. Public — Meta calls these
 // directly with no Laravel session and no knowledge of our internal
@@ -331,6 +350,43 @@ Route::middleware('auth:sanctum')->group(function () {
     // scoped change (broader blast radius, real regression risk) than this
     // session's request covers. Flag it explicitly if you want that done.
     // ==========================================================================
+    // Paid module add-ons (for example Custom Contact Groups). A client requests one;
+    // a Super Admin or an agent approves it, invoices it, and records the payment.
+    // Outside subscription.guard: a lapsed client must still be able to ask and pay.
+    Route::middleware(['tenant.isolation', 'permission:manage-subscriptions'])->prefix('module-addons')->group(function () {
+        Route::get('/', [ModuleAddonController::class, 'index']);
+        Route::post('/request', [ModuleAddonController::class, 'request']);
+        Route::post('/invoices/{id}/pay', [ModuleAddonController::class, 'payInvoice'])->whereNumber('id');
+    });
+    // Offers (price, term, units, on sale) are shown to everyone who can act on requests.
+    // Only a Super Admin changes them; a change applies to new requests, not to issued invoices.
+    Route::middleware(['role:super_admin|agent'])->get('/admin/module-offers', [ModuleAddonController::class, 'offers']);
+    Route::middleware(['role:super_admin'])->put('/admin/module-offers/{module}', [ModuleAddonController::class, 'updateOffer']);
+    Route::middleware(['role:super_admin|agent'])->prefix('admin/module-addons')->group(function () {
+        Route::get('/pending', [ModuleAddonController::class, 'pending']);
+        Route::post('/{id}/approve', [ModuleAddonController::class, 'approve'])->whereNumber('id');
+        Route::post('/{id}/reject', [ModuleAddonController::class, 'reject'])->whereNumber('id');
+        Route::post('/{id}/record-payment', [ModuleAddonController::class, 'recordPayment'])->whereNumber('id');
+    });
+
+    // Manual payment for an add-on invoice (no payment gateway is configured yet).
+    // Super Admin, or an Agent acting on its own client. Deliberately OUTSIDE
+    // subscription.guard: that guard checks the ACTOR's own subscription, and an
+    // Agent's own account has none, which would block every payment it records.
+    // The rules (own client, self-signup, amount, duplicates) are in
+    // WhatsAppAddonService::assertCanRecord and validatedDetails.
+    Route::middleware(['tenant.isolation', 'role:super_admin|agent'])
+        ->post('/admin/whatsapp/addon-invoices/{id}/record-payment', [WhatsAppAddonController::class, 'recordPayment'])
+        ->whereNumber('id');
+    Route::middleware(['tenant.isolation', 'role:super_admin|agent'])
+        ->get('/admin/whatsapp/addon-invoices/pending', [WhatsAppAddonController::class, 'pending']);
+
+    // Online payment for an add-on invoice (only when a gateway is configured). Outside
+    // subscription.guard too: paying is how a lapsed subscription is renewed.
+    Route::middleware(['tenant.isolation', 'permission:manage-subscriptions'])
+        ->post('/whatsapp/addon-invoices/{id}/pay', [WhatsAppAddonController::class, 'pay'])
+        ->whereNumber('id');
+
     Route::middleware(['tenant.isolation', 'subscription.guard'])->group(function () {
         Route::middleware('permission:manage-roles')->group(function () {
             Route::get('/roles', [RoleController::class, 'index']);
@@ -378,7 +434,23 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::get('/status', [WhatsAppController::class, 'status']);
             Route::post('/start-session', [WhatsAppController::class, 'startSession']);
             Route::post('/logout', [WhatsAppController::class, 'logout']);
+
+            // WhatsApp number slots: the included number plus paid add-ons.
+            // Uniqueness and the lock rules live in WhatsAppNumberService.
+            Route::get('/numbers', [WhatsAppNumberController::class, 'index']);
+            Route::post('/numbers', [WhatsAppNumberController::class, 'store']);
+            Route::put('/numbers/{id}/default', [WhatsAppNumberController::class, 'setDefault'])->whereNumber('id');
+            Route::delete('/numbers/{id}', [WhatsAppNumberController::class, 'destroy'])->whereNumber('id');
+
+            // Paid extra numbers (one-month term each). Buying and cancelling need the
+            // same permission as the rest of billing.
+            Route::get('/numbers/addon-price', [WhatsAppAddonController::class, 'price']);
+            Route::middleware('permission:manage-subscriptions')->group(function () {
+                Route::post('/numbers/purchase', [WhatsAppAddonController::class, 'purchase']);
+                Route::delete('/addon-invoices/{id}', [WhatsAppAddonController::class, 'cancel'])->whereNumber('id');
+            });
         });
+
 
         // Module 5: Meta Cloud API credential vault. Admin-only (not
         // manage-accounts) — this is per-tenant configuration, distinct
@@ -541,6 +613,7 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::post('/accounts/bind', [SocialAuthController::class, 'bind']);
             Route::post('/accounts/{id}/check', [SocialAuthController::class, 'check'])->whereNumber('id');
             Route::get('/oauth/{provider}/redirect', [SocialAuthController::class, 'redirect']);
+            Route::get('/oauth/{provider}/result/{nonce}', [SocialAuthController::class, 'result']);
         });
 
         // Phase 11 Task 1 — Industry Modules foundation (read-only). See config/industries.php and
@@ -983,6 +1056,8 @@ Route::middleware('auth:sanctum')->group(function () {
         // already gating ordinary WhatsApp usage, not a new privilege tier.
         Route::middleware(['permission:send-messages', 'module.guard:send_alert'])->prefix('alerts')->group(function () {
             Route::post('/send', [PaymentAlertController::class, 'send']);
+            // Send Alert "No template" option (owner request 2026-10-05) -- free-text/media send, bypassing templates entirely.
+            Route::post('/send-direct', [PaymentAlertController::class, 'sendDirect']);
             Route::post('/bulk-upload', [PaymentAlertController::class, 'bulkUpload']);
             // Dynamic Templates & Variables System — Client Admin Dynamic
             // Form Engine: the approved-templates dropdown and its submit
@@ -1129,6 +1204,13 @@ Route::middleware('auth:sanctum')->group(function () {
                 Route::get('/message-logs', [MessageDispatchLogController::class, 'index']);
                 // "View" action: the complete record for one row, same scoping as the list.
                 Route::get('/message-logs/{id}', [MessageDispatchLogController::class, 'show'])->whereNumber('id');
+                // "Resend" action (owner request 2026-10-05) -- a real outbound send (costs
+                // quota), so on top of the view-logs + module.guard:message_logs this whole
+                // group already requires, it additionally requires send-messages -- the same
+                // permission Send Alert itself is gated by.
+                Route::post('/message-logs/{id}/resend', [MessageDispatchLogController::class, 'resend'])
+                    ->whereNumber('id')
+                    ->middleware('permission:send-messages');
             });
         });
 

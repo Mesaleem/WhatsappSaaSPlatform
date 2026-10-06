@@ -103,3 +103,9 @@ export interface MessageDispatchLogDetailResponse {
   data: MessageDispatchLogDetail;
   scope: 'account' | 'global';
 }
+
+/** POST /api/message-logs/{id}/resend — "Resend" action (owner request 2026-10-05). */
+export interface MessageDispatchLogResendResponse {
+  message: string;
+  dispatch_log_id?: number | null;
+}

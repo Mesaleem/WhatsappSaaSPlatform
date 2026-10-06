@@ -3,6 +3,7 @@ import type {
   BindAccountsPayload,
   BindAccountsResponse,
   OAuthRedirectResponse,
+  OAuthResultResponse,
   SocialAccount,
   SocialConnectionCheckResponse,
   SocialProvider,
@@ -32,6 +33,13 @@ const socialService = {
   getOAuthRedirectUrl(provider: SocialProvider) {
     return axiosInstance
       .get<OAuthRedirectResponse>(`${BASE}/oauth/${provider}/redirect`)
+      .then((res) => res.data);
+  },
+
+  /** Server-side outcome of a connect attempt — polled while the popup is open. */
+  getOAuthResult(provider: SocialProvider, nonce: string) {
+    return axiosInstance
+      .get<OAuthResultResponse>(`${BASE}/oauth/${provider}/result/${encodeURIComponent(nonce)}`)
       .then((res) => res.data);
   },
 

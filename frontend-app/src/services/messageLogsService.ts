@@ -1,5 +1,5 @@
 import axiosInstance from '../core/api/axiosInstance';
-import type { MessageDispatchLogDetailResponse, MessageDispatchLogFilters, MessageDispatchLogsResponse } from '../types/messageLog';
+import type { MessageDispatchLogDetailResponse, MessageDispatchLogFilters, MessageDispatchLogResendResponse, MessageDispatchLogsResponse } from '../types/messageLog';
 
 /**
  * [New feature, disclosed]. CSV/PDF export is deliberately NOT included
@@ -32,6 +32,11 @@ const messageLogsService = {
   /** GET /api/message-logs/{id} — the complete record for the "View" action (tenant-scoped like the list). */
   show(id: number) {
     return axiosInstance.get<MessageDispatchLogDetailResponse>(`/message-logs/${id}`).then((res) => res.data.data);
+  },
+
+  /** POST /api/message-logs/{id}/resend — "Resend" action (owner request 2026-10-05), only valid for a failed, non-group row. */
+  resend(id: number) {
+    return axiosInstance.post<MessageDispatchLogResendResponse>(`/message-logs/${id}/resend`).then((res) => res.data);
   },
 };
 

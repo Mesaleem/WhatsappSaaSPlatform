@@ -140,6 +140,12 @@ class Invoice extends Model
         return $query->where('account_id', $accountId);
     }
 
+    /** The purchased items (one row per extra WhatsApp number on add-on invoices). */
+    public function lineItems(): \Illuminate\Database\Eloquent\Relations\HasMany
+    {
+        return $this->hasMany(InvoiceLineItem::class);
+    }
+
     public function isPaid(): bool
     {
         return $this->status === 'paid';

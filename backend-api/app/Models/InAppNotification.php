@@ -13,6 +13,7 @@ class InAppNotification extends Model
         'title',
         'body',
         'category',
+        'link',
         'is_read',
         'read_at',
     ];

@@ -181,7 +181,8 @@ class RecoveryConfigurationTest extends TestCase
     {
         $declared = [];
         foreach (glob(app_path('Models/*.php')) as $file) {
-            if (! preg_match_all("/'([a-z_]+)'\s*=>\s*'encrypted'/", (string) file_get_contents($file), $m)) {
+            // Both the plain 'encrypted' cast and App\Casts\EncryptedOrNull (same ciphertext, unreadable values read as null).
+            if (! preg_match_all('/\'([a-z_]+)\'\s*=>\s*(?:\'encrypted\'|[\\\\\w]*EncryptedOrNull::class)/', (string) file_get_contents($file), $m)) {
                 continue;
             }
             $class = 'App\\Models\\'.basename($file, '.php');

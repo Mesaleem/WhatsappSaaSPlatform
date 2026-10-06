@@ -83,6 +83,10 @@ class SendMessageRequest extends FormRequest
             // sendToGroup(), unchanged) -- same lenient, never-422-on-bad-URL
             // rule as SendTemplateMessageRequest's own media_url.
             'media_url' => ['sometimes', 'nullable', 'string', 'max:2048'],
+            // Developer API "No template" sentinel (owner request 2026-10-05, see
+            // MessageTemplate::NO_TEMPLATE_CODE) -- template_code=no_template sends this
+            // free text instead of a template; ignored (optional) for a real template_code.
+            'text' => ['required_if:template_code,'.MessageTemplate::NO_TEMPLATE_CODE, 'string', 'max:4096'],
             ...MessageTemplate::variableValidationRules($this->targetSchema()),
         ];
     }
@@ -98,6 +102,7 @@ class SendMessageRequest extends FormRequest
         return [
             'recipient_phone.required_if' => 'The :attribute field is required when recipient_type is "individual".',
             'group_code.required_if' => 'The :attribute field is required when recipient_type is "group".',
+            'text.required_if' => 'The "text" field is required when template_code is "'.MessageTemplate::NO_TEMPLATE_CODE.'".',
             'variables.*.required' => 'The :attribute field is required.',
             'variables.*.numeric' => 'The :attribute field must be a number.',
             'variables.*.date' => 'The :attribute field must be a valid date.',
@@ -123,6 +128,7 @@ class SendMessageRequest extends FormRequest
             'group_code' => 'group_code',
             'variables' => 'variables',
             'media_url' => 'media_url',
+            'text' => 'text',
         ];
 
         foreach ($this->targetSchema() as $field) {
@@ -144,7 +150,7 @@ class SendMessageRequest extends FormRequest
     {
         $templateCode = $this->input('template_code');
 
-        if (! is_string($templateCode) || $templateCode === '') {
+        if (! is_string($templateCode) || $templateCode === '' || $templateCode === MessageTemplate::NO_TEMPLATE_CODE) {
             return [];
         }
 

@@ -2,6 +2,7 @@
 
 namespace App\Services\Groups;
 
+use App\Models\WhatsAppNumber;
 use App\Support\PhoneNumberNormalizer;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -60,6 +61,7 @@ class NativeWhatsAppGroupService
 
         $result = $this->post('/api/group/create', [
             'account_id' => $accountId,
+            ...$this->sessionFor($accountId),
             'subject' => $subject,
             'participants' => $participants,
         ]);
@@ -98,6 +100,7 @@ class NativeWhatsAppGroupService
 
         $result = $this->post('/api/group/add-participants', [
             'account_id' => $accountId,
+            ...$this->sessionFor($accountId),
             'group_jid' => $groupJid,
             'participants' => $participants,
         ]);
@@ -121,7 +124,7 @@ class NativeWhatsAppGroupService
      */
     public function listGroups(int $accountId): array
     {
-        $result = $this->get('/api/group/list', ['account_id' => $accountId]);
+        $result = $this->get('/api/group/list', ['account_id' => $accountId, ...$this->sessionFor($accountId)]);
 
         if (! ($result['success'] ?? false)) {
             return ['success' => false, 'error' => $result['error'] ?? 'The QR engine rejected the group-list request.'];
@@ -143,7 +146,7 @@ class NativeWhatsAppGroupService
      */
     public function groupMetadata(int $accountId, string $groupJid): array
     {
-        $result = $this->get('/api/group/metadata', ['account_id' => $accountId, 'group_jid' => $groupJid]);
+        $result = $this->get('/api/group/metadata', ['account_id' => $accountId, 'group_jid' => $groupJid, ...$this->sessionFor($accountId)]);
 
         if (! ($result['success'] ?? false)) {
             return ['success' => false, 'error' => $result['error'] ?? 'The QR engine rejected the group-metadata request.'];
@@ -251,5 +254,16 @@ class NativeWhatsAppGroupService
         }
 
         return $body;
+    }
+
+    /** The account's default number slot, sent as session_id (none for accounts without slots). */
+    private function sessionFor(int|string $accountId): array
+    {
+        $slotId = WhatsAppNumber::query()
+            ->where('account_id', $accountId)
+            ->where('is_default', true)
+            ->value('id');
+
+        return $slotId === null ? [] : ['session_id' => (int) $slotId];
     }
 }

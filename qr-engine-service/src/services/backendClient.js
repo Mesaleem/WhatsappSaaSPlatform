@@ -9,15 +9,61 @@ const backendHttp = axios.create({
 });
 
 /**
+ * Which account and number slot each live session belongs to. Filled by
+ * sessionManager when a session starts, so every callback can name the slot
+ * (session_id) and its account. Legacy sessions (no slot) map to the account only.
+ */
+const sessionOwners = new Map();
+
+export function registerSessionOwner(sessionKey, { accountId, slotBased }) {
+  sessionOwners.set(String(sessionKey), { accountId: Number(accountId), slotBased: !!slotBased });
+}
+
+export function hasSessionOwner(sessionKey) {
+  return sessionOwners.has(String(sessionKey));
+}
+
+/**
+ * Asks the backend which account owns a number slot. Used when a slot session starts
+ * without its owner (a boot resume, or a reconnect after a restart), so its status
+ * callbacks reach the right account. Returns null for an unknown slot.
+ */
+export async function fetchNumberOwner(sessionId) {
+  try {
+    const { data } = await backendHttp.get(`/api/internal/whatsapp-numbers/${Number(sessionId)}`, {
+      headers: internalHeaders(),
+      timeout: AUTH_STATE_TIMEOUT_MS,
+    });
+    return data?.account_id != null ? { accountId: Number(data.account_id) } : null;
+  } catch {
+    return null;
+  }
+}
+
+export function unregisterSessionOwner(sessionKey) {
+  sessionOwners.delete(String(sessionKey));
+}
+
+function ownerFields(sessionKey) {
+  const owner = sessionOwners.get(String(sessionKey));
+  if (!owner) {
+    return { account_id: Number(sessionKey) };
+  }
+  return owner.slotBased
+    ? { account_id: owner.accountId, session_id: Number(sessionKey) }
+    : { account_id: owner.accountId };
+}
+
+/**
  * Internal webhook: POST /api/internal/whatsapp-status.
  * Failures are logged, never thrown — a webhook outage must not break the
  * QR pairing flow for the user who is actively scanning.
  */
-export async function notifyBackend(accountId, status) {
+export async function notifyBackend(sessionKey, status, extra = {}) {
   try {
     await backendHttp.post(
       '/api/internal/whatsapp-status',
-      { account_id: Number(accountId), status },
+      { ...ownerFields(sessionKey), status, ...extra },
       { headers: { 'X-Internal-Secret': INTERNAL_API_SECRET } },
     );
   } catch (err) {
@@ -50,7 +96,7 @@ export async function notifyInboundMessage(accountId, senderPhone, message, mess
       // Phase 7 Task 3 — message_id: the Baileys message key id (msg.key.id),
       // the message's stable WhatsApp identity. backend-api uses it to
       // process each inbound message at most once (durable de-duplication).
-      { account_id: Number(accountId), sender_phone: senderPhone, message, message_id: messageId },
+      { ...ownerFields(accountId), sender_phone: senderPhone, message, message_id: messageId },
       { headers: { 'X-Internal-Secret': INTERNAL_API_SECRET } },
     );
   } catch (err) {
@@ -58,6 +104,69 @@ export async function notifyInboundMessage(accountId, senderPhone, message, mess
       `[backendClient] failed to notify backend-api of inbound message for account_id=${accountId}:`,
       err.response?.data ?? err.message,
     );
+  }
+}
+
+/**
+ * Baileys auth-state storage (see authStore.js). Every call is an internal
+ * request, so backend-api answers only to this process's shared secret.
+ * Unlike the fire-and-forget notifications above, these THROW on failure:
+ * the caller must know whether a credential update was stored.
+ */
+const internalHeaders = () => ({ 'X-Internal-Secret': INTERNAL_API_SECRET });
+
+// Credential storage is on the critical path (a missed write can force a
+// re-pair), so it gets more headroom than the 5 s status webhooks above.
+const AUTH_STATE_TIMEOUT_MS = 15000;
+
+export async function fetchBackendAuthState(accountId) {
+  const { data } = await backendHttp.get(`/api/internal/whatsapp-auth/${Number(accountId)}`, {
+    headers: internalHeaders(),
+    timeout: AUTH_STATE_TIMEOUT_MS,
+  });
+  return data?.entries ?? {};
+}
+
+// Large first-time imports are split so no single request carries an
+// unbounded body. Matches the server-side per-request cap.
+const AUTH_STATE_CHUNK = 200;
+
+export async function patchBackendAuthState(accountId, { set = {}, delete: remove = [] }) {
+  const entries = Object.entries(set);
+  const url = `/api/internal/whatsapp-auth/${Number(accountId)}`;
+
+  for (let i = 0; i < entries.length; i += AUTH_STATE_CHUNK) {
+    const chunk = Object.fromEntries(entries.slice(i, i + AUTH_STATE_CHUNK));
+    await backendHttp.put(url, { set: chunk, delete: [] }, { headers: internalHeaders(), timeout: AUTH_STATE_TIMEOUT_MS });
+  }
+
+  if (remove.length > 0) {
+    await backendHttp.put(url, { set: {}, delete: remove }, { headers: internalHeaders(), timeout: AUTH_STATE_TIMEOUT_MS });
+  }
+}
+
+export async function removeBackendAuthState(accountId) {
+  await backendHttp.delete(`/api/internal/whatsapp-auth/${Number(accountId)}`, { headers: internalHeaders(), timeout: AUTH_STATE_TIMEOUT_MS });
+}
+
+export async function fetchBackendPairedAccountIds() {
+  const { data } = await backendHttp.get('/api/internal/whatsapp-auth/paired', { headers: internalHeaders(), timeout: AUTH_STATE_TIMEOUT_MS });
+  return data?.number_ids ?? [];
+}
+
+/**
+ * True only when number slot `sessionId` belongs to `accountId`. A browser may
+ * only watch the QR/status of a slot its own account owns.
+ */
+export async function verifyNumberOwner(sessionId, accountId) {
+  try {
+    const { data } = await backendHttp.get(`/api/internal/whatsapp-numbers/${Number(sessionId)}`, {
+      headers: internalHeaders(),
+      timeout: AUTH_STATE_TIMEOUT_MS,
+    });
+    return Number(data?.account_id) === Number(accountId);
+  } catch {
+    return false;
   }
 }
 
@@ -70,7 +179,7 @@ export async function notifyInboundMessage(accountId, senderPhone, message, mess
 export async function verifyAccountAccess(token, accountId) {
   const { data } = await backendHttp.get('/api/auth/me', {
     headers: { Authorization: `Bearer ${token}` },
-    timeout: 5000,
+    timeout: 10000, // handshake check; the socket client retries a failed one
   });
 
   const user = data?.user;

@@ -41,7 +41,7 @@ class PlanCatalog
             'total_allocated_messages' => 500,
             // Phase 8 Task 2 — AI credits per period (owner decision: 0 for every existing plan).
             'included_credits' => 0,
-            'price' => 499.00,
+            'price' => 599.00,
             'duration_days' => 30,
             'description' => '500 messages/month over the QR (Baileys) engine.',
         ],

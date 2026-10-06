@@ -23,6 +23,7 @@ import type { ApiErrorResponse } from '../../types/auth';
 import { PageHeader, PageShell } from '../../components/common/PageShell';
 import { Card, TableCard, inputClass } from '../../components/common/Card';
 import ConfirmModal from '../../components/common/ConfirmModal';
+import ModuleAddonCard from '../../components/common/ModuleAddonCard';
 import DismissibleAlert from '../../components/common/DismissibleAlert';
 
 /** Same pattern as MessageLogsPage.tsx's extractMessage() — surfaces the backend's real error (e.g. GROUP_MODULE_DISABLED's exact copy) instead of a fixed generic string. */
@@ -184,6 +185,8 @@ export default function ContactGroupsPage() {
           ) : undefined
         }
       />
+
+      <ModuleAddonCard module="contact_groups" enabled={moduleEnabled} />
 
       {!moduleEnabled ? (
         <LockedCard />
