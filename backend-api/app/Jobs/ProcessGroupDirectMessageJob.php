@@ -58,6 +58,7 @@ class ProcessGroupDirectMessageJob implements ShouldQueue
         public readonly string $messageType,
         public readonly array $content,
         public readonly ?int $apiKeyId = null,
+        public readonly ?int $senderNumberId = null,
     ) {
     }
 
@@ -156,7 +157,7 @@ class ProcessGroupDirectMessageJob implements ShouldQueue
         }
 
         try {
-            $driver = WhatsAppEngineFactory::make($account);
+            $driver = WhatsAppEngineFactory::make($account, $this->senderNumberId);
         } catch (RuntimeException $e) {
             $this->resolveAllFailed($log, $e->getMessage());
 
@@ -311,7 +312,7 @@ class ProcessGroupDirectMessageJob implements ShouldQueue
         }
 
         try {
-            $driver = WhatsAppEngineFactory::make($account);
+            $driver = WhatsAppEngineFactory::make($account, $this->senderNumberId);
         } catch (RuntimeException $e) {
             $this->resolveAllFailed($log, $e->getMessage());
 
@@ -463,7 +464,7 @@ class ProcessGroupDirectMessageJob implements ShouldQueue
             return;
         }
 
-        $next = static::dispatch($this->dispatchLogId, $this->messageType, $this->content, $this->apiKeyId)
+        $next = static::dispatch($this->dispatchLogId, $this->messageType, $this->content, $this->apiKeyId, $this->senderNumberId)
             ->onConnection($this->connection)
             ->onQueue($this->queue);
 

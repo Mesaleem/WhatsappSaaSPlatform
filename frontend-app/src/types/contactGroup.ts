@@ -19,6 +19,8 @@ export interface ContactGroup {
   is_default: boolean;
   /** Set while the group is outside the groups the client's paid term allows (after a downgrade). */
   locked_at?: string | null;
+  /** The WhatsApp number this group belongs to. A group is sent only from this number. Null = the default number. */
+  whatsapp_number_id?: number | null;
   /** Added via ContactGroupController::index()'s withCount('members'). */
   members_count: number;
   /** Defaults to 'internal_segment' server-side for every group created before this re-architecture. */
@@ -56,6 +58,8 @@ export interface CreateContactGroupPayload {
 export interface SendGroupTemplatePayload {
   template_id: number;
   variables: Record<string, string>;
+  /** The number to send from. Must be the number the group is on. Omit for the default number. */
+  sender_number_id?: number;
   /** Optional ISO 8601 time: send to the group later instead of now. */
   scheduled_at?: string;
 }

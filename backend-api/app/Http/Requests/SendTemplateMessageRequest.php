@@ -101,6 +101,8 @@ class SendTemplateMessageRequest extends FormRequest
             // docblock), rather than 422-rejecting the whole send over a
             // bad attachment link.
             'media_url' => ['sometimes', 'nullable', 'string', 'max:2048'],
+            // The WhatsApp number to send from (must be a linked number of this account). Omitted = the default number.
+            'sender_number_id' => ['sometimes', 'nullable', 'integer'],
             ...MessageTemplate::variableValidationRules($this->targetSchema()),
         ];
     }

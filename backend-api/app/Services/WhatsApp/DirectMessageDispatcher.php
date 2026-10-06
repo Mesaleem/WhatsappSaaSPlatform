@@ -42,6 +42,8 @@ class DirectMessageDispatcher
         array $content,
         string $source = 'api',
         ?int $apiKeyId = null,
+        // The WhatsApp number to send from (a linked number of this account). Null = the account's default number.
+        ?int $senderNumberId = null,
     ): array {
         $account = Account::with(['currentSubscription', 'whatsAppSession'])->find($accountId);
 
@@ -70,7 +72,7 @@ class DirectMessageDispatcher
         }
 
         try {
-            $driver = WhatsAppEngineFactory::make($account);
+            $driver = WhatsAppEngineFactory::make($account, $senderNumberId);
         } catch (RuntimeException $e) {
             MessageDispatchLog::record($accountId, $source, $normalizedPhone, success: false, errorReason: $e->getMessage(), apiKeyId: $apiKeyId, referenceType: $messageType);
 

@@ -70,6 +70,10 @@ class GroupMessageDispatcher
         // A Super Admin acting in the UI may send to a native group of a client that
         // lacks the capability. Never set for API keys or agents.
         bool $superAdminBypass = false,
+        // The WhatsApp number to send from (a linked number of this account). Null = the account's default number.
+        ?int $senderNumberId = null,
+        // A media URL for the template (an image or document), as on the single-recipient send. Null = text only.
+        ?string $mediaUrl = null,
     ): array {
         $account = Account::with(['currentSubscription', 'whatsAppSession'])->find($accountId);
 
@@ -258,7 +262,7 @@ class GroupMessageDispatcher
         // TemplateMessageDispatcher's MessageDispatchLog::record() call
         // both already use: a worker can never pick this job up before
         // the reservation it depends on is durably saved.
-        ProcessGroupDispatchJob::dispatch($reservation['dispatch_id'], $template->id, $variables, $apiKeyId);
+        ProcessGroupDispatchJob::dispatch($reservation['dispatch_id'], $template->id, $variables, $apiKeyId, $senderNumberId, $mediaUrl);
 
         return [
             'status' => 'queued',

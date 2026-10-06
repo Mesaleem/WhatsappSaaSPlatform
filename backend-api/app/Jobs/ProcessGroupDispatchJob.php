@@ -94,6 +94,8 @@ class ProcessGroupDispatchJob implements ShouldQueue
         public readonly int $templateId,
         public readonly array $variables,
         public readonly ?int $apiKeyId = null,
+        public readonly ?int $senderNumberId = null,
+        public readonly ?string $mediaUrl = null,
     ) {
     }
 
@@ -222,7 +224,7 @@ class ProcessGroupDispatchJob implements ShouldQueue
         }
 
         try {
-            $driver = WhatsAppEngineFactory::make($account);
+            $driver = WhatsAppEngineFactory::make($account, $this->senderNumberId);
         } catch (RuntimeException $e) {
             $this->resolveAllFailed($log, $e->getMessage());
 
@@ -356,6 +358,7 @@ class ProcessGroupDispatchJob implements ShouldQueue
             $result = $driver->sendMessage($normalizedPhone, $renderedMessage, [
                 'template_id' => $template->id,
                 'group_id' => $log->group_id,
+                ...\App\Services\Templates\TemplateMessageDispatcher::resolveMediaMetaData($template, $account, $this->mediaUrl),
             ]);
 
             // Phase 5 Task 5 -- the per-recipient audit row, written
@@ -437,7 +440,7 @@ class ProcessGroupDispatchJob implements ShouldQueue
         }
 
         try {
-            $driver = WhatsAppEngineFactory::make($account);
+            $driver = WhatsAppEngineFactory::make($account, $this->senderNumberId);
         } catch (RuntimeException $e) {
             $this->resolveAllFailed($log, $e->getMessage());
 
@@ -461,6 +464,7 @@ class ProcessGroupDispatchJob implements ShouldQueue
         $result = $driver->sendMessage($group->wa_group_jid, $renderedMessage, [
             'template_id' => $template->id,
             'group_id' => $log->group_id,
+            ...\App\Services\Templates\TemplateMessageDispatcher::resolveMediaMetaData($template, $account, $this->mediaUrl),
         ]);
 
         $nativeSucceeded = ! empty($result['success']);
@@ -601,7 +605,7 @@ class ProcessGroupDispatchJob implements ShouldQueue
             return;
         }
 
-        $next = static::dispatch($this->dispatchLogId, $this->templateId, $this->variables, $this->apiKeyId)
+        $next = static::dispatch($this->dispatchLogId, $this->templateId, $this->variables, $this->apiKeyId, $this->senderNumberId, $this->mediaUrl)
             ->onConnection($this->connection)
             ->onQueue($this->queue);
 

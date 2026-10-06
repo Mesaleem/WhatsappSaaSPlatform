@@ -1107,6 +1107,16 @@ Route::middleware('auth:sanctum')->group(function () {
             // not only after a blocked send attempt. See
             // MessageTemplateController::bulkCooldownStatus()'s own docblock.
             Route::get('/bulk-cooldown-status', [MessageTemplateController::class, 'bulkCooldownStatus']);
+            // Batch sends from an Excel/CSV list (Send Notification page only). Session-authenticated: not part of the Developer API.
+            // The linked, active WhatsApp numbers a send can go out from (default first).
+            Route::get('/sender-numbers', [\App\Http\Controllers\Api\SenderNumberController::class, 'index']);
+            // Bulk: the numbers typed on the Send page (up to 30), sent from the ticked numbers in turn. Kept in the batch history.
+            Route::post('/bulk-sends', [\App\Http\Controllers\Api\BulkSendController::class, 'store']);
+            Route::get('/message-batches', [\App\Http\Controllers\Api\MessageBatchController::class, 'index']);
+            Route::post('/message-batches', [\App\Http\Controllers\Api\MessageBatchController::class, 'store']);
+            Route::post('/message-batches/{id}/pause', [\App\Http\Controllers\Api\MessageBatchController::class, 'pause'])->whereNumber('id');
+            Route::post('/message-batches/{id}/resume', [\App\Http\Controllers\Api\MessageBatchController::class, 'resume'])->whereNumber('id');
+            Route::post('/message-batches/{id}/stop', [\App\Http\Controllers\Api\MessageBatchController::class, 'stop'])->whereNumber('id');
             // Tiered Template Approval Workflow for 3-Tier Hierarchy --
             // the entry point rules 1/2 assume exists: a plain Client
             // Admin/User submitting a template REQUEST for their own

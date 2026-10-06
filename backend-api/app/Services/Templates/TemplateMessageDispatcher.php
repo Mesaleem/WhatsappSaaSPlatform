@@ -64,6 +64,8 @@ class TemplateMessageDispatcher
         // Manager/Request-a-Template) when the caller doesn't supply
         // one, and to plain text if neither is present or valid.
         ?string $mediaUrl = null,
+        // The WhatsApp number to send from (a linked number of this account). Null = the account's default number.
+        ?int $senderNumberId = null,
     ): array
     {
         $account = Account::with(['currentSubscription', 'whatsAppSession'])->find($accountId);
@@ -150,7 +152,7 @@ class TemplateMessageDispatcher
         }
 
         try {
-            $driver = WhatsAppEngineFactory::make($account);
+            $driver = WhatsAppEngineFactory::make($account, $senderNumberId);
         } catch (RuntimeException $e) {
             MessageDispatchLog::record($accountId, $source, $normalizedPhone, success: false, errorReason: $e->getMessage(), apiKeyId: $apiKeyId, referenceType: 'template', referenceId: $template->id, templateName: $template->title, messagePreview: $renderedMessage);
 

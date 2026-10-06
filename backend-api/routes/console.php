@@ -217,6 +217,12 @@ Schedule::command('subscriptions:send-expiry-reminders')
     ->onOneServer()
     ->withoutOverlapping();
 
+// Send Notification batches (Excel/CSV): every minute, one server only, never overlapping.
+Schedule::command('batches:dispatch-due')
+    ->everyMinute()
+    ->onOneServer()
+    ->withoutOverlapping();
+
 // Scheduled messages: send each message at its time. Every minute, one server only, never overlapping.
 Schedule::command('messages:dispatch-scheduled')
     ->everyMinute()

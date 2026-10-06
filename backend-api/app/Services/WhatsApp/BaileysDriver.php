@@ -24,7 +24,7 @@ class BaileysDriver implements WhatsAppDriverInterface
      */
     private const JID_SUFFIX = '@s.whatsapp.net';
 
-    public function __construct(private readonly int $accountId)
+    public function __construct(private readonly int $accountId, private readonly ?int $slotId = null)
     {
     }
 
@@ -98,6 +98,11 @@ class BaileysDriver implements WhatsAppDriverInterface
      */
     private function sessionPayload(): array
     {
+        // A send from a chosen number goes through that number's slot.
+        if ($this->slotId !== null) {
+            return ['session_id' => $this->slotId];
+        }
+
         $slotId = WhatsAppNumber::query()
             ->where('account_id', $this->accountId)
             ->where('is_default', true)

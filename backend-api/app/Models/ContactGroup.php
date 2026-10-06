@@ -48,6 +48,7 @@ class ContactGroup extends Model
 
     protected $fillable = [
         'account_id',
+        'whatsapp_number_id',
         'name',
         // Developer API: unique (per-account), human-readable lookup key for
         // POST /api/v1/send-message (recipient_type: "group") -- see the

@@ -47,6 +47,8 @@ class GroupDirectMessageDispatcher
         // A Super Admin acting in the UI may send to a native group of a client that
         // lacks the capability. Never set for API keys or agents.
         bool $superAdminBypass = false,
+        // The WhatsApp number to send from (a linked number of this account). Null = the account's default number.
+        ?int $senderNumberId = null,
     ): array {
         $account = Account::with(['currentSubscription', 'whatsAppSession'])->find($accountId);
 
@@ -174,7 +176,7 @@ class GroupDirectMessageDispatcher
             return $reservation;
         }
 
-        ProcessGroupDirectMessageJob::dispatch($reservation['dispatch_id'], $messageType, $content, $apiKeyId);
+        ProcessGroupDirectMessageJob::dispatch($reservation['dispatch_id'], $messageType, $content, $apiKeyId, $senderNumberId);
 
         return [
             'status' => 'queued',

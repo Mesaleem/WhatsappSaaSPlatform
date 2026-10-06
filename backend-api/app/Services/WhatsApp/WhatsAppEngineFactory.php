@@ -13,12 +13,12 @@ use RuntimeException;
  */
 class WhatsAppEngineFactory
 {
-    public static function make(Account $account): WhatsAppDriverInterface
+    public static function make(Account $account, ?int $senderNumberId = null): WhatsAppDriverInterface
     {
         $engineType = $account->currentSubscription?->engine_type;
 
         return match ($engineType) {
-            'qr' => new BaileysDriver($account->id),
+            'qr' => new BaileysDriver($account->id, $senderNumberId),
             'meta' => self::makeMetaDriver($account),
             default => throw new RuntimeException(
                 "Account {$account->id} has no WhatsApp engine configured (engine_type={$engineType})."

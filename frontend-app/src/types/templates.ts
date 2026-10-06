@@ -188,6 +188,8 @@ export interface SendTemplateMessagePayload {
   variables: Record<string, string>;
   /** Optional ISO 8601 time: send later instead of now. */
   scheduled_at?: string;
+  /** The number to send from. Omit for the default number. */
+  sender_number_id?: number;
   /**
    * Media Templates (send-time override, QR/Baileys-only) -- ONE
    * optional key, no separate type field alongside it (the backend
@@ -219,6 +221,8 @@ export interface SendBulkTemplateMessagePayload {
   variables: Record<string, string>;
   /** Optional ISO 8601 time: schedule every recipient (staggered) instead of sending now. */
   scheduled_at?: string;
+  /** The number the whole list sends from. Omit for the default number. */
+  sender_number_id?: number;
   /** Same send-time media override contract as SendTemplateMessagePayload.media_url. */
   media_url?: string;
 }

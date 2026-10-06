@@ -157,6 +157,15 @@ class MessageTemplateController extends Controller
 
         $data = $request->validated();
 
+        try {
+            $senderId = app(\App\Services\WhatsApp\SenderNumberResolver::class)->resolve(
+                $account,
+                isset($data['sender_number_id']) ? (int) $data['sender_number_id'] : null,
+            );
+        } catch (\App\Services\WhatsApp\SenderNumberException $e) {
+            return response()->json(['message' => $e->getMessage(), 'error_code' => $e->errorCode], $e->status);
+        }
+
         $sendAt = ScheduledMessageService::parseSendAt($data['scheduled_at'] ?? null);
         if ($sendAt !== null) {
             return $this->scheduleOne($account, ScheduledMessage::KIND_TEMPLATE_INDIVIDUAL, [
@@ -164,6 +173,7 @@ class MessageTemplateController extends Controller
                 'recipient_phone' => $data['recipient_phone'],
                 'variables' => $data['variables'] ?? [],
                 'media_url' => $data['media_url'] ?? null,
+                'sender_number_id' => $senderId,
             ], $sendAt);
         }
 
@@ -173,6 +183,7 @@ class MessageTemplateController extends Controller
             $data['recipient_phone'],
             $data['variables'] ?? [],
             mediaUrl: $data['media_url'] ?? null,
+            senderNumberId: $senderId,
         );
 
         return match ($result['status']) {
@@ -251,6 +262,16 @@ class MessageTemplateController extends Controller
             return response()->json(['message' => 'This template does not exist, is not approved, or is not available to this account.'], 404);
         }
 
+        // One sending number for the whole manual bulk list (the Batch section rotates across several numbers instead).
+        try {
+            $senderId = app(\App\Services\WhatsApp\SenderNumberResolver::class)->resolve(
+                $account,
+                isset($data['sender_number_id']) ? (int) $data['sender_number_id'] : null,
+            );
+        } catch (\App\Services\WhatsApp\SenderNumberException $e) {
+            return response()->json(['message' => $e->getMessage(), 'error_code' => $e->errorCode], $e->status);
+        }
+
         $sendAt = ScheduledMessageService::parseSendAt($data['scheduled_at'] ?? null);
         if ($sendAt !== null) {
             $service = app(ScheduledMessageService::class);
@@ -260,7 +281,7 @@ class MessageTemplateController extends Controller
                     $row = $service->schedule(
                         $account,
                         ScheduledMessage::KIND_TEMPLATE_INDIVIDUAL,
-                        ['template_id' => $template->id, 'recipient_phone' => (string) $phone, 'variables' => $data['variables'] ?? []],
+                        ['template_id' => $template->id, 'recipient_phone' => (string) $phone, 'variables' => $data['variables'] ?? [], 'sender_number_id' => $senderId],
                         $sendAt->copy()->addSeconds($index * ScheduledMessageService::BULK_STAGGER_SECONDS),
                         'web_template',
                     );
@@ -279,6 +300,7 @@ class MessageTemplateController extends Controller
             $data['recipient_phones'],
             $data['variables'] ?? [],
             $data['media_url'] ?? null,
+            $senderId,
         );
 
         // Only a dispatch that actually used the full 150-recipient cap

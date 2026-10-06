@@ -27,8 +27,9 @@ class ScheduledMessageService
     /** The optional send time from a request: null for an immediate send, else the parsed time. */
     public static function parseSendAt(mixed $value): ?Carbon
     {
-        // A value without its own zone is Indian Standard Time, the zone the Send later field uses.
-        return $value === null || $value === '' ? null : Carbon::parse((string) $value, 'Asia/Kolkata');
+        // A value without its own zone is Indian Standard Time (the Send later field's zone). Stored in UTC, because the
+        // database keeps wall-clock values and reads them back as UTC: an IST value kept as-is would fire 5.5 hours late.
+        return $value === null || $value === '' ? null : Carbon::parse((string) $value, 'Asia/Kolkata')->utc();
     }
 
     /**
@@ -136,6 +137,7 @@ class ScheduledMessageService
                 source: $row->source,
                 apiKeyId: $row->api_key_id,
                 mediaUrl: $p['media_url'] ?? null,
+                senderNumberId: isset($p['sender_number_id']) ? (int) $p['sender_number_id'] : null,
             ),
             ScheduledMessage::KIND_TEMPLATE_GROUP => GroupMessageDispatcher::dispatch(
                 (int) $row->account_id,
@@ -144,6 +146,8 @@ class ScheduledMessageService
                 (array) ($p['variables'] ?? []),
                 source: $row->source,
                 apiKeyId: $row->api_key_id,
+                senderNumberId: isset($p['sender_number_id']) ? (int) $p['sender_number_id'] : null,
+                mediaUrl: $p['media_url'] ?? null,
             ),
             ScheduledMessage::KIND_DIRECT_TEXT => DirectMessageDispatcher::dispatch(
                 (int) $row->account_id,

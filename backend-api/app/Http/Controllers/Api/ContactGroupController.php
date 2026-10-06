@@ -172,6 +172,7 @@ class ContactGroupController extends Controller
             'account_id' => $account->id,
             'name' => $data['name'],
             'group_code' => ContactGroup::generateGroupCode($account->id, $data['name']),
+            'whatsapp_number_id' => app(\App\Services\WhatsApp\SenderNumberResolver::class)->defaultId($account),
             'is_default' => false,
             'group_type' => ContactGroup::GROUP_TYPE_INTERNAL,
         ]);
@@ -534,7 +535,25 @@ class ContactGroupController extends Controller
             'variables' => ['sometimes', 'array'],
             // Optional: send to the group at a later time instead of now.
             'scheduled_at' => ['sometimes', 'nullable', 'date'],
+            // The number to send from. Must be the number the group is on; omitted = the default number.
+            'sender_number_id' => ['sometimes', 'nullable', 'integer'],
+            'media_url' => ['sometimes', 'nullable', 'string', 'max:2048'],
         ]);
+
+        $group = ContactGroup::query()->where('account_id', $account->id)->find($id);
+        if (! $group) {
+            return response()->json(['success' => false, 'message' => 'Group not found.'], 404);
+        }
+
+        try {
+            $senderId = app(\App\Services\WhatsApp\SenderNumberResolver::class)->resolve(
+                $account,
+                isset($data['sender_number_id']) ? (int) $data['sender_number_id'] : null,
+                $group,
+            );
+        } catch (\App\Services\WhatsApp\SenderNumberException $e) {
+            return response()->json(['success' => false, 'message' => $e->getMessage(), 'error_code' => $e->errorCode], $e->status);
+        }
 
         $sendAt = ScheduledMessageService::parseSendAt($data['scheduled_at'] ?? null);
         if ($sendAt !== null) {
@@ -542,7 +561,7 @@ class ContactGroupController extends Controller
                 $row = app(ScheduledMessageService::class)->schedule(
                     $account,
                     ScheduledMessage::KIND_TEMPLATE_GROUP,
-                    ['group_id' => $id, 'template_id' => (int) $data['template_id'], 'variables' => $data['variables'] ?? []],
+                    ['group_id' => $id, 'template_id' => (int) $data['template_id'], 'variables' => $data['variables'] ?? [], 'sender_number_id' => $senderId, 'media_url' => $data['media_url'] ?? null],
                     $sendAt,
                     'web_template',
                 );
@@ -564,6 +583,8 @@ class ContactGroupController extends Controller
             $data['variables'] ?? [],
             source: 'web_template',
             superAdminBypass: (bool) $request->attributes->get('is_super_admin'),
+            senderNumberId: $senderId,
+            mediaUrl: $data['media_url'] ?? null,
         );
 
         return match ($result['status']) {

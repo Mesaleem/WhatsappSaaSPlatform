@@ -33,7 +33,7 @@ class SendBulkTemplateMessageRequest extends FormRequest
      * dispatch should start the tier-based cooldown) rather than
      * redeclaring it here.
      */
-    public const MAX_RECIPIENTS = BulkMessageCooldown::MAX_RECIPIENTS_PER_BATCH;
+    public const MAX_RECIPIENTS = 30;
 
     public function authorize(): bool
     {
@@ -89,6 +89,8 @@ class SendBulkTemplateMessageRequest extends FormRequest
             // variables + one optional media_url per bulk request, only
             // the phone number varies per job).
             'media_url' => ['sometimes', 'nullable', 'string', 'max:2048'],
+            // The number the whole bulk list sends from (linked, this account). Omitted = the default number.
+            'sender_number_id' => ['sometimes', 'nullable', 'integer'],
             ...MessageTemplate::variableValidationRules($this->targetSchema()),
         ];
     }
@@ -110,7 +112,7 @@ class SendBulkTemplateMessageRequest extends FormRequest
             // to the frontend's own input-validation warning
             // (SendAlertPage.tsx) so a caller sees the exact same wording
             // whether the 150-cap is caught client-side or server-side.
-            'recipient_phones.max' => 'Maximum '.self::MAX_RECIPIENTS.' contacts allowed per batch. For larger lists, create a Group or upgrade your plan.',
+            'recipient_phones.max' => 'Bulk allows up to '.self::MAX_RECIPIENTS.' numbers. For more, upload an Excel file in the Batch section below.',
             'variables.*.required' => 'The :attribute field is required.',
             'variables.*.numeric' => 'The :attribute field must be a number.',
             'variables.*.date' => 'The :attribute field must be a valid date.',

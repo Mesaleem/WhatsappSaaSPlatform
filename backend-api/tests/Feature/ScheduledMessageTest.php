@@ -59,9 +59,9 @@ class ScheduledMessageTest extends TestCase
     {
         $sendAt = ScheduledMessageService::parseSendAt('2026-10-08 09:35:00');
 
-        $this->assertSame('Asia/Kolkata', $sendAt->timezoneName);
-        $this->assertSame('2026-10-08 09:35:00', $sendAt->format('Y-m-d H:i:s'));
-        $this->assertSame('2026-10-08T04:05:00Z', $sendAt->utc()->format('Y-m-d\TH:i:s\Z'));
+        // Stored in UTC: 09:35 IST is 04:05 UTC.
+        $this->assertSame('UTC', $sendAt->timezoneName);
+        $this->assertSame('2026-10-08 04:05:00', $sendAt->format('Y-m-d H:i:s'));
     }
 
     public function test_a_valid_time_is_stored_as_pending(): void

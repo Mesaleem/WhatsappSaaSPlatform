@@ -261,7 +261,7 @@ class TemplateMessageController extends Controller
             return $this->scheduledResponse(
                 $accountId,
                 ScheduledMessage::KIND_TEMPLATE_GROUP,
-                ['group_id' => $group->id, 'template_id' => $template->id, 'variables' => $data['variables'] ?? []],
+                ['group_id' => $group->id, 'template_id' => $template->id, 'variables' => $data['variables'] ?? [], 'media_url' => $data['media_url'] ?? null],
                 $sendAt,
                 $apiKeyId,
             );
@@ -337,6 +337,12 @@ class TemplateMessageController extends Controller
             return response()->json(['success' => false, 'error_code' => 'NOT_FOUND', 'message' => 'Invalid group_code for this account.'], 404);
         }
 
+        try {
+            $senderId = app(\App\Services\WhatsApp\SenderNumberResolver::class)->resolve(Account::findOrFail($accountId), null, $group);
+        } catch (\App\Services\WhatsApp\SenderNumberException $e) {
+            return response()->json(['success' => false, 'error_code' => $e->errorCode, 'message' => $e->getMessage()], $e->status);
+        }
+
         $result = GroupMessageDispatcher::dispatch(
             $accountId,
             $group->id,
@@ -344,6 +350,8 @@ class TemplateMessageController extends Controller
             $data['variables'] ?? [],
             source: 'api',
             apiKeyId: $apiKeyId,
+            senderNumberId: $senderId,
+            mediaUrl: $data['media_url'] ?? null,
         );
 
         return match ($result['status']) {
@@ -426,6 +434,12 @@ class TemplateMessageController extends Controller
 
         $content = $this->directContent($data);
 
+        try {
+            $senderId = app(\App\Services\WhatsApp\SenderNumberResolver::class)->resolve(Account::findOrFail($accountId), null, $group);
+        } catch (\App\Services\WhatsApp\SenderNumberException $e) {
+            return response()->json(['success' => false, 'error_code' => $e->errorCode, 'message' => $e->getMessage()], $e->status);
+        }
+
         $result = GroupDirectMessageDispatcher::dispatch(
             $accountId,
             $group->id,
@@ -433,6 +447,7 @@ class TemplateMessageController extends Controller
             $content['content'],
             source: 'api',
             apiKeyId: $apiKeyId,
+            senderNumberId: $senderId,
         );
 
         return match ($result['status']) {

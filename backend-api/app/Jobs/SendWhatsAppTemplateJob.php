@@ -69,6 +69,7 @@ class SendWhatsAppTemplateJob implements ShouldQueue
         public readonly string $recipientPhone,
         public readonly array $variables,
         public readonly ?string $mediaUrl = null,
+        public readonly ?int $senderNumberId = null,
     ) {
     }
 
@@ -81,6 +82,7 @@ class SendWhatsAppTemplateJob implements ShouldQueue
             $this->variables,
             source: 'web_template_bulk',
             mediaUrl: $this->mediaUrl,
+            senderNumberId: $this->senderNumberId,
         );
 
         if ($result['status'] !== 'sent') {

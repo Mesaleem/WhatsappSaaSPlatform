@@ -61,6 +61,7 @@ class BulkMessageDispatcher
         array $recipientPhones,
         array $variables,
         ?string $mediaUrl = null,
+        ?int $senderNumberId = null,
     ): array {
         $recipientPhones = array_values($recipientPhones);
         $cumulativeDelay = 0;
@@ -95,7 +96,7 @@ class BulkMessageDispatcher
                 }
             }
 
-            SendWhatsAppTemplateJob::dispatch($accountId, $templateId, $phone, $variables, $mediaUrl)
+            SendWhatsAppTemplateJob::dispatch($accountId, $templateId, $phone, $variables, $mediaUrl, $senderNumberId)
                 // Deliberately NOT the app's default queue connection
                 // (QUEUE_CONNECTION=sync) — see SendWhatsAppTemplateJob's
                 // own docblock for why this is scoped to its own
