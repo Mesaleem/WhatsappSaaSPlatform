@@ -175,6 +175,7 @@ class ModuleAddonController extends Controller
             'term_months' => ['required', 'integer', 'min:1', 'max:12'],
             'units_included' => ['required', 'integer', 'min:0', 'max:100000'],
             'is_active' => ['required', 'boolean'],
+            'is_free' => ['required', 'boolean'],
         ]);
 
         $offer->forceFill($data)->save();
@@ -321,6 +322,7 @@ class ModuleAddonController extends Controller
             'term_months' => (int) $o->term_months,
             'units_included' => (int) $o->units_included,
             'is_active' => (bool) $o->is_active,
+            'is_free' => (bool) $o->is_free,
         ];
     }
 

@@ -7,10 +7,16 @@ use App\Http\Controllers\Controller;
 use App\Jobs\ProcessPaymentAlertJob;
 use App\Support\OutboundPacing;
 use App\Support\WhatsAppMediaPayloadBuilder;
+use App\Models\ContactGroup;
 use App\Models\PaymentAlert;
+use App\Models\ScheduledMessage;
 use App\Services\Groups\GroupDirectMessageDispatcher;
 use App\Services\PaymentAlerts\PaymentAlertDispatcher;
+use App\Services\Scheduling\ScheduledMessageException;
+use App\Services\Scheduling\ScheduledMessageService;
 use App\Services\WhatsApp\DirectMessageDispatcher;
+use App\Services\WhatsApp\SenderNumberException;
+use App\Services\WhatsApp\SenderNumberResolver;
 use Illuminate\Database\QueryException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -221,6 +227,9 @@ class PaymentAlertController extends Controller
      * {{variable}} substitution, no template-approval requirement.
      * media_url is unchanged from the template form: optional, sent
      * with the text as its caption when present.
+     *
+     * Same sender-number and schedule rules as the template path: the send goes out from the chosen (or default)
+     * linked number, a group must be on that number, and an optional scheduled_at defers the send.
      */
     public function sendDirect(Request $request): JsonResponse
     {
@@ -233,6 +242,10 @@ class PaymentAlertController extends Controller
             'group_ids.*' => ['integer'],
             'message' => ['nullable', 'string', 'max:4096'],
             'media_url' => ['sometimes', 'nullable', 'string', 'max:2048'],
+            // The number to send from (a linked number of this account). Omitted = the default number.
+            'sender_number_id' => ['sometimes', 'nullable', 'integer'],
+            // Optional: send at a later time instead of now.
+            'scheduled_at' => ['sometimes', 'nullable', 'date'],
         ]);
 
         $message = trim((string) ($data['message'] ?? ''));
@@ -254,8 +267,37 @@ class PaymentAlertController extends Controller
             $content = ['body' => $message];
         }
 
+        $requestedSenderId = isset($data['sender_number_id']) ? (int) $data['sender_number_id'] : null;
+        // The 'date' rule above already guarantees this parses; consistent with every other scheduled-send entry point.
+        $sendAt = ScheduledMessageService::parseSendAt($data['scheduled_at'] ?? null);
+
         if ($data['recipient_type'] === 'individual') {
-            $result = DirectMessageDispatcher::dispatch($account->id, $data['recipient_phone'], $messageType, $content, source: 'web_ui');
+            try {
+                $senderId = app(SenderNumberResolver::class)->resolve($account, $requestedSenderId);
+            } catch (SenderNumberException $e) {
+                return response()->json(['message' => $e->getMessage(), 'error_code' => $e->errorCode], $e->status);
+            }
+
+            if ($sendAt !== null) {
+                try {
+                    $row = app(ScheduledMessageService::class)->schedule(
+                        $account,
+                        ScheduledMessage::KIND_DIRECT_TEXT,
+                        ['recipient_phone' => $data['recipient_phone'], 'message_type' => $messageType, 'content' => $content, 'sender_number_id' => $senderId],
+                        $sendAt,
+                        'web_ui',
+                    );
+                } catch (ScheduledMessageException $e) {
+                    return response()->json(['message' => $e->getMessage(), 'error_code' => $e->errorCode], $e->status);
+                }
+
+                return response()->json([
+                    'message' => 'Message scheduled.',
+                    'scheduled' => ['id' => $row->id, 'send_at' => $row->send_at->toIso8601String()],
+                ], 202);
+            }
+
+            $result = DirectMessageDispatcher::dispatch($account->id, $data['recipient_phone'], $messageType, $content, source: 'web_ui', senderNumberId: $senderId);
 
             return match ($result['status']) {
                 'sent' => response()->json(['message' => 'Message sent.', 'dispatch_log_id' => $result['dispatch_log_id'] ?? null]),
@@ -264,6 +306,44 @@ class PaymentAlertController extends Controller
                 'quota_exhausted' => response()->json(['message' => $result['message']], 402),
                 default => response()->json(['message' => $result['message'] ?? 'Could not send this message.'], 422),
             };
+        }
+
+        // Every chosen group must be on the chosen (or default) number — checked for all of them before anything sends.
+        $groups = ContactGroup::query()->where('account_id', $account->id)->whereIn('id', $data['group_ids'])->get()->keyBy('id');
+        $senderId = null;
+        foreach ($data['group_ids'] as $groupId) {
+            $group = $groups->get((int) $groupId);
+            if (! $group) {
+                return response()->json(['message' => 'Group not found.'], 404);
+            }
+            try {
+                $senderId = app(SenderNumberResolver::class)->resolve($account, $requestedSenderId, $group);
+            } catch (SenderNumberException $e) {
+                return response()->json(['message' => $e->getMessage(), 'error_code' => $e->errorCode], $e->status);
+            }
+        }
+
+        if ($sendAt !== null) {
+            $scheduled = [];
+            foreach ($data['group_ids'] as $groupId) {
+                try {
+                    $row = app(ScheduledMessageService::class)->schedule(
+                        $account,
+                        ScheduledMessage::KIND_GROUP_DIRECT_TEXT,
+                        ['group_id' => (int) $groupId, 'message_type' => $messageType, 'content' => $content, 'sender_number_id' => $senderId],
+                        $sendAt,
+                        'web_ui',
+                    );
+                } catch (ScheduledMessageException $e) {
+                    return response()->json(['message' => $e->getMessage(), 'error_code' => $e->errorCode], $e->status);
+                }
+                $scheduled[] = ['id' => $row->id, 'group_id' => (int) $groupId, 'send_at' => $row->send_at->toIso8601String()];
+            }
+
+            return response()->json([
+                'message' => 'Message scheduled for '.count($scheduled).' group(s).',
+                'scheduled' => $scheduled,
+            ], 202);
         }
 
         $results = [];
@@ -275,6 +355,7 @@ class PaymentAlertController extends Controller
                 $content,
                 source: 'web_ui',
                 superAdminBypass: (bool) $request->attributes->get('is_super_admin'),
+                senderNumberId: $senderId,
             );
         }
 

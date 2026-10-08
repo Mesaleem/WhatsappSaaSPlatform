@@ -7,7 +7,9 @@ use App\Http\Controllers\Controller;
 use App\Models\ApiKey;
 use App\Models\ApiKeyChangeRequest;
 use App\Services\ApiAccess\ApiKeyBindingService;
+use App\Services\ApiAccess\ApiKeyCooldownActiveException;
 use InvalidArgumentException;
+use App\Services\ApiAccess\InstallationAllowanceExceededException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
@@ -106,25 +108,38 @@ class ApiKeyController extends Controller
             return response()->json(['message' => $e->getMessage(), 'errors' => ['authorized_ips' => [$e->getMessage()]]], 422);
         }
 
-        [$apiKey, $credential] = \Illuminate\Support\Facades\DB::transaction(function () use ($account, $data, $plainTextKey, $plainTextSecret, $request) {
-            $apiKey = ApiKey::create([
-                'account_id' => $account->id,
-                'name' => $data['name'],
-                'key_prefix' => substr($plainTextKey, 0, 20),
-                'key_hash' => ApiKey::hashKey($plainTextKey),
-                'secret_prefix' => substr($plainTextSecret, 0, 20),
-                'secret_hash' => ApiKey::hashSecret($plainTextSecret),
-                'expires_at' => $data['expires_at'] ?? null,
-            ]);
-            $provisioned = $this->bindings->provision($apiKey, [
-                'label' => $data['server_label'] ?? null,
-                'ip_policy' => $data['ip_policy'] ?? null,
-                'authorized_ips' => $data['authorized_ips'] ?? [],
-            ], $request->user());
-            $this->bindings->record(ApiKeyBindingService::EV_KEY_CREATED, $apiKey, $provisioned['binding'], null, [], actor: $request->user());
+        try {
+            [$apiKey, $credential] = \Illuminate\Support\Facades\DB::transaction(function () use ($account, $data, $plainTextKey, $plainTextSecret, $request) {
+                $apiKey = ApiKey::create([
+                    'account_id' => $account->id,
+                    'name' => $data['name'],
+                    'key_prefix' => substr($plainTextKey, 0, 20),
+                    'key_hash' => ApiKey::hashKey($plainTextKey),
+                    'secret_prefix' => substr($plainTextSecret, 0, 20),
+                    'secret_hash' => ApiKey::hashSecret($plainTextSecret),
+                    'expires_at' => $data['expires_at'] ?? null,
+                ]);
+                $provisioned = $this->bindings->provision($apiKey, [
+                    'label' => $data['server_label'] ?? null,
+                    'ip_policy' => $data['ip_policy'] ?? null,
+                    'authorized_ips' => $data['authorized_ips'] ?? [],
+                ], $request->user());
+                $this->bindings->record(ApiKeyBindingService::EV_KEY_CREATED, $apiKey, $provisioned['binding'], null, [], actor: $request->user());
 
-            return [$apiKey, $provisioned['credential']];
-        });
+                return [$apiKey, $provisioned['credential']];
+            });
+        } catch (InstallationAllowanceExceededException $e) {
+            // Phase 4 Task 6 — the transaction above rolled back
+            // entirely (Laravel's DB::transaction() rolls back on any
+            // thrown exception before rethrowing), so no ApiKey row and
+            // no binding were created — "do not partially mutate the
+            // request/key state" per this task's own requirement.
+            return response()->json(['message' => $e->getMessage(), 'code' => $e->reason], 409);
+        } catch (ApiKeyCooldownActiveException $e) {
+            // Phase 4 Task 9 — same rollback guarantee as above: no
+            // ApiKey row and no binding were created.
+            return response()->json(['message' => $e->getMessage(), 'code' => $e->reason], 409);
+        }
 
         return response()->json([
             'message' => 'API key created. Copy the key, secret and installation credential now — none will be shown again.',
@@ -176,6 +191,14 @@ class ApiKeyController extends Controller
             'secret_hash' => ApiKey::hashSecret($plainTextSecret),
         ])->save();
 
+        // Phase 4 Task 11 — audit gap closed: this write previously
+        // recorded no event at all, unlike every other credential-
+        // adjacent transition in this service (EV_CREDENTIAL_ISSUED for
+        // the installation credential). No payload beyond the standard
+        // key/account/binding/actor identifiers record() always
+        // attaches — the plaintext secret itself is never logged.
+        $this->bindings->record(ApiKeyBindingService::EV_SECRET_REGENERATED, $apiKey, $apiKey->liveBinding(), null, [], actor: $request->user());
+
         return response()->json([
             'message' => 'API secret (re)generated. Copy it now — it will not be shown again.',
             'plain_text_secret' => $plainTextSecret,
@@ -183,7 +206,19 @@ class ApiKeyController extends Controller
         ]);
     }
 
-    /** DELETE /api/developer/api-keys/{id} — revokes (soft) rather than deletes; already-revoked is a no-op. */
+    /**
+     * DELETE /api/developer/api-keys/{id} — revokes (soft) rather than
+     * deletes; already-revoked is a no-op.
+     *
+     * Phase 4 Task 6: destroying/revoking a key must also release its
+     * live installation slot in the SAME transaction, not just mark the
+     * key revoked and leave the binding occupying a slot forever. This
+     * now delegates entirely to ApiKeyBindingService::destroyKey(),
+     * which locks Account -> ApiKey -> binding (same order as the
+     * creation seam), revokes the key (idempotently) and revokes its
+     * live binding (if any) via the existing revokeBinding() lifecycle
+     * method — never a physical delete, never a second binding created.
+     */
     public function destroy(Request $request, int $id): JsonResponse
     {
         $account = $this->requireAccount($request, 'Select a client/tenant account to manage its API keys (pass ?account_id=).');
@@ -191,11 +226,9 @@ class ApiKeyController extends Controller
         $apiKey = ApiKey::forAccount($account->id)->find($id);
         abort_if(! $apiKey, 404, 'API key not found.');
 
-        if (! $apiKey->isRevoked()) {
-            $apiKey->forceFill(['revoked_at' => now()])->save();
-        }
+        $apiKey = $this->bindings->destroyKey($apiKey, $request->user());
 
-        return response()->json(['message' => 'API key revoked.', 'api_key' => $apiKey->fresh()]);
+        return response()->json(['message' => 'API key revoked.', 'api_key' => $apiKey]);
     }
 
     /** GET /api/developer/api-keys/{id}/server-binding */
@@ -233,6 +266,11 @@ class ApiKeyController extends Controller
             ], $request->user());
         } catch (InvalidArgumentException $e) {
             return response()->json(['message' => $e->getMessage(), 'errors' => ['authorized_ips' => [$e->getMessage()]]], 422);
+        } catch (InstallationAllowanceExceededException $e) {
+            return response()->json(['message' => $e->getMessage(), 'code' => $e->reason], 409);
+        } catch (ApiKeyCooldownActiveException $e) {
+            // Phase 4 Task 9
+            return response()->json(['message' => $e->getMessage(), 'code' => $e->reason], 409);
         }
 
         return response()->json([
@@ -280,6 +318,9 @@ class ApiKeyController extends Controller
             $changeRequest = $this->bindings->requestChange($apiKey, $request->user(), $data);
         } catch (InvalidArgumentException $e) {
             return response()->json(['message' => $e->getMessage()], 422);
+        } catch (ApiKeyCooldownActiveException $e) {
+            // Phase 4 Task 9
+            return response()->json(['message' => $e->getMessage(), 'code' => $e->reason], 409);
         }
 
         return response()->json([

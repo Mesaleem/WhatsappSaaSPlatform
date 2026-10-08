@@ -76,6 +76,43 @@ class SenderNumberTest extends TestCase
         $this->assertSame($default->id, $group->fresh()->whatsapp_number_id);
     }
 
+    public function test_creating_a_group_on_a_chosen_number_stores_that_number(): void
+    {
+        [$account, $user, , $second] = $this->client('919800000001');
+
+        $response = $this->actingAs($user)->postJson('/api/groups/create', [
+            'name' => 'Stock updates',
+            'whatsapp_number_id' => $second->id,
+        ]);
+
+        $response->assertCreated();
+        $this->assertSame($second->id, ContactGroup::query()->where('name', 'Stock updates')->value('whatsapp_number_id'));
+    }
+
+    public function test_creating_a_group_on_an_unlinked_number_is_refused(): void
+    {
+        [$account, $user] = $this->client('919800000001');
+        $paused = $this->number($account, '919800000009', false, WhatsAppNumber::STATUS_PAUSED);
+
+        $this->actingAs($user)->postJson('/api/groups/create', [
+            'name' => 'Should not be created',
+            'whatsapp_number_id' => $paused->id,
+        ])->assertStatus(422)->assertJsonPath('error_code', 'sender_not_active');
+
+        $this->assertSame(0, ContactGroup::query()->where('name', 'Should not be created')->count());
+    }
+
+    public function test_an_agent_can_send_notifications_for_their_own_account(): void
+    {
+        [$account, , $default] = $this->client('919800000001');
+        $agent = User::factory()->create(['account_id' => $account->id]);
+        $agent->assignRole('agent');
+
+        $this->actingAs($agent)->getJson('/api/alerts/sender-numbers')
+            ->assertOk()
+            ->assertJsonPath('data.0.phone_number', $default->phone_number);
+    }
+
     public function test_the_resolver_uses_the_default_number_when_none_is_chosen(): void
     {
         [$account, , $default] = $this->client('919800000001');
@@ -127,9 +164,12 @@ class SenderNumberTest extends TestCase
         ]);
 
         $plainKey = 'wasaas_live_'.Str::random(40);
+        // Phase 4 Task 7 FIX — a valid per-key legacy deadline is now required for the legacy-IP path to
+        // authenticate; this test is about sender-number resolution, not binding enforcement.
         ApiKey::create([
             'account_id' => $account->id, 'name' => 'Test', 'key_prefix' => substr($plainKey, 0, 20),
             'key_hash' => ApiKey::hashKey($plainKey),
+            'legacy_binding_grace_expires_at' => now()->addDays(30),
         ]);
 
         $this->withHeaders(['X-API-KEY' => $plainKey, 'Idempotency-Key' => 'grp-'.Str::random(8)])

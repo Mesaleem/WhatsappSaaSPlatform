@@ -217,6 +217,8 @@ class RolePermissionSeeder extends Seeder
             'manage-subscriptions',
             // The Developer API key comes with the agent's own account's plan, like any client.
             'manage-developer-settings',
+            // Send Notification (individual, group, bulk and batch) for the agent's own account and its sub-clients.
+            'send-messages',
         ],
         // Social Media Marketing & Meta Ads Automation Expansion (Phase 1).
         // Deliberately restricted to ONLY these four permissions — this

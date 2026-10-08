@@ -5,7 +5,6 @@ namespace Tests\Feature;
 use App\Jobs\CreateNativeWhatsAppGroupJob;
 use App\Jobs\ProcessGroupDirectMessageJob;
 use App\Jobs\ProcessGroupDispatchJob;
-use App\Jobs\SyncNativeWhatsAppGroupParticipantsJob;
 use App\Models\Account;
 use App\Models\AccountEntitlement;
 use App\Models\ActivityLog;
@@ -173,6 +172,21 @@ class WhatsAppGroupCapabilityTest extends TestCase
         $this->createNative($this->user($account))->assertStatus(403);
     }
 
+    /**
+     * Super Admin "Free (no charge)" switch (2026-10-07): off by default (this file's other
+     * tests all run with it off, so the paid-capability path above is unchanged), but once a
+     * Super Admin switches the `whatsapp_groups` offer free, every account may create native
+     * groups even with no entitlement purchased -- see NativeGroupEntitlement::allows()'s
+     * docblock for the exact check.
+     */
+    public function test_switching_the_offer_free_grants_native_group_creation_with_no_entitlement(): void
+    {
+        $account = $this->qrTenant(entitled: false);
+        \App\Models\ModuleAddonOffer::where('module', 'whatsapp_groups')->update(['is_free' => true]);
+
+        $this->createNative($this->user($account))->assertCreated()->assertJsonPath('success', true);
+    }
+
     public function test_contact_list_groups_do_not_need_the_capability(): void
     {
         $account = $this->qrTenant(entitled: false);
@@ -220,17 +234,23 @@ class WhatsAppGroupCapabilityTest extends TestCase
         Queue::assertPushed(CreateNativeWhatsAppGroupJob::class);
     }
 
-    public function test_adding_members_to_a_native_group_needs_the_capability(): void
+    /**
+     * [Re-scoped 2026-10-07, disclosed]: a Native WhatsApp Group's membership is no longer editable
+     * from this app at all (previously this needed the `whatsapp_groups` capability; now it is
+     * refused unconditionally, entitled or not -- see ContactGroupController::addContacts()'s own
+     * re-scoping docblock). Kept as its own test, renamed, rather than deleted, since "add-contacts
+     * on a native group never writes to it" is still exactly the property worth asserting.
+     */
+    public function test_adding_members_to_a_native_group_is_always_refused(): void
     {
-        $account = $this->qrTenant(entitled: false);
+        $account = $this->qrTenant(entitled: true);
         $group = $this->nativeGroup($account);
 
         $this->actingAs($this->user($account))->postJson('/api/groups/add-contacts', [
             'group_id' => $group->id, 'contacts' => [['phone_number' => '918888888888']],
-        ])->assertStatus(403)->assertJsonPath('error_code', 'CAPABILITY_NOT_ENTITLED');
+        ])->assertStatus(422)->assertJsonPath('error_code', 'NATIVE_GROUP_MEMBERSHIP_VIA_WHATSAPP_ONLY');
 
         $this->assertSame(1, ContactGroupMember::where('group_id', $group->id)->count());
-        Queue::assertNotPushed(SyncNativeWhatsAppGroupParticipantsJob::class);
     }
 
     public function test_super_admin_may_send_to_a_native_group_of_a_client_without_the_capability(): void
@@ -272,11 +292,19 @@ class WhatsAppGroupCapabilityTest extends TestCase
         $this->assertSame(0, ContactGroup::where('account_id', $account->id)->count());
     }
 
-    public function test_the_existing_module_check_still_applies(): void
+    /**
+     * [Re-scoped 2026-10-07, disclosed]: group creation (internal or native) is no longer gated by
+     * `allowed_modules`/module.guard at all -- an entitled (whatsapp_groups) account can create a
+     * native group regardless of its allowed_modules, and an internal segment group never needed
+     * the module either. Kept as its own test, renamed, rather than deleted, since "the module
+     * checklist has no effect here any more" is still a real, worth-asserting property, replacing
+     * the old "module check still applies" one this re-scoping removed.
+     */
+    public function test_allowed_modules_no_longer_gates_group_creation_at_all(): void
     {
         $account = $this->qrTenant(entitled: true, attributes: ['allowed_modules' => ['dashboard', 'send_alert']]);
 
-        $this->createNative($this->user($account))->assertStatus(403)->assertJsonPath('error_code', 'GROUP_MODULE_DISABLED');
+        $this->createNative($this->user($account))->assertCreated()->assertJsonPath('success', true);
     }
 
     // ---------------------------------------------------------------

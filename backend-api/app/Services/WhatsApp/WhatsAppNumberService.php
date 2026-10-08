@@ -145,6 +145,53 @@ class WhatsAppNumberService
         });
     }
 
+    /**
+     * Self-service number change (agreed 2026-10-07): a client may retype the number on
+     * any slot that is NOT currently linked (connect it first "disconnects" it, or it was
+     * never connected). No approval is required -- this replaces the approval flow for the
+     * common case of a wrongly typed number. The slot's paid/locked state, invoice and
+     * default flag are untouched; only phone_number changes, and the slot stays whatever
+     * status it already was (unlinked/paused/pending_payment) so the normal Connect button
+     * picks it up for re-pairing.
+     */
+    public function changeNumber(Account $account, int $id, string $raw): WhatsAppNumber
+    {
+        $target = $this->findOwned($account, $id);
+
+        if ($target->status === WhatsAppNumber::STATUS_LINKED) {
+            throw new WhatsAppNumberException(
+                'Disconnect this number first, then you can change it.',
+                'must_disconnect_first',
+                409,
+            );
+        }
+
+        $phone = $this->normalize($raw);
+
+        if ($phone === $target->phone_number) {
+            throw new WhatsAppNumberException(
+                'That is the number already on this slot.',
+                'same_number',
+                422,
+            );
+        }
+
+        try {
+            $target->forceFill(['phone_number' => $phone])->save();
+        } catch (QueryException $e) {
+            if ($this->isUniqueViolation($e)) {
+                throw new WhatsAppNumberException(
+                    'This WhatsApp number is already added. Each number can be used by only one WhatsApp slot.',
+                    'number_already_used',
+                    409,
+                );
+            }
+            throw $e;
+        }
+
+        return $target->refresh();
+    }
+
     public function remove(Account $account, int $id): void
     {
         if ($this->isLocked($account)) {

@@ -81,6 +81,13 @@ export interface ServerBindingSummary {
   credential_pending: boolean;
   pending_change_request: ServerChangeRequest | null;
   last_change_request: ServerChangeRequest | null;
+  /** Phase 4 Task 12 — cooldown/legacy visibility. Optional: absent on any older cached response shape. */
+  cooldown_until?: string | null;
+  in_cooldown?: boolean;
+  /** True while this key still depends on the account's legacy authorized_server_ip (no live binding yet) — stays true even past an expired deadline. */
+  legacy_ip_dependent?: boolean;
+  legacy_authorized_ip?: string | null;
+  legacy_deadline?: string | null;
 }
 
 /** Fields the buyer supplies when a key is created / a legacy key is registered. */
@@ -225,6 +232,8 @@ export interface AdminApiAccessRow {
   revoked_at: string | null;
   last_used_at: string | null;
   server_binding: ServerBindingSummary;
+  /** Phase 4 Task 12 — same account-scoped allowance InstallationAllowanceResolver/countLiveInstallations() already compute; not a second source of truth. */
+  installation_usage?: { live: number; allowance: number; at_or_over_allowance: boolean } | null;
 }
 
 export interface AdminChangeRequestRow extends ServerChangeRequest {

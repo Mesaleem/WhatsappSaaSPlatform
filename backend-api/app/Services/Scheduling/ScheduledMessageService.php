@@ -4,6 +4,7 @@ namespace App\Services\Scheduling;
 
 use App\Models\Account;
 use App\Models\ScheduledMessage;
+use App\Services\Groups\GroupDirectMessageDispatcher;
 use App\Services\Groups\GroupMessageDispatcher;
 use App\Services\Templates\TemplateMessageDispatcher;
 use App\Services\WhatsApp\DirectMessageDispatcher;
@@ -37,7 +38,7 @@ class ScheduledMessageService
      */
     public function schedule(Account $account, string $kind, array $payload, Carbon $sendAt, string $source = 'api', ?int $apiKeyId = null): ScheduledMessage
     {
-        if (! in_array($kind, [ScheduledMessage::KIND_TEMPLATE_INDIVIDUAL, ScheduledMessage::KIND_TEMPLATE_GROUP, ScheduledMessage::KIND_DIRECT_TEXT], true)) {
+        if (! in_array($kind, [ScheduledMessage::KIND_TEMPLATE_INDIVIDUAL, ScheduledMessage::KIND_TEMPLATE_GROUP, ScheduledMessage::KIND_DIRECT_TEXT, ScheduledMessage::KIND_GROUP_DIRECT_TEXT], true)) {
             throw new ScheduledMessageException('This message type cannot be scheduled.', 'unsupported_kind');
         }
 
@@ -156,6 +157,16 @@ class ScheduledMessageService
                 $p['content'],
                 source: $row->source,
                 apiKeyId: $row->api_key_id,
+                senderNumberId: isset($p['sender_number_id']) ? (int) $p['sender_number_id'] : null,
+            ),
+            ScheduledMessage::KIND_GROUP_DIRECT_TEXT => GroupDirectMessageDispatcher::dispatch(
+                (int) $row->account_id,
+                (int) $p['group_id'],
+                (string) $p['message_type'],
+                $p['content'],
+                source: $row->source,
+                apiKeyId: $row->api_key_id,
+                senderNumberId: isset($p['sender_number_id']) ? (int) $p['sender_number_id'] : null,
             ),
             default => ['status' => 'unsupported'],
         };

@@ -93,10 +93,16 @@ export interface SendDirectPayload {
   group_ids?: number[];
   message?: string;
   media_url?: string;
+  /** The number to send from (a linked number of this account). Omit for the default number. */
+  sender_number_id?: number;
+  /** "yyyy-mm-dd hh:mm:ss", read as Indian Standard Time. Omit to send now. */
+  scheduled_at?: string;
 }
 
 export interface SendDirectResponse {
   message: string;
   dispatch_log_id?: number;
   results?: Array<{ status: string; message?: string }>;
+  /** Present (202) when scheduled_at was set: one row for an individual send, one per group for a group send. */
+  scheduled?: { id: number; send_at: string } | Array<{ id: number; group_id: number; send_at: string }>;
 }

@@ -77,6 +77,8 @@ export interface ModuleAddonOffer {
   term_months: number;
   units_included: number;
   is_active: boolean;
+  /** Super Admin switch: free for every account right now, no purchase needed. Independent of is_active/price/tiers. */
+  is_free: boolean;
   /** Price tiers by number of units, lowest first. Empty for a flat price. */
   tiers?: ModuleAddonTier[];
 }

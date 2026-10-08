@@ -7,21 +7,27 @@ use App\Models\Invoice;
 use App\Models\ModuleAddonRequest;
 use App\Models\Subscription;
 use App\Models\User;
+use App\Models\WhatsAppSession;
 use Database\Seeders\Phase1FoundationSeeder;
 use Database\Seeders\RolePermissionSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Queue;
+use Tests\Concerns\GrantsNativeWhatsAppGroups;
 use Tests\TestCase;
 
 /** The offer price is changed by Super Admin: new approvals use it, issued invoices keep theirs. */
 class ModuleAddonPriceTest extends TestCase
 {
-    use RefreshDatabase;
+    use RefreshDatabase, GrantsNativeWhatsAppGroups;
 
     protected function setUp(): void
     {
         parent::setUp();
         $this->seed(RolePermissionSeeder::class);
         $this->seed(Phase1FoundationSeeder::class);
+        Queue::fake();
+        Http::fake(['*' => Http::response(['success' => true, 'groups' => []], 200)]);
     }
 
     private function client(): array
@@ -32,6 +38,16 @@ class ModuleAddonPriceTest extends TestCase
         $user->assignRole('admin');
 
         return [$account, $user];
+    }
+
+    /** A client whose account can actually create native WhatsApp groups (QR session + capability). */
+    private function nativeCapableClient(): array
+    {
+        [$account, $user] = $this->client();
+        WhatsAppSession::create(['account_id' => $account->id, 'status' => 'connected']);
+        $this->grantNativeWhatsAppGroups($account);
+
+        return [$account->fresh(), $user];
     }
 
     private function superAdmin(): User
@@ -69,11 +85,10 @@ class ModuleAddonPriceTest extends TestCase
 
     public function test_a_paid_term_limits_the_account_to_its_included_groups_and_no_term_means_no_add_on_limit(): void
     {
-        [$account, $user] = $this->client();
-        $body = ['name' => 'G', 'group_type' => 'internal_segment', 'contacts' => [['phone_number' => '919876543210']]];
+        [$account, $user] = $this->nativeCapableClient();
+        $body = ['name' => 'G', 'group_type' => 'native_wa_group', 'contacts' => [['phone_number' => '919876543210']]];
 
-        // Module on (by the plan or the Super Admin) and no paid term: no add-on limit applies.
-        $account->forceFill(['allowed_modules' => ['dashboard', 'contact_groups']])->save();
+        // Entitled (capability.guard) and no paid term: no add-on limit applies (null = unlimited).
         $this->actingAs($user)->postJson('/api/groups/create', $body)->assertCreated();
 
         ModuleAddonRequest::create([
@@ -83,9 +98,9 @@ class ModuleAddonPriceTest extends TestCase
 
         // One group exists; the term allows five in total, so four more are fine and a sixth is not.
         for ($i = 0; $i < 4; $i++) {
-            $this->actingAs($user)->postJson('/api/groups/create', ['name' => "G{$i}", 'group_type' => 'internal_segment', 'contacts' => [['phone_number' => '91987654321'.$i]]])->assertCreated();
+            $this->actingAs($user)->postJson('/api/groups/create', ['name' => "G{$i}", 'group_type' => 'native_wa_group', 'contacts' => [['phone_number' => '91987654321'.$i]]])->assertCreated();
         }
-        $this->actingAs($user)->postJson('/api/groups/create', ['name' => 'Sixth', 'group_type' => 'internal_segment', 'contacts' => [['phone_number' => '919000000009']]])
+        $this->actingAs($user)->postJson('/api/groups/create', ['name' => 'Sixth', 'group_type' => 'native_wa_group', 'contacts' => [['phone_number' => '919000000009']]])
             ->assertUnprocessable()
             ->assertJsonPath('error_code', 'group_limit_reached');
     }

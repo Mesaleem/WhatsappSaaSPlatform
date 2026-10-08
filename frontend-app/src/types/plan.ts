@@ -34,6 +34,14 @@ export interface ManagedPlan {
   is_active: boolean;
   /** Capability slugs this plan bundles, from plan_entitlements. */
   capabilities: string[];
+  /**
+   * Phase 4 Task 2 / Task 10 — the plan_entitlements.usage_limit pivot
+   * per bundled capability slug. null = no concrete limit configured
+   * for that capability (never "unlimited" — see
+   * InstallationAllowanceResolver). A capability not present in
+   * `capabilities` never has a key here.
+   */
+  capability_limits: Record<string, number | null>;
   /** How many accounts have ever paid for this plan — server-computed. */
   accounts: number;
 }
@@ -71,6 +79,13 @@ export interface CreatePlanPayload {
   included_credits?: number;
   is_active?: boolean;
   capabilities?: string[];
+  /**
+   * Phase 4 Task 2 / Task 10 — slug => usage_limit (null clears it).
+   * A plan that includes `external_api` must also include
+   * `api_installations` with a concrete, non-negative value here — the
+   * backend rejects the save otherwise.
+   */
+  capability_limits?: Record<string, number | null>;
 }
 
 /**

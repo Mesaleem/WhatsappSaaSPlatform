@@ -52,6 +52,8 @@ export interface CreateContactGroupPayload {
   name: string;
   group_type?: ContactGroupType;
   contacts?: ContactGroupContactInput[];
+  /** The linked number this group belongs to (a Custom Contact Group only). Omitted = the default number. */
+  whatsapp_number_id?: number;
 }
 
 /** POST /api/groups/{id}/send-template — payload accepted by contactGroupsService.sendTemplate(). */
@@ -91,4 +93,26 @@ export interface SendGroupTemplateResponse {
   dispatch_id?: number;
   /** Present only when success === true — 1 for a native_wa_group (one message, one credit), N for an internal_segment (one credit per member). */
   queued_recipients_count?: number;
+}
+
+/**
+ * [2026-10-07] Native WhatsApp Groups is the chargeable, plan-limited half of this feature now
+ * (internal segment groups are free and unlimited) — mirrors ContactGroupController::index()'s
+ * `usage` key, from CustomGroupAccessService::usage()/selectionRequired().
+ */
+export interface ContactGroupUsage {
+  /** How many Native WhatsApp Groups this account currently has. */
+  used: number;
+  /** The current paid term's included group count, or null for no limit (no term bought, or granted directly). */
+  limit: number | null;
+  /** True while a downgrade left some native groups locked and the client has not chosen which to keep yet. */
+  selection_required: boolean;
+}
+
+/** One row of GET /api/groups/{id}/contacts (ContactGroupController::listContacts()). */
+export interface ContactGroupMemberRow {
+  id: number;
+  group_id: number;
+  phone_number: string;
+  name: string | null;
 }

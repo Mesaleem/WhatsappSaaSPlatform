@@ -18,7 +18,9 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../../core/context/AuthContext';
 import contactGroupsService from '../../services/contactGroupsService';
-import type { AvailableNativeGroup, ContactGroup, ContactGroupContactInput, ContactGroupType } from '../../types/contactGroup';
+import senderNumberService from '../../services/senderNumberService';
+import type { SenderNumber } from '../../types/senderNumber';
+import type { AvailableNativeGroup, ContactGroup, ContactGroupContactInput, ContactGroupMemberRow, ContactGroupType } from '../../types/contactGroup';
 import type { ApiErrorResponse } from '../../types/auth';
 import { PageHeader, PageShell } from '../../components/common/PageShell';
 import { Card, TableCard, inputClass } from '../../components/common/Card';
@@ -36,20 +38,17 @@ function extractMessage(err: unknown, fallback: string): string {
 
 /**
  * Group Messaging Phase 2, extended by the Native WhatsApp Group
- * Re-Architecture — Custom Contact Groups manager.
+ * Re-Architecture — Contact Groups manager.
  *
- * [Disclosed, deliberate, carried over unchanged from Phase 2]: this
- * route and its AppLayout sidebar item are reachable by any user
- * holding send-messages, regardless of the contact_groups module —
- * unlike every other module-gated nav item in this app (AppLayout's
- * `requiresModule` hides the item entirely rather than rendering a
- * locked state). That's a deliberate deviation: hiding this nav item the
- * same way message_logs/chatbot do would make the locked upsell card
- * below unreachable through normal navigation, which defeats its
- * purpose as a paid-addon upsell. The actual data — list, create,
- * add-contacts, delete — stays fully enforced server-side either way
- * (module.guard:contact_groups in routes/api.php is completely
- * independent of what this page chooses to render).
+ * [Re-scoped 2026-10-07, disclosed]: internal segment groups (a DB broadcast list — each member
+ * gets their own DM) are now a free, always-on baseline feature for any user holding send-messages
+ * — `moduleEnabled`/`hasModule('contact_groups')` below is therefore always true now (the backend's
+ * Account::effectiveModules() always includes it), making the `!moduleEnabled` locked-state branch
+ * below permanently dead code; left in place rather than torn out, since it's harmless and this
+ * page's own history shows module gating has moved before. A Native WhatsApp Group remains the
+ * chargeable, plan-limited half of this page — gated by the `whatsapp_groups` capability and a
+ * numeric term allowance (see ContactGroupController's own re-scoping docblock), neither of which
+ * `moduleEnabled` reflects any more.
  */
 export default function ContactGroupsPage() {
   const { hasModule } = useAuth();
@@ -71,6 +70,11 @@ export default function ContactGroupsPage() {
   // separate ContactGroup|null states) is enough.
   const [pendingConfirm, setPendingConfirm] = useState<{ kind: 'delete' | 'recreate'; group: ContactGroup } | null>(null);
   const [isConfirming, setIsConfirming] = useState(false);
+
+  // "Manage Members" -- view/add/remove a group's members. Internal segment groups only for
+  // add/remove; a Native WhatsApp Group's real member list is shown read-only (see
+  // ManageMembersModal's own docblock).
+  const [managingGroup, setManagingGroup] = useState<ContactGroup | null>(null);
 
   const load = useCallback(async () => {
     if (!moduleEnabled) {
@@ -191,16 +195,19 @@ export default function ContactGroupsPage() {
         }
       />
 
-      <ModuleAddonCard module="contact_groups" enabled={moduleEnabled} />
+      {/* Native WhatsApp Groups is the chargeable, plan-limited half of this feature (internal
+          segment groups are free and unlimited — see ContactGroupController's own re-scoping
+          docblock); this card/usage banner is about native groups only. */}
+      <ModuleAddonCard module="contact_groups" enabled={usage?.limit != null} unitLabel="group chats" />
 
       {usage && usage.limit !== null && (
         <p className="mb-4 text-sm text-slate-600" data-testid="group-usage">
           <strong className="text-slate-900">
             {usage.used} of {usage.limit}
           </strong>{' '}
-          custom groups used.
+          native WhatsApp groups used.
           {usage.used >= usage.limit && (
-            <span className="ml-1 text-amber-700">All groups in your plan are in use. Upgrade to add more.</span>
+            <span className="ml-1 text-amber-700">All native groups in your plan are in use. Upgrade to add more.</span>
           )}
         </p>
       )}
@@ -208,7 +215,7 @@ export default function ContactGroupsPage() {
       {usage?.selection_required && usage.limit !== null && (
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
           <p>
-            Your plan now includes {usage.limit} {usage.limit === 1 ? 'group' : 'groups'}. Choose which groups stay open for this term.
+            Your plan now includes {usage.limit} native WhatsApp {usage.limit === 1 ? 'group' : 'groups'}. Choose which ones stay open for this term.
           </p>
           <button
             type="button"
@@ -222,7 +229,7 @@ export default function ContactGroupsPage() {
 
       {choosingGroups && usage?.limit != null && (
         <KeepGroupsModal
-          groups={groups.filter((g) => !g.is_default && g.group_type === 'internal_segment')}
+          groups={groups.filter((g) => !g.is_default && g.group_type === 'native_wa_group')}
           limit={usage.limit}
           onClose={() => setChoosingGroups(false)}
           onSaved={() => {
@@ -292,6 +299,13 @@ export default function ContactGroupsPage() {
                       </td>
                       <td className="px-4 py-3 text-right">
                         <button
+                          onClick={() => setManagingGroup(group)}
+                          title="Manage members"
+                          className="rounded-lg p-1.5 text-slate-400 hover:bg-indigo-50 hover:text-indigo-600"
+                        >
+                          <Users className="h-4 w-4" />
+                        </button>
+                        <button
                           onClick={() => handleDelete(group)}
                           disabled={group.is_default}
                           title={group.is_default ? 'The default group cannot be deleted.' : 'Delete group'}
@@ -321,7 +335,10 @@ export default function ContactGroupsPage() {
 
       {showImport && (
         <ImportContactsModal
-          groups={groups}
+          // Native WhatsApp Groups are excluded here -- their membership is WhatsApp-only now (see
+          // ContactGroupController::addContacts()'s re-scoping docblock); there is no group in this
+          // list a native group's row could ever be imported into successfully.
+          groups={groups.filter((g) => g.group_type === 'internal_segment')}
           onClose={() => setShowImport(false)}
           onImported={() => {
             setShowImport(false);
@@ -356,6 +373,14 @@ export default function ContactGroupsPage() {
           isLoading={isConfirming}
           onConfirm={() => void handleConfirmed()}
           onCancel={() => setPendingConfirm(null)}
+        />
+      )}
+
+      {managingGroup && (
+        <ManageMembersModal
+          group={managingGroup}
+          onClose={() => setManagingGroup(null)}
+          onChanged={() => void load()}
         />
       )}
     </PageShell>
@@ -492,6 +517,19 @@ function NativeGroupCell({ group, onRecreate }: { group: ContactGroup; onRecreat
 function CreateGroupModal({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
   const [name, setName] = useState('');
   const [groupType, setGroupType] = useState<ContactGroupType>('internal_segment');
+  // Which linked number a Custom Contact Group belongs to; it is sent only from that number.
+  const [numbers, setNumbers] = useState<SenderNumber[]>([]);
+  const [numberId, setNumberId] = useState<number | ''>('');
+
+  useEffect(() => {
+    senderNumberService
+      .list()
+      .then((list) => {
+        setNumbers(list);
+        setNumberId((prev) => prev || (list.find((n) => n.is_default) ?? list[0])?.id || '');
+      })
+      .catch(() => undefined);
+  }, []);
   const [rawContacts, setRawContacts] = useState('');
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -554,7 +592,10 @@ function CreateGroupModal({ onClose, onCreated }: { onClose: () => void; onCreat
       return;
     }
 
-    const contacts = groupType === 'native_wa_group' ? parseContactLines(rawContacts) : undefined;
+    // Internal segment: starting members are optional (an empty textarea just means "start empty",
+    // the same as before this field existed). Native: required -- WhatsApp has no empty-group concept.
+    const parsedContacts = parseContactLines(rawContacts);
+    const contacts = parsedContacts.length > 0 ? parsedContacts : undefined;
     if (groupType === 'native_wa_group' && (!contacts || contacts.length === 0)) {
       setError('A Native WhatsApp Group needs at least one starting member — WhatsApp itself has no concept of an empty group.');
       return;
@@ -567,6 +608,7 @@ function CreateGroupModal({ onClose, onCreated }: { onClose: () => void; onCreat
         name: name.trim(),
         group_type: groupType,
         contacts,
+        ...(groupType === 'internal_segment' && numberId ? { whatsapp_number_id: numberId } : {}),
       });
       onCreated();
     } catch (err) {
@@ -632,6 +674,54 @@ function CreateGroupModal({ onClose, onCreated }: { onClose: () => void; onCreat
               </button>
             </div>
           </div>
+
+          {groupType === 'internal_segment' && (
+            <div>
+              <label htmlFor="create-group-number" className="text-sm font-medium text-slate-700">
+                WhatsApp number
+              </label>
+              {numbers.length === 0 ? (
+                <p className="mt-1 text-xs text-amber-700">
+                  No connected WhatsApp number. Connect one in WhatsApp Setup to pick a number for this group.
+                </p>
+              ) : (
+                <>
+                  <select
+                    id="create-group-number"
+                    value={numberId}
+                    onChange={(e) => setNumberId(e.target.value ? Number(e.target.value) : '')}
+                    className={inputClass}
+                  >
+                    {numbers.map((n) => (
+                      <option key={n.id} value={n.id}>
+                        {n.phone_number}
+                        {n.is_default ? ' (default)' : ''}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="mt-1 text-xs text-slate-500">This group is sent only from the chosen number.</p>
+                </>
+              )}
+            </div>
+          )}
+
+          {groupType === 'internal_segment' && (
+            <div>
+              <label className="text-sm font-medium text-slate-700">
+                Starting members <span className="text-xs font-normal text-slate-400">(optional — one per line: phone number, optional name)</span>
+              </label>
+              <textarea
+                value={rawContacts}
+                onChange={(e) => setRawContacts(e.target.value)}
+                rows={5}
+                placeholder={'919876543210, Vendor 1\n+91 91234 56789, Vendor 2'}
+                className={`${inputClass} font-mono`}
+              />
+              <p className="mt-1 text-xs text-slate-500">
+                Leave this empty to start with no members — add them later with "Manage Members".
+              </p>
+            </div>
+          )}
 
           {groupType === 'native_wa_group' && (
             <>
@@ -793,6 +883,7 @@ function parseContactLines(raw: string): ContactGroupContactInput[] {
     .filter((c) => c.phone_number.length > 0);
 }
 
+/** `groups` passed in must already exclude Native WhatsApp Groups -- see this component's one caller. */
 function ImportContactsModal({
   groups,
   onClose,
@@ -807,9 +898,6 @@ function ImportContactsModal({
   const [raw, setRaw] = useState('');
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  const selectedGroup = groups.find((g) => g.id === groupId);
-  const isNativePending = selectedGroup?.group_type === 'native_wa_group' && selectedGroup.sync_status !== 'synced';
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -859,20 +947,11 @@ function ImportContactsModal({
                 <option key={g.id} value={g.id} disabled={!!g.locked_at}>
                   {g.name}
                   {g.is_default ? ' (Default)' : ''}
-                  {g.group_type === 'native_wa_group' ? ' (Native WA Group)' : ''}
                   {g.locked_at ? ' (Locked for this term)' : ''}
                 </option>
               ))}
             </select>
           </div>
-
-          {isNativePending && (
-            <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-              This WhatsApp group {selectedGroup?.sync_status === 'failed' ? 'failed to sync' : 'is still syncing'} —
-              contacts you add now are saved here, but won't reach the real WhatsApp group until it's
-              {selectedGroup?.sync_status === 'failed' ? ' recreated.' : ' synced.'}
-            </p>
-          )}
 
           <div>
             <label className="text-sm font-medium text-slate-700">
@@ -908,6 +987,205 @@ function ImportContactsModal({
             </button>
           </div>
         </form>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * "Manage Members" -- opened per group from the table's new Users icon button. An internal segment
+ * group is fully editable here (add via a textarea, same parseContactLines() convention as
+ * everywhere else; remove one at a time). A Native WhatsApp Group's member list is shown read-only
+ * -- its real membership only ever changes from WhatsApp itself, on the tenant's own phone, exactly
+ * like any other WhatsApp group (see ContactGroupController::addContacts()/removeContact()'s own
+ * re-scoping docblocks); this view exists so the tenant can still SEE who's in it.
+ */
+function ManageMembersModal({
+  group,
+  onClose,
+  onChanged,
+}: {
+  group: ContactGroup;
+  onClose: () => void;
+  onChanged: () => void;
+}) {
+  const isNative = group.group_type === 'native_wa_group';
+
+  const [members, setMembers] = useState<ContactGroupMemberRow[] | null>(null);
+  const [page, setPage] = useState(1);
+  const [lastPage, setLastPage] = useState(1);
+  const [error, setError] = useState<string | null>(null);
+
+  const [rawContacts, setRawContacts] = useState('');
+  const [isAdding, setIsAdding] = useState(false);
+  const [addError, setAddError] = useState<string | null>(null);
+
+  const [removingId, setRemovingId] = useState<number | null>(null);
+
+  const load = useCallback(
+    (targetPage: number) => {
+      setMembers(null);
+      setError(null);
+      contactGroupsService
+        .listMembers(group.id, targetPage)
+        .then((res) => {
+          setMembers(res.data);
+          setPage(res.meta.current_page);
+          setLastPage(res.meta.last_page);
+        })
+        .catch((err: unknown) => setError(extractMessage(err, 'Failed to load members.')));
+    },
+    [group.id],
+  );
+
+  useEffect(() => {
+    load(1);
+  }, [load]);
+
+  const handleAdd = async () => {
+    const contacts = parseContactLines(rawContacts);
+    if (contacts.length === 0) {
+      setAddError('Enter at least one phone number.');
+      return;
+    }
+    setIsAdding(true);
+    setAddError(null);
+    try {
+      await contactGroupsService.addContacts(group.id, contacts);
+      setRawContacts('');
+      load(1);
+      onChanged();
+    } catch (err) {
+      setAddError(extractMessage(err, 'Could not add these members.'));
+    } finally {
+      setIsAdding(false);
+    }
+  };
+
+  const handleRemove = async (member: ContactGroupMemberRow) => {
+    setRemovingId(member.id);
+    setError(null);
+    try {
+      await contactGroupsService.removeMember(group.id, member.id);
+      load(page);
+      onChanged();
+    } catch (err) {
+      setError(extractMessage(err, 'Could not remove this member.'));
+    } finally {
+      setRemovingId(null);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-slate-900/50 p-4">
+      <div className="my-8 flex max-h-[85vh] w-full max-w-lg flex-col rounded-xl bg-white p-6 shadow-xl">
+        <div className="flex items-center justify-between">
+          <h3 className="text-base font-semibold text-slate-900">Members — {group.name}</h3>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-600">
+            <XCircle className="h-5 w-5" />
+          </button>
+        </div>
+
+        {isNative && (
+          <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+            This is a real WhatsApp group — add or remove members from WhatsApp itself, on your phone. This list
+            just shows who's in it.
+          </p>
+        )}
+
+        {!isNative && (
+          <div className="mt-4">
+            <label className="text-sm font-medium text-slate-700">
+              Add members <span className="text-xs font-normal text-slate-400">(one per line: phone number, optional name)</span>
+            </label>
+            <textarea
+              value={rawContacts}
+              onChange={(e) => setRawContacts(e.target.value)}
+              rows={3}
+              placeholder={'919876543210, Vendor 1'}
+              className={`${inputClass} font-mono`}
+            />
+            {addError && <p className="mt-1 text-sm text-red-600">{addError}</p>}
+            <div className="mt-2 flex justify-end">
+              <button
+                type="button"
+                onClick={() => void handleAdd()}
+                disabled={isAdding}
+                className="flex items-center gap-2 rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:opacity-60"
+              >
+                {isAdding && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                Add
+              </button>
+            </div>
+          </div>
+        )}
+
+        <div className="mt-4 flex-1 overflow-y-auto border-t border-slate-100 pt-3">
+          {members === null && !error && (
+            <div className="flex items-center gap-2 py-6 text-sm text-slate-500">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Loading…
+            </div>
+          )}
+
+          {error && <p className="text-sm text-red-600">{error}</p>}
+
+          {members !== null && members.length === 0 && (
+            <p className="py-6 text-center text-sm text-slate-400">No members yet.</p>
+          )}
+
+          {members !== null && members.length > 0 && (
+            <ul className="divide-y divide-slate-100">
+              {members.map((m) => (
+                <li key={m.id} className="flex items-center justify-between gap-2 py-2">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm text-slate-900">{m.name || m.phone_number}</p>
+                    {m.name && <p className="truncate text-xs text-slate-400">{m.phone_number}</p>}
+                  </div>
+                  {!isNative && (
+                    <button
+                      type="button"
+                      onClick={() => void handleRemove(m)}
+                      disabled={removingId === m.id}
+                      title="Remove member"
+                      className="flex-shrink-0 rounded-lg p-1.5 text-slate-400 hover:bg-red-50 hover:text-red-600 disabled:opacity-50"
+                    >
+                      {removingId === m.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                    </button>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        {members !== null && lastPage > 1 && (
+          <div className="mt-2 flex items-center justify-between border-t border-slate-100 pt-2">
+            <button
+              type="button"
+              disabled={page <= 1}
+              onClick={() => load(page - 1)}
+              className="rounded-lg border border-slate-300 px-3 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-40"
+            >
+              Previous
+            </button>
+            <span className="text-xs text-slate-500">Page {page} of {lastPage}</span>
+            <button
+              type="button"
+              disabled={page >= lastPage}
+              onClick={() => load(page + 1)}
+              className="rounded-lg border border-slate-300 px-3 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-40"
+            >
+              Next
+            </button>
+          </div>
+        )}
+
+        <div className="mt-4 flex justify-end">
+          <button onClick={onClose} className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
+            Close
+          </button>
+        </div>
       </div>
     </div>
   );

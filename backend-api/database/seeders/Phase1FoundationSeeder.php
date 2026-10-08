@@ -66,6 +66,12 @@ class Phase1FoundationSeeder extends Seeder
         'commerce' => ['label' => 'Commerce Catalog', 'category' => 'growth'],
         'payments' => ['label' => 'Payments', 'category' => 'growth'],
         'external_api' => ['label' => 'External API Calls', 'category' => 'platform'],
+        // Phase 4 Task 2 — separate from external_api (which governs API
+        // key eligibility): this capability's plan_entitlements.usage_limit
+        // governs the MAXIMUM NUMBER of live API-key installations
+        // (ApiKeyBinding rows) an account may hold. See
+        // InstallationAllowanceResolver.
+        'api_installations' => ['label' => 'API Installations', 'category' => 'platform'],
         'custom_code' => ['label' => 'Custom Code', 'category' => 'platform'],
         'email' => ['label' => 'Email', 'category' => 'platform'],
         // Phase 11 Task 1 — one capability per industry (see config/industries.php). Not part of any
@@ -148,6 +154,7 @@ class Phase1FoundationSeeder extends Seeder
         ['none', 'commerce', false, 'Commerce messages are delivered over WhatsApp; an account with no WhatsApp provider cannot send one.'],
         ['none', 'payments', true, 'Payments run through PaymentGatewayFactory (Razorpay/Stripe), which is provider-independent -- no WhatsApp engine is required to create a payment request.'],
         ['none', 'external_api', true, 'An outbound HTTP call is a platform capability and needs no WhatsApp engine.'],
+        ['none', 'api_installations', true, 'Installation-count limiting is a platform capability and needs no WhatsApp engine.'],
         ['none', 'custom_code', true, 'Server-side code execution is a platform capability and needs no WhatsApp engine.'],
         ['none', 'email', true, 'Email is delivered through the platform mail configuration (MailSetting), not a WhatsApp engine.'],
         ['none', 'industry_education', true, 'Industry modules are a platform capability: no WhatsApp engine is required to be entitled to one.'],
@@ -212,6 +219,37 @@ class Phase1FoundationSeeder extends Seeder
             'email',
         ],
     ];
+
+    /**
+     * Phase 4 Task 2 — DELIBERATELY NOT bundled into starter/growth/
+     * business above. `api_installations` is registered as a capability
+     * (CAPABILITIES / PROVIDER_CAPABILITIES above) so the plan management
+     * UI/API can offer and validate it, but NO per-tier usage_limit has
+     * ever been confirmed by a product owner — unlike every entry in
+     * PLAN_CAPABILITIES above, which that constant's own docblock
+     * requires to be a CONFIRMED decision. Inventing numbers here would
+     * misrepresent them as that same kind of confirmed policy, which is
+     * exactly what this task was corrected to avoid.
+     *
+     * CONSEQUENCE: a fresh install's starter/growth/business plans sell
+     * `external_api` but do NOT yet carry `api_installations` at all, so
+     * Task 4 Task 2's requirement 7 ("a plan with external_api must have
+     * api_installations with a concrete limit before installation
+     * enforcement is considered valid") is NOT YET satisfied for these
+     * three plans. For an account on one of them, InstallationAllowance
+     * Resolver::resolveForAccount() correctly falls into rule 1 (capability
+     * absent -> default allowance 1, no warning) rather than reading an
+     * invented number.
+     *
+     * TO SET REAL LIMITS: a Super Admin calls
+     * PUT /api/admin/plans-management/{slug} with
+     * `capabilities` including `api_installations` and
+     * `capability_limits.api_installations` set to the approved number —
+     * the validation this task added (PlanManagementController::
+     * assertApiInstallationsConcreteWhenExternalApi) then enforces
+     * requirement 7 on that write. This must happen before Task 6
+     * enforcement is considered production-ready for these plans.
+     */
 
     /**
      * Value-identical to App\Support\PlanCatalog::PLANS — including the
@@ -302,6 +340,10 @@ class Phase1FoundationSeeder extends Seeder
              * metered capability today is whatsapp_send, written above. A new
              * plan has no rows, so attach() cannot duplicate
              * (unique(plan_id, capability_id) backs that up).
+             *
+             * api_installations is deliberately absent from this bundle —
+             * see PLAN_CAPABILITIES' docblock above (Phase 4 Task 2): no
+             * product-owner-confirmed per-tier limit exists yet.
              */
             $bundle = collect(self::PLAN_CAPABILITIES[$slug] ?? [])
                 ->reject(fn (string $capabilitySlug) => $capabilitySlug === $attrs['capability'])

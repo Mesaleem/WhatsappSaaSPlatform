@@ -5,7 +5,7 @@ import type { ContactGroup } from '../../types/contactGroup';
 import { extractErrorMessage } from '../../utils/apiError';
 
 interface KeepGroupsModalProps {
-  /** The client's own custom groups (not the default group, not a native WhatsApp group). */
+  /** The client's own Native WhatsApp Groups (not the default group, not an internal segment group). */
   groups: ContactGroup[];
   /** How many groups the running term includes. */
   limit: number;

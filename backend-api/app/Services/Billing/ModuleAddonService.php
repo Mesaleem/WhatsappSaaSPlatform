@@ -76,6 +76,10 @@ class ModuleAddonService
     {
         $this->offer($module);
 
+        if ($this->isFree($module)) {
+            throw new WhatsAppNumberException('This is currently free -- nothing to request.', 'module_is_free', 422);
+        }
+
         // Add-ons are bought while the plan is active. A lapsed plan renews first.
         if (! $account->hasActiveSubscription()) {
             throw new WhatsAppNumberException('Your plan is not active. Renew it first, then you can add this.', 'plan_not_active', 422);
@@ -595,6 +599,16 @@ class ModuleAddonService
             return app(AccessControlService::class)->canTenant($account, (string) $offer->capability_slug);
         }
 
+        // [Re-scoped 2026-10-07, disclosed]: 'contact_groups' now prices Native WhatsApp Group COUNT
+        // only -- internal_segment groups are free and always on, so hasModuleEnabled('contact_groups')
+        // is always true and would otherwise make this module permanently "already included", refusing
+        // every request to buy native-group units. A native-group allowance is always something
+        // bought in units (see CustomGroupAccessService), never "included for free" by a module flag,
+        // so this never short-circuits a request for it.
+        if ($module === 'contact_groups') {
+            return false;
+        }
+
         return $account->hasModuleEnabled($module);
     }
 
@@ -657,8 +671,23 @@ class ModuleAddonService
      * The number of groups an account may have while a paid term of the module is running
      * (the offer's units_included). Null when no paid term is running, so no add-on limit applies.
      */
+    /**
+     * True while a Super Admin has switched this module to free (owner instruction,
+     * 2026-10-07): unlimited/granted for every account, no purchase needed. Independent
+     * of `is_active` and of price/tiers, which stay stored underneath for when the
+     * switch is turned back off.
+     */
+    public function isFree(string $module): bool
+    {
+        return (bool) (ModuleAddonOffer::query()->where('module', $module)->value('is_free') ?? false);
+    }
+
     public function activeUnitLimit(Account $account, string $module): ?int
     {
+        if ($this->isFree($module)) {
+            return null;
+        }
+
         $running = ModuleAddonRequest::query()
             ->where('account_id', $account->id)
             ->where('module', $module)

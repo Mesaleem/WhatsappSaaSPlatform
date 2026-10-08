@@ -190,20 +190,37 @@ class PublicApiAuthorizationTest extends TestCase
         $dualFactor->assertJson(['success' => false, 'error_code' => 'UNAUTHORIZED', 'message' => 'The account associated with this API key is not active.']);
     }
 
-    // 3. Missing required entitlement/module is denied -- the dedicated
-    // GROUP_MODULE_DISABLED code path on the group CREATE endpoint
-    // (distinct from PublicApiSecurityTest's coverage of the same gate
-    // on the group MESSAGE-SEND endpoint).
-    public function test_missing_entitlement_module_is_denied_on_group_creation(): void
+    // 3. [Re-scoped 2026-10-07, disclosed]: internal_segment group creation is no longer gated by
+    // any module/entitlement at all (it is now a free, always-on baseline feature -- see
+    // ContactGroupController's own re-scoping docblock), so GROUP_MODULE_DISABLED on a plain
+    // create() no longer exists as a code path. The one entitlement this endpoint still enforces is
+    // `whatsapp_groups`, for a native_wa_group specifically -- re-targeted here instead of deleted,
+    // since "missing required entitlement is denied on group creation" is still worth covering.
+    public function test_an_internal_segment_group_is_never_denied_for_a_missing_module(): void
     {
-        $account = Account::factory()->create(['allowed_modules' => ['dashboard', 'send_alert', 'developer_api']]); // 'contact_groups' deliberately absent (P5-B: developer_api kept on so the group gate is what refuses)
+        $account = Account::factory()->create(['allowed_modules' => ['dashboard', 'send_alert', 'developer_api']]); // 'contact_groups' deliberately absent
         $issued = $this->issueApiKey($account);
 
         $response = $this->withHeaders(['X-API-KEY' => $issued['key'], 'X-API-SECRET' => $issued['secret']])
             ->postJson('/api/v1/whatsapp/groups/create', ['name' => 'Sales Team']);
 
+        $response->assertCreated();
+        $response->assertJson(['success' => true]);
+    }
+
+    public function test_missing_whatsapp_groups_entitlement_is_denied_on_native_group_creation(): void
+    {
+        $account = Account::factory()->create(); // no grantNativeWhatsAppGroups() -- capability absent
+        $issued = $this->issueApiKey($account);
+
+        $response = $this->withHeaders(['X-API-KEY' => $issued['key'], 'X-API-SECRET' => $issued['secret']])
+            ->postJson('/api/v1/whatsapp/groups/create', [
+                'name' => 'Sales Team', 'group_type' => ContactGroup::GROUP_TYPE_NATIVE,
+                'contacts' => [['phone_number' => '919999999999']],
+            ]);
+
         $response->assertStatus(403);
-        $response->assertJson(['success' => false, 'error_code' => 'GROUP_MODULE_DISABLED']);
+        $response->assertJson(['success' => false, 'error_code' => 'CAPABILITY_NOT_ENTITLED']);
     }
 
     // 4. Provider/engine capability: a Meta Cloud API account cannot
@@ -302,8 +319,8 @@ class PublicApiAuthorizationTest extends TestCase
     // separately enforced rather than auth alone gating everything.
     public function test_authentication_success_does_not_imply_blanket_authorization(): void
     {
-        $account = Account::factory()->create(['allowed_modules' => ['dashboard', 'send_alert', 'developer_api']]); // no 'contact_groups'
-        $this->giveActiveSubscription($account);
+        $account = Account::factory()->create(['allowed_modules' => ['dashboard', 'send_alert', 'developer_api']]);
+        $this->giveActiveSubscription($account); // 'starter' -- includes whatsapp_groups
         $this->makeApprovedTemplate($account->id, 'ALLOWED_TPL');
         $issued = $this->issueApiKey($account);
 
@@ -313,12 +330,22 @@ class PublicApiAuthorizationTest extends TestCase
         $allowed->assertStatus(422); // 'disconnected' -- authenticated AND authorized, just no WhatsApp session
         $allowed->assertJson(['status' => false, 'error_code' => 'WHATSAPP_DISCONNECTED']);
 
-        // Same key, same account, same authentication -- but an
-        // operation this account is NOT entitled to is still denied.
+        // Same key, same account, same authentication -- but an operation this account is NOT
+        // entitled to (its whatsapp_groups grant is revoked here, same as
+        // WhatsAppGroupCapabilityTest::test_a_revoked_capability_is_denied()'s own pattern; a NATIVE
+        // WhatsApp Group -- internal_segment groups need no entitlement at all any more, see test 3
+        // above) is still denied.
+        \App\Models\AccountEntitlement::where('account_id', $account->id)
+            ->whereHas('capability', fn ($q) => $q->where('slug', 'whatsapp_groups'))
+            ->update(['revoked_at' => now(), 'revoked_reason' => 'test']);
+
         $denied = $this->withHeaders(['X-API-KEY' => $issued['key'], 'X-API-SECRET' => $issued['secret']])
-            ->postJson('/api/v1/whatsapp/groups/create', ['name' => 'Sales Team']);
+            ->postJson('/api/v1/whatsapp/groups/create', [
+                'name' => 'Sales Team', 'group_type' => ContactGroup::GROUP_TYPE_NATIVE,
+                'contacts' => [['phone_number' => '919999999999']],
+            ]);
         $denied->assertStatus(403);
-        $denied->assertJson(['success' => false, 'error_code' => 'GROUP_MODULE_DISABLED']);
+        $denied->assertJson(['success' => false, 'error_code' => 'CAPABILITY_NOT_ENTITLED']);
     }
 
     // 9. Authorization failures never leak internal details (account id,
@@ -326,11 +353,14 @@ class PublicApiAuthorizationTest extends TestCase
     // API error envelope shape.
     public function test_authorization_failure_response_leaks_no_internal_details(): void
     {
-        $account = Account::factory()->create(['allowed_modules' => ['dashboard']]);
+        $account = Account::factory()->create(['allowed_modules' => ['dashboard']]); // no grantNativeWhatsAppGroups()
         $issued = $this->issueApiKey($account);
 
         $response = $this->withHeaders(['X-API-KEY' => $issued['key'], 'X-API-SECRET' => $issued['secret']])
-            ->postJson('/api/v1/whatsapp/groups/create', ['name' => 'Sales Team']);
+            ->postJson('/api/v1/whatsapp/groups/create', [
+                'name' => 'Sales Team', 'group_type' => ContactGroup::GROUP_TYPE_NATIVE,
+                'contacts' => [['phone_number' => '919999999999']],
+            ]);
 
         $response->assertStatus(403);
         $response->assertJsonStructure(['success', 'error_code', 'message']);

@@ -24,7 +24,7 @@ class MessageBatch extends Model
     public const MAX_INTERVAL_MINUTES = 60;
 
     protected $fillable = [
-        'account_id', 'created_by_user_id', 'template_id', 'sender_number_ids', 'variables', 'media_url', 'title', 'kind', 'source_filename',
+        'account_id', 'created_by_user_id', 'template_id', 'message_text', 'sender_number_ids', 'variables', 'media_url', 'title', 'kind', 'source_filename',
         'total', 'batch_size', 'interval_minutes', 'status', 'scheduled_at', 'next_chunk_at', 'sent_count',
         'failed_count', 'stop_reason', 'stopped_at', 'completed_at',
     ];

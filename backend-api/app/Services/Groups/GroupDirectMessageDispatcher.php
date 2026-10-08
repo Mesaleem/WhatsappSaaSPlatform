@@ -56,13 +56,9 @@ class GroupDirectMessageDispatcher
             return ['status' => 'not_found', 'message' => 'Account not found.'];
         }
 
-        if (! $account->hasModuleEnabled('contact_groups')) {
-            return [
-                'status' => 'group_access_denied',
-                'message' => 'Your current subscription plan only supports individual message dispatches. Upgrade to unlock Group Messaging.',
-            ];
-        }
-
+        // [Re-scoped 2026-10-07, disclosed]: same removal as GroupMessageDispatcher::dispatch()'s own
+        // -- see its docblock. A Native WhatsApp Group is still gated by `whatsapp_groups`, checked
+        // below once the group itself is resolved.
         if (! $account->hasActiveSubscription()) {
             return ['status' => 'quota_exhausted', 'message' => $account->quotaExhaustedMessage()];
         }

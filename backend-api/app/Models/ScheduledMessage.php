@@ -19,6 +19,8 @@ class ScheduledMessage extends Model
     public const KIND_TEMPLATE_GROUP = 'template_group';
     /** Plain text to one phone number ("no template" sends). */
     public const KIND_DIRECT_TEXT = 'direct_text';
+    /** Plain text to a contact group ("no template" sends). */
+    public const KIND_GROUP_DIRECT_TEXT = 'group_direct_text';
 
     /** How far ahead a message may be scheduled. */
     public const MAX_DAYS_AHEAD = 90;

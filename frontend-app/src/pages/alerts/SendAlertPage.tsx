@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent } from 'react';
 import { Link } from 'react-router-dom';
-import { AlertTriangle, CheckCircle2, Code2, Copy, Download, Loader2, Send, ShieldCheck, Sparkles, Upload, Users, XCircle } from 'lucide-react';
+import { AlertTriangle, CalendarClock, CheckCircle2, Code2, Copy, Download, Loader2, Send, ShieldCheck, Sparkles, Upload, Users, XCircle } from 'lucide-react';
 import { useAuth } from '../../core/context/AuthContext';
 import BatchSendPanel from '../../components/alerts/BatchSendPanel';
+import ScheduledMessagesModal from '../../components/alerts/ScheduledMessagesModal';
 import senderNumberService from '../../services/senderNumberService';
 import messageBatchService from '../../services/messageBatchService';
 import type { SenderNumber } from '../../types/senderNumber';
@@ -169,13 +170,31 @@ export default function SendAlertPage() {
   const isDisconnected = waStatus === 'disconnected';
   const readOnly = isReadOnly();
 
+  // Scheduled Messages -- every send-later, whichever mode/screen scheduled it (including the
+  // Developer API), lives in one list reachable from this top-corner link. See
+  // ScheduledMessagesModal's own docblock for why this is a modal rather than a separate page.
+  const [showScheduled, setShowScheduled] = useState(false);
+
   return (
     <div className="p-6">
       <div className="w-full">
-        <h1 className="text-xl font-semibold text-slate-900">Send Notification</h1>
-        <p className="mt-1 text-sm text-slate-500">
-          Send an approved WhatsApp template message to a customer or contact group.
-        </p>
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h1 className="text-xl font-semibold text-slate-900">Send Notification</h1>
+            <p className="mt-1 text-sm text-slate-500">
+              Send an approved WhatsApp template message to a customer or contact group.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setShowScheduled(true)}
+            className="flex flex-shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-50"
+          >
+            <CalendarClock className="h-3.5 w-3.5" />
+            Scheduled Messages
+          </button>
+        </div>
+        {showScheduled && <ScheduledMessagesModal onClose={() => setShowScheduled(false)} />}
 
         <div className="mt-6">
           <ApiKeySetupBanner />
@@ -240,8 +259,6 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
   const [recipientType, setRecipientType] = useState<'individual' | 'group'>('individual');
   // Bulk: several numbers typed at once, sent from the ticked numbers in turn (recipientType stays 'individual').
   const [isBulk, setIsBulk] = useState(false);
-  // Inside Bulk: typed numbers, or an Excel/CSV list (its own view).
-  const [bulkTab, setBulkTab] = useState<'type' | 'file'>('type');
   const [groups, setGroups] = useState<ContactGroup[]>([]);
   const [isLoadingGroups, setIsLoadingGroups] = useState(true);
   const [groupsLoadError, setGroupsLoadError] = useState<string | null>(null);
@@ -262,17 +279,6 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
       })
       .catch(() => undefined);
   }, []);
-
-  // The numbers a bulk list sends from: the default at first; the user ticks the others.
-  const [bulkSenderIds, setBulkSenderIds] = useState<number[]>([]);
-  useEffect(() => {
-    setBulkSenderIds((prev) => {
-      const kept = prev.filter((id) => senderNumbers.some((n) => n.id === id));
-      if (kept.length > 0) return kept;
-      const first = senderNumbers.find((n) => n.is_default) ?? senderNumbers[0];
-      return first ? [first.id] : [];
-    });
-  }, [senderNumbers]);
 
   // When the number changes, drop any selected group that is not on it: the user must choose again.
   useEffect(() => {
@@ -447,6 +453,10 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
         setCsvError('No valid phone numbers found in this CSV.');
         return;
       }
+      if (numbers.length > MAX_BULK_RECIPIENTS) {
+        setCsvError(`This file has ${numbers.length} numbers. Individual allows up to ${MAX_BULK_RECIPIENTS}. For more, choose Bulk and upload the file there.`);
+        return;
+      }
       setRecipientPhone(numbers.join(', '));
     };
     reader.onerror = () => setCsvError('Could not read this file.');
@@ -595,13 +605,12 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
       setSendError('Enter at least one valid recipient phone number.');
       return;
     }
-    // Strict Bulk Messaging Limit -- blocked client-side before a round
-    // trip; the backend's own max:150 rule (SendBulkTemplateMessageRequest)
-    // is the real enforcement, this is purely so the user sees the exact
-    // warning immediately, not after a 422.
+    // Individual numbers typed here are capped at MAX_BULK_RECIPIENTS -- blocked client-side before a
+    // round trip; the backend's own max:30 rule (BulkSendController) is the real enforcement, this is
+    // purely so the user sees the exact warning immediately, not after a 422.
     if (recipientType === 'individual' && exceedsMaxRecipients) {
       setSendError(
-        `Maximum ${MAX_BULK_RECIPIENTS} contacts allowed per batch. For larger lists, create a Group or upgrade your plan.`,
+        `Up to ${MAX_BULK_RECIPIENTS} numbers here. For more, choose Bulk and upload an Excel or CSV file.`,
       );
       return;
     }
@@ -647,7 +656,7 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
       return;
     }
 
-    if (!noTemplate && scheduleProblem) {
+    if (scheduleProblem) {
       setSendError(scheduleProblem);
       return;
     }
@@ -657,60 +666,68 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
       if (noTemplate) {
         // "No template" option (owner request 2026-10-05) -- same recipient-type branching as the
         // template path above, but through alertService.sendDirect() (DirectMessageDispatcher /
-        // GroupDirectMessageDispatcher server-side) instead of TemplateMessageDispatcher. No
-        // variables_schema, no anti-spam paced bulk queue (that machinery is template-only) -- a
-        // phone list here is sent with one request per number, same as the group loop below.
+        // GroupDirectMessageDispatcher server-side) instead of TemplateMessageDispatcher. Follows the
+        // same sender-number and schedule rules as the template path. Several individual numbers go
+        // through the same paced bulk engine the template path uses, not one unpaced request per number.
         const message = directMessage.trim() || undefined;
         const media = mediaUrl.trim() || undefined;
+        const sender_number_id = senderNumberId ?? undefined;
+        const scheduled_at = scheduledIso ?? undefined;
 
         if (recipientType === 'group') {
             const results = await Promise.allSettled(
               selectedGroupIds.map((groupId) =>
-                alertService.sendDirect({ recipient_type: 'group', group_ids: [groupId], message, media_url: media }),
+                alertService.sendDirect({ recipient_type: 'group', group_ids: [groupId], message, media_url: media, sender_number_id, scheduled_at }),
               ),
             );
             const groupName = (id: number) => groups.find((g) => g.id === id)?.name ?? `#${id}`;
             const failures = results
               .map((r, i) => ({ r, groupId: selectedGroupIds[i] }))
               .filter((x): x is { r: PromiseRejectedResult; groupId: number } => x.r.status === 'rejected');
+            const verb = scheduled_at ? 'Scheduled' : 'Queued';
 
             if (failures.length === 0) {
-              setSendSuccess(`Queued for ${results.length} group${results.length === 1 ? '' : 's'}.`);
+              setSendSuccess(`${verb} for ${results.length} group${results.length === 1 ? '' : 's'}.`);
               setSelectedGroupIds([]);
               setDirectMessage('');
               setMediaUrl('');
+              setSchedule(EMPTY_SCHEDULE);
             } else if (failures.length === results.length) {
               setSendError(extractErrorMessage(failures[0].r.reason, 'Could not queue this group dispatch.'));
             } else {
               const succeeded = results.length - failures.length;
               const failedNames = failures.map((f) => groupName(f.groupId)).join(', ');
-              setSendSuccess(`Queued for ${succeeded} of ${results.length} group(s). Failed: ${failedNames}.`);
+              setSendSuccess(`${verb} for ${succeeded} of ${results.length} group(s). Failed: ${failedNames}.`);
               setSelectedGroupIds(failures.map((f) => f.groupId));
             }
         } else if (recipientPhones.length > 1) {
-          const results = await Promise.allSettled(
-            recipientPhones.map((phone) =>
-              alertService.sendDirect({ recipient_type: 'individual', recipient_phone: phone, message, media_url: media }),
-            ),
-          );
-          const failures = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
-
-          if (failures.length === 0) {
-            setSendSuccess(`Sent to ${results.length} recipients.`);
-            setRecipientPhone('');
-            setDirectMessage('');
-            setMediaUrl('');
-          } else if (failures.length === results.length) {
-            setSendError(extractErrorMessage(failures[0].reason, 'Could not send this message.'));
-          } else {
-            setSendSuccess(`Sent to ${results.length - failures.length} of ${results.length} recipient(s). ${failures.length} failed.`);
-          }
-        } else {
-          await alertService.sendDirect({ recipient_type: 'individual', recipient_phone: recipientPhones[0], message, media_url: media });
-          setSendSuccess('Sent to 1 recipient.');
+          const response = await messageBatchService.createBulk({
+            recipient_phones: recipientPhones,
+            message_text: message,
+            variables: {},
+            media_url: media,
+            sender_number_ids: senderNumberId ? [senderNumberId] : [],
+            scheduled_at,
+          });
+          setSendSuccess(response.message);
           setRecipientPhone('');
           setDirectMessage('');
           setMediaUrl('');
+          setSchedule(EMPTY_SCHEDULE);
+        } else {
+          const response = await alertService.sendDirect({
+            recipient_type: 'individual',
+            recipient_phone: recipientPhones[0],
+            message,
+            media_url: media,
+            sender_number_id,
+            scheduled_at,
+          });
+          setSendSuccess(response.scheduled ? 'Scheduled for later.' : 'Sent to 1 recipient.');
+          setRecipientPhone('');
+          setDirectMessage('');
+          setMediaUrl('');
+          setSchedule(EMPTY_SCHEDULE);
         }
       } else {
         // noTemplate is false here, so selectedTemplate is non-null by construction (guarded above);
@@ -759,7 +776,7 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
             setSendSuccess(`Queued for ${succeeded} of ${results.length} group(s). Failed: ${failedNames}.`);
             setSelectedGroupIds(failures.map((f) => f.groupId));
           }
-        } else if (isBulk || recipientPhones.length > 1) {
+        } else if (recipientPhones.length > 1) {
           // Anti-Spam Bulk Dispatch — ONE call enqueues all N recipients as
           // individually rate-limited, randomly-delayed background jobs
           // (see MessageTemplateController::sendBulk()'s docblock) instead
@@ -775,7 +792,7 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
             template_id: template.id,
             recipient_phones: recipientPhones,
             variables,
-            sender_number_ids: bulkSenderIds,
+            sender_number_ids: senderNumberId ? [senderNumberId] : [],
             ...(scheduledIso ? { scheduled_at: scheduledIso } : {}),
             // Omit the key entirely when blank rather than sending an empty
             // string — the backend only overrides the template's own media
@@ -894,27 +911,63 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
 
   return (
     <div className="space-y-6">
-      {isBulk && (
-        <div className="mb-4 flex gap-2">
-          {(['type', 'file'] as const).map((tab) => (
-            <button
-              key={tab}
-              type="button"
-              onClick={() => setBulkTab(tab)}
-              className={`rounded-lg border px-3 py-1.5 text-sm font-medium transition ${
-                bulkTab === tab ? 'border-indigo-600 bg-indigo-50 text-indigo-700' : 'border-slate-300 text-slate-600 hover:bg-slate-50'
-              }`}
-            >
-              {tab === 'type' ? 'Type numbers' : 'Upload Excel or CSV'}
-            </button>
-          ))}
+      <div>
+        <label className="text-sm font-medium text-slate-700">Send To</label>
+        <div className="mt-1.5 flex gap-2">
+          <button
+            type="button"
+            onClick={() => {
+              setRecipientType('individual');
+              setIsBulk(false);
+            }}
+            className={`flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-sm font-medium transition ${
+              recipientType === 'individual' && !isBulk
+                ? 'border-indigo-600 bg-indigo-50 text-indigo-700'
+                : 'border-slate-300 text-slate-600 hover:bg-slate-50'
+            }`}
+          >
+            <Send className="h-3.5 w-3.5" />
+            Individual
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setRecipientType('group');
+              setIsBulk(false);
+            }}
+            className={`flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-sm font-medium transition ${
+              recipientType === 'group'
+                ? 'border-indigo-600 bg-indigo-50 text-indigo-700'
+                : 'border-slate-300 text-slate-600 hover:bg-slate-50'
+            }`}
+          >
+            <Users className="h-3.5 w-3.5" />
+            Group
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setRecipientType('individual');
+              setIsBulk(true);
+            }}
+            className={`flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-sm font-medium transition ${
+              isBulk ? 'border-indigo-600 bg-indigo-50 text-indigo-700' : 'border-slate-300 text-slate-600 hover:bg-slate-50'
+            }`}
+          >
+            <Upload className="h-3.5 w-3.5" />
+            Bulk
+          </button>
         </div>
-      )}
+      </div>
 
-      {!(isBulk && bulkTab === 'file') && (
+      {!isBulk && (
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
       <form onSubmit={(e) => void handleSubmit(e)} className="space-y-4">
-        {!noTemplate && !isBulk && senderNumbers.length > 0 && (
+        {!isBulk && senderNumbers.length === 0 && (
+          <p className="text-xs text-amber-700">No connected WhatsApp number. Connect a number in WhatsApp Setup to choose the number to send from.</p>
+        )}
+
+        {!isBulk && senderNumbers.length > 0 && (
           <div>
             <label htmlFor="send-from-number" className="text-sm font-medium text-slate-700">Send from</label>
             <select
@@ -933,33 +986,6 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
               Only connected numbers are listed. A group is sent only from the number it was created on.
             </p>
           </div>
-        )}
-
-        {isBulk && !noTemplate && senderNumbers.length > 0 && (
-          <fieldset className="space-y-2 rounded-lg border border-slate-200 bg-slate-50/60 p-3">
-            <legend className="px-1 text-sm font-medium text-slate-700">
-              Send from these numbers <span className="text-red-500">*</span>
-            </legend>
-            <div className="flex flex-wrap gap-2">
-              {senderNumbers.map((n) => (
-                <label key={n.id} className="flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm">
-                  <input
-                    type="checkbox"
-                    checked={bulkSenderIds.includes(n.id)}
-                    disabled={isSending}
-                    onChange={(e) =>
-                      setBulkSenderIds((prev) => (e.target.checked ? [...prev, n.id] : prev.filter((id) => id !== n.id)))
-                    }
-                  />
-                  <span className="font-mono text-xs">{n.phone_number}</span>
-                  {n.is_default && <span className="text-[10px] font-semibold text-indigo-700">default</span>}
-                </label>
-              ))}
-            </div>
-            <p className="text-[11px] text-slate-500">
-              Only connected numbers are listed. Messages go out from the ticked numbers in turn, and each number waits 25 seconds between its own messages.
-            </p>
-          </fieldset>
         )}
 
         <div>
@@ -1009,55 +1035,6 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
             <RequestTemplateModal onClose={() => setShowRequestTemplate(false)} onSubmitted={handleTemplateRequested} />
           )}
           {showMyTemplates && <MyTemplatesModal onClose={() => setShowMyTemplates(false)} />}
-        </div>
-
-        <div>
-          <label className="text-sm font-medium text-slate-700">Send To</label>
-          <div className="mt-1.5 flex gap-2">
-            <button
-              type="button"
-              onClick={() => {
-                setRecipientType('individual');
-                setIsBulk(false);
-              }}
-              className={`flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-sm font-medium transition ${
-                recipientType === 'individual' && !isBulk
-                  ? 'border-indigo-600 bg-indigo-50 text-indigo-700'
-                  : 'border-slate-300 text-slate-600 hover:bg-slate-50'
-              }`}
-            >
-              <Send className="h-3.5 w-3.5" />
-              Individual
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setRecipientType('group');
-                setIsBulk(false);
-              }}
-              className={`flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-sm font-medium transition ${
-                recipientType === 'group'
-                  ? 'border-indigo-600 bg-indigo-50 text-indigo-700'
-                  : 'border-slate-300 text-slate-600 hover:bg-slate-50'
-              }`}
-            >
-              <Users className="h-3.5 w-3.5" />
-              Group
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setRecipientType('individual');
-                setIsBulk(true);
-              }}
-              className={`flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-sm font-medium transition ${
-                isBulk ? 'border-indigo-600 bg-indigo-50 text-indigo-700' : 'border-slate-300 text-slate-600 hover:bg-slate-50'
-              }`}
-            >
-              <Upload className="h-3.5 w-3.5" />
-              Bulk
-            </button>
-          </div>
         </div>
 
         {recipientType === 'individual' ? (
@@ -1118,6 +1095,9 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
                 className={inputClass}
               />
               <div className="mt-1 flex flex-wrap items-center gap-2">
+                <span className={`text-[11px] ${exceedsMaxRecipients ? 'text-red-600' : 'text-slate-500'}`}>
+                  Up to {MAX_BULK_RECIPIENTS} numbers here: {recipientPhones.length} / {MAX_BULK_RECIPIENTS}
+                </span>
                 {recipientPhones.length > 0 && (
                   <span
                     className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ring-inset ${
@@ -1134,7 +1114,7 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
               {exceedsMaxRecipients && (
                 <DismissibleAlert className="mt-2 flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-medium text-red-700">
                   <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0" />
-                  Bulk allows up to {MAX_BULK_RECIPIENTS} numbers. For more, upload an Excel file in the Batch section below.
+                  Up to {MAX_BULK_RECIPIENTS} numbers here. For more, choose Bulk and upload an Excel or CSV file.
                 </DismissibleAlert>
               )}
             </div>
@@ -1160,6 +1140,14 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
                 </Link>
                 .
               </p>
+            ) : groupsOnSender.length === 0 ? (
+              <p className="mt-1.5 text-sm text-slate-500">
+                No contact groups are on {senderNumbers.find((n) => n.id === senderNumberId)?.phone_number ?? 'this number'} yet.{' '}
+                <Link to="/contact-groups" className="font-medium text-indigo-600 hover:text-indigo-700">
+                  Create a group for this number
+                </Link>
+                .
+              </p>
             ) : (
               <div className="mt-1.5 max-h-40 space-y-1 overflow-y-auto rounded-lg border border-slate-300 p-2">
                 {groupsOnSender.map((group) => (
@@ -1182,6 +1170,12 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
                   </label>
                 ))}
               </div>
+            )}
+            {selectedGroupIds.some((id) => groups.find((g) => g.id === id)?.group_type === 'internal_segment') && (
+              <p className="mt-1.5 text-xs text-slate-500">
+                A custom group (Internal Segment) sends this as a separate message to each member, one by one — not
+                as a single group chat message.
+              </p>
             )}
           </div>
         )}
@@ -1317,7 +1311,7 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
                 : recipientType === 'group' && groups.length === 0
                   ? 'No contact groups exist yet — create one under Contact Groups first.'
                 : recipientType === 'individual' && exceedsMaxRecipients
-                  ? `Maximum ${MAX_BULK_RECIPIENTS} contacts allowed per batch.`
+                  ? `Up to ${MAX_BULK_RECIPIENTS} numbers here. For more, choose Bulk and upload an Excel or CSV file.`
                   : recipientType === 'individual' && recipientPhones.length > 1 && isOnCooldown
                     ? `Bulk dispatch is on cooldown. Try again in ${formatCooldownRemaining(cooldownRemainingSeconds ?? 0)}.`
                     : undefined
@@ -1325,7 +1319,13 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
           className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:opacity-60"
         >
           {isSending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-          {isSending ? 'Sending…' : noTemplate ? (recipientType === 'group' ? 'Send to Group(s)' : 'Send Message') : scheduledIso ? 'Schedule message' : recipientType === 'group' ? 'Send to Group(s)' : 'Send Template'}
+          {isSending
+            ? 'Sending…'
+            : scheduledIso
+              ? 'Schedule message'
+              : noTemplate
+                ? (recipientType === 'group' ? 'Send to Group(s)' : 'Send Message')
+                : (recipientType === 'group' ? 'Send to Group(s)' : 'Send Template')}
         </button>
       </form>
 
@@ -1350,7 +1350,14 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
                 </p>
               )}
               {recipientType === 'group' && (
-                <p className="mt-1 text-xs text-slate-500">Sending to multiple groups? Call this endpoint once per group_code.</p>
+                <>
+                  <p className="mt-1 text-xs text-slate-500">Sending to multiple groups? Call this endpoint once per group_code.</p>
+                  <p className="mt-1 text-xs text-slate-500">
+                    group_code can be a Native WhatsApp Group (one message, one group chat) or a custom group —
+                    "Internal Segment" on the Contact Groups page (free, no limit). A custom group's group_code
+                    sends this as a separate message to every member, one by one, not as a single group message.
+                  </p>
+                </>
               )}
               {recipientType === 'individual' && recipientPhones.length > 1 && (
                 <>
@@ -1359,7 +1366,9 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
                     queued {recipientPhones.length} calls for you above.
                   </p>
                   <p className="mt-1 text-xs text-slate-500">
-                    Messages are sent in batches of 10 with a 1-2 minute anti-spam pause between batches.
+                    Calling the API itself? Leave a few seconds between calls so the sending number isn't flagged as
+                    spam -- this screen's own Bulk option (Excel/CSV upload, dashboard-only) already paces that for
+                    you automatically.
                   </p>
                 </>
               )}
@@ -1440,13 +1449,7 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
       </div>
       )}
 
-      {isBulk && bulkTab === 'file' && (
-        <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
-          <div>
-            <BatchSendPanel senders={senderNumbers} disabled={isSending} />
-          </div>
-        </section>
-      )}
+      {isBulk && <BatchSendPanel senders={senderNumbers} disabled={isSending} />}
     </div>
   );
 }

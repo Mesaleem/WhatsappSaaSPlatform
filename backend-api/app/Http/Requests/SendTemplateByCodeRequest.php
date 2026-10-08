@@ -66,7 +66,7 @@ class SendTemplateByCodeRequest extends FormRequest
     {
         return [
             'template_code' => ['required', 'string', 'max:100'],
-            'recipient_phone' => ['required', 'string', 'max:20'],
+            'recipient_phone' => ['required', 'string', 'max:20', 'not_regex:/,/'],
             'variables' => ['sometimes', 'array'],
             // Media Templates (send-time override, QR/Baileys-only) --
             // identical, deliberately lenient handling to
@@ -90,6 +90,7 @@ class SendTemplateByCodeRequest extends FormRequest
     public function messages(): array
     {
         $messages = [
+            'recipient_phone.not_regex' => 'The Developer API sends to one number per request. To send to more than one number (up to 30), make one request per number. For a larger list, use Bulk in the dashboard and upload an Excel or CSV file.',
             'text.required_if' => 'The "text" field is required when template_code is "'.MessageTemplate::NO_TEMPLATE_CODE.'".',
         ];
 

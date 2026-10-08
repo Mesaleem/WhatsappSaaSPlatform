@@ -467,6 +467,8 @@ Route::middleware('auth:sanctum')->group(function () {
             // Uniqueness and the lock rules live in WhatsAppNumberService.
             Route::get('/numbers', [WhatsAppNumberController::class, 'index']);
             Route::post('/numbers', [WhatsAppNumberController::class, 'store']);
+            // Self-service number change on a disconnected slot -- no approval needed.
+            Route::put('/numbers/{id}', [WhatsAppNumberController::class, 'update'])->whereNumber('id');
             Route::put('/numbers/{id}/default', [WhatsAppNumberController::class, 'setDefault'])->whereNumber('id');
             Route::delete('/numbers/{id}', [WhatsAppNumberController::class, 'destroy'])->whereNumber('id');
             // A slot holding a wrongly entered number: the client asks for a change; a Super Admin or agent decides.
@@ -1139,6 +1141,10 @@ Route::middleware('auth:sanctum')->group(function () {
             // group has no such {id} route today, but this ordering
             // guards against one being added later without noticing).
             Route::get('/message-templates/mine', [MessageTemplateController::class, 'myTemplates']);
+            // Session-authenticated list/cancel for a scheduled send -- template or "No template", individual or
+            // group -- the internal counterpart of the Developer API's own DELETE /v1/scheduled-messages/{id}.
+            Route::get('/scheduled-messages', [\App\Http\Controllers\Api\ScheduledMessageController::class, 'index']);
+            Route::post('/scheduled-messages/{id}/cancel', [\App\Http\Controllers\Api\ScheduledMessageController::class, 'cancel'])->whereNumber('id');
         });
 
         // Group Messaging Phase 2: Contact Group Management APIs. Same
@@ -1162,8 +1168,13 @@ Route::middleware('auth:sanctum')->group(function () {
         // Sanctum bearer token, not an API key). These live under the
         // same tenant.isolation/subscription.guard group as every other
         // internal page instead, at /api/groups* (no /v1).
-        Route::middleware(['permission:send-messages', 'module.guard:contact_groups'])->prefix('groups')->group(function () {
-            // After a downgrade: the client chooses which of its groups stay open for the term.
+        // [Re-scoped 2026-10-07, disclosed]: module.guard:contact_groups removed from this whole
+        // group -- internal_segment groups are now a free, always-on baseline feature (no module
+        // gate at all); a native_wa_group remains gated, but separately, by `whatsapp_groups`
+        // (capability.guard below) and a numeric term allowance checked inline in the controller --
+        // see ContactGroupController's own re-scoping docblock.
+        Route::middleware(['permission:send-messages'])->prefix('groups')->group(function () {
+            // After a downgrade: the client chooses which of its Native WhatsApp Groups stay open for the term.
             Route::post('/keep', [ContactGroupController::class, 'keep']);
             Route::get('/', [ContactGroupController::class, 'index']);
             Route::post('/create', [ContactGroupController::class, 'store']);
@@ -1190,14 +1201,19 @@ Route::middleware('auth:sanctum')->group(function () {
             // the way /create's native_wa_group path does.
             Route::post('/import-native', [ContactGroupController::class, 'importNative'])->middleware('capability.guard:whatsapp_groups');
             Route::post('/add-contacts', [ContactGroupController::class, 'addContacts']);
+            // "Manage Members" -- list a group's members (paginated) and remove one. Internal
+            // segment groups only; a Native WhatsApp Group's membership is read-only here, changed
+            // only from WhatsApp itself (see ContactGroupController::removeContact()'s docblock).
+            Route::get('/{id}/contacts', [ContactGroupController::class, 'listContacts'])->whereNumber('id');
+            Route::delete('/{id}/contacts/{memberId}', [ContactGroupController::class, 'removeContact'])->whereNumber(['id', 'memberId']);
             Route::delete('/{id}', [ContactGroupController::class, 'destroy']);
             // [New, disclosed]: previously there was NO session-authenticated
             // way to send a message to a group at all — GroupMessageDispatcher
             // was only reachable from the external, API-key-gated
             // /api/v1/send-message endpoint. This is the internal, Sanctum
             // counterpart the Send Alert screen now calls. Same
-            // permission:send-messages + module.guard:contact_groups gate as
-            // every other route in this group — no new permission tier.
+            // permission:send-messages gate as every other route in this
+            // group — no new permission tier.
             Route::post('/{id}/send-template', [ContactGroupController::class, 'sendTemplate']);
             // [New, disclosed]: one-click response to a native_wa_group
             // stuck at sync_status='failed' (initial creation failure, or
@@ -1470,13 +1486,20 @@ Route::middleware('auth:sanctum')->group(function () {
     // revoke / re-bind a server, disable a key's API access. Never returns a key, credential or hash.
     Route::middleware('role:super_admin')->prefix('admin/api-access')->group(function () {
         Route::get('/', [ApiKeyBindingAdminController::class, 'index']);
+        // Phase 4 Task 14 -- must be registered before the /{keyId}/... routes below so the literal
+        // path segment is never swallowed by the {keyId} wildcard.
+        Route::get('/legacy-retirement-gate', [ApiKeyBindingAdminController::class, 'legacyRetirementGate']);
         Route::get('/change-requests', [ApiKeyBindingAdminController::class, 'changeRequests']);
         Route::post('/change-requests/{requestId}/approve', [ApiKeyBindingAdminController::class, 'approve'])->whereNumber('requestId');
         Route::post('/change-requests/{requestId}/reject', [ApiKeyBindingAdminController::class, 'reject'])->whereNumber('requestId');
         Route::post('/{keyId}/revoke', [ApiKeyBindingAdminController::class, 'revoke'])->whereNumber('keyId');
+        // Phase 4 Task 12 — Super Admin equivalent of the tenant-only DELETE /api/developer/api-keys/{id}.
+        Route::delete('/{keyId}', [ApiKeyBindingAdminController::class, 'destroy'])->whereNumber('keyId');
         Route::post('/{keyId}/rebind', [ApiKeyBindingAdminController::class, 'rebind'])->whereNumber('keyId');
         Route::post('/{keyId}/disable', [ApiKeyBindingAdminController::class, 'disable'])->whereNumber('keyId');
         Route::post('/{keyId}/enable', [ApiKeyBindingAdminController::class, 'enable'])->whereNumber('keyId');
+        // Phase 4 Task 9
+        Route::post('/{keyId}/cooldown', [ApiKeyBindingAdminController::class, 'overrideCooldown'])->whereNumber('keyId');
         Route::get('/{keyId}/events', [ApiKeyBindingAdminController::class, 'events'])->whereNumber('keyId');
     });
 

@@ -5,6 +5,7 @@ namespace App\Services\Access;
 use App\Jobs\ReconcilePlanAccountsJob;
 use App\Models\Capability;
 use App\Models\Plan;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
@@ -39,6 +40,23 @@ use Illuminate\Validation\ValidationException;
  * customer on that plan is entitled to, so modify() dispatches
  * ReconcilePlanAccountsJob rather than leaving the fleet inconsistent
  * until someone remembers to run a command.
+ *
+ * PHASE 4 TASK 2 UPDATE: every capability in the bundle used to be
+ * attached with `usage_limit => null` unconditionally — the pivot
+ * column existed but nothing ever wrote a real number into it.
+ * create()/modify() now accept an optional `$capabilityLimits` map
+ * (slug => int|null) so a metered capability (api_installations first,
+ * following the same pivot the seeder already uses for whatsapp_send)
+ * can carry a concrete, non-negative usage_limit. A capability NOT
+ * present in that map still gets `usage_limit => null` on a bundle
+ * write, so `external_api` and every other unmetered capability keeps
+ * its exact prior behavior.
+ *
+ * modify() also supports a LIMIT-ONLY update: calling it with
+ * `$capabilities === null` (bundle untouched) but a non-empty
+ * `$capabilityLimits` updates the usage_limit pivot value of whichever
+ * named capabilities are ALREADY in the plan's bundle, without
+ * resending (and risking silently altering) the whole membership list.
  */
 class PlanManagementService
 {
@@ -52,12 +70,14 @@ class PlanManagementService
      * same arguments leaves the same state.
      *
      * @param array<int, string> $capabilities capability SLUGS
+     * @param array<string, int|null> $capabilityLimits slug => usage_limit; a slug not in the bundle is ignored; a slug in the bundle but absent here gets usage_limit = null (unchanged default)
      */
-    public function create(string $slug, array $attributes, array $capabilities = []): Plan
+    public function create(string $slug, array $attributes, array $capabilities = [], array $capabilityLimits = []): Plan
     {
-        $capabilityIds = $this->resolveCapabilities($capabilities);
+        $this->assertNoNegativeLimits($capabilityLimits);
+        $idsBySlug = $this->resolveCapabilityIdsBySlug($capabilities);
 
-        return DB::transaction(function () use ($slug, $attributes, $capabilityIds) {
+        return DB::transaction(function () use ($slug, $attributes, $idsBySlug, $capabilityLimits) {
             $plan = Plan::firstOrCreate(['slug' => $slug], [
                 'label' => $attributes['label'] ?? $slug,
                 'price' => $attributes['price'] ?? 0,
@@ -75,11 +95,11 @@ class PlanManagementService
                 'is_active' => $attributes['is_active'] ?? true,
             ]);
 
-            if ($capabilityIds !== []) {
+            if ($idsBySlug->isNotEmpty()) {
                 // syncWithoutDetaching, never sync(): additive, and the
                 // unique index is the real duplicate guard.
                 $plan->capabilities()->syncWithoutDetaching(
-                    collect($capabilityIds)->mapWithKeys(fn (int $id) => [$id => ['usage_limit' => null]])->all()
+                    $this->pivotPayload($idsBySlug, $capabilityLimits)
                 );
             }
 
@@ -94,16 +114,18 @@ class PlanManagementService
      * an absent key leaves it untouched — those are different requests).
      *
      * @param array<string, mixed> $attributes may contain label/price/duration_days/description
-     * @param array<int, string>|null $capabilities NULL = do not touch the bundle
+     * @param array<int, string>|null $capabilities NULL = do not touch bundle MEMBERSHIP
+     * @param array<string, int|null> $capabilityLimits slug => usage_limit. When $capabilities is given, applied as part of the bundle rewrite (same as create()). When $capabilities is null, applied as a LIMIT-ONLY update to whichever of these slugs are already bundled; a slug here that is not currently bundled is silently skipped (the caller — PlanManagementController — is expected to have already rejected that case).
      * @return array{plan: Plan, bundle_changed: bool, added: array<int,string>, removed: array<int,string>}
      */
-    public function modify(Plan $plan, array $attributes = [], ?array $capabilities = null, ?int $actorUserId = null): array
+    public function modify(Plan $plan, array $attributes = [], ?array $capabilities = null, ?int $actorUserId = null, array $capabilityLimits = []): array
     {
-        $capabilityIds = $capabilities === null ? null : $this->resolveCapabilities($capabilities);
+        $this->assertNoNegativeLimits($capabilityLimits);
+        $idsBySlug = $capabilities === null ? null : $this->resolveCapabilityIdsBySlug($capabilities);
 
         $before = $plan->capabilities()->pluck('slug')->sort()->values()->all();
 
-        $result = DB::transaction(function () use ($plan, $attributes, $capabilityIds) {
+        $result = DB::transaction(function () use ($plan, $attributes, $idsBySlug, $capabilityLimits) {
             // Core plan data — pricing dimension. Written only for keys
             // that were actually supplied.
             $core = array_intersect_key($attributes, array_flip([
@@ -124,11 +146,23 @@ class PlanManagementService
                 $plan->update($core);
             }
 
-            // Capability dimension — only when explicitly supplied.
-            if ($capabilityIds !== null) {
+            if ($idsBySlug !== null) {
+                // Capability dimension, membership change — only when
+                // explicitly supplied.
                 $plan->capabilities()->sync(
-                    collect($capabilityIds)->mapWithKeys(fn (int $id) => [$id => ['usage_limit' => null]])->all()
+                    $this->pivotPayload($idsBySlug, $capabilityLimits)
                 );
+            } elseif ($capabilityLimits !== []) {
+                // Phase 4 Task 2 — limit-only update: membership is left
+                // untouched, but any of these slugs that are ALREADY
+                // bundled get their usage_limit pivot value updated in
+                // place, without resending the whole membership list.
+                $currentIdsBySlug = $plan->capabilities()->pluck('capabilities.id', 'capabilities.slug');
+                foreach ($capabilityLimits as $slug => $limit) {
+                    if ($currentIdsBySlug->has($slug)) {
+                        $plan->capabilities()->updateExistingPivot($currentIdsBySlug[$slug], ['usage_limit' => $limit]);
+                    }
+                }
             }
 
             return $plan->fresh('capabilities');
@@ -159,20 +193,59 @@ class PlanManagementService
     }
 
     /**
+     * Builds the sync()/syncWithoutDetaching() pivot payload: every
+     * capability id in the bundle maps to ['usage_limit' => ...], where
+     * the value is the caller-supplied limit for that slug if one was
+     * given, and null otherwise — exactly the previous unconditional-null
+     * behavior for any slug not present in $capabilityLimits.
+     *
+     * @param Collection<string, int> $idsBySlug slug => capability id
+     * @param array<string, int|null> $capabilityLimits slug => usage_limit
+     * @return array<int, array{usage_limit: int|null}>
+     */
+    private function pivotPayload(Collection $idsBySlug, array $capabilityLimits): array
+    {
+        return $idsBySlug->mapWithKeys(
+            fn (int $id, string $slug) => [$id => ['usage_limit' => $capabilityLimits[$slug] ?? null]]
+        )->all();
+    }
+
+    /**
+     * Phase 4 Task 2, requirement 6 — a negative usage_limit must be
+     * rejected when creating/updating a plan. The HTTP layer
+     * (PlanManagementController) already validates this with
+     * `min:0` on each `capability_limits.*` entry; this is defense in
+     * depth for any other caller of this service (artisan command,
+     * future job, a test) that does not go through that validation.
+     *
+     * @param array<string, int|null> $capabilityLimits
+     */
+    private function assertNoNegativeLimits(array $capabilityLimits): void
+    {
+        $negative = array_keys(array_filter($capabilityLimits, fn ($limit) => $limit !== null && $limit < 0));
+
+        if ($negative !== []) {
+            throw ValidationException::withMessages([
+                'capability_limits' => ['usage_limit cannot be negative for: '.implode(', ', $negative).'.'],
+            ]);
+        }
+    }
+
+    /**
      * Slugs -> ids, rejecting anything unseeded. Deduplicates, so a
      * payload listing the same capability twice cannot produce two rows
      * (the unique index would stop it anyway; this makes the intent
      * explicit and the error message useful).
      *
      * @param array<int, string> $slugs
-     * @return array<int, int>
+     * @return Collection<string, int> slug => id
      */
-    private function resolveCapabilities(array $slugs): array
+    private function resolveCapabilityIdsBySlug(array $slugs): Collection
     {
         $slugs = array_values(array_unique(array_filter($slugs)));
 
         if ($slugs === []) {
-            return [];
+            return collect();
         }
 
         $found = Capability::whereIn('slug', $slugs)->pluck('id', 'slug');
@@ -185,6 +258,6 @@ class PlanManagementService
             ]);
         }
 
-        return $found->values()->all();
+        return $found;
     }
 }

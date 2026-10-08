@@ -167,13 +167,23 @@ class PublicApiRequestLoggingTest extends TestCase
     // lacks the required module) is logged with a 403 status and CORRECT
     // tenant/key attribution -- unlike an auth failure, the tenant/key
     // were genuinely resolved here and must be recorded.
+    /**
+     * [Re-scoped 2026-10-07, disclosed]: internal_segment group creation is no longer gated by any
+     * module/entitlement at all (free, always-on -- see ContactGroupController's own re-scoping
+     * docblock), so this now exercises the one entitlement group creation still has: `whatsapp_groups`,
+     * for a native_wa_group specifically (no subscription is granted here, so the capability is
+     * absent by construction -- same as every other case in this file not calling giveActiveSubscription()).
+     */
     public function test_authorization_failure_is_safely_logged_with_correct_attribution(): void
     {
-        $account = Account::factory()->create(['allowed_modules' => ['dashboard', 'send_alert']]); // 'contact_groups' deliberately absent
+        $account = Account::factory()->create();
         $issued = $this->issueApiKey($account);
 
         $response = $this->withHeaders(['X-API-KEY' => $issued['key'], 'X-API-SECRET' => $issued['secret']])
-            ->postJson('/api/v1/whatsapp/groups/create', ['name' => 'Sales Team']);
+            ->postJson('/api/v1/whatsapp/groups/create', [
+                'name' => 'Sales Team', 'group_type' => 'native_wa_group',
+                'contacts' => [['phone_number' => '919999999999']],
+            ]);
 
         $response->assertStatus(403);
 

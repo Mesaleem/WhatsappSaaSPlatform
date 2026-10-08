@@ -39,19 +39,26 @@ class BulkSendController extends Controller
         $data = $request->validate([
             'recipient_phones' => ['required', 'array', 'min:1', 'max:'.self::MAX_NUMBERS],
             'recipient_phones.*' => ['required', 'string', 'max:20'],
-            'template_id' => ['required', 'integer'],
+            // Either a template, or free text (optionally with media) — the same "No template" choice offered elsewhere.
+            'template_id' => ['nullable', 'integer'],
+            'message_text' => ['nullable', 'string', 'max:4096'],
             'variables' => ['nullable', 'array'],
             'media_url' => ['nullable', 'string', 'max:2048'],
             'sender_number_ids' => ['required', 'array', 'min:1', 'max:10'],
             'sender_number_ids.*' => ['integer', 'distinct'],
             'scheduled_at' => ['nullable', 'date'],
         ], [
-            'recipient_phones.max' => 'Bulk allows up to '.self::MAX_NUMBERS.' numbers. For more, upload an Excel file in the Batch section below.',
+            'recipient_phones.max' => 'Bulk allows up to '.self::MAX_NUMBERS.' numbers. For more, use Bulk in the dashboard and upload an Excel or CSV file.',
         ]);
 
-        $template = MessageTemplate::query()->approvedFor($account->id)->whereKey((int) $data['template_id'])->first();
-        if (! $template) {
-            return response()->json(['message' => 'Choose an approved template for this account.', 'error_code' => 'TEMPLATE_NOT_APPROVED'], 422);
+        $template = null;
+        if (isset($data['template_id'])) {
+            $template = MessageTemplate::query()->approvedFor($account->id)->whereKey((int) $data['template_id'])->first();
+            if (! $template) {
+                return response()->json(['message' => 'Choose an approved template for this account.', 'error_code' => 'TEMPLATE_NOT_APPROVED'], 422);
+            }
+        } elseif (trim((string) ($data['message_text'] ?? '')) === '' && trim((string) ($data['media_url'] ?? '')) === '') {
+            return response()->json(['message' => 'Choose a template, or write a message or attach a media URL.', 'error_code' => 'TEMPLATE_OR_TEXT_REQUIRED'], 422);
         }
 
         // Every typed number must be a phone number; a bad one is named, so the user can fix it before anything is sent.
@@ -87,13 +94,14 @@ class BulkSendController extends Controller
             $batch = $this->batches->create($account, $request->user(), ['phones' => $numbers, 'invalid' => 0, 'rows' => count($numbers)], '', [
                 'kind' => 'bulk',
                 'title' => 'Bulk: '.count($numbers).' '.(count($numbers) === 1 ? 'number' : 'numbers'),
-                'template_id' => $template->id,
+                'template_id' => $template?->id,
+                'message_text' => $data['message_text'] ?? null,
                 'sender_number_ids' => $senders,
                 'variables' => $data['variables'] ?? [],
                 'media_url' => $data['media_url'] ?? null,
                 // Up to MAX_NUMBERS numbers fit in one batch, so the interval between batches never applies here.
                 'batch_size' => self::MAX_NUMBERS,
-                'interval_minutes' => 1,
+                'interval_minutes' => 0,
                 'scheduled_at' => \App\Services\Scheduling\ScheduledMessageService::parseSendAt($data['scheduled_at'] ?? null),
             ]);
         } catch (BatchException $e) {

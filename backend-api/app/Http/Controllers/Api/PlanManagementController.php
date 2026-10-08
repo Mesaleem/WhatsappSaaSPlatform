@@ -5,12 +5,14 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Capability;
 use App\Models\Plan;
+use App\Services\ApiAccess\InstallationAllowanceResolver;
 use App\Services\Access\PlanEntitlementReconciliationService;
 use App\Services\Access\PlanManagementService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
 
 /**
  * Phase 5 Task 10 — Super-Admin plan management.
@@ -34,6 +36,22 @@ use Illuminate\Validation\Rule;
  * it". Those are different requests and the service treats them so —
  * a price edit can never silently re-bundle, and a bundle edit can
  * never silently re-price.
+ *
+ * PHASE 4 TASK 2 UPDATE: a new, optional `capability_limits` input
+ * (slug => non-negative int|null) lets a bundled capability carry a
+ * concrete `plan_entitlements.usage_limit`, the same pivot column
+ * `whatsapp_send` already uses via the seeder — nothing new in the
+ * schema, only the first admin-facing write path for it. Every
+ * capability NOT named in `capability_limits` keeps the prior
+ * unconditional-null behavior, so `external_api` and every other
+ * unmetered capability is unaffected.
+ *
+ * REQUIREMENT 7 (api_installations foundation): a plan that bundles
+ * `external_api` must also bundle `api_installations` with an explicit,
+ * concrete, non-negative usage_limit before that plan is considered a
+ * valid installation-enforcement source. Checked on both store() and
+ * update(), against the FINAL bundle/limit the request would produce —
+ * mirrors assertCreditsNeedAi()'s existing "final state" pattern below.
  */
 class PlanManagementController extends Controller
 {
@@ -59,8 +77,59 @@ class PlanManagementController extends Controller
     private function assertCreditsNeedAi(int $includedCredits, array $capabilities): void
     {
         if ($includedCredits > 0 && ! in_array(\App\Services\Credits\CreditEntitlementService::CAPABILITY, $capabilities, true)) {
-            throw \Illuminate\Validation\ValidationException::withMessages([
+            throw ValidationException::withMessages([
                 'included_credits' => ['A plan can include credits only if it also includes the "ai" capability.'],
+            ]);
+        }
+    }
+
+    /**
+     * Phase 4 Task 2, requirement 7 — a plan selling `external_api` must
+     * also sell `api_installations` with a concrete, non-negative limit.
+     * `usage_limit = 0` IS concrete (explicit deny, requirement 3) — only
+     * an absent capability or a NULL limit fails this check.
+     *
+     * @param  array<int, string>  $finalCapabilities  the plan's resulting bundle
+     * @param  array<string, int|null>  $finalCapabilityLimits  slug => usage_limit, resulting state
+     */
+    private function assertApiInstallationsConcreteWhenExternalApi(array $finalCapabilities, array $finalCapabilityLimits): void
+    {
+        if (! in_array('external_api', $finalCapabilities, true)) {
+            return;
+        }
+
+        if (! in_array(InstallationAllowanceResolver::CAPABILITY, $finalCapabilities, true)) {
+            throw ValidationException::withMessages([
+                'capabilities' => ['A plan that includes external_api must also include api_installations.'],
+            ]);
+        }
+
+        $limit = $finalCapabilityLimits[InstallationAllowanceResolver::CAPABILITY] ?? null;
+
+        if ($limit === null) {
+            throw ValidationException::withMessages([
+                'capability_limits.'.InstallationAllowanceResolver::CAPABILITY => ['A plan that includes external_api must set a concrete, non-negative usage_limit for api_installations (0 or greater).'],
+            ]);
+        }
+    }
+
+    /**
+     * Every key of `capability_limits` must name a capability that is
+     * actually in the plan's resulting bundle — a limit for a capability
+     * the plan does not (or no longer) sell is meaningless and silently
+     * dropped by the service's pivot write otherwise, which would hide a
+     * typo'd slug from the caller instead of rejecting it.
+     *
+     * @param  array<string, int|null>  $capabilityLimits
+     * @param  array<int, string>  $finalCapabilities
+     */
+    private function assertCapabilityLimitKeysAreBundled(array $capabilityLimits, array $finalCapabilities): void
+    {
+        $unbundled = array_diff(array_keys($capabilityLimits), $finalCapabilities);
+
+        if ($unbundled !== []) {
+            throw ValidationException::withMessages([
+                'capability_limits' => ['capability_limits names a capability not in this plan\'s bundle: '.implode(', ', $unbundled).'.'],
             ]);
         }
     }
@@ -90,6 +159,12 @@ class PlanManagementController extends Controller
             'included_credits' => (int) $plan->included_credits,
             'is_active' => $plan->is_active,
             'capabilities' => $plan->capabilities->pluck('slug')->sort()->values()->all(),
+            // Phase 4 Task 2 — the pivot usage_limit per capability, so an
+            // admin UI (or this task's tests) can see what each bundled
+            // capability's concrete limit is, not only whether it's sold.
+            'capability_limits' => $plan->capabilities->mapWithKeys(
+                fn (Capability $c) => [$c->slug => $c->pivot->usage_limit === null ? null : (int) $c->pivot->usage_limit]
+            ),
             'accounts' => $this->reconciler->candidateAccountIdsForPlan($plan->slug)->count(),
         ]);
 
@@ -154,11 +229,21 @@ class PlanManagementController extends Controller
             // distinct stops a payload listing the same capability twice;
             // exists stops an invented slug reaching the service.
             'capabilities.*' => ['string', 'distinct', Rule::exists('capabilities', 'slug')],
+            // Phase 4 Task 2 — slug => usage_limit. min:0 rejects a
+            // negative value here, at the HTTP boundary, before it ever
+            // reaches the service (requirement 6).
+            'capability_limits' => ['sometimes', 'array'],
+            'capability_limits.*' => ['nullable', 'integer', 'min:0'],
         ]);
 
-        $this->assertCreditsNeedAi((int) ($data['included_credits'] ?? 0), $data['capabilities'] ?? []);
+        $finalCapabilities = $data['capabilities'] ?? [];
+        $finalCapabilityLimits = $data['capability_limits'] ?? [];
 
-        $plan = $this->plans->create($data['slug'], $data, $data['capabilities'] ?? []);
+        $this->assertCreditsNeedAi((int) ($data['included_credits'] ?? 0), $finalCapabilities);
+        $this->assertCapabilityLimitKeysAreBundled($finalCapabilityLimits, $finalCapabilities);
+        $this->assertApiInstallationsConcreteWhenExternalApi($finalCapabilities, $finalCapabilityLimits);
+
+        $plan = $this->plans->create($data['slug'], $data, $finalCapabilities, $finalCapabilityLimits);
 
         return response()->json([
             'message' => 'Plan created.',
@@ -166,6 +251,9 @@ class PlanManagementController extends Controller
                 'slug' => $plan->slug,
                 'included_credits' => (int) $plan->included_credits,
                 'capabilities' => $plan->capabilities->pluck('slug')->sort()->values()->all(),
+                'capability_limits' => $plan->capabilities->mapWithKeys(
+                    fn (Capability $c) => [$c->slug => $c->pivot->usage_limit === null ? null : (int) $c->pivot->usage_limit]
+                ),
             ],
         ], 201);
     }
@@ -197,20 +285,55 @@ class PlanManagementController extends Controller
             'is_active' => ['sometimes', 'boolean'],
             'capabilities' => ['sometimes', 'array'],
             'capabilities.*' => ['string', 'distinct', Rule::exists('capabilities', 'slug')],
+            // Phase 4 Task 2 — see store().
+            'capability_limits' => ['sometimes', 'array'],
+            'capability_limits.*' => ['nullable', 'integer', 'min:0'],
         ]);
+
+        $bundleTouched = array_key_exists('capabilities', $data);
+        $finalCapabilities = $bundleTouched ? $data['capabilities'] : $plan->capabilities()->pluck('slug')->all();
+
+        // The resulting usage_limit per capability after this request:
+        // an explicitly supplied limit wins; otherwise, if the capability
+        // remains bundled and the bundle itself is being rewritten in
+        // this call, its existing pivot value survives unless overwritten
+        // (modify() only touches the pivot when $capabilities is
+        // supplied at all, in which case every bundled capability's
+        // limit is resolved here the same way PlanManagementService
+        // resolves it, so this check sees the TRUE resulting state).
+        $existingLimitsBySlug = $plan->capabilities->mapWithKeys(
+            fn (Capability $c) => [$c->slug => $c->pivot->usage_limit === null ? null : (int) $c->pivot->usage_limit]
+        )->all();
+        $suppliedLimits = $data['capability_limits'] ?? [];
+        $finalCapabilityLimits = [];
+        foreach ($finalCapabilities as $capSlug) {
+            $finalCapabilityLimits[$capSlug] = array_key_exists($capSlug, $suppliedLimits)
+                ? $suppliedLimits[$capSlug]
+                : ($bundleTouched ? null : ($existingLimitsBySlug[$capSlug] ?? null));
+        }
 
         $this->assertCreditsNeedAi(
             (int) ($data['included_credits'] ?? $plan->included_credits),
-            array_key_exists('capabilities', $data) ? $data['capabilities'] : $plan->capabilities()->pluck('slug')->all(),
+            $finalCapabilities,
         );
+        $this->assertCapabilityLimitKeysAreBundled($suppliedLimits, $finalCapabilities);
+        $this->assertApiInstallationsConcreteWhenExternalApi($finalCapabilities, $finalCapabilityLimits);
 
         $result = $this->plans->modify(
             $plan,
             $data,
             // array_key_exists, not ??: an explicit [] must clear the
             // bundle, while an absent key must leave it untouched.
-            array_key_exists('capabilities', $data) ? $data['capabilities'] : null,
+            $bundleTouched ? $data['capabilities'] : null,
             $request->user()?->id,
+            // Pass only what was actually supplied this call, not the
+            // merged final-state map computed above for validation — the
+            // service resolves any omitted slug itself (to null on a
+            // bundle rewrite, or by leaving it untouched on a limit-only
+            // update), so resending every existing value here would cause
+            // needless pivot writes/updated_at churn for capabilities the
+            // admin never touched.
+            $suppliedLimits,
         );
 
         return response()->json([
@@ -221,6 +344,9 @@ class PlanManagementController extends Controller
                 'slug' => $result['plan']->slug,
                 'included_credits' => (int) $result['plan']->included_credits,
                 'capabilities' => $result['plan']->capabilities->pluck('slug')->sort()->values()->all(),
+                'capability_limits' => $result['plan']->capabilities->mapWithKeys(
+                    fn (Capability $c) => [$c->slug => $c->pivot->usage_limit === null ? null : (int) $c->pivot->usage_limit]
+                ),
                 'bundle_changed' => $result['bundle_changed'],
                 'added' => $result['added'],
                 'removed' => $result['removed'],

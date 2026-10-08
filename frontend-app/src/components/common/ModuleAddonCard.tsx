@@ -58,7 +58,8 @@ export default function ModuleAddonCard({ module, accountId, enabled, unitLabel 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [module, accountId]);
 
-  if (!offer || enabled) return null;
+  // Hidden once the module is enabled for this account, or the Super Admin has switched it free for everyone.
+  if (!offer || enabled || offer.is_free) return null;
 
   const tiers = offer.tiers ?? [];
   const count = Number.parseInt(units, 10);

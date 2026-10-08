@@ -7,21 +7,27 @@ use App\Models\Invoice;
 use App\Models\ModuleAddonRequest;
 use App\Models\Subscription;
 use App\Models\User;
+use App\Models\WhatsAppSession;
 use Database\Seeders\Phase1FoundationSeeder;
 use Database\Seeders\RolePermissionSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Queue;
+use Tests\Concerns\GrantsNativeWhatsAppGroups;
 use Tests\TestCase;
 
-/** Custom Contact Groups is priced by how many groups the client needs (tiers set by Super Admin). */
+/** Native WhatsApp Groups is priced by how many groups the client needs (tiers set by Super Admin). */
 class ModuleAddonTierTest extends TestCase
 {
-    use RefreshDatabase;
+    use RefreshDatabase, GrantsNativeWhatsAppGroups;
 
     protected function setUp(): void
     {
         parent::setUp();
         $this->seed(RolePermissionSeeder::class);
         $this->seed(Phase1FoundationSeeder::class);
+        Queue::fake();
+        Http::fake(['*' => Http::response(['success' => true, 'groups' => []], 200)]);
     }
 
     private function client(?Account $agent = null): array
@@ -72,9 +78,13 @@ class ModuleAddonTierTest extends TestCase
 
     public function test_the_group_limit_is_the_units_of_the_paid_term(): void
     {
-        // The module is off until the payment switches it on (it is not included in the plan).
-        [, $user] = $this->client();
-        $account = $user->account;
+        // Native WhatsApp Groups needs the `whatsapp_groups` capability too -- the paid term here
+        // only narrows the COUNT, it is not what turns the feature on at all (see
+        // CustomGroupAccessService's own re-scoping docblock).
+        [$account, $user] = $this->client();
+        WhatsAppSession::create(['account_id' => $account->id, 'status' => 'connected']);
+        $this->grantNativeWhatsAppGroups($account);
+
         $id = $this->actingAs($user)->postJson('/api/module-addons/request', ['module' => 'contact_groups', 'units' => 2])
             ->assertCreated()->json('data.id');
         $this->actingAs($this->superAdmin())->postJson("/api/admin/module-addons/{$id}/approve")->assertOk();
@@ -82,9 +92,9 @@ class ModuleAddonTierTest extends TestCase
             'amount' => 99, 'method' => 'cash', 'transaction_id' => 'G-2', 'paid_on' => now()->toDateString(),
         ])->assertOk();
 
-        $this->actingAs($user)->postJson('/api/groups/create', ['name' => 'A', 'group_type' => 'internal_segment', 'contacts' => [['phone_number' => '919876543210']]])->assertCreated();
-        $this->actingAs($user)->postJson('/api/groups/create', ['name' => 'B', 'group_type' => 'internal_segment', 'contacts' => [['phone_number' => '919876543211']]])->assertCreated();
-        $this->actingAs($user)->postJson('/api/groups/create', ['name' => 'C', 'group_type' => 'internal_segment', 'contacts' => [['phone_number' => '919876543212']]])
+        $this->actingAs($user)->postJson('/api/groups/create', ['name' => 'A', 'group_type' => 'native_wa_group', 'contacts' => [['phone_number' => '919876543210']]])->assertCreated();
+        $this->actingAs($user)->postJson('/api/groups/create', ['name' => 'B', 'group_type' => 'native_wa_group', 'contacts' => [['phone_number' => '919876543211']]])->assertCreated();
+        $this->actingAs($user)->postJson('/api/groups/create', ['name' => 'C', 'group_type' => 'native_wa_group', 'contacts' => [['phone_number' => '919876543212']]])
             ->assertUnprocessable()
             ->assertJsonPath('error_code', 'group_limit_reached');
     }

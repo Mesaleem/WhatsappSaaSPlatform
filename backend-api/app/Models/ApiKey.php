@@ -31,6 +31,14 @@ class ApiKey extends Model
         'revoked_at',
         'access_disabled_at',
         'access_disabled_reason',
+        // Phase 4 Task 5 — legacy API-key binding backfill deadline
+        // foundation. NULL for every key except one the backfill
+        // command actually bound (see BackfillApiKeyLegacyBindings).
+        'legacy_binding_grace_expires_at',
+        // Phase 4 Task 6 — per-key cooldown storage primitive. NULL
+        // until Task 9 wires an actual policy that sets it
+        // (ApiKeyBindingService::setCooldown()/clearCooldown()).
+        'cooldown_until',
     ];
 
     /**
@@ -50,6 +58,8 @@ class ApiKey extends Model
             'expires_at' => 'datetime',
             'revoked_at' => 'datetime',
             'access_disabled_at' => 'datetime',
+            'legacy_binding_grace_expires_at' => 'datetime',
+            'cooldown_until' => 'datetime',
         ];
     }
 
@@ -66,7 +76,10 @@ class ApiKey extends Model
     /** The pending/active authorized server, if any (at most one - enforced by a unique slot). */
     public function liveBinding(): ?ApiKeyBinding
     {
-        return $this->bindings()->whereIn('status', [ApiKeyBinding::STATUS_PENDING, ApiKeyBinding::STATUS_ACTIVE])->first();
+        // Phase 4 Task 3 — reads the same live() scope the account-wide
+        // counting seam uses (ApiKeyBindingService::countLiveInstallations()),
+        // rather than repeating the status list here.
+        return $this->bindings()->live()->first();
     }
 
     public function isAccessDisabled(): bool
@@ -93,6 +106,16 @@ class ApiKey extends Model
     public function isValid(): bool
     {
         return ! $this->isRevoked() && ! $this->isExpired();
+    }
+
+    /**
+     * Phase 4 Task 6 — read-side half of the cooldown primitive. Not
+     * consulted by gate() or any enforcement path yet (that is Task 9);
+     * provided now so Task 9 only has to call it, not design it.
+     */
+    public function isInCooldown(): bool
+    {
+        return $this->cooldown_until !== null && $this->cooldown_until->isFuture();
     }
 
     /** SHA-256 hex digest — the only form of the key ever persisted. */

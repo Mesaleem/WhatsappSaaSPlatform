@@ -724,18 +724,23 @@ class PublicApiIdempotencyTest extends TestCase
     }
 
     /**
-     * An entitlement/module denial is a non-2xx like any other failure:
-     * nothing was sent, so the key must be released for a genuine retry
-     * once the module is enabled. Ties the module gate (Task 2/3 scope)
-     * to the idempotency cleanup contract.
+     * An entitlement denial is a non-2xx like any other failure: nothing was sent, so the key must
+     * be released for a genuine retry once the account is entitled. Ties the `whatsapp_groups`
+     * capability gate to the idempotency cleanup contract.
+     *
+     * [Re-scoped 2026-10-07, disclosed]: internal_segment group creation is no longer gated by a
+     * module at all (free, always-on -- see ContactGroupController's own re-scoping docblock), so
+     * this now exercises the one entitlement group creation still has: `whatsapp_groups`, for a
+     * native_wa_group specifically.
      */
-    public function test_module_entitlement_denial_does_not_consume_the_key(): void
+    public function test_native_group_entitlement_denial_does_not_consume_the_key(): void
     {
-        $account = Account::factory()->create([
-            'allowed_modules' => ['dashboard', 'send_alert', 'developer_api'], // contact_groups deliberately absent (P5-B: developer_api kept on so the group gate is what refuses)
-        ]);
-        $this->giveActiveSubscription($account);
+        $account = Account::factory()->create();
+        $this->giveActiveSubscription($account); // 'starter' -- includes whatsapp_groups; revoked below
         $this->connectSession($account);
+        \App\Models\AccountEntitlement::where('account_id', $account->id)
+            ->whereHas('capability', fn ($q) => $q->where('slug', 'whatsapp_groups'))
+            ->update(['revoked_at' => now(), 'revoked_reason' => 'test']);
         $issued = $this->issueApiKey($account);
 
         $denied = $this->withHeaders([
@@ -744,11 +749,12 @@ class PublicApiIdempotencyTest extends TestCase
             'Idempotency-Key' => 'module-denied-key',
         ])->postJson('/api/v1/whatsapp/groups/create', [
             'name' => 'Test group',
-            'group_type' => 'internal_segment',
+            'group_type' => 'native_wa_group',
+            'contacts' => [['phone_number' => '919999999999']],
         ]);
 
         $denied->assertStatus(403);
-        $denied->assertJson(['error_code' => 'GROUP_MODULE_DISABLED']);
+        $denied->assertJson(['error_code' => 'CAPABILITY_NOT_ENTITLED']);
 
         $this->assertSame(0, ApiIdempotencyKey::query()->where('idempotency_key', 'module-denied-key')->count());
     }

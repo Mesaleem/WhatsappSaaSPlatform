@@ -87,11 +87,17 @@ export default function ApiAccessPage() {
       <section aria-label="API keys" className="overflow-x-auto rounded-lg border border-slate-200 bg-white">
         <table className="min-w-full text-left text-sm">
           <thead className="bg-slate-50 text-xs uppercase text-slate-500">
-            <tr><th className="p-2">Account</th><th className="p-2">Key</th><th className="p-2">Status</th><th className="p-2">Server</th><th className="p-2">Registered IP</th><th className="p-2">Last IP</th><th className="p-2">Last used</th><th className="p-2">Actions</th></tr>
+            <tr>
+              <th className="p-2">Account</th><th className="p-2">Key</th><th className="p-2">Status</th><th className="p-2">Server</th>
+              <th className="p-2">Registered IP</th><th className="p-2">Last IP</th><th className="p-2">Last used</th>
+              <th className="p-2">Credential</th><th className="p-2">Cooldown</th><th className="p-2">Legacy</th><th className="p-2">Installations</th>
+              <th className="p-2">Actions</th>
+            </tr>
           </thead>
           <tbody>
             {rows.map((k) => {
               const b = k.server_binding.binding;
+              const usage = k.installation_usage;
               return (
                 <tr key={k.id} className="border-t border-slate-100">
                   <td className="p-2">{k.account_name ?? k.account_id}</td>
@@ -101,12 +107,45 @@ export default function ApiAccessPage() {
                   <td className="p-2 font-mono text-xs">{b?.registered_ip ?? '—'}</td>
                   <td className="p-2 font-mono text-xs">{b?.last_success_ip ?? '—'}</td>
                   <td className="p-2">{fmt(b?.last_success_at ?? k.last_used_at)}</td>
+                  <td className="p-2">{b === null ? '—' : k.server_binding.credential_pending ? 'Pending' : 'Configured'}</td>
+                  <td className="p-2">{k.server_binding.in_cooldown ? `Until ${fmt(k.server_binding.cooldown_until)}` : '—'}</td>
+                  <td className="p-2">
+                    {k.server_binding.legacy_ip_dependent
+                      ? <span className="text-amber-700">IP-dependent{k.server_binding.legacy_deadline ? ` (until ${fmt(k.server_binding.legacy_deadline)})` : ' (no deadline)'}</span>
+                      : '—'}
+                  </td>
+                  <td className="p-2">
+                    {usage ? <span className={usage.at_or_over_allowance ? 'font-medium text-amber-700' : ''}>{usage.live} / {usage.allowance}</span> : '—'}
+                  </td>
                   <td className="flex flex-wrap gap-1 p-2">
                     {b && b.status !== 'revoked' && <button className={btn} disabled={busy !== null} onClick={() => void act(`v${k.id}`, () => apiAccessAdminService.revoke(k.id))}>Revoke server</button>}
                     {k.server_binding.access_disabled
                       ? <button className={btn} disabled={busy !== null} onClick={() => void act(`e${k.id}`, () => apiAccessAdminService.enable(k.id))}>Enable access</button>
                       : <button className={btn} disabled={busy !== null} onClick={() => void act(`d${k.id}`, () => apiAccessAdminService.disable(k.id))}>Disable access</button>}
+                    {k.server_binding.in_cooldown && (
+                      <button
+                        className={btn}
+                        disabled={busy !== null}
+                        onClick={() => {
+                          const reason = window.prompt('Reason for overriding this cooldown (required):');
+                          if (reason && reason.trim()) void act(`c${k.id}`, () => apiAccessAdminService.overrideCooldown(k.id, reason.trim()));
+                        }}
+                      >
+                        Override cooldown
+                      </button>
+                    )}
                     <button className={btn} onClick={() => void showEvents(k.id)}>Events</button>
+                    {k.revoked_at === null && (
+                      <button
+                        className={btn}
+                        disabled={busy !== null}
+                        onClick={() => {
+                          if (window.confirm(`Destroy API key "${k.name}"? This cannot be undone.`)) void act(`x${k.id}`, () => apiAccessAdminService.destroy(k.id));
+                        }}
+                      >
+                        Destroy key
+                      </button>
+                    )}
                   </td>
                 </tr>
               );

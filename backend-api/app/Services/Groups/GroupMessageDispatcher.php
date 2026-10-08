@@ -81,18 +81,12 @@ class GroupMessageDispatcher
             return ['status' => 'not_found', 'message' => 'Account not found.'];
         }
 
-        // Strict Group Permission Guard — the exact same gate
-        // module.guard:contact_groups enforces on the internal
-        // ContactGroupController routes (see EnsureModuleEnabledMiddleware),
-        // checked directly here since this is a single conditional branch
-        // inside one endpoint's body, not a whole route to gate.
-        if (! $account->hasModuleEnabled('contact_groups')) {
-            return [
-                'status' => 'group_access_denied',
-                'message' => 'Your current subscription plan only supports individual message dispatches. Upgrade to unlock Group Messaging.',
-            ];
-        }
-
+        // [Re-scoped 2026-10-07, disclosed]: Strict Group Permission Guard removed -- it used to mirror
+        // module.guard:contact_groups (hasModuleEnabled() is now always true for 'contact_groups', see
+        // Account::effectiveModules()). Group messaging is free for an internal segment group now, the
+        // same as creating one; a Native WhatsApp Group is still gated, separately, by the
+        // `whatsapp_groups` capability -- unaffected by this removal (see the group lookup below,
+        // which checks NativeGroupEntitlement for a native group specifically).
         if (! $account->hasActiveSubscription()) {
             return ['status' => 'quota_exhausted', 'message' => $account->quotaExhaustedMessage()];
         }

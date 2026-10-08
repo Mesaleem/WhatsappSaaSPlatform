@@ -48,6 +48,10 @@ const response: ManagedPlansResponse = {
       included_credits: 0,
       is_active: true,
       capabilities: ['external_api', 'social', 'whatsapp_groups', 'whatsapp_send'],
+      // Task 10 FIX — the real seeded 'starter' plan deliberately has no
+      // api_installations limit at all (see Phase1FoundationSeeder's
+      // PLAN_CAPABILITIES docblock); this fixture mirrors that exactly.
+      capability_limits: {},
       accounts: 12,
     },
     {
@@ -63,6 +67,7 @@ const response: ManagedPlansResponse = {
       included_credits: 2000,
       is_active: false,
       capabilities: ['crm', 'whatsapp_send'],
+      capability_limits: {},
       accounts: 3,
     },
   ],
@@ -485,7 +490,8 @@ describe('after a successful write', () => {
     withScale.data.push({
       slug: 'scale', label: 'Scale', price: 4999, duration_days: 60, description: null,
       engine_type: 'meta', billing_model: 'flat_quota', rate_per_message: null,
-      total_allocated_messages: 25000, included_credits: 0, is_active: true, capabilities: ['whatsapp_send'], accounts: 0,
+      total_allocated_messages: 25000, included_credits: 0, is_active: true, capabilities: ['whatsapp_send'],
+      capability_limits: {}, accounts: 0,
     });
     // open() already consumed the first call; every later read includes it.
     plans.list.mockResolvedValue(withScale);

@@ -43,23 +43,18 @@ class GroupController extends Controller
             return response()->json(['success' => false, 'error_code' => 'NOT_FOUND', 'message' => 'Account not found.'], 404);
         }
 
-        // Same paid-addon gate GroupMessageDispatcher/ContactGroupController
-        // already enforce for every other contact-group action.
-        if (! $account->hasModuleEnabled('contact_groups')) {
-            return response()->json([
-                'success' => false,
-                'error_code' => 'GROUP_MODULE_DISABLED',
-                'message' => 'Group Messaging is a paid feature. Please upgrade your subscription plan to unlock custom contact groups.',
-            ], 403);
-        }
-
         $data = $request->validated();
         $groupType = $data['group_type'] ?? ContactGroup::GROUP_TYPE_INTERNAL;
 
+        // [Re-scoped 2026-10-07, disclosed]: internal_segment groups are a free, always-on baseline
+        // feature for every account -- no module/entitlement gate at all any more (this previously
+        // required `contact_groups` in allowed_modules, GROUP_MODULE_DISABLED on a miss; removed
+        // along with that same gate everywhere else -- see ContactGroupController's own docblock).
         if ($groupType !== ContactGroup::GROUP_TYPE_NATIVE) {
             $group = ContactGroup::create([
                 'account_id' => $account->id,
                 'name' => $data['name'],
+                'group_code' => ContactGroup::generateGroupCode($account->id, $data['name']),
                 'is_default' => false,
                 'group_type' => ContactGroup::GROUP_TYPE_INTERNAL,
             ]);
@@ -71,6 +66,17 @@ class GroupController extends Controller
         // `whatsapp_groups` capability (API keys never bypass it).
         if (! NativeGroupEntitlement::allows($account, 'groups.create_native', 'api_key')) {
             return response()->json(NativeGroupEntitlement::denialBody(), 403);
+        }
+
+        // A paid Native WhatsApp Groups term allows its included number of groups (the offer's units).
+        if (app(\App\Services\Billing\CustomGroupAccessService::class)->limitReached($account)) {
+            $limit = app(\App\Services\Billing\ModuleAddonService::class)->activeUnitLimit($account, 'contact_groups');
+
+            return response()->json([
+                'success' => false,
+                'error_code' => 'group_limit_reached',
+                'message' => "Your plan includes {$limit} native WhatsApp group".($limit === 1 ? '' : 's').'. Renew or upgrade to add more.',
+            ], 422);
         }
 
         // Native WhatsApp group -- requires the 'qr' (Baileys) engine and

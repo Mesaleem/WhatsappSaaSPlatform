@@ -12,10 +12,10 @@ const messageBatchService = {
   create(payload: CreateMessageBatchPayload) {
     const form = new FormData();
     form.append('file', payload.file);
-    form.append('template_id', String(payload.template_id));
+    if (payload.template_id) form.append('template_id', String(payload.template_id));
+    if (payload.message_text) form.append('message_text', payload.message_text);
     payload.sender_number_ids.forEach((id) => form.append('sender_number_ids[]', String(id)));
     form.append('batch_size', String(payload.batch_size));
-    form.append('interval_minutes', String(payload.interval_minutes));
     if (payload.media_url) form.append('media_url', payload.media_url);
     if (payload.title) form.append('title', payload.title);
     if (payload.scheduled_at) form.append('scheduled_at', payload.scheduled_at);

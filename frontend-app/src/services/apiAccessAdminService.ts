@@ -13,6 +13,11 @@ const apiAccessAdminService = {
   disable: (keyId: number, reason?: string) => axiosInstance.post(`/admin/api-access/${keyId}/disable`, { reason }).then((r) => r.data),
   enable: (keyId: number) => axiosInstance.post(`/admin/api-access/${keyId}/enable`).then((r) => r.data),
   events: (keyId: number) => axiosInstance.get<{ data: ApiSecurityEvent[] }>(`/admin/api-access/${keyId}/events`).then((r) => r.data.data),
+  /** Phase 4 Task 12 — wires the Task 9 cooldown-override endpoint into the admin UI; it was reachable by API only before this. */
+  overrideCooldown: (keyId: number, reason: string, until?: string) =>
+    axiosInstance.post<{ message: string; data: ServerBindingSummary }>(`/admin/api-access/${keyId}/cooldown`, { reason, until }).then((r) => r.data),
+  /** Phase 4 Task 12 — Super Admin equivalent of the tenant-only key destroy; delegates to the same ApiKeyBindingService::destroyKey(). */
+  destroy: (keyId: number) => axiosInstance.delete<{ message: string; data: ServerBindingSummary }>(`/admin/api-access/${keyId}`).then((r) => r.data),
 };
 
 export default apiAccessAdminService;

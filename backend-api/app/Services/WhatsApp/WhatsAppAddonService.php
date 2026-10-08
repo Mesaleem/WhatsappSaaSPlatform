@@ -74,6 +74,26 @@ class WhatsAppAddonService
             throw new WhatsAppNumberException('Your plan is not active. Renew it first, then you can add extra numbers.', 'plan_not_active', 422);
         }
 
+        // A number already on THIS account (any status except paused, which purchase() below reuses
+        // the slot for) needs a specific, actionable message -- "connect it" or "pay its invoice" --
+        // not the generic cross-account refusal the QueryException catch below gives. Checked before
+        // the transaction so the caller sees this instead of a raw unique-constraint failure.
+        $own = WhatsAppNumber::query()
+            ->where('account_id', $account->id)
+            ->whereIn('phone_number', $phones)
+            ->where('status', '!=', WhatsAppNumber::STATUS_PAUSED)
+            ->first();
+
+        if ($own !== null) {
+            throw new WhatsAppNumberException(
+                $own->status === WhatsAppNumber::STATUS_PENDING_PAYMENT
+                    ? "+{$own->phone_number} is already in an unpaid invoice on your account. Pay or cancel that invoice before buying it again."
+                    : "+{$own->phone_number} is already on your account (see the list above) — connect it there instead of buying it again.",
+                'number_already_yours',
+                409,
+            );
+        }
+
         $unit = $this->price();
         $total = round($unit * count($phones), 2);
 

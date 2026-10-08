@@ -535,7 +535,7 @@ class Account extends Model
         }
 
         if ($this->agent_id === null) {
-            return array_values($own);
+            return self::withFreeBaselineModules($own);
         }
 
         $agentAccount = self::findCached($this->agent_id);
@@ -548,7 +548,7 @@ class Account extends Model
             // this codebase, per this hierarchy's first migration's
             // docblock), kept only so this method never mis-grants if
             // that ever changes.
-            return [];
+            return self::withFreeBaselineModules([]);
         }
 
         $agentOwnModules = $agentAccount->allowed_modules ?? self::MODULES;
@@ -556,7 +556,27 @@ class Account extends Model
             $agentOwnModules = array_values(array_intersect($agentOwnModules, $activeKeys));
         }
 
-        return array_values(array_intersect($own, $agentOwnModules));
+        return self::withFreeBaselineModules(array_intersect($own, $agentOwnModules));
+    }
+
+    /**
+     * Modules every account always has, regardless of allowed_modules/the Agent-Client hierarchy
+     * above — a standing exception to "the account's plan decides", for a module that is no longer
+     * something a plan can restrict at all.
+     *
+     * `contact_groups` (2026-10-07, disclosed, owner instruction): Custom Contact Groups (internal
+     * segment lists — each member gets their own DM) are now a free, always-on baseline feature for
+     * every account holding `send-messages`, never gated by allowed_modules/module.guard. Native
+     * WhatsApp Groups (a real group chat) remain the chargeable, plan-limited half of this same
+     * route surface — gated separately, by the `whatsapp_groups` capability (NativeGroupEntitlement)
+     * and a numeric term allowance (CustomGroupAccessService), neither of which this list controls.
+     *
+     * @param  list<string>  $modules
+     * @return list<string>
+     */
+    private static function withFreeBaselineModules(array $modules): array
+    {
+        return array_values(array_unique([...$modules, 'contact_groups']));
     }
 
     /** Phase 11 Task 1 — the industries this account operates in. */

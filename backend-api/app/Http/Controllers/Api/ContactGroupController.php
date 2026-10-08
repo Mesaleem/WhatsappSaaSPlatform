@@ -5,7 +5,6 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Concerns\ResolvesTenantAccount;
 use App\Http\Controllers\Controller;
 use App\Jobs\CreateNativeWhatsAppGroupJob;
-use App\Jobs\SyncNativeWhatsAppGroupParticipantsJob;
 use App\Models\Account;
 use App\Models\ScheduledMessage;
 use App\Services\Scheduling\ScheduledMessageException;
@@ -27,14 +26,17 @@ use Illuminate\Validation\Rule;
  * Group Messaging Phase 2, extended by the Native WhatsApp Group
  * Re-Architecture — Contact Group Management APIs.
  *
- * Gated the same way /alerts above is: `permission:send-messages` (the
- * same tenant users who can already send WhatsApp messages manage the
- * lists they send to) PLUS `module.guard:contact_groups` on the whole
- * route group (routes/api.php) — a paid addon, so even a user who
- * holds send-messages is blocked unless their tenant's allowed_modules
- * includes it. The module-guard 403 shape (success/error_code/message)
- * is handled centrally by EnsureModuleEnabledMiddleware's
- * CUSTOM_RESPONSES map, not duplicated here.
+ * [Re-scoped 2026-10-07, disclosed]: `internal_segment` ("Custom Contact
+ * Groups" — a DB broadcast list; each member gets their own DM) is now a
+ * free, always-on baseline feature for every account holding
+ * `send-messages` — unlimited, no paid add-on, no module gate (see
+ * Account::effectiveModules(), which now always includes
+ * 'contact_groups'). A `native_wa_group` (a real WhatsApp group chat)
+ * remains the chargeable, plan-limited one — gated by the `whatsapp_groups`
+ * capability (NativeGroupEntitlement, on/off) AND, new in this pass, a
+ * numeric count against the SAME paid add-on this whole route group used
+ * to gate everything with (CustomGroupAccessService, now re-scoped to
+ * count native groups instead of internal ones — see its own docblock).
  *
  * Every action uses requireAccount() (422 if no tenant is resolvable),
  * not resolveAccount()'s nullable "Super Admin, no client selected"
@@ -45,10 +47,18 @@ class ContactGroupController extends Controller
 {
     use ResolvesTenantAccount;
 
+    /** The body addContacts()/removeContact() answer with for a Native WhatsApp Group. */
+    private const NATIVE_MEMBERSHIP_DENIAL = [
+        'success' => false,
+        'error_code' => 'NATIVE_GROUP_MEMBERSHIP_VIA_WHATSAPP_ONLY',
+        'message' => 'Add or remove members of a Native WhatsApp Group from WhatsApp itself, on your phone — this app only reflects the group, it cannot change who is in it.',
+    ];
+
     /** GET /api/groups — every contact group for the active account, with members_count. */
     /**
-     * POST /api/groups/keep  body: { keep_ids: [..] } — after a downgrade, the client chooses which of
-     * its groups stay open for the term. The others stay locked until the next term starts.
+     * POST /api/groups/keep  body: { keep_ids: [..] } — after a downgrade, the client chooses which
+     * of its Native WhatsApp Groups stay open for the term. The others stay locked until the next
+     * term starts. Internal segment groups are never locked (they are unlimited and free).
      */
     public function keep(Request $request): JsonResponse
     {
@@ -67,19 +77,6 @@ class ContactGroupController extends Controller
         ]);
     }
 
-    /**
-     * The groups a paid Custom Contact Groups term counts: the client's own internal groups. The
-     * default "All Contacts" group and native WhatsApp groups are not counted.
-     */
-    private function customGroupCount(Account $account): int
-    {
-        return ContactGroup::query()
-            ->where('account_id', $account->id)
-            ->where('is_default', false)
-            ->where('group_type', ContactGroup::GROUP_TYPE_INTERNAL)
-            ->count();
-    }
-
     public function index(Request $request): JsonResponse
     {
         $account = $this->requireAccount($request);
@@ -91,16 +88,13 @@ class ContactGroupController extends Controller
             ->orderBy('name')
             ->get();
 
-        $limit = app(\App\Services\Billing\ModuleAddonService::class)->activeUnitLimit($account, 'contact_groups');
-
         return response()->json([
             'success' => true,
             'data' => $groups,
-            'usage' => [
-                'used' => $this->customGroupCount($account),
-                'limit' => $limit,
-                'selection_required' => app(\App\Services\Billing\CustomGroupAccessService::class)->selectionRequired($account),
-            ],
+            // "usage" is about Native WhatsApp Groups only -- internal segment groups are unlimited,
+            // so they have nothing to report here (see this controller's own re-scoping docblock).
+            'usage' => app(\App\Services\Billing\CustomGroupAccessService::class)->usage($account)
+                + ['selection_required' => app(\App\Services\Billing\CustomGroupAccessService::class)->selectionRequired($account)],
         ]);
     }
 
@@ -142,9 +136,14 @@ class ContactGroupController extends Controller
         $data = $request->validate([
             'name' => ['required', 'string', 'max:255'],
             'group_type' => ['sometimes', 'string', Rule::in(ContactGroup::GROUP_TYPES)],
+            // Required for a native group (Baileys' groupCreate() has no empty-group concept); optional for an
+            // internal segment -- it can start empty and get members later via "Import Contacts"/add-contacts.
             'contacts' => ['required_if:group_type,'.ContactGroup::GROUP_TYPE_NATIVE, 'array', 'min:1'],
             'contacts.*.phone_number' => ['required_with:contacts', 'string', 'max:32'],
             'contacts.*.name' => ['nullable', 'string', 'max:255'],
+            // Which linked number this group belongs to; omitted = the default number. Native groups still use the
+            // account's one connected session (see storeNativeGroup()), so this applies to a Custom Contact Group only.
+            'whatsapp_number_id' => ['sometimes', 'nullable', 'integer'],
         ]);
 
         $groupType = $data['group_type'] ?? ContactGroup::GROUP_TYPE_INTERNAL;
@@ -156,31 +155,71 @@ class ContactGroupController extends Controller
                 return response()->json(NativeGroupEntitlement::denialBody(), 403);
             }
 
+            // A paid Native WhatsApp Groups term allows its included number of groups (the offer's units).
+            if (app(\App\Services\Billing\CustomGroupAccessService::class)->limitReached($account)) {
+                $limit = app(\App\Services\Billing\ModuleAddonService::class)->activeUnitLimit($account, 'contact_groups');
+
+                return response()->json([
+                    'success' => false,
+                    'message' => "Your plan includes {$limit} native WhatsApp group".($limit === 1 ? '' : 's').'. Renew or upgrade to add more.',
+                    'error_code' => 'group_limit_reached',
+                ], 422);
+            }
+
             return $this->storeNativeGroup($account, $data);
         }
 
-        // A paid Custom Contact Groups term allows its included number of groups (the offer's units).
-        $limit = app(\App\Services\Billing\ModuleAddonService::class)->activeUnitLimit($account, 'contact_groups');
-        if ($limit !== null && $this->customGroupCount($account) >= $limit) {
-            return response()->json([
-                'message' => "Your plan includes {$limit} contact groups. Renew or upgrade to add more.",
-                'error_code' => 'group_limit_reached',
-            ], 422);
+        // Internal segment groups are a free, always-on feature -- no limit, no paid term required.
+        try {
+            $numberId = app(\App\Services\WhatsApp\SenderNumberResolver::class)->resolve($account, $data['whatsapp_number_id'] ?? null);
+        } catch (\App\Services\WhatsApp\SenderNumberException $e) {
+            return response()->json(['success' => false, 'message' => $e->getMessage(), 'error_code' => $e->errorCode], $e->status);
         }
 
         $group = ContactGroup::create([
             'account_id' => $account->id,
             'name' => $data['name'],
             'group_code' => ContactGroup::generateGroupCode($account->id, $data['name']),
-            'whatsapp_number_id' => app(\App\Services\WhatsApp\SenderNumberResolver::class)->defaultId($account),
+            'whatsapp_number_id' => $numberId,
             'is_default' => false,
             'group_type' => ContactGroup::GROUP_TYPE_INTERNAL,
         ]);
 
+        // Optional starting members -- a custom/internal group needs no minimum (unlike a native
+        // group, which Baileys cannot create empty), but letting the caller seed it right away saves
+        // a separate add-contacts round trip for the common "I already have the list" case.
+        if (! empty($data['contacts'])) {
+            $this->insertMembers($group, $data['contacts']);
+        }
+
         return response()->json([
             'success' => true,
-            'data' => $group,
+            'data' => $group->loadCount('members'),
         ], 201);
+    }
+
+    /**
+     * @param  list<array{phone_number: string, name?: string|null}>  $contacts
+     */
+    private function insertMembers(ContactGroup $group, array $contacts): void
+    {
+        $now = now();
+        $rows = collect($contacts)
+            ->map(fn (array $c) => [
+                'group_id' => $group->id,
+                'account_id' => $group->account_id,
+                'phone_number' => PhoneNumberNormalizer::normalize($c['phone_number']),
+                'name' => $c['name'] ?? null,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ])
+            ->all();
+
+        ContactGroupMember::upsert($rows, ['group_id', 'phone_number'], ['name', 'updated_at']);
+
+        // Phase 6 CRM Hardening (Issue 8) -- same reconciliation addContacts() already does for a
+        // later add; a group created with its starting members gets the exact same treatment.
+        app(ContactGroupContactLinker::class)->linkGroupQuietly($group);
     }
 
     private function storeNativeGroup(Account $account, array $data): JsonResponse
@@ -352,6 +391,18 @@ class ContactGroupController extends Controller
             ], 422);
         }
 
+        // A paid Native WhatsApp Groups term allows its included number of groups (the offer's units)
+        // -- importing an existing group still adds one more native group row, same as creating one.
+        if (app(\App\Services\Billing\CustomGroupAccessService::class)->limitReached($account)) {
+            $limit = app(\App\Services\Billing\ModuleAddonService::class)->activeUnitLimit($account, 'contact_groups');
+
+            return response()->json([
+                'success' => false,
+                'message' => "Your plan includes {$limit} native WhatsApp group".($limit === 1 ? '' : 's').'. Renew or upgrade to add more.',
+                'error_code' => 'group_limit_reached',
+            ], 422);
+        }
+
         $name = $data['name'] ?? $metadata['subject'] ?? 'Imported WhatsApp Group';
 
         $group = NativeGroupCreationService::importExisting(
@@ -386,14 +437,17 @@ class ContactGroupController extends Controller
      * phone_number in the same group updates its name instead of
      * erroring or inserting a second row.
      *
-     * Native WhatsApp Group Re-Architecture addition: for a synced
-     * native group (isSyncedNativeGroup()), the same phone numbers are
-     * also queued to be added to the REAL WhatsApp group
-     * (SyncNativeWhatsAppGroupParticipantsJob) — see that job's docblock
-     * for why this doesn't touch the group's own sync_status. A native
-     * group that is still 'pending' or 'failed' only gets its local
-     * shadow-copy rows updated here, same as before; there is no live
-     * group yet to add participants to.
+     * [Re-scoped 2026-10-07, disclosed]: internal segment groups only.
+     * A Native WhatsApp Group's membership is no longer editable from
+     * this dashboard at all — adding (or removing) someone from a real
+     * WhatsApp group is now always done from WhatsApp itself, on the
+     * tenant's own phone, the same way any other WhatsApp group works.
+     * This previously also pushed the same numbers into the real group
+     * via SyncNativeWhatsAppGroupParticipantsJob (Phase 5 P5-C); that
+     * path is removed, not merely gated, per the owner's explicit
+     * instruction that a native group's membership should never be
+     * written to from the app, only read (sync_status/participant count
+     * still come FROM WhatsApp, at creation/import time).
      */
     public function addContacts(Request $request): JsonResponse
     {
@@ -409,46 +463,11 @@ class ContactGroupController extends Controller
         $group = ContactGroup::where('account_id', $account->id)->find($data['group_id']);
         abort_if(! $group, 404, 'Contact group not found.');
 
-        // Phase 5 P5-C — adding members to a Native WhatsApp Group changes
-        // the real group's participants; refused before any write.
-        if ($group->isNative() && ! NativeGroupEntitlement::allows($account, 'groups.add_contacts_native', 'api', (bool) $request->attributes->get('is_super_admin'))) {
-            return response()->json(NativeGroupEntitlement::denialBody(), 403);
+        if ($group->isNative()) {
+            return response()->json(self::NATIVE_MEMBERSHIP_DENIAL, 422);
         }
 
-        $now = now();
-        $rows = collect($data['contacts'])
-            ->map(fn (array $c) => [
-                'group_id' => $group->id,
-                // Round 2 — contact_group_members.account_id is NOT NULL
-                // and half of the composite (group_id, account_id)
-                // foreign key. Taken from the group, never from input.
-                'account_id' => $group->account_id,
-                'phone_number' => PhoneNumberNormalizer::normalize($c['phone_number']),
-                'name' => $c['name'] ?? null,
-                'created_at' => $now,
-                'updated_at' => $now,
-            ])
-            ->all();
-
-        ContactGroupMember::upsert($rows, ['group_id', 'phone_number'], ['name', 'updated_at']);
-
-        /*
-         * Phase 6 CRM Hardening (Issue 8) — reconcile the imported rows
-         * to universal CRM Contacts, resolving each one against THIS
-         * group's own account (contact_group_members has no account_id;
-         * ownership is derived from group_id -> contact_groups
-         * .account_id, which is how a caller can never reach another
-         * tenant's contact from here). Runs after the upsert and only
-         * over contact_id IS NULL rows, so re-importing the same list
-         * creates nothing. Quietly: a CRM reconciliation failure must
-         * not fail a contact import that already succeeded.
-         */
-        app(ContactGroupContactLinker::class)->linkGroupQuietly($group);
-
-        if ($group->isSyncedNativeGroup()) {
-            $phones = collect($data['contacts'])->pluck('phone_number')->all();
-            SyncNativeWhatsAppGroupParticipantsJob::dispatch($group->id, $phones);
-        }
+        $this->insertMembers($group, $data['contacts']);
 
         return response()->json([
             'success' => true,
@@ -456,6 +475,52 @@ class ContactGroupController extends Controller
                 'group_id' => $group->id,
                 'members_count' => $group->members()->count(),
             ],
+        ]);
+    }
+
+    /**
+     * GET /api/groups/{id}/contacts — the group's members, newest first, paginated (50/page). Used
+     * by the "Manage Members" view so a member can be picked for removal; a native group's real
+     * member list is shown read-only here too (see removeContact()'s own docblock for why removal
+     * is refused for one).
+     */
+    public function listContacts(Request $request, int $id): JsonResponse
+    {
+        $account = $this->requireAccount($request);
+        $group = ContactGroup::where('account_id', $account->id)->find($id);
+        abort_if(! $group, 404, 'Contact group not found.');
+
+        $paginator = $group->members()->orderByDesc('id')->paginate(50);
+
+        return response()->json([
+            'success' => true,
+            'data' => $paginator->items(),
+            'meta' => ['current_page' => $paginator->currentPage(), 'last_page' => $paginator->lastPage(), 'total' => $paginator->total()],
+        ]);
+    }
+
+    /**
+     * DELETE /api/groups/{id}/contacts/{memberId} — removes one member from an internal segment
+     * group. Refused for a Native WhatsApp Group: its real membership is only ever changed from
+     * WhatsApp itself (see addContacts()'s own re-scoping docblock) — removing someone here would
+     * only desync this app's shadow copy from the real group, not actually remove them from it.
+     */
+    public function removeContact(Request $request, int $id, int $memberId): JsonResponse
+    {
+        $account = $this->requireAccount($request);
+        $group = ContactGroup::where('account_id', $account->id)->find($id);
+        abort_if(! $group, 404, 'Contact group not found.');
+
+        if ($group->isNative()) {
+            return response()->json(self::NATIVE_MEMBERSHIP_DENIAL, 422);
+        }
+
+        $deleted = $group->members()->whereKey($memberId)->delete();
+        abort_if(! $deleted, 404, 'This member is not in the group.');
+
+        return response()->json([
+            'success' => true,
+            'data' => ['group_id' => $group->id, 'members_count' => $group->members()->count()],
         ]);
     }
 

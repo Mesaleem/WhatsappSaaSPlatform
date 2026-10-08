@@ -75,7 +75,7 @@ class SendMessageRequest extends FormRequest
         return [
             'recipient_type' => ['required', Rule::in(['individual', 'group'])],
             'template_code' => ['required', 'string', 'max:100'],
-            'recipient_phone' => ['required_if:recipient_type,individual', 'string', 'max:20'],
+            'recipient_phone' => ['required_if:recipient_type,individual', 'string', 'max:20', 'not_regex:/,/'],
             'group_code' => ['required_if:recipient_type,group', 'string', 'max:100'],
             'variables' => ['sometimes', 'array'],
             // Media Templates (send-time override, QR/Baileys-only,
@@ -103,6 +103,7 @@ class SendMessageRequest extends FormRequest
     {
         return [
             'recipient_phone.required_if' => 'The :attribute field is required when recipient_type is "individual".',
+            'recipient_phone.not_regex' => 'The Developer API sends to one number per request. To send to more than one number (up to 30), make one request per number. For a larger list, use Bulk in the dashboard and upload an Excel or CSV file.',
             'group_code.required_if' => 'The :attribute field is required when recipient_type is "group".',
             'text.required_if' => 'The "text" field is required when template_code is "'.MessageTemplate::NO_TEMPLATE_CODE.'".',
             'variables.*.required' => 'The :attribute field is required.',

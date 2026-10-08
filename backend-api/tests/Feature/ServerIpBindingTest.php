@@ -38,7 +38,18 @@ class ServerIpBindingTest extends TestCase
         parent::tearDown();
     }
 
-    /** A client with an active plan (so the key is included) and an admin user. */
+    /**
+     * A client with an active plan (so the key is included) and an admin user.
+     *
+     * Phase 4 Task 7 FIX: also returns the ApiKey model itself as a 4th
+     * element (every existing 3-element `[$account, $user, $plainKey] =
+     * ...` destructuring is unaffected — PHP list destructuring simply
+     * ignores extra array elements it doesn't name) so a test can set
+     * legacy_binding_grace_expires_at directly. Task 7's fail-closed rule
+     * means a key with NO deadline can no longer authenticate via the
+     * legacy IP path at all — tests about the IP-MATCHING behavior below
+     * must explicitly opt a key into a valid migration window first.
+     */
     private function client(): array
     {
         $account = Account::factory()->create(['allowed_modules' => ['dashboard']]);
@@ -52,14 +63,25 @@ class ServerIpBindingTest extends TestCase
         $user->assignRole('admin');
 
         $plainKey = 'wasaas_live_'.Str::random(40);
-        ApiKey::create([
+        $apiKey = ApiKey::create([
             'account_id' => $account->id,
             'name' => 'Client API Key',
             'key_prefix' => substr($plainKey, 0, 20),
             'key_hash' => ApiKey::hashKey($plainKey),
         ]);
 
-        return [$account, $user, $plainKey];
+        return [$account, $user, $plainKey, $apiKey];
+    }
+
+    /**
+     * Phase 4 Task 7 FIX — opts a client's key into a valid (not yet
+     * expired) legacy migration window, the precondition every "legacy
+     * IP path succeeds" test now needs explicitly; Task 7 made this
+     * NEVER implicit.
+     */
+    private function giveValidLegacyDeadline(ApiKey $apiKey, int $days = 30): void
+    {
+        $apiKey->forceFill(['legacy_binding_grace_expires_at' => now()->addDays($days)])->save();
     }
 
     /** A DELETE on the Developer API: it passes the gate and then answers 404 for an unknown id. */
@@ -75,18 +97,39 @@ class ServerIpBindingTest extends TestCase
         return $this->actingAs($user)->putJson('/api/account/api-key/server-ip', ['authorized_server_ip' => $ip]);
     }
 
-    public function test_a_request_from_the_registered_server_is_allowed(): void
+    /**
+     * Phase 4 Task 7 FIX — renamed/narrowed from
+     * "a request from the registered server is allowed": a registered
+     * account IP with NO legacy deadline at all no longer authenticates
+     * by itself. See the next test for the (now separate) success case.
+     */
+    public function test_a_request_from_the_registered_server_without_a_legacy_deadline_requires_binding(): void
     {
         [$account, $user, $plainKey] = $this->client();
         $account->forceFill(['authorized_server_ip' => '127.0.0.1'])->save();
+
+        $this->callApi($plainKey, '127.0.0.1')
+            ->assertForbidden()
+            ->assertJsonPath('error_code', 'API_SERVER_BINDING_REQUIRED');
+    }
+
+    /** Phase 4 Task 7 FIX — the success case: matching account IP AND a valid (unexpired) per-key legacy deadline. */
+    public function test_a_request_from_the_registered_server_within_a_valid_legacy_deadline_is_allowed(): void
+    {
+        [$account, $user, $plainKey, $apiKey] = $this->client();
+        $account->forceFill(['authorized_server_ip' => '127.0.0.1'])->save();
+        $this->giveValidLegacyDeadline($apiKey);
 
         $this->callApi($plainKey, '127.0.0.1')->assertNotFound();
     }
 
     public function test_a_request_from_another_server_is_refused_with_a_generic_message(): void
     {
-        [$account, $user, $plainKey] = $this->client();
+        [$account, $user, $plainKey, $apiKey] = $this->client();
         $account->forceFill(['authorized_server_ip' => self::OWN_SERVER])->save();
+        // Phase 4 Task 7 FIX — a valid deadline is now the precondition to even reach the IP-mismatch check;
+        // without one this would be API_SERVER_BINDING_REQUIRED instead, which is a different scenario (see above).
+        $this->giveValidLegacyDeadline($apiKey);
 
         $response = $this->callApi($plainKey, '198.51.100.7');
 
@@ -174,7 +217,10 @@ class ServerIpBindingTest extends TestCase
 
     public function test_the_gate_follows_the_saved_ip_after_a_change(): void
     {
-        [$account, $user, $plainKey] = $this->client();
+        [$account, $user, $plainKey, $apiKey] = $this->client();
+        // Phase 4 Task 7 FIX — a valid deadline is the precondition for the final success assertion below; the
+        // earlier assertForbidden() calls pass either way (BINDING_REQUIRED and the IP-mismatch denial are both 403).
+        $this->giveValidLegacyDeadline($apiKey, 60);
         $this->saveIp($user, self::OWN_SERVER)->assertOk();
 
         $this->callApi($plainKey, '127.0.0.1')->assertForbidden();
@@ -216,8 +262,11 @@ class ServerIpBindingTest extends TestCase
 
     public function test_a_refused_ip_gets_a_verify_flag_without_the_registered_ip(): void
     {
-        [$account, , $plainKey] = $this->client();
+        [$account, , $plainKey, $apiKey] = $this->client();
         $account->forceFill(['authorized_server_ip' => self::OWN_SERVER])->save();
+        // Phase 4 Task 7 FIX — the 'action' => 'verify_server_ip' flag is only added on the IP-mismatch denial
+        // branch, which now requires a valid deadline to even be reached (otherwise it's BINDING_REQUIRED instead).
+        $this->giveValidLegacyDeadline($apiKey);
 
         $response = $this->callApi($plainKey, '198.51.100.7');
 

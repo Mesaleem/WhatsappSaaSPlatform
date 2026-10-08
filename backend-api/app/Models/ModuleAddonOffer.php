@@ -12,7 +12,7 @@ class ModuleAddonOffer extends Model
 
     protected $table = 'module_addon_offers';
 
-    protected $fillable = ['module', 'label', 'price', 'term_months', 'units_included', 'is_active', 'kind', 'capability_slug'];
+    protected $fillable = ['module', 'label', 'price', 'term_months', 'units_included', 'is_active', 'is_free', 'kind', 'capability_slug'];
 
     protected function casts(): array
     {
@@ -21,6 +21,7 @@ class ModuleAddonOffer extends Model
             'term_months' => 'integer',
             'units_included' => 'integer',
             'is_active' => 'boolean',
+            'is_free' => 'boolean',
         ];
     }
 }

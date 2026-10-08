@@ -55,6 +55,16 @@ const BILLING_OPTIONS: { value: PlanBillingModel; label: string }[] = [
   { value: 'unlimited', label: 'Unlimited' },
 ];
 
+/**
+ * Phase 4 Task 2 / Task 10 FIX — mirrors
+ * InstallationAllowanceResolver::CAPABILITY server-side. The one
+ * capability this screen gives a dedicated numeric input for, because
+ * the backend requires a concrete limit for it whenever `external_api`
+ * is also bundled (PlanManagementController::
+ * assertApiInstallationsConcreteWhenExternalApi()).
+ */
+const API_INSTALLATIONS_CAPABILITY = 'api_installations';
+
 interface PlanFormState {
   slug: string;
   label: string;
@@ -69,6 +79,17 @@ interface PlanFormState {
   included_credits: string;
   is_active: boolean;
   capabilities: string[];
+  /**
+   * Phase 4 Task 2 / Task 10 FIX — the backend has required a concrete,
+   * non-negative api_installations usage_limit on any plan that also
+   * includes external_api since Task 2, but this screen never exposed
+   * a field for it until now: a Super Admin trying to set this up
+   * through the UI alone had no way to satisfy that requirement and no
+   * visible reason why the save was refused. Raw string input, same
+   * convention as rate_per_message/total_allocated_messages — empty
+   * string means "no limit" (null), not zero.
+   */
+  api_installations_limit: string;
 }
 
 function emptyForm(): PlanFormState {
@@ -85,6 +106,7 @@ function emptyForm(): PlanFormState {
     included_credits: '0',
     is_active: true,
     capabilities: [],
+    api_installations_limit: '',
   };
 }
 
@@ -102,6 +124,8 @@ function formFromPlan(plan: ManagedPlan): PlanFormState {
     included_credits: String(plan.included_credits ?? 0),
     is_active: plan.is_active,
     capabilities: [...plan.capabilities],
+    api_installations_limit:
+      plan.capability_limits?.api_installations == null ? '' : String(plan.capability_limits.api_installations),
   };
 }
 
@@ -276,6 +300,22 @@ function PlanFormModal({
     // Absent unless genuinely changed — see this function's docblock.
     if (bundleChanged) patch.capabilities = form.capabilities;
 
+    // Phase 4 Task 2 / Task 10 FIX — same "absent unless changed"
+    // discipline as every other field above, but for the
+    // api_installations usage_limit pivot specifically. Only sent when
+    // the capability is actually part of the RESULTING bundle (sending
+    // it otherwise is refused by assertCapabilityLimitKeysAreBundled())
+    // and only when its value actually changed, so an untouched limit
+    // on an untouched bundle never causes a needless pivot write.
+    const resultingCapabilities = bundleChanged ? form.capabilities : plan.capabilities;
+    if (resultingCapabilities.includes(API_INSTALLATIONS_CAPABILITY)) {
+      const newLimit = numberOrNull(form.api_installations_limit);
+      const previousLimit = plan.capability_limits?.[API_INSTALLATIONS_CAPABILITY] ?? null;
+      if (bundleChanged || newLimit !== previousLimit) {
+        patch.capability_limits = { [API_INSTALLATIONS_CAPABILITY]: newLimit };
+      }
+    }
+
     return patch;
   };
 
@@ -302,6 +342,12 @@ function PlanFormModal({
           included_credits: Number(form.included_credits || 0),
           is_active: form.is_active,
           capabilities: form.capabilities,
+          // Phase 4 Task 2 / Task 10 FIX — only meaningful (and only
+          // accepted by the backend) when the capability is part of
+          // this create's own bundle.
+          ...(form.capabilities.includes(API_INSTALLATIONS_CAPABILITY)
+            ? { capability_limits: { [API_INSTALLATIONS_CAPABILITY]: numberOrNull(form.api_installations_limit) } }
+            : {}),
         };
         const result = await planService.create(payload);
         onSaved(result.message);
@@ -547,6 +593,37 @@ function PlanFormModal({
                 onToggle={toggleCapability}
               />
               <FieldError errors={errors} name="capabilities" />
+
+              {/*
+                Phase 4 Task 2 / Task 10 FIX — always rendered, same
+                convention as "Included AI credits / period" above
+                (also conditionally required by another capability):
+                the field exists regardless of the current selection,
+                and the hint explains the condition under which the
+                backend requires a concrete value, rather than the
+                field appearing and disappearing as capabilities are
+                toggled.
+              */}
+              <label className="mt-3 block text-xs font-medium text-slate-700">
+                API installations limit
+                <input
+                  type="number"
+                  min={0}
+                  step={1}
+                  data-testid="plan-api-installations-limit"
+                  className={inputClass}
+                  value={form.api_installations_limit}
+                  onChange={(e) => set('api_installations_limit', e.target.value)}
+                  placeholder="Leave empty unless this plan includes api_installations"
+                />
+                <span className="mt-1 block text-[11px] font-normal text-slate-400">
+                  How many authorized servers an account on this plan may bind at once. Required (0 or greater) when
+                  this plan includes both “api_installations” and “external_api”; ignored unless “api_installations”
+                  is in the bundle above.
+                </span>
+                <FieldError errors={errors} name="capability_limits.api_installations" />
+                <FieldError errors={errors} name="capability_limits" />
+              </label>
             </div>
           </div>
         </div>

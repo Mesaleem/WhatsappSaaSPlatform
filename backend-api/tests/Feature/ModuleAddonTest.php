@@ -15,9 +15,10 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
 /**
- * Paid module add-ons (Custom Contact Groups): request -> approve (invoice) -> pay
- * (manual or online) -> the module is on for one term -> switched off when it ends.
- * The offer (price, term, units) is stored and editable by a Super Admin.
+ * Paid module add-ons (Native WhatsApp Groups -- module key `contact_groups`, see
+ * ModuleAddonService::alreadyIncluded()'s own re-scoping docblock for why this file still uses that
+ * key): request -> approve (invoice) -> pay (manual or online) -> the module is on for one term ->
+ * switched off when it ends. The offer (price, term, units) is stored and editable by a Super Admin.
  */
 class ModuleAddonTest extends TestCase
 {
@@ -105,14 +106,24 @@ class ModuleAddonTest extends TestCase
             ->assertUnprocessable();
     }
 
-    public function test_a_module_the_account_already_has_cannot_be_requested(): void
+    /**
+     * [Re-scoped 2026-10-07, disclosed]: 'contact_groups' now prices Native WhatsApp Group COUNT
+     * only -- internal segment groups are free and always on (Account::effectiveModules() always
+     * includes 'contact_groups'), so a native-group allowance is never "already included" by the
+     * allowed_modules flag any more; it is always something bought in units (see
+     * ModuleAddonService::alreadyIncluded()'s own re-scoping docblock). The scenario this test used
+     * to cover ("a module the account already has cannot be requested") has no example left on this
+     * one module-addon this whole file is built around -- repointed to its new, real behavior
+     * instead of deleted.
+     */
+    public function test_contact_groups_can_always_be_requested_regardless_of_allowed_modules(): void
     {
         [$account, $user] = $this->client();
         $account->forceFill(['allowed_modules' => ['dashboard', 'contact_groups']])->save();
 
         $this->actingAs($user)->postJson('/api/module-addons/request', ['module' => 'contact_groups', 'units' => 3])
-            ->assertUnprocessable()
-            ->assertJsonPath('error_code', 'already_enabled');
+            ->assertCreated()
+            ->assertJsonPath('data.status', 'requested');
     }
 
     public function test_only_a_super_admin_or_agent_can_see_pending_requests_and_approve(): void
@@ -356,5 +367,68 @@ class ModuleAddonTest extends TestCase
             ->assertOk()
             ->assertJsonPath('data.0.status', 'requested')
             ->assertJsonPath('offers.0.module', 'contact_groups');
+    }
+
+    // --- Super Admin "Free (no charge)" switch (2026-10-07): off by default, so every test above
+    // this line exercises the paid path exactly as before. These cover the switch itself. ---
+
+    public function test_is_free_defaults_to_false_so_existing_paid_behaviour_is_unchanged(): void
+    {
+        $this->assertFalse(app(\App\Services\Billing\ModuleAddonService::class)->isFree('contact_groups'));
+    }
+
+    public function test_a_super_admin_can_switch_a_module_free_and_it_is_reflected_immediately(): void
+    {
+        $admin = $this->superAdmin();
+        $offer = ModuleAddonOffer::where('module', 'contact_groups')->first();
+
+        $this->actingAs($admin)->putJson('/api/admin/module-offers/contact_groups', [
+            'label' => $offer->label,
+            'price' => (float) $offer->price,
+            'term_months' => $offer->term_months,
+            'units_included' => $offer->units_included,
+            'is_active' => $offer->is_active,
+            'is_free' => true,
+        ])->assertOk()->assertJsonPath('data.is_free', true);
+
+        $this->assertTrue(app(\App\Services\Billing\ModuleAddonService::class)->isFree('contact_groups'));
+    }
+
+    public function test_requesting_a_module_that_is_switched_free_is_refused_since_there_is_nothing_to_buy(): void
+    {
+        [, $user] = $this->client();
+        ModuleAddonOffer::where('module', 'contact_groups')->update(['is_free' => true]);
+
+        $this->actingAs($user)->postJson('/api/module-addons/request', ['module' => 'contact_groups', 'units' => 3])
+            ->assertUnprocessable()
+            ->assertJsonPath('error_code', 'module_is_free');
+    }
+
+    public function test_a_free_module_has_no_unit_limit_even_with_no_purchase(): void
+    {
+        [$account] = $this->client();
+        ModuleAddonOffer::where('module', 'contact_groups')->update(['is_free' => true]);
+
+        $this->assertNull(app(\App\Services\Billing\ModuleAddonService::class)->activeUnitLimit($account, 'contact_groups'));
+    }
+
+    public function test_switching_a_module_back_to_paid_resumes_the_stored_price_and_tiers(): void
+    {
+        $admin = $this->superAdmin();
+        ModuleAddonOffer::where('module', 'contact_groups')->update(['is_free' => true]);
+        $offer = ModuleAddonOffer::where('module', 'contact_groups')->first();
+
+        $this->actingAs($admin)->putJson('/api/admin/module-offers/contact_groups', [
+            'label' => $offer->label,
+            'price' => (float) $offer->price,
+            'term_months' => $offer->term_months,
+            'units_included' => $offer->units_included,
+            'is_active' => $offer->is_active,
+            'is_free' => false,
+        ])->assertOk()->assertJsonPath('data.is_free', false)->assertJsonPath('data.price', (float) $offer->price);
+
+        $this->assertFalse(app(\App\Services\Billing\ModuleAddonService::class)->isFree('contact_groups'));
+        [, $user] = $this->client();
+        $this->requestFor($user); // paid path works again, exactly as before the switch.
     }
 }

@@ -49,6 +49,25 @@ class WhatsAppNumberController extends Controller
         return response()->json(['message' => 'Number added.', 'data' => $this->present($number)], 201);
     }
 
+    /**
+     * PUT /api/whatsapp/numbers/{id}  body: { phone_number }
+     * Self-service: changes the number on a slot that is not currently linked. No
+     * approval required (see WhatsAppNumberService::changeNumber()'s docblock).
+     */
+    public function update(Request $request, int $id): JsonResponse
+    {
+        $account = $this->requireAccount($request, 'Select a client account first (pass ?account_id=).');
+        $data = $request->validate(['phone_number' => ['required', 'string', 'max:25']]);
+
+        try {
+            $number = $this->numbers->changeNumber($account, $id, $data['phone_number']);
+        } catch (WhatsAppNumberException $e) {
+            return $this->error($e);
+        }
+
+        return response()->json(['message' => 'Number updated.', 'data' => $this->present($number)]);
+    }
+
     /** PUT /api/whatsapp/numbers/{id}/default */
     public function setDefault(Request $request, int $id): JsonResponse
     {

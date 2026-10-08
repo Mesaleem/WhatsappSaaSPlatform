@@ -219,4 +219,91 @@ class WhatsAppNumberTest extends TestCase
 
         $this->assertDatabaseHas('whatsapp_numbers', ['id' => $number['id']]);
     }
+
+    // --- Self-service number change (2026-10-07): no approval required, only disconnect first. ---
+
+    public function test_a_disconnected_number_can_be_self_edited_without_approval(): void
+    {
+        [$account, $user] = $this->tenant();
+        $number = $this->actingAs($user)->postJson('/api/whatsapp/numbers', ['phone_number' => '919876543210'])->json('data');
+        WhatsAppNumber::whereKey($number['id'])->update(['status' => WhatsAppNumber::STATUS_UNLINKED]);
+
+        $this->actingAs($user)->putJson("/api/whatsapp/numbers/{$number['id']}", ['phone_number' => '917236062374'])
+            ->assertOk()
+            ->assertJsonPath('data.phone_number', '917236062374')
+            ->assertJsonPath('data.status', 'unlinked');
+
+        $this->assertDatabaseHas('whatsapp_numbers', [
+            'id' => $number['id'],
+            'account_id' => $account->id,
+            'phone_number' => '917236062374',
+        ]);
+        $this->assertDatabaseCount('whatsapp_number_change_requests', 0);
+    }
+
+    public function test_a_linked_number_must_be_disconnected_before_it_can_be_edited(): void
+    {
+        [, $user] = $this->tenant();
+        $number = $this->actingAs($user)->postJson('/api/whatsapp/numbers', ['phone_number' => '919876543210'])->json('data');
+        WhatsAppNumber::whereKey($number['id'])->update(['status' => WhatsAppNumber::STATUS_LINKED]);
+
+        $this->actingAs($user)->putJson("/api/whatsapp/numbers/{$number['id']}", ['phone_number' => '917236062374'])
+            ->assertStatus(409)
+            ->assertJsonPath('error_code', 'must_disconnect_first');
+
+        $this->assertDatabaseHas('whatsapp_numbers', ['id' => $number['id'], 'phone_number' => '919876543210']);
+    }
+
+    public function test_editing_to_the_same_number_is_refused(): void
+    {
+        [, $user] = $this->tenant();
+        $number = $this->actingAs($user)->postJson('/api/whatsapp/numbers', ['phone_number' => '919876543210'])->json('data');
+        WhatsAppNumber::whereKey($number['id'])->update(['status' => WhatsAppNumber::STATUS_UNLINKED]);
+
+        $this->actingAs($user)->putJson("/api/whatsapp/numbers/{$number['id']}", ['phone_number' => '919876543210'])
+            ->assertUnprocessable()
+            ->assertJsonPath('error_code', 'same_number');
+    }
+
+    public function test_editing_to_a_number_already_used_by_another_slot_is_refused(): void
+    {
+        [, $owner] = $this->tenant();
+        [, $other] = $this->tenant();
+        $ownerNumber = $this->actingAs($owner)->postJson('/api/whatsapp/numbers', ['phone_number' => '919876543210'])->json('data');
+        WhatsAppNumber::whereKey($ownerNumber['id'])->update(['status' => WhatsAppNumber::STATUS_UNLINKED]);
+        $this->actingAs($other)->postJson('/api/whatsapp/numbers', ['phone_number' => '917236062374'])->assertCreated();
+
+        $this->actingAs($owner)->putJson("/api/whatsapp/numbers/{$ownerNumber['id']}", ['phone_number' => '917236062374'])
+            ->assertStatus(409)
+            ->assertJsonPath('error_code', 'number_already_used');
+    }
+
+    public function test_a_locked_but_disconnected_number_can_still_be_self_edited(): void
+    {
+        // Disclosed design choice: changeNumber() does not consult isLocked() -- a paid,
+        // locked slot's number can still be corrected once disconnected, which is the whole
+        // point of this feature (it replaces the approval flow for that case).
+        [$account, $user] = $this->tenant();
+        $number = $this->actingAs($user)->postJson('/api/whatsapp/numbers', ['phone_number' => '919876543210'])->json('data');
+        WhatsAppNumber::whereKey($number['id'])->update(['status' => WhatsAppNumber::STATUS_UNLINKED]);
+        app(WhatsAppNumberService::class)->lockAll($account);
+
+        $this->actingAs($user)->putJson("/api/whatsapp/numbers/{$number['id']}", ['phone_number' => '917236062374'])
+            ->assertOk()
+            ->assertJsonPath('data.phone_number', '917236062374');
+    }
+
+    public function test_another_tenants_number_id_is_reported_as_not_found_when_editing(): void
+    {
+        [, $owner] = $this->tenant();
+        [, $other] = $this->tenant();
+        $number = $this->actingAs($owner)->postJson('/api/whatsapp/numbers', ['phone_number' => '919876543210'])->json('data');
+        WhatsAppNumber::whereKey($number['id'])->update(['status' => WhatsAppNumber::STATUS_UNLINKED]);
+
+        $this->actingAs($other)->putJson("/api/whatsapp/numbers/{$number['id']}", ['phone_number' => '917236062374'])
+            ->assertNotFound()
+            ->assertJsonPath('error_code', 'not_found');
+
+        $this->assertDatabaseHas('whatsapp_numbers', ['id' => $number['id'], 'phone_number' => '919876543210']);
+    }
 }

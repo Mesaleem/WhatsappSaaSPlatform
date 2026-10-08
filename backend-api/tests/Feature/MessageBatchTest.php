@@ -136,6 +136,39 @@ class MessageBatchTest extends TestCase
         $this->assertSame(MessageBatchItem::PENDING, $batch->items()->orderBy('sequence')->value('status'));
     }
 
+    public function test_a_batch_without_a_template_sends_the_typed_text(): void
+    {
+        [$account, $user, , $default] = $this->client();
+
+        $this->actingAs($user)->postJson('/api/alerts/message-batches', [
+            'file' => $this->csv("phone
+919876543210
+"),
+            'message_text' => 'Stock is running low, please reorder.',
+            'batch_size' => 10,
+            'interval_minutes' => 5,
+            'sender_number_ids' => [$default->id],
+        ])->assertCreated();
+
+        $batch = MessageBatch::query()->firstOrFail();
+        $this->assertNull($batch->template_id);
+        $this->assertSame('Stock is running low, please reorder.', $batch->message_text);
+    }
+
+    public function test_a_batch_without_a_template_and_without_text_or_media_is_refused(): void
+    {
+        [, $user, , $default] = $this->client();
+
+        $this->actingAs($user)->postJson('/api/alerts/message-batches', [
+            'file' => $this->csv("phone
+919876543210
+"),
+            'batch_size' => 10,
+            'interval_minutes' => 5,
+            'sender_number_ids' => [$default->id],
+        ])->assertStatus(422)->assertJsonPath('error_code', 'TEMPLATE_OR_TEXT_REQUIRED');
+    }
+
     public function test_the_senders_take_turns_in_order_and_each_number_keeps_its_gap(): void
     {
         [$account, $user, $template, $default] = $this->client();
@@ -166,6 +199,25 @@ class MessageBatchTest extends TestCase
         $this->assertSame(25, $service->stepSeconds(1));
         $this->assertSame(5, $service->stepSeconds(5));
         $this->assertSame(3, $service->stepSeconds(10));
+        $this->assertSame(13, $service->stepSeconds(2)); // 13 s apart, so each number waits 26 s between its own messages
+    }
+
+    public function test_batches_run_back_to_back_with_no_rest_between_them(): void
+    {
+        [, $user, $template] = $this->client();
+
+        $phones = implode("
+", array_map(fn ($i) => '9199'.str_pad((string) $i, 8, '0', STR_PAD_LEFT), range(1, 11)));
+        $this->store($user, $template, $this->csv("phone
+{$phones}
+"), ['batch_size' => 10])->assertCreated();
+
+        $batch = MessageBatch::query()->firstOrFail();
+        $this->assertSame(0, $batch->interval_minutes);
+
+        $items = $batch->items()->orderBy('sequence')->get();
+        // Item 11 starts a new chunk (batch_size 10), right after item 10 — exactly one step later, no extra rest.
+        $this->assertSame(25, (int) $items[9]->send_at->diffInSeconds($items[10]->send_at));
     }
 
     public function test_a_scheduled_batch_waits_for_its_time_then_starts(): void

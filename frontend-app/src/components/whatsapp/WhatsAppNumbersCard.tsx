@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Lock, Plus, RefreshCw, Star, Trash2, X } from 'lucide-react';
+import { Lock, Pencil, Plus, RefreshCw, Star, Trash2, X } from 'lucide-react';
 import whatsappService from '../../services/whatsappService';
 import QRScannerModal from '../qr/QRScannerModal';
 import type { AddonInvoice, WhatsAppNumberRow, WhatsAppNumberStatus } from '../../types/whatsapp';
@@ -46,6 +46,13 @@ export default function WhatsAppNumbersCard({ accountId, onConnected, reloadKey 
   // The number waiting for the user's confirmation before it is removed.
   const [confirmRemove, setConfirmRemove] = useState<WhatsAppNumberRow | null>(null);
 
+  // Self-service number edit: only offered on a slot that is not currently linked
+  // (disconnect it first, or it was never connected) -- no approval required.
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editValue, setEditValue] = useState('');
+  const [editBusy, setEditBusy] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
+
   // Extra-number purchase.
   const [price, setPrice] = useState<{ price: number; term_months: number; max_per_purchase: number } | null>(null);
   const [purchaseOpen, setPurchaseOpen] = useState(false);
@@ -85,6 +92,33 @@ export default function WhatsAppNumbersCard({ accountId, onConnected, reloadKey 
       setError(errorMessage(err, fallback));
     } finally {
       setBusyId(null);
+    }
+  };
+
+  const startEdit = (row: WhatsAppNumberRow) => {
+    setEditingId(row.id);
+    setEditValue(row.phone_number);
+    setEditError(null);
+  };
+
+  const cancelEdit = () => {
+    setEditingId(null);
+    setEditValue('');
+    setEditError(null);
+  };
+
+  const saveEdit = async (id: number) => {
+    setEditBusy(true);
+    setEditError(null);
+    try {
+      await whatsappService.updateNumber(id, editValue.replace(/\D/g, ''), accountId);
+      setEditingId(null);
+      setEditValue('');
+      await load();
+    } catch (err) {
+      setEditError(errorMessage(err, 'Could not update this number.'));
+    } finally {
+      setEditBusy(false);
     }
   };
 
@@ -237,6 +271,52 @@ export default function WhatsAppNumbersCard({ accountId, onConnected, reloadKey 
           // Shown only when the server allows it (linked, paid, all numbers linked, subscription active).
           const canSetDefault = row.can_set_default;
           const canRemove = !row.is_included && row.status === 'pending_payment' && !row.locked;
+          // Self-service edit: offered once the slot is disconnected (or was never
+          // connected). While linked, disconnect first -- the server enforces the same rule.
+          const canEdit = row.status !== 'linked';
+          const isEditing = editingId === row.id;
+
+          if (isEditing) {
+            return (
+              <div key={row.id} className="flex flex-wrap items-center gap-3 py-3">
+                <div className="min-w-0 flex-1">
+                  <label className="block text-xs font-medium text-slate-700" htmlFor={`edit-number-${row.id}`}>
+                    New WhatsApp number
+                  </label>
+                  <input
+                    id={`edit-number-${row.id}`}
+                    type="tel"
+                    inputMode="numeric"
+                    autoFocus
+                    value={editValue}
+                    onChange={(e) => setEditValue(e.target.value)}
+                    placeholder="919876543210"
+                    className="mt-1 w-full max-w-xs rounded-lg border border-slate-300 px-3 py-1.5 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none"
+                  />
+                  <p className="mt-1 text-xs text-slate-400">Country code first, no + or spaces. Then connect to scan and verify it.</p>
+                  {editError && <p className="mt-1 text-xs text-red-600">{editError}</p>}
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    disabled={editBusy || editValue.replace(/\D/g, '').length === 0}
+                    onClick={() => void saveEdit(row.id)}
+                    className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-60"
+                  >
+                    {editBusy ? 'Saving…' : 'Save'}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={editBusy}
+                    onClick={cancelEdit}
+                    className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            );
+          }
 
           return (
             <div key={row.id} className="flex flex-wrap items-center justify-between gap-3 py-3">
@@ -275,6 +355,17 @@ export default function WhatsAppNumbersCard({ accountId, onConnected, reloadKey 
                     className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
                   >
                     Set as default
+                  </button>
+                )}
+                {canEdit && (
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => startEdit(row)}
+                    className="flex items-center gap-1 rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                  >
+                    <Pencil className="h-3.5 w-3.5" />
+                    Edit
                   </button>
                 )}
                 {canRemove && (

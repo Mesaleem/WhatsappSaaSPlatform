@@ -265,13 +265,19 @@ class PublicApiSecurityTest extends TestCase
         $stillWorks->assertStatus(422); // 'disconnected', not 401 -- the key itself is valid.
     }
 
-    // 7. Missing required entitlement is rejected.
+    // 7. [Re-scoped 2026-10-07, disclosed]: missing required entitlement is rejected. Sending to an
+    // internal segment group no longer needs any entitlement at all (free, always-on -- see
+    // GroupMessageDispatcher::dispatch()'s own re-scoping docblock), so this now exercises the one
+    // entitlement group messaging still has: `whatsapp_groups`, for a Native WhatsApp Group.
     public function test_missing_entitlement_is_rejected(): void
     {
-        $account = Account::factory()->create(['allowed_modules' => ['dashboard', 'send_alert', 'developer_api']]); // 'contact_groups' deliberately NOT included (P5-B: developer_api kept on so the group gate is what refuses)
-        $this->giveActiveSubscription($account);
+        $account = Account::factory()->create();
+        $this->giveActiveSubscription($account); // 'starter' -- includes whatsapp_groups; revoked below
         $this->makeApprovedTemplate($account->id, 'GROUP_TPL');
-        ContactGroup::create(['account_id' => $account->id, 'name' => 'VIP', 'group_code' => 'VIP', 'group_type' => ContactGroup::GROUP_TYPE_INTERNAL]);
+        ContactGroup::create(['account_id' => $account->id, 'name' => 'VIP', 'group_code' => 'VIP', 'group_type' => ContactGroup::GROUP_TYPE_NATIVE, 'sync_status' => ContactGroup::SYNC_STATUS_SYNCED, 'wa_group_jid' => '120363111@g.us']);
+        \App\Models\AccountEntitlement::where('account_id', $account->id)
+            ->whereHas('capability', fn ($q) => $q->where('slug', 'whatsapp_groups'))
+            ->update(['revoked_at' => now(), 'revoked_reason' => 'test']);
         $issued = $this->issueApiKey($account);
 
         $response = $this->withHeader('X-API-KEY', $issued['key'])

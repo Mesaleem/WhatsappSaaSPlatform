@@ -112,7 +112,7 @@ class SendBulkTemplateMessageRequest extends FormRequest
             // to the frontend's own input-validation warning
             // (SendAlertPage.tsx) so a caller sees the exact same wording
             // whether the 150-cap is caught client-side or server-side.
-            'recipient_phones.max' => 'Bulk allows up to '.self::MAX_RECIPIENTS.' numbers. For more, upload an Excel file in the Batch section below.',
+            'recipient_phones.max' => 'Bulk allows up to '.self::MAX_RECIPIENTS.' numbers. For more, use Bulk in the dashboard and upload an Excel or CSV file.',
             'variables.*.required' => 'The :attribute field is required.',
             'variables.*.numeric' => 'The :attribute field must be a number.',
             'variables.*.date' => 'The :attribute field must be a valid date.',

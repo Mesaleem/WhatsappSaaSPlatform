@@ -5,6 +5,7 @@ import type {
   WhatsAppStatus,
   WhatsAppStatusResponse,
   WhatsAppNumbersResponse,
+  WhatsAppNumberRow,
   AddonInvoice,
   MetaConfigResponse,
   SaveMetaConfigPayload,
@@ -81,6 +82,17 @@ const whatsappService = {
   listNumbers(accountId?: number) {
     return axiosInstance
       .get<WhatsAppNumbersResponse>(`${BASE}/numbers`, accountId ? { params: { account_id: accountId } } : undefined)
+      .then((res) => res.data);
+  },
+
+  /** Self-service: changes the number on a slot that is not currently linked. No approval needed. */
+  updateNumber(id: number, phoneNumber: string, accountId?: number) {
+    return axiosInstance
+      .put<{ message: string; data: WhatsAppNumberRow }>(
+        `${BASE}/numbers/${id}`,
+        { phone_number: phoneNumber },
+        accountId ? { params: { account_id: accountId } } : undefined,
+      )
       .then((res) => res.data);
   },
 

@@ -212,10 +212,16 @@ class TemplateMessageController extends Controller
 
         $apiKey = $request->attributes->get('api_key');
         $data = $request->validated();
+        $scheduledAt = $this->scheduledAt($data);
 
         // "No template" sentinel -- same idea as send() above, branching on recipient_type the same
         // way the template path below does (one call per request; individual synchronous, group queued).
+        // An optional scheduled_at defers it instead, the same as the template path below.
         if ($data['template_code'] === MessageTemplate::NO_TEMPLATE_CODE) {
+            if ($scheduledAt !== null) {
+                return $this->scheduleDirectSend((int) $accountId, $apiKey?->id, $data, $scheduledAt);
+            }
+
             return $data['recipient_type'] === 'group'
                 ? $this->sendDirectToGroup((int) $accountId, $apiKey?->id, $data)
                 : $this->sendDirectToIndividual((int) $accountId, $apiKey?->id, $data);
@@ -233,7 +239,6 @@ class TemplateMessageController extends Controller
             return response()->json(['success' => false, 'error_code' => 'TEMPLATE_NOT_APPROVED', 'message' => 'Invalid template_code for this account.'], 404);
         }
 
-        $scheduledAt = $this->scheduledAt($data);
         if ($scheduledAt !== null) {
             return $this->scheduleTemplateSend((int) $accountId, $apiKey?->id, $template, $data, $scheduledAt);
         }
@@ -258,7 +263,7 @@ class TemplateMessageController extends Controller
                 return response()->json(['success' => false, 'error_code' => 'NOT_FOUND', 'message' => 'Invalid group_code for this account.'], 404);
             }
 
-            return $this->scheduledResponse(
+            return $this->scheduledSendMessageResponse(
                 $accountId,
                 ScheduledMessage::KIND_TEMPLATE_GROUP,
                 ['group_id' => $group->id, 'template_id' => $template->id, 'variables' => $data['variables'] ?? [], 'media_url' => $data['media_url'] ?? null],
@@ -267,7 +272,7 @@ class TemplateMessageController extends Controller
             );
         }
 
-        return $this->scheduledResponse(
+        return $this->scheduledSendMessageResponse(
             $accountId,
             ScheduledMessage::KIND_TEMPLATE_INDIVIDUAL,
             [
@@ -279,6 +284,74 @@ class TemplateMessageController extends Controller
             $sendAt,
             $apiKeyId,
         );
+    }
+
+    /**
+     * Stores a "No template" free-text send for later, individual or group. The group -- and, with
+     * it, the sending number -- is resolved now, so a wrong group_code, or a group that isn't on the
+     * chosen (or default) number, is refused at once rather than hours later when the send is due.
+     */
+    private function scheduleDirectSend(int $accountId, ?int $apiKeyId, array $data, Carbon $sendAt): JsonResponse
+    {
+        $content = $this->directContent($data);
+
+        if ($data['recipient_type'] === 'group') {
+            $group = $this->resolveGroupByCode($accountId, $data['group_code']);
+
+            if (! $group) {
+                return response()->json(['success' => false, 'error_code' => 'NOT_FOUND', 'message' => 'Invalid group_code for this account.'], 404);
+            }
+
+            try {
+                $senderId = app(\App\Services\WhatsApp\SenderNumberResolver::class)->resolve(Account::findOrFail($accountId), null, $group);
+            } catch (\App\Services\WhatsApp\SenderNumberException $e) {
+                return response()->json(['success' => false, 'error_code' => $e->errorCode, 'message' => $e->getMessage()], $e->status);
+            }
+
+            return $this->scheduledSendMessageResponse(
+                $accountId,
+                ScheduledMessage::KIND_GROUP_DIRECT_TEXT,
+                ['group_id' => $group->id, 'message_type' => $content['message_type'], 'content' => $content['content'], 'sender_number_id' => $senderId],
+                $sendAt,
+                $apiKeyId,
+            );
+        }
+
+        return $this->scheduledSendMessageResponse(
+            $accountId,
+            ScheduledMessage::KIND_DIRECT_TEXT,
+            ['recipient_phone' => $data['recipient_phone'], 'message_type' => $content['message_type'], 'content' => $content['content']],
+            $sendAt,
+            $apiKeyId,
+        );
+    }
+
+    /**
+     * Stores a message for later and answers 202 in /v1/send-message's own {success, ...} envelope --
+     * the same contract as every other response on this endpoint (unlike the older /v1/messages/
+     * send-template endpoint's {status, ...} envelope, see scheduledResponse() below, kept as-is there).
+     */
+    private function scheduledSendMessageResponse(int $accountId, string $kind, array $payload, Carbon $sendAt, ?int $apiKeyId): JsonResponse
+    {
+        try {
+            $row = app(ScheduledMessageService::class)->schedule(
+                Account::query()->findOrFail($accountId),
+                $kind,
+                $payload,
+                $sendAt,
+                'api',
+                $apiKeyId,
+            );
+        } catch (ScheduledMessageException $e) {
+            return response()->json(['success' => false, 'error_code' => $e->errorCode, 'message' => $e->getMessage()], $e->status);
+        }
+
+        return response()->json([
+            'success' => true,
+            'scheduled' => true,
+            'dispatch_id' => $row->id,
+            'scheduled_for' => $row->send_at->toIso8601String(),
+        ], 202);
     }
 
     /**

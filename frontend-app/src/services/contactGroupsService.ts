@@ -4,6 +4,8 @@ import type {
   AvailableNativeGroup,
   ContactGroup,
   ContactGroupContactInput,
+  ContactGroupMemberRow,
+  ContactGroupUsage,
   CreateContactGroupPayload,
   ImportNativeGroupPayload,
   SendGroupTemplatePayload,
@@ -29,10 +31,10 @@ const contactGroupsService = {
     return axiosInstance.post<{ success: boolean; message: string }>('/groups/keep', { keep_ids: keepIds }).then((res) => res.data);
   },
 
-  /** The groups plus this client's usage against its paid group limit (null limit = no paid term). */
+  /** The groups plus this client's usage against its paid Native WhatsApp Groups limit (null limit = no paid term). */
   listWithUsage() {
     return axiosInstance
-      .get<{ success: boolean; data: ContactGroup[]; usage: { used: number; limit: number | null; selection_required: boolean } }>('/groups')
+      .get<{ success: boolean; data: ContactGroup[]; usage: ContactGroupUsage }>('/groups')
       .then((res) => res.data);
   },
 
@@ -86,6 +88,27 @@ const contactGroupsService = {
 
   remove(id: number) {
     return axiosInstance.delete<{ success: boolean }>(`/groups/${id}`).then((res) => res.data);
+  },
+
+  /** GET /api/groups/{id}/contacts — a group's members, paginated 50/page, for "Manage Members". */
+  listMembers(groupId: number, page = 1) {
+    return axiosInstance
+      .get<{ success: boolean; data: ContactGroupMemberRow[]; meta: { current_page: number; last_page: number; total: number } }>(
+        `/groups/${groupId}/contacts`,
+        { params: { page } },
+      )
+      .then((res) => res.data);
+  },
+
+  /**
+   * DELETE /api/groups/{id}/contacts/{memberId} — removes one member from an internal segment
+   * group. Refused (422) for a Native WhatsApp Group: see ContactGroupController::removeContact()'s
+   * docblock -- its membership only ever changes from WhatsApp itself.
+   */
+  removeMember(groupId: number, memberId: number) {
+    return axiosInstance
+      .delete<{ success: boolean; data: AddContactsResult }>(`/groups/${groupId}/contacts/${memberId}`)
+      .then((res) => res.data);
   },
 
   /**

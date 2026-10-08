@@ -9,6 +9,8 @@ use App\Models\ScheduledMessage;
 use App\Models\User;
 use App\Services\Templates\BulkMessageCooldown;
 use App\Services\Templates\TemplateMessageDispatcher;
+use App\Services\WhatsApp\DirectMessageDispatcher;
+use App\Support\WhatsAppMediaPayloadBuilder;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -77,7 +79,8 @@ class MessageBatchService
             $batch = MessageBatch::query()->create([
                 'account_id' => $account->id,
                 'created_by_user_id' => $user?->id,
-                'template_id' => (int) $data['template_id'],
+                'template_id' => isset($data['template_id']) ? (int) $data['template_id'] : null,
+                'message_text' => $data['message_text'] ?? null,
                 'sender_number_ids' => $senders,
                 'variables' => $data['variables'] ?? [],
                 'media_url' => $data['media_url'] ?? null,
@@ -231,15 +234,27 @@ class MessageBatchService
     /** Sends one claimed number from its own sending number; a quota or connection problem pauses the batch instead. */
     private function sendItem(MessageBatch $batch, MessageBatchItem $item): void
     {
-        $result = TemplateMessageDispatcher::dispatch(
-            $batch->account_id,
-            $batch->template_id,
-            $item->phone,
-            $batch->variables ?? [],
-            source: self::SOURCE,
-            mediaUrl: $batch->media_url,
-            senderNumberId: $item->sender_number_id,
-        );
+        if ($batch->template_id !== null) {
+            $result = TemplateMessageDispatcher::dispatch(
+                $batch->account_id,
+                $batch->template_id,
+                $item->phone,
+                $batch->variables ?? [],
+                source: self::SOURCE,
+                mediaUrl: $batch->media_url,
+                senderNumberId: $item->sender_number_id,
+            );
+        } else {
+            [$messageType, $content] = $this->directContent($batch);
+            $result = DirectMessageDispatcher::dispatch(
+                $batch->account_id,
+                $item->phone,
+                $messageType,
+                $content,
+                source: self::SOURCE,
+                senderNumberId: $item->sender_number_id,
+            );
+        }
 
         // Whatever happened, this sending number's next message waits the gap from this moment.
         $this->rememberSend($this->senderKey($batch->account_id, $item->sender_number_id), now()->utc());
@@ -273,6 +288,22 @@ class MessageBatchService
         if (! $open) {
             $batch->forceFill(['status' => MessageBatch::COMPLETED, 'completed_at' => now()->utc()])->save();
         }
+    }
+
+    /** The no-template message: an image/document with the typed text as its caption, or plain text. */
+    private function directContent(MessageBatch $batch): array
+    {
+        $mediaUrl = trim((string) ($batch->media_url ?? ''));
+
+        if ($mediaUrl !== '') {
+            return ['media', [
+                'media_type' => WhatsAppMediaPayloadBuilder::inferMediaType($mediaUrl),
+                'url' => $mediaUrl,
+                'caption' => $batch->message_text,
+            ]];
+        }
+
+        return ['text', ['body' => (string) $batch->message_text]];
     }
 
     /** The cache key of one sending number's last send. A null sender means the account's default number. */

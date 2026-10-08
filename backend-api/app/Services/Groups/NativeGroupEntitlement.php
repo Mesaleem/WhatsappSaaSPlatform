@@ -47,6 +47,13 @@ final class NativeGroupEntitlement
             return true;
         }
 
+        // Super Admin "Free (no charge)" switch on the whatsapp_groups offer, 2026-10-07 --
+        // see ModuleAddonService::isFree()'s docblock. Off today; left wired in for whenever
+        // the owner chooses to flip it.
+        if (app(\App\Services\Billing\ModuleAddonService::class)->isFree(self::CAPABILITY)) {
+            return true;
+        }
+
         if (app(AccessControlService::class)->canTenant($account, self::CAPABILITY)) {
             return true;
         }

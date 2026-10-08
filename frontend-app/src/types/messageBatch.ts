@@ -27,7 +27,10 @@ export interface MessageBatch {
 /** POST /api/alerts/bulk-sends: the numbers typed on the Send page (up to 30), sent from the ticked numbers in turn. */
 export interface CreateBulkSendPayload {
   recipient_phones: string[];
-  template_id: number;
+  /** Omit for a "No template" send; then message_text (and/or media_url) is required. */
+  template_id?: number;
+  /** The typed message for a "No template" send. Ignored when template_id is set. */
+  message_text?: string;
   variables: Record<string, string>;
   media_url?: string;
   sender_number_ids: number[];
@@ -37,14 +40,16 @@ export interface CreateBulkSendPayload {
 
 export interface CreateMessageBatchPayload {
   file: File;
-  template_id: number;
+  /** Omit for a "No template" batch; then message_text (and/or media_url) is required. */
+  template_id?: number;
+  /** The typed message for a "No template" batch. Ignored when template_id is set. */
+  message_text?: string;
   /** The numbers to send from, in turn: the 1st message from the 1st number, the 2nd from the 2nd, and so on. */
   sender_number_ids: number[];
   variables: Record<string, string>;
   media_url?: string;
   title?: string;
   batch_size: number;
-  interval_minutes: number;
   /** "yyyy-mm-dd hh:mm:ss", read as Indian Standard Time. Omit to start at once. */
   scheduled_at?: string;
 }

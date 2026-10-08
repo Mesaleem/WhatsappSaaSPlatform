@@ -42,7 +42,7 @@ export default function ModuleOfferAdminCard() {
       .offers()
       .then((list) => {
         setOffers(list);
-        setDraft(Object.fromEntries(list.map((o) => [o.module, { label: o.label, price: o.price, term_months: o.term_months, units_included: o.units_included, is_active: o.is_active }])));
+        setDraft(Object.fromEntries(list.map((o) => [o.module, { label: o.label, price: o.price, term_months: o.term_months, units_included: o.units_included, is_active: o.is_active, is_free: o.is_free }])));
         setTierDraft(Object.fromEntries(list.map((o) => [o.module, toDrafts(o.tiers)])));
       })
       .catch((err: unknown) => setError(errorMessage(err, 'Could not load the offers.')));
@@ -151,6 +151,10 @@ export default function ModuleOfferAdminCard() {
                 <label className="flex items-center gap-2 text-xs font-medium text-slate-700">
                   <input type="checkbox" checked={d.is_active} onChange={(e) => update(offer.module, { is_active: e.target.checked })} />
                   On sale
+                </label>
+                <label className="flex items-center gap-2 text-xs font-medium text-slate-700" title="Switches this off for every account right now -- no request or payment needed. Price and tiers below are kept, so turning this back off resumes charging at them.">
+                  <input type="checkbox" checked={d.is_free} onChange={(e) => update(offer.module, { is_free: e.target.checked })} />
+                  Free (no charge) right now
                 </label>
                 <button
                   type="submit"
