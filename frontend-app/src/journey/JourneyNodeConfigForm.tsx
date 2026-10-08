@@ -1,8 +1,10 @@
+import { useState } from 'react';
 import { Plus, X } from 'lucide-react';
 
 import { inputClass } from '../components/common/Card';
 import { indigo } from '../theme/signalIndigo';
 import { getJourneyNode } from './nodeRegistry';
+import ManageConditionsModal from './ManageConditionsModal';
 import {
   MAX_REPLY_BUTTONS,
   type ApiKeyValue,
@@ -56,21 +58,6 @@ function fieldId(prefix: string): string {
 function asArray<T>(value: unknown): T[] {
   return Array.isArray(value) ? (value as T[]) : [];
 }
-
-const CONDITION_OPERATORS: { value: ConditionalOperator; label: string }[] = [
-  { value: 'equals', label: 'equals' },
-  { value: 'not_equals', label: 'does not equal' },
-  { value: 'contains', label: 'contains' },
-  { value: 'not_contains', label: 'does not contain' },
-  { value: 'starts_with', label: 'starts with' },
-  { value: 'ends_with', label: 'ends with' },
-  { value: 'exists', label: 'is set' },
-  { value: 'not_exists', label: 'is not set' },
-  { value: 'greater_than', label: 'is greater than (number)' },
-  { value: 'less_than', label: 'is less than (number)' },
-  { value: 'greater_or_equal', label: 'is at least (number)' },
-  { value: 'less_or_equal', label: 'is at most (number)' },
-];
 
 function FieldShell({
   field,
@@ -143,6 +130,8 @@ export interface JourneyNodeConfigFormProps {
   /** Phase 8 Task 11 — the edited account's registered AI agents; null while loading / unavailable. */
   aiAgents?: ReadonlyArray<{ id: number; name: string; is_enabled?: boolean }> | null;
   onChange: (patch: Record<string, unknown>) => void;
+  /** Rendered inline inside a canvas node card, which already shows the node's icon + label — skip the repeated heading. */
+  hideHeader?: boolean;
 }
 
 export default function JourneyNodeConfigForm({
@@ -153,7 +142,9 @@ export default function JourneyNodeConfigForm({
   knowledgeBases = null,
   aiAgents = null,
   onChange,
+  hideHeader = false,
 }: JourneyNodeConfigFormProps) {
+  const [conditionsModalField, setConditionsModalField] = useState<string | null>(null);
   const definition = getJourneyNode(nodeType);
 
   if (!definition) {
@@ -437,49 +428,33 @@ export default function JourneyNodeConfigForm({
       case 'conditions': {
         const rules = asArray<{ variable?: string; operator?: ConditionalOperator; value?: string }>(value);
         const update = (next: typeof rules) => onChange({ [field.key]: next });
-        const patchRule = (index: number, patch: Partial<(typeof rules)[number]>) =>
-          update(rules.map((r, i) => (i === index ? { ...r, ...patch } : r)));
 
         return (
           <FieldShell key={field.key} field={field} error={error}>
-            <div className="mt-1 space-y-1.5">
-              {rules.map((rule, index) => (
-                <RepeatableRow key={index} onRemove={() => update(rules.filter((_, i) => i !== index))}>
-                  <input
-                    type="text"
-                    className={`${inputClass} !mt-0`}
-                    value={rule.variable ?? ''}
-                    placeholder="variable"
-                    onChange={(e) => patchRule(index, { variable: e.target.value.trim().replace(/\s+/g, '_') })}
-                  />
-                  <select
-                    className={`${inputClass} !mt-0`}
-                    value={rule.operator ?? ''}
-                    onChange={(e) => patchRule(index, { operator: e.target.value as ConditionalOperator })}
-                  >
-                    <option value="">— operator —</option>
-                    {CONDITION_OPERATORS.map((option) => (
-                      <option key={option.value} value={option.value}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
-                  {rule.operator !== 'exists' && rule.operator !== 'not_exists' && (
-                    <input
-                      type="text"
-                      className={`${inputClass} !mt-0`}
-                      value={rule.value ?? ''}
-                      placeholder="value"
-                      onChange={(e) => patchRule(index, { value: e.target.value })}
-                    />
-                  )}
-                </RepeatableRow>
-              ))}
-              <AddRowButton
-                label="Add condition"
-                onClick={() => update([...rules, { variable: '', operator: 'equals', value: '' }])}
-              />
+            <div className="mt-1 flex items-center justify-between gap-2 rounded-lg border px-2.5 py-2" style={{ borderColor: indigo.border }}>
+              <span className="text-xs text-slate-600">
+                {rules.length === 0 ? 'No conditions yet' : `${rules.length} condition${rules.length === 1 ? '' : 's'} configured`}
+              </span>
+              <button
+                type="button"
+                onClick={() => setConditionsModalField(field.key)}
+                className={`${ROW_BUTTON} flex-shrink-0`}
+                style={{ color: indigo.accentSolid }}
+              >
+                Manage Conditions
+              </button>
             </div>
+            {conditionsModalField === field.key && (
+              <ManageConditionsModal
+                initialConditions={rules}
+                knownVariables={knownVariables}
+                onClose={() => setConditionsModalField(null)}
+                onSave={(next) => {
+                  update(next);
+                  setConditionsModalField(null);
+                }}
+              />
+            )}
           </FieldShell>
         );
       }
@@ -589,14 +564,16 @@ export default function JourneyNodeConfigForm({
 
   return (
     <div className="space-y-3" data-testid={`node-config-${definition.type}`}>
-      <div>
-        <h3 className="text-sm font-semibold" style={{ color: indigo.ink }}>
-          {definition.label}
-        </h3>
-        <p className="text-[11px]" style={{ color: indigo.muted }}>
-          {definition.description}
-        </p>
-      </div>
+      {!hideHeader && (
+        <div>
+          <h3 className="text-sm font-semibold" style={{ color: indigo.ink }}>
+            {definition.label}
+          </h3>
+          <p className="text-[11px]" style={{ color: indigo.muted }}>
+            {definition.description}
+          </p>
+        </div>
+      )}
 
       {definition.configSchema.map(renderField)}
 

@@ -96,6 +96,16 @@ const accountService = {
     return axiosInstance.get<AgentSummaryResponse>('/admin/accounts/agent-summary').then((res) => res.data);
   },
 
+  /**
+   * [New feature, disclosed]: Super Admin's own send-only WhatsApp account
+   * ("My WhatsApp — Super Admin" in the header switcher) — the reserved
+   * is_platform_device row, lazily created on first call. Super Admin only
+   * (server-enforced via role:super_admin, not permission:manage-accounts).
+   */
+  platformDevice() {
+    return axiosInstance.get<AccountDetail>('/admin/accounts/platform-device').then((res) => res.data);
+  },
+
   get(id: number) {
     return axiosInstance.get<AccountDetail>(`${BASE}/${id}`).then((res) => res.data);
   },

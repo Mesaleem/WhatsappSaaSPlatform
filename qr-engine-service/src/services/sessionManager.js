@@ -641,7 +641,27 @@ export async function startSession(
     // seen to fail with WhatsApp's "couldn't link device" after a correct code.
     // One identity is used for every session, because the restart that follows
     // pairing must present the same device as the request that started it.
-    browser: Browsers.ubuntu('Chrome'),
+    //
+    // [Branded device name, disclosed, scoped]: WhatsApp's own Linked
+    // Devices label comes from TWO separate fields of this triple, verified
+    // against Baileys' own source (node_modules/@whiskeysockets/baileys/
+    // lib/Utils/validate-connection.js -- generateRegistrationNode(), used
+    // for every session including QR) --
+    //   element[0] -> sent as `os` in the DeviceProps companion payload;
+    //                 this is the text WhatsApp shows for the device.
+    //   element[1] -> resolved through getPlatformType()/getCompanionPlatformId()
+    //                 to a recognized WAProto PlatformType enum value
+    //                 (CHROME/FIREFOX/EDGE/...) -- THIS is the field whose
+    //                 past rename ("WA SaaS Platform", see the note above)
+    //                 broke pairing-code linking, and it also feeds the
+    //                 pairing-code companion_platform_display string
+    //                 (`${browser[1]} (${browser[0]})`) directly.
+    // Browsers.ubuntu('Chrome') => ['Ubuntu', 'Chrome', '22.04.4']. Renaming
+    // only element[0] here swaps the shown device name from "Ubuntu" to
+    // "WapHub WhatsApp" while leaving element[1] untouched at the exact
+    // literal string ('Chrome') already proven safe for pairing-code login
+    // -- no regression risk for the issue the note above already paid down.
+    browser: ['WapHub WhatsApp', 'Chrome', '22.04.4'],
     printQRInTerminal: false,
   });
 

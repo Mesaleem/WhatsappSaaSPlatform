@@ -256,6 +256,15 @@ class WhatsAppAddonService
 
             $locked->forceFill([
                 'status' => 'paid',
+                // [Bugfix, disclosed]: an invoice that had an abandoned online checkout
+                // attempt (createOrder() sets payment_gateway to that gateway as soon as
+                // the order is created, before the user actually pays — see
+                // WhatsAppAddonController::pay()) kept showing that gateway after a
+                // Super Admin later recorded the SAME invoice as paid manually, since
+                // this method never touched payment_gateway. Mirrors
+                // ManualPaymentService::recordPlan(), which already does this correctly
+                // for plan invoices.
+                'payment_gateway' => 'manual',
                 'paid_at' => Carbon::parse($details['paid_on'])->startOfDay(),
                 'gateway_payment_id' => $details['transaction_id'],
             ])->save();

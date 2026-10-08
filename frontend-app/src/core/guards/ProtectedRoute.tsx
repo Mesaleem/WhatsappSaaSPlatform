@@ -1,6 +1,7 @@
 import { Navigate, useLocation } from 'react-router-dom';
 import type { ReactNode } from 'react';
 import { useAuth } from '../context/AuthContext';
+import { useEffectiveHasModule } from '../hooks/useEffectiveHasModule';
 import type { AccountModule } from '../../types/account';
 
 interface ProtectedRouteProps {
@@ -68,7 +69,11 @@ interface ProtectedRouteProps {
  * authentication and permission/role gating.
  */
 export function ProtectedRoute({ children, permission, role, strictRole, module, capability, anyPermission }: ProtectedRouteProps) {
-  const { isAuthenticated, isLoading, user, hasPermission, hasRole, isSuperAdmin, hasModule } = useAuth();
+  const { isAuthenticated, isLoading, user, hasPermission, hasRole, isSuperAdmin } = useAuth();
+  // Tenant-aware: respects a Super Admin/Agent's currently selected
+  // client instead of always the caller's own account — see this hook's
+  // own docblock for why AuthContext.hasModule() alone isn't right here.
+  const hasModule = useEffectiveHasModule();
   const location = useLocation();
 
   if (isLoading) {

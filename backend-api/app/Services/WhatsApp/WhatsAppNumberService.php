@@ -3,6 +3,8 @@
 namespace App\Services\WhatsApp;
 
 use App\Models\Account;
+use App\Models\Invoice;
+use App\Models\InvoiceLineItem;
 use App\Models\WhatsAppNumber;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
@@ -176,6 +178,8 @@ class WhatsAppNumberService
             );
         }
 
+        $previousPhone = $target->phone_number;
+
         try {
             $target->forceFill(['phone_number' => $phone])->save();
         } catch (QueryException $e) {
@@ -187,6 +191,30 @@ class WhatsAppNumberService
                 );
             }
             throw $e;
+        }
+
+        // [Bugfix, disclosed]: this slot's still-unpaid add-on invoice was created
+        // with the OLD number baked into its line item's description text
+        // (WhatsAppAddonService::purchase() writes 'Extra WhatsApp number +<phone>'
+        // literally, with no link back from the line item to the number row), so a
+        // self-service number change here previously left that invoice showing the
+        // number the client no longer owns — confusing, and if later paid/recorded,
+        // a permanently wrong line item on an otherwise-immutable financial record.
+        // Scoped to a still-PENDING invoice only: once paid, an invoice is a fixed
+        // historical record (same "issued invoices keep what they were issued with"
+        // rule this app already applies to price/term elsewhere) and must not be
+        // retroactively edited, even if the underlying slot is edited again later
+        // (which the UI already prevents once addon_invoice_id is attached and paid,
+        // but this guard is the authoritative one, not the UI's).
+        if ($target->addon_invoice_id !== null) {
+            $invoice = Invoice::query()->find($target->addon_invoice_id);
+
+            if ($invoice !== null && ! $invoice->isPaid()) {
+                InvoiceLineItem::query()
+                    ->where('invoice_id', $invoice->id)
+                    ->where('description', 'Extra WhatsApp number +'.$previousPhone)
+                    ->update(['description' => 'Extra WhatsApp number +'.$phone]);
+            }
         }
 
         return $target->refresh();

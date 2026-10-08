@@ -104,14 +104,33 @@ export function TenantProvider({ children }: { children: ReactNode }) {
       // AccountController::index() already scopes this to just their own
       // Sub-Clients (callerAgentScopeId()) — no separate endpoint needed.
       const res = await accountService.list({ per_page: 100 });
-      setAccounts(res.data);
+      let nextAccounts = res.data;
+
+      // [New feature, disclosed]: Super Admin's own send-only WhatsApp
+      // account (the reserved is_platform_device row) prepended into the
+      // switcher — list() never returns it (excluded by Account's own
+      // exclude_platform_device global scope on purpose), so it's fetched
+      // separately and merged in client-side only, here. Best-effort: a
+      // failure here (e.g. role check, though this is always Super Admin)
+      // just means that one extra option doesn't appear — never blocks
+      // the real client list from loading.
+      if (superAdmin) {
+        try {
+          const platformDevice = await accountService.platformDevice();
+          nextAccounts = [platformDevice, ...nextAccounts];
+        } catch {
+          // Switcher still works with real clients only.
+        }
+      }
+
+      setAccounts(nextAccounts);
       setHasLoadedAccounts(true);
     } catch {
       setAccounts([]);
     } finally {
       setIsLoadingAccounts(false);
     }
-  }, [canSwitchClients]);
+  }, [canSwitchClients, superAdmin]);
 
   useEffect(() => {
     if (canSwitchClients) {

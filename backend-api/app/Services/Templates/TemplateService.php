@@ -68,8 +68,17 @@ class TemplateService
     public function resolveCreationStatus(User $creator, Account $targetAccount): string
     {
         if ($creator->isSuperAdmin()) {
-            // Rule 4a — unchanged, pre-existing behavior.
-            return 'pending';
+            // [Behavior change, disclosed, explicitly requested]: Super
+            // Admin's own template is approved immediately, not queued
+            // through 'pending' for a separate approve() call — Super
+            // Admin IS the approver, so a second explicit confirmation
+            // step on their own creation was redundant busywork, not a
+            // real review. is_super_admin_tested stays informational-only
+            // (already true since the 2026-10-05 owner request noted on
+            // approve() below), so skipping straight to 'approved' here
+            // doesn't bypass any still-enforced precondition. Scoped to
+            // Super Admin only — Rule 4b (Agent) below is unchanged.
+            return 'approved';
         }
 
         if ($creator->account?->account_type === 'agent') {

@@ -22,15 +22,16 @@ import {
   MousePointerClick,
   Navigation,
   Package,
+  PlayCircle,
   Route,
   ShoppingBag,
   Smile,
   Sparkles,
+  Square,
   Target,
   UserPlus,
   Video,
   Workflow,
-  Zap,
 } from 'lucide-react';
 
 import {
@@ -906,6 +907,24 @@ const UTILITY_NODES: JourneyNodeDefinition[] = [
     summarize: (c) => str(c, 'journeyId') || null,
   },
   {
+    type: 'end',
+    label: 'End',
+    description: 'Ends the conversation. Canvas-only — never sent to the server (see EndNodeConfig).',
+    category: 'utility',
+    icon: Square,
+    color: '#475569',
+    background: '#f8fafc',
+    providers: ['none'],
+    // Terminal: nothing may connect out of an End node.
+    sourceHandles: [],
+    hasTargetHandle: true,
+    defaultConfig: { body: 'Thank you for connecting with us.' },
+    configSchema: [
+      { key: 'body', label: 'End Message', type: 'textarea', required: true },
+    ],
+    summarize: (c) => (str(c, 'body') ? truncate(str(c, 'body')) : null),
+  },
+  {
     type: 'delay',
     label: 'Delay',
     description: 'Wait before continuing.',
@@ -957,10 +976,16 @@ const UTILITY_NODES: JourneyNodeDefinition[] = [
 const LEGACY_NODES: JourneyNodeDefinition[] = [
   {
     type: 'trigger',
-    label: 'Trigger',
+    // Display-only rename to "Start" (matches the reference builder this
+    // card mirrors) — the `type` stays the literal string 'trigger'
+    // unchanged: HasJourneyGraph::entryNode() and WhatsAppJourneyEngine
+    // both find the entry node by type === 'trigger' (backend, not
+    // touched here), so renaming the type string would break every
+    // existing saved flow's entry-point resolution.
+    label: 'Start',
     description: 'Where the journey starts.',
     category: 'utility',
-    icon: Zap,
+    icon: PlayCircle,
     color: '#7c3aed',
     background: '#f5f3ff',
     providers: ['none'],

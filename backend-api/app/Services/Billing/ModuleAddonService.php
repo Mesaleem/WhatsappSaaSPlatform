@@ -390,6 +390,11 @@ class ModuleAddonService
 
             $locked->forceFill([
                 'status' => 'paid',
+                // [Bugfix, disclosed]: same gap as WhatsAppAddonService::recordManualPayment()
+                // — an abandoned online checkout (POST /api/module-addons/invoices/{id}/pay)
+                // sets payment_gateway to that gateway before payment is confirmed; recording
+                // this invoice as paid manually afterwards never reset it back to 'manual'.
+                'payment_gateway' => 'manual',
                 'paid_at' => Carbon::parse($details['paid_on'])->startOfDay(),
                 'gateway_payment_id' => $details['transaction_id'],
             ])->save();

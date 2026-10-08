@@ -78,7 +78,22 @@ class TenantIsolationMiddleware
             $requestedAccountId = $request->query('account_id');
 
             if ($requestedAccountId !== null && $requestedAccountId !== '') {
-                if (! Account::whereKey($requestedAccountId)->exists()) {
+                // [New feature, disclosed]: Account's default query scope
+                // excludes the reserved is_platform_device row everywhere
+                // (see Account::booted()'s exclude_platform_device global
+                // scope), so the ordinary exists() check below would 404 a
+                // Super Admin selecting "My WhatsApp — Super Admin" in the
+                // header switcher. Checked directly, bypassing ONLY that
+                // scope and ONLY for this one id-match — it does not relax
+                // isolation for any other account, and nothing else about
+                // this middleware's handling of the resolved $accountId
+                // changes once it IS this id.
+                $isPlatformDevice = Account::withoutGlobalScope('exclude_platform_device')
+                    ->whereKey($requestedAccountId)
+                    ->where('is_platform_device', true)
+                    ->exists();
+
+                if (! $isPlatformDevice && ! Account::whereKey($requestedAccountId)->exists()) {
                     return response()->json(['message' => 'The selected client/tenant account was not found.'], 404);
                 }
 

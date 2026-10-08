@@ -137,23 +137,27 @@ export default function ModuleOfferAdminCard() {
               </label>
               <label className="text-xs font-medium text-slate-700">
                 Price (₹, incl. GST)
-                <span className="text-red-500" aria-hidden="true"> *</span><input className={field} type="number" min="0" step="0.01" value={d.price} onChange={(e) => update(offer.module, { price: Number(e.target.value) })} required />
+                <span className="text-red-500" aria-hidden="true"> *</span><input className={field} type="number" min="0" step="0.01" value={d.price} disabled={d.is_free} onChange={(e) => update(offer.module, { price: Number(e.target.value) })} required />
               </label>
               <label className="text-xs font-medium text-slate-700">
                 Term (months)
-                <span className="text-red-500" aria-hidden="true"> *</span><input className={field} type="number" min="1" max="12" value={d.term_months} onChange={(e) => update(offer.module, { term_months: Number(e.target.value) })} required />
+                <span className="text-red-500" aria-hidden="true"> *</span><input className={field} type="number" min="1" max="12" value={d.term_months} disabled={d.is_free} onChange={(e) => update(offer.module, { term_months: Number(e.target.value) })} required />
               </label>
               <label className="text-xs font-medium text-slate-700">
                 Units included
-                <span className="text-red-500" aria-hidden="true"> *</span><input className={field} type="number" min="0" value={d.units_included} onChange={(e) => update(offer.module, { units_included: Number(e.target.value) })} required />
+                <span className="text-red-500" aria-hidden="true"> *</span><input className={field} type="number" min="0" value={d.units_included} disabled={d.is_free} onChange={(e) => update(offer.module, { units_included: Number(e.target.value) })} required />
               </label>
               <div className="flex flex-col justify-end gap-2">
-                <label className="flex items-center gap-2 text-xs font-medium text-slate-700">
-                  <input type="checkbox" checked={d.is_active} onChange={(e) => update(offer.module, { is_active: e.target.checked })} />
+                <label className="flex items-center gap-2 text-xs font-medium text-slate-700" title={d.is_free ? 'On sale stays on while Free is checked -- a free module still needs to be visible to clients.' : undefined}>
+                  <input type="checkbox" checked={d.is_free ? true : d.is_active} disabled={d.is_free} onChange={(e) => update(offer.module, { is_active: e.target.checked })} />
                   On sale
                 </label>
                 <label className="flex items-center gap-2 text-xs font-medium text-slate-700" title="Switches this off for every account right now -- no request or payment needed. Price and tiers below are kept, so turning this back off resumes charging at them.">
-                  <input type="checkbox" checked={d.is_free} onChange={(e) => update(offer.module, { is_free: e.target.checked })} />
+                  <input
+                    type="checkbox"
+                    checked={d.is_free}
+                    onChange={(e) => update(offer.module, e.target.checked ? { is_free: true, is_active: true } : { is_free: false })}
+                  />
                   Free (no charge) right now
                 </label>
                 <button
@@ -171,6 +175,9 @@ export default function ModuleOfferAdminCard() {
               <p className="mt-0.5 text-xs text-slate-500">
                 A client's request is priced by the tier its number of units falls in. Leave "up to" empty on the last tier to make it open-ended. Tiers must not overlap.
               </p>
+              {d.is_free && (
+                <p className="mt-1 text-xs text-amber-600">Unit pricing is ignored while this module is free. Values are kept and resume applying once Free is unchecked above.</p>
+              )}
 
               {rows.length === 0 ? (
                 <p className="mt-3 text-xs text-slate-500">No tiers. Requests use the flat price above.</p>
@@ -180,21 +187,22 @@ export default function ModuleOfferAdminCard() {
                     <div key={index} className="grid grid-cols-2 items-end gap-2 md:grid-cols-5">
                       <label className="text-xs font-medium text-slate-700">
                         From
-                        <span className="text-red-500" aria-hidden="true"> *</span><input className={field} type="number" min="1" value={row.from_units} onChange={(e) => updateTier(offer.module, index, { from_units: e.target.value })} required />
+                        <span className="text-red-500" aria-hidden="true"> *</span><input className={field} type="number" min="1" value={row.from_units} disabled={d.is_free} onChange={(e) => updateTier(offer.module, index, { from_units: e.target.value })} required />
                       </label>
                       <label className="text-xs font-medium text-slate-700">
                         Up to (empty = and above)
-                        <input className={field} type="number" min="1" value={row.to_units} onChange={(e) => updateTier(offer.module, index, { to_units: e.target.value })} />
+                        <input className={field} type="number" min="1" value={row.to_units} disabled={d.is_free} onChange={(e) => updateTier(offer.module, index, { to_units: e.target.value })} />
                       </label>
                       <label className="text-xs font-medium text-slate-700">
                         Price (₹, incl. GST)
-                        <span className="text-red-500" aria-hidden="true"> *</span><input className={field} type="number" min="0" step="0.01" value={row.price} onChange={(e) => updateTier(offer.module, index, { price: e.target.value })} required />
+                        <span className="text-red-500" aria-hidden="true"> *</span><input className={field} type="number" min="0" step="0.01" value={row.price} disabled={d.is_free} onChange={(e) => updateTier(offer.module, index, { price: e.target.value })} required />
                       </label>
                       <div className="col-span-2 md:col-span-1">
                         <button
                           type="button"
                           onClick={() => removeTier(offer.module, index)}
-                          className="rounded-lg border border-red-200 px-3 py-2 text-xs font-medium text-red-600 hover:bg-red-50"
+                          disabled={d.is_free}
+                          className="rounded-lg border border-red-200 px-3 py-2 text-xs font-medium text-red-600 hover:bg-red-50 disabled:opacity-60"
                         >
                           Remove
                         </button>
@@ -205,12 +213,12 @@ export default function ModuleOfferAdminCard() {
               )}
 
               <div className="mt-3 flex flex-wrap gap-2">
-                <button type="button" onClick={() => addTier(offer.module)} className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50">
+                <button type="button" onClick={() => addTier(offer.module)} disabled={d.is_free} className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60">
                   Add tier
                 </button>
                 <button
                   type="submit"
-                  disabled={busy || rows.length === 0}
+                  disabled={busy || rows.length === 0 || d.is_free}
                   className="rounded-lg bg-indigo-600 px-3 py-2 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-60"
                 >
                   {busy ? 'Saving…' : 'Save tiers'}

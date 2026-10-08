@@ -1326,6 +1326,13 @@ Route::middleware('auth:sanctum')->group(function () {
         // clients. Super Admin only (an Agent also holds manage-accounts). Registered before
         // '/accounts/{id}' so 'agent-summary' is not read as an id.
         Route::middleware('role:super_admin')->get('/accounts/agent-summary', [AccountController::class, 'agentSummary']);
+        // [New feature, disclosed]: Super Admin's own send-only WhatsApp
+        // account (the is_platform_device row) for the header switcher —
+        // see AccountController::platformDevice()'s docblock. role:super_admin
+        // specifically, not permission:manage-accounts (which an Agent also
+        // holds) — an Agent must never reach this account. Registered
+        // before '/accounts/{id}' for the same reason as agent-summary above.
+        Route::middleware('role:super_admin')->get('/accounts/platform-device', [AccountController::class, 'platformDevice']);
         Route::get('/accounts/expiring-soon', [AccountController::class, 'expiringSoon']);
         Route::get('/accounts/{id}', [AccountController::class, 'show']);
         Route::put('/accounts/{id}', [AccountController::class, 'update']);

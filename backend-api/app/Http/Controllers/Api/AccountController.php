@@ -157,9 +157,20 @@ class AccountController extends Controller
             ->latest('id')
             ->paginate($perPage);
 
-        $accounts->getCollection()->each(
-            fn (Account $account) => $account->currentSubscription?->refreshStatus()
-        );
+        // Frontend Tenant-Switcher Module Gating fix: this list is what
+        // populates TenantContext.accounts/selectedAccount for a Super
+        // Admin/Agent acting as a selected client (useEffectiveHasModule
+        // on the frontend). Without effective_modules here, that check
+        // fell back to the row's raw allowed_modules — correct in most
+        // cases, but it skips the one hierarchy-capping step that matters
+        // most for an Agent: a Sub-Client showing a module the Agent has
+        // since lost themselves. Same append() AccountController::show()
+        // and AuthController's /auth/me already do (see those for the
+        // "no new N+1" note — effectiveModules() uses Account::findCached()).
+        $accounts->getCollection()->each(function (Account $account) {
+            $account->currentSubscription?->refreshStatus();
+            $account->setAttribute('effective_modules', $account->effectiveModules());
+        });
 
         return response()->json($accounts);
     }
@@ -305,6 +316,35 @@ class AccountController extends Controller
                 $agentAccount ? $this->quotaService->remainingPool($agentAccount, $account->id) : null,
             );
         }
+
+        return response()->json($account);
+    }
+
+    /**
+     * [New feature, disclosed]: Super Admin's own send-only WhatsApp
+     * account for real promotional/broadcast sends, without creating a
+     * client account for themselves — the SAME reserved is_platform_device
+     * row Account::platformDevice() already provisions for Template
+     * Manager's "Test Send" (unlimited subscription, excluded from every
+     * ordinary account query by the exclude_platform_device global scope).
+     * Agreed explicitly: quota stays unlimited/free for this account —
+     * only real client/agent accounts are quota-tracked — so this method
+     * deliberately does NOT add any usage accounting.
+     *
+     * This is the ONE place other than platformDevice() itself allowed to
+     * reach past that scope, which is why it bypasses findOrFail($id) and
+     * assertCallerCanAccessAccount() (both scope-dependent) entirely —
+     * the route below is role:super_admin-gated, never permission:manage-
+     * accounts (which an Agent also holds), so an Agent can never reach
+     * this account via this endpoint.
+     */
+    public function platformDevice(): JsonResponse
+    {
+        $account = Account::platformDevice();
+        $account->load(['subscriptions' => fn ($q) => $q->orderByDesc('starts_at')]);
+        $account->subscriptions->each->refreshStatus();
+        $account->setRelation('currentSubscription', $account->subscriptions->first());
+        $account->setAttribute('effective_modules', $account->effectiveModules());
 
         return response()->json($account);
     }

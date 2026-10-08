@@ -116,15 +116,48 @@ class MessageTemplateController extends Controller
         return response()->json(['data' => $templates]);
     }
 
-    /** GET /api/alerts/message-templates -- approved templates this tenant may actually send. Tenant-scoped. */
+    /**
+     * GET /api/alerts/message-templates -- approved templates this tenant
+     * may actually send. Tenant-scoped for every normal caller.
+     *
+     * [Bugfix, disclosed]: Super Admin sends through the reserved
+     * platform-device account (see MessageTemplateController::test()'s
+     * docblock and AdminDeviceSettingsPage), which is not a real tenant
+     * that ever receives its own template submissions -- approvedFor()
+     * scoped to that one account's id returned only platform-wide Global
+     * templates (account_id null), so this dropdown showed "No approved
+     * templates yet" even when every Agent's and Client's own approved
+     * templates existed. Super Admin instead gets every approved
+     * template platform-wide here, the same unscoped breadth index()
+     * already gives Super Admin for the Template Manager (that method's
+     * own docblock: "Super Admin: everything, any status") -- this is
+     * just that same rule applied to the approved-only subset Send
+     * Notification actually sends from.
+     */
     public function available(Request $request): JsonResponse
     {
-        $account = $this->resolveAccount($request);
+        $user = $request->user();
+        $superAdmin = $user->isSuperAdmin();
 
-        $templates = MessageTemplate::query()
-            ->approvedFor($account?->id)
-            ->orderBy('title')
-            ->get();
+        // [Feature, disclosed, Super-Admin only]: Super Admin sees every
+        // account's approved templates here (the fix above), unlike every
+        // other caller who only ever sees their own + Global -- so, for
+        // Super Admin only, the Global/own ones (account_id null) sort
+        // first, and `account` is eager-loaded to tag each one with the
+        // owning client/agent's name (same 'Assigned To' convention
+        // Template Manager's table already uses: account?.company_name,
+        // 'Global (every client)' for account_id null). A plain tenant
+        // already knows whose templates these are (their own + Global),
+        // so account_name stays null for that branch rather than adding
+        // a column nobody there needs.
+        $templates = $superAdmin
+            ? MessageTemplate::query()
+                ->with('account:id,company_name')
+                ->where('status', 'approved')
+                ->orderByRaw('account_id IS NOT NULL') // NULL (Global/Super Admin's own) sorts first
+                ->orderBy('title')
+                ->get()
+            : MessageTemplate::query()->approvedFor($this->resolveAccount($request)?->id)->orderBy('title')->get();
 
         return response()->json([
             'data' => $templates->map(fn (MessageTemplate $t) => [
@@ -139,6 +172,16 @@ class MessageTemplateController extends Controller
                 'template_body' => $t->template_body,
                 'variables' => $t->variableNames(),
                 'variables_schema' => $t->effectiveVariablesSchema(),
+                'account_name' => $superAdmin ? ($t->account?->company_name ?? 'Global (every client)') : null,
+                // TEMP DIAGNOSTIC -- remove once account_name is confirmed working. Tells us exactly
+                // what the server resolved for this request, since reading the code hasn't found the bug.
+                '_debug' => [
+                    'super_admin' => $superAdmin,
+                    'user_id' => $user->id,
+                    'account_id' => $t->account_id,
+                    'account_loaded' => $t->relationLoaded('account'),
+                    'account_company_name' => $t->account?->company_name,
+                ],
             ]),
         ]);
     }
@@ -429,6 +472,33 @@ class MessageTemplateController extends Controller
      */
     public function myTemplates(Request $request): JsonResponse
     {
+        $user = $request->user();
+
+        // [Feature, disclosed, Super-Admin only]: Super Admin has no
+        // single "my account" to resolve here (requireAccount() can only
+        // fall back to an arbitrary first account under APP_ENV=local,
+        // and 422s outside local) -- "My Templates" means something
+        // different for Super Admin, who is the one caller that can see
+        // every account's templates elsewhere (index(), available()).
+        // Mirrors available()'s own Super-Admin branch: every template,
+        // any status (this list's whole point is seeing pending/rejected
+        // too, unlike available()'s approved-only), Global/own first,
+        // each tagged with its owning account's name.
+        if ($user->isSuperAdmin()) {
+            $templates = MessageTemplate::query()
+                ->with('account:id,company_name')
+                ->orderByRaw('account_id IS NOT NULL')
+                ->orderByDesc('id')
+                ->get(['id', 'account_id', 'title', 'industry_type', 'status', 'rejection_reason', 'created_at', 'template_code'])
+                ->each(function (MessageTemplate $t) {
+                    $t->setAttribute('is_global', $t->account_id === null);
+                    $t->setAttribute('account_name', $t->account?->company_name ?? 'Global (every client)');
+                    $t->makeHidden('account_id');
+                });
+
+            return response()->json(['data' => $templates]);
+        }
+
         $account = $this->requireAccount($request, 'Select a client/tenant account to view its templates (pass ?account_id=).');
 
         // Own templates (any status) PLUS the platform's approved Global Templates -- the same visibility
@@ -628,9 +698,14 @@ class MessageTemplateController extends Controller
         // target client already had an approved template live
         // (assertSingleApprovedTemplatePerAccount()). Multiple templates
         // per client are now allowed — see submitRequest()'s own note.
+        // [Behavior change, disclosed, explicitly requested]: a global
+        // template (account_id null) is reachable only by Super Admin
+        // (the Agent guard above requires targetAccount), so this matches
+        // resolveCreationStatus()'s own Super-Admin branch — 'approved'
+        // immediately, not 'pending'.
         $status = $targetAccount
             ? $this->templateService->resolveCreationStatus($user, $targetAccount)
-            : 'pending'; // global -- Super Admin only, per the Agent guard above.
+            : 'approved'; // global -- Super Admin only, per the Agent guard above.
 
         if (empty($data['template_code'])) {
             $data['template_code'] = MessageTemplate::generateTemplateCode($data['title']);

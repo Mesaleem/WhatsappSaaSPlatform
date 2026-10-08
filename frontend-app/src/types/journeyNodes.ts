@@ -120,7 +120,7 @@ export type JourneyAdvancedNodeType =
   | 'rag'
   | 'human_intervention';
 
-export type JourneyUtilityNodeType = 'code' | 'email' | 'journey' | 'delay';
+export type JourneyUtilityNodeType = 'code' | 'email' | 'journey' | 'delay' | 'end';
 
 /** The 27 nodes this task introduces. */
 export type JourneyPaletteNodeType =
@@ -398,6 +398,19 @@ export interface DelayNodeConfig {
   unit: DelayUnit;
 }
 
+/**
+ * Canvas-only terminator. UI sugar, never sent to the backend: a journey
+ * with no outgoing edge from its last real node already completes the
+ * session today (WhatsAppJourneyEngine::advance()'s `if (!$next) { ...
+ * complete($session); }` branch) — this node exists purely so the builder
+ * shows that fact as a card instead of a dangling connector. See
+ * `stripEndNodes()` in JourneyBuilderPage.tsx, which removes every 'end'
+ * node (and any edge into one) from the payload before it is saved.
+ */
+export interface EndNodeConfig {
+  body: string;
+}
+
 /** Maps every palette node type to its configuration contract. */
 export interface JourneyNodeConfigMap {
   prompt: PromptNodeConfig;
@@ -427,6 +440,7 @@ export interface JourneyNodeConfigMap {
   email: EmailNodeConfig;
   journey: JourneyRefNodeConfig;
   delay: DelayNodeConfig;
+  end: EndNodeConfig;
 }
 
 export type JourneyNodeConfig = JourneyNodeConfigMap[JourneyPaletteNodeType];

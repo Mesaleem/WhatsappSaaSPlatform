@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Lock, Pencil, Plus, RefreshCw, Star, Trash2, X } from 'lucide-react';
 import whatsappService from '../../services/whatsappService';
+import billingService from '../../services/billingService';
 import QRScannerModal from '../qr/QRScannerModal';
+import { pickOnlineGateway, useOnlineInvoicePayment } from '../billing/useOnlineInvoicePayment';
 import type { AddonInvoice, WhatsAppNumberRow, WhatsAppNumberStatus } from '../../types/whatsapp';
 
 interface WhatsAppNumbersCardProps {
@@ -61,6 +63,38 @@ export default function WhatsAppNumbersCard({ accountId, onConnected, reloadKey 
   const [purchaseError, setPurchaseError] = useState<string | null>(null);
   const [invoice, setInvoice] = useState<AddonInvoice | null>(null);
 
+  // Whether an online gateway is configured at all -- null while still
+  // loading, [] once loaded with nothing configured (payment stays
+  // admin-recorded only). Fetched the same way BillingPage/AddOnsPage
+  // already do (billingService.getPlans()) rather than a new endpoint.
+  const [gateways, setGateways] = useState<string[] | null>(null);
+  useEffect(() => {
+    billingService
+      .getPlans()
+      .then((res) => setGateways(res.available_gateways))
+      .catch(() => setGateways([]));
+  }, []);
+  const onlineGateway = gateways ? pickOnlineGateway(gateways) : null;
+
+  // Payment for the add-on invoice itself, right here on this card --
+  // previously this card only ever said "payment is recorded by an
+  // administrator" even when an online gateway WAS configured, so the
+  // client had to go find the invoice again on Billing & Plans/Add-ons
+  // just to pay it. onPaid reloads this card's own number list so a
+  // paid invoice's numbers flip out of "Awaiting payment" immediately.
+  const { payOnline, payingId, stripeCard } = useOnlineInvoicePayment({
+    onPaid: () => {
+      setPurchaseError(null);
+      void load();
+    },
+    onError: setPurchaseError,
+  });
+
+  const payForInvoice = (target: AddonInvoice) => {
+    if (!onlineGateway) return;
+    void payOnline({ id: target.id, account_id: accountId, plan_key: 'whatsapp_addon', plan_label: 'Extra WhatsApp number' }, onlineGateway);
+  };
+
   const load = useCallback(async () => {
     setLoading(true);
     try {
@@ -110,10 +144,32 @@ export default function WhatsAppNumbersCard({ accountId, onConnected, reloadKey 
   const saveEdit = async (id: number) => {
     setEditBusy(true);
     setEditError(null);
+    const previousPhone = rows.find((r) => r.id === id)?.phone_number;
+    const newPhone = editValue.replace(/\D/g, '');
     try {
-      await whatsappService.updateNumber(id, editValue.replace(/\D/g, ''), accountId);
+      await whatsappService.updateNumber(id, newPhone, accountId);
       setEditingId(null);
       setEditValue('');
+      // [Bugfix, disclosed]: the invoice summary above is a snapshot taken
+      // when it was created/last fetched -- there's no GET-by-id to refetch
+      // it from, and `load()` below only refreshes the plain number rows.
+      // The backend now also updates the matching line item's text on this
+      // same edit (see WhatsAppNumberService::changeNumber()), so patch the
+      // already-displayed invoice the same way here, otherwise it keeps
+      // showing the old number until this card is reopened.
+      if (previousPhone) {
+        setInvoice((inv) => {
+          if (!inv || !inv.numbers.some((n) => n.id === id)) return inv;
+          const oldDescription = `Extra WhatsApp number +${previousPhone}`;
+          return {
+            ...inv,
+            numbers: inv.numbers.map((n) => (n.id === id ? { ...n, phone_number: newPhone } : n)),
+            items: inv.items.map((item) =>
+              item.description === oldDescription ? { ...item, description: `Extra WhatsApp number +${newPhone}` } : item,
+            ),
+          };
+        });
+      }
       await load();
     } catch (err) {
       setEditError(errorMessage(err, 'Could not update this number.'));
@@ -134,6 +190,12 @@ export default function WhatsAppNumbersCard({ accountId, onConnected, reloadKey 
       setInvoice(res.invoice);
       setPurchaseText('');
       await load();
+      // Open the checkout immediately when a gateway is configured, instead
+      // of leaving the client to find this invoice again on Billing &
+      // Plans/Add-ons just to pay it.
+      if (onlineGateway) {
+        payForInvoice(res.invoice);
+      }
     } catch (err) {
       setPurchaseError(errorMessage(err, 'Could not create the invoice. Please check the numbers and try again.'));
     } finally {
@@ -198,18 +260,34 @@ export default function WhatsAppNumbersCard({ accountId, onConnected, reloadKey 
                 <span>Total (GST included)</span>
                 <span>₹{invoice.total_amount.toFixed(2)}</span>
               </p>
-              <p className="text-xs text-slate-500">
-                The numbers are connected after payment. Payment is recorded by an administrator.
-              </p>
+              {onlineGateway ? (
+                <p className="text-xs text-slate-500">The numbers are connected as soon as this is paid.</p>
+              ) : (
+                <p className="text-xs text-slate-500">
+                  No online payment method is configured yet. Ask your administrator to record this payment once it's received.
+                </p>
+              )}
               {invoice.status === 'pending' && (
-                <button
-                  type="button"
-                  disabled={purchasing}
-                  onClick={() => void cancelInvoice()}
-                  className="rounded-lg border border-red-200 px-3 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50 disabled:opacity-60"
-                >
-                  Cancel this invoice
-                </button>
+                <div className="flex flex-wrap gap-2">
+                  {onlineGateway && (
+                    <button
+                      type="button"
+                      disabled={purchasing || payingId === invoice.id}
+                      onClick={() => payForInvoice(invoice)}
+                      className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-60"
+                    >
+                      {payingId === invoice.id ? 'Starting…' : 'Pay now'}
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    disabled={purchasing}
+                    onClick={() => void cancelInvoice()}
+                    className="rounded-lg border border-red-200 px-3 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50 disabled:opacity-60"
+                  >
+                    Cancel this invoice
+                  </button>
+                </div>
               )}
             </div>
           ) : (
@@ -430,6 +508,8 @@ export default function WhatsAppNumbersCard({ accountId, onConnected, reloadKey 
           }}
         />
       )}
+
+      {stripeCard}
     </div>
   );
 }

@@ -115,6 +115,16 @@ export interface AvailableTemplate {
   variables: string[];
   /** Always resolved (server-side effectiveVariablesSchema()) — one entry per `variables` name, in the same order. */
   variables_schema: TemplateVariableSchemaField[];
+  /**
+   * Owning client/agent's company_name ('Global (every client)' for an
+   * account_id-null template) -- Super-Admin-only: the backend only ever
+   * populates this for a Super Admin caller (who sees every account's
+   * templates here), and sends null for every other caller, who only
+   * ever sees their own account's + Global templates and so has no need
+   * to be told whose template is whose. See
+   * MessageTemplateController::available().
+   */
+  account_name: string | null;
 }
 
 /** Meta's own template classification — mirrors MessageTemplate::META_CATEGORIES. */
@@ -180,6 +190,15 @@ export interface MyTemplateSummary {
   created_at: string;
   /** true for a platform Global Template shared with this account (not owned by it). */
   is_global?: boolean;
+  /**
+   * Owning client/agent's company_name ('Global (every client)' for an
+   * account_id-null template) -- Super-Admin-only, same convention as
+   * AvailableTemplate.account_name: present only when the backend
+   * resolved this list for a Super Admin (who sees every account's
+   * templates here, not just "their own"); absent for every other
+   * caller, who already knows whose templates these are.
+   */
+  account_name?: string;
 }
 
 export interface SendTemplateMessagePayload {

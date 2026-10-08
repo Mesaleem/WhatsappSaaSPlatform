@@ -36,6 +36,8 @@ import {
   Zap,
 } from 'lucide-react';
 import { useAuth } from '../../core/context/AuthContext';
+import { useTenant } from '../../core/context/TenantContext';
+import { useEffectiveHasModule } from '../../core/hooks/useEffectiveHasModule';
 import type { AccountModule } from '../../types/account';
 import { indigo, NAV_TINTS, activeGradient, type Tint } from '../../theme/signalIndigo';
 import Header from './Header';
@@ -51,8 +53,24 @@ interface NavItem {
   permission?: string;
   /** Phase 10 Task 3 — shown when the user holds ANY of these (the backend's `permission:a|b`). */
   anyPermission?: string[];
-  /** Only shown to a user with a tenant account_id (hidden for Super Admin). */
+  /**
+   * Shown to a user with a tenant account_id, OR to Super Admin/Agent once
+   * they've selected a client/the platform device in the header switcher
+   * (hasAccount in AppLayout follows "own account, or the selection", same
+   * pattern as hasModule) — hidden for Super Admin in Global View, unless
+   * `alwaysForSuperAdmin` also overrides that below.
+   */
   requiresAccount?: boolean;
+  /**
+   * Overrides requiresAccount's Global-View gate for Super Admin only —
+   * shown unconditionally, like Dashboard/Plans, no selection needed.
+   * "Send Notification" is the only item using this (explicitly
+   * requested); "WhatsApp Setup" deliberately does NOT get it — Device
+   * Settings is Super Admin's own dedicated connect screen for the same
+   * platform-device row, so a duplicate entry point here was asked to
+   * stay out. Meaningless (never checked) for anyone but Super Admin.
+   */
+  alwaysForSuperAdmin?: boolean;
   /** Only shown to Super Admin, regardless of permission. */
   superAdminOnly?: boolean;
   /**
@@ -168,8 +186,33 @@ const NAV_ITEMS: NavItem[] = [
   { label: 'Manage Clients', to: '/admin/accounts', icon: Building2, tint: NAV_TINTS.accounts, superAdminOnly: true },
   { label: 'My Clients', to: '/admin/accounts', icon: Building2, tint: NAV_TINTS.accounts, agentOnly: true },
   { label: 'Team Users', to: '/users', icon: Users, tint: NAV_TINTS.team, permission: 'manage-team', requiresModule: 'team_management' },
-  { label: 'WhatsApp Setup', to: '/settings/whatsapp', icon: QrCode, tint: NAV_TINTS.whatsapp, requiresAccount: true, requiresModule: 'whatsapp_setup', hiddenForRoles: ['social_marketer'] },
-  { label: 'Send Notification', to: '/alerts/send', icon: Send, tint: NAV_TINTS.send, permission: 'send-messages', requiresModule: 'send_alert', hiddenForSuperAdmin: true },
+  // [Bugfix, disclosed]: hiddenForSuperAdmin added -- requiresAccount's
+  // hasAccount check (user.account_id OR selectedAccountId) treats the
+  // Platform Device the same as any real client, so this item re-appeared
+  // the moment Super Admin selected it in the header switcher, even though
+  // the alwaysForSuperAdmin docblock above already says it was asked to
+  // stay out for Super Admin entirely -- Device Settings is Super Admin's
+  // one connect screen for its own device AND every client's (see its own
+  // page docblock), so there is no case where Super Admin still needs this
+  // duplicate entry point. Unaffected for every non-Super-Admin caller.
+  { label: 'WhatsApp Setup', to: '/settings/whatsapp', icon: QrCode, tint: NAV_TINTS.whatsapp, requiresAccount: true, requiresModule: 'whatsapp_setup', hiddenForRoles: ['social_marketer'], hiddenForSuperAdmin: true },
+  // [Bugfix, disclosed]: hiddenForSuperAdmin dropped - Super Admin already
+  // holds 'send-messages' (PERMISSIONS) and the /alerts/send route has no
+  // extra guard, so this was reachable by direct URL even while hidden
+  // from the sidebar; SendAlertPage.tsx already drives its number/template
+  // list off TenantContext's selectedAccountId, same as every other
+  // Agent-facing page, so it works for Super Admin the moment a client is
+  // selected. requiresAccount added instead, so it only shows once a
+  // client is actually selected (same "WhatsApp Setup" pattern just above).
+  // [Behavior change, disclosed, explicitly requested]: visible for Super
+  // Admin ALWAYS (Global View too, no switch needed) - unlike WhatsApp
+  // Setup just above, which Super Admin deliberately does NOT get this
+  // treatment for: Device Settings is already Super Admin's dedicated
+  // connect/reconnect screen for "Your WhatsApp Test Device" (same
+  // platform-device row), so a second, redundant entry point here was
+  // explicitly asked to stay out. alwaysForSuperAdmin is scoped to this
+  // ONE item - see isNavItemVisible's requiresAccount check.
+  { label: 'Send Notification', to: '/alerts/send', icon: Send, tint: NAV_TINTS.send, requiresAccount: true, alwaysForSuperAdmin: true, permission: 'send-messages', requiresModule: 'send_alert' },
   // Group Messaging — Module-to-UI Sync architecture rule (explicit
   // instruction): gated by requiresModule: 'contact_groups' like every
   // other module-backed item in this list. [Disclosed, superseded
@@ -310,7 +353,7 @@ function isNavItemVisible(
   if (item.agentOnly) return opts.isAgent;
   if (item.hiddenForSuperAdmin && opts.isSuperAdmin) return false;
   if (!opts.isSuperAdmin && item.hiddenForRoles?.some((role) => opts.hasRole(role))) return false;
-  if (item.requiresAccount && !opts.hasAccount) return false;
+  if (item.requiresAccount && !opts.hasAccount && !(item.alwaysForSuperAdmin && opts.isSuperAdmin)) return false;
   if (item.permission && !opts.isSuperAdmin && !opts.hasPermission(item.permission)) return false;
   if (item.anyPermission && !opts.isSuperAdmin && !item.anyPermission.some((p) => opts.hasPermission(p))) return false;
   if (item.requiresModule && !opts.isSuperAdmin && !opts.hasModule(item.requiresModule)) return false;
@@ -332,12 +375,26 @@ function resolvePageTitle(pathname: string, items: NavItem[]): string {
 }
 
 export default function AppLayout() {
-  const { user, hasPermission, isSuperAdmin, hasModule, hasRole, refreshUser } = useAuth();
+  const { user, hasPermission, isSuperAdmin, hasRole, refreshUser } = useAuth();
+  // Tenant-aware nav gating: a Super Admin/Agent acting as a selected
+  // client sees that client's modules (e.g. an Agent's onboarded client
+  // with WhatsApp Setup enabled, even when the Agent's own account
+  // doesn't have it) instead of always the caller's own account — same
+  // "own account, or the selected client" pattern hasIndustryModuleKey
+  // below already follows. See useEffectiveHasModule's own docblock.
+  const hasModule = useEffectiveHasModule();
   const location = useLocation();
   const [isCollapsed, setIsCollapsed] = useState(false);
 
-  const hasAccount = !!user?.account_id;
+  // [Bugfix, disclosed]: requiresAccount (e.g. "WhatsApp Setup") used only
+  // the caller's OWN account_id, so it stayed hidden for a Super Admin no
+  // matter which client was selected in the header switcher (Super Admin
+  // has no account_id of its own) - unlike hasModule above, which already
+  // follows "own account, or the selected client". An Agent was unaffected
+  // (its own account_id is never null), so this only ever broke Super Admin.
+  const { selectedAccountId } = useTenant();
   const superAdmin = isSuperAdmin();
+  const hasAccount = !!(user?.account_id || selectedAccountId);
   // 3-Tier Hierarchy & Agent-Client Scope Engine (Phase 3 UI).
   const isAgent = !superAdmin && user?.account?.account_type === 'agent';
 

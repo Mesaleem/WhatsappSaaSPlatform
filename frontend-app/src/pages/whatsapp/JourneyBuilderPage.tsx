@@ -3,6 +3,9 @@ import type { MouseEvent as ReactMouseEvent } from 'react';
 import {
   AlertTriangle,
   ArrowLeft,
+  Blocks,
+  LayoutGrid,
+  List,
   Loader2,
   Lock,
   Plus,
@@ -28,7 +31,7 @@ import {
   validateJourneyGraph,
 } from '../../journey/nodeRegistry';
 import JourneyNodeConfigForm from '../../journey/JourneyNodeConfigForm';
-import { journeyNodeAvailability } from '../../journey/nodeEntitlement';
+import { journeyNodeAvailability, type JourneyEntitlementContext } from '../../journey/nodeEntitlement';
 import { ClearFiltersButton, SearchInput } from '../../components/common/DataTableControls';
 import { TableCard, inputClass } from '../../components/common/Card';
 import ConfirmModal from '../../components/common/ConfirmModal';
@@ -74,10 +77,15 @@ import DismissibleAlert from '../../components/common/DismissibleAlert';
  * contract (WhatsAppJourneyEngine's docblock) does not change either way.
  */
 
-const NODE_WIDTH = 208;
+// Widened from the original 208px chip so a node's own configuration
+// fields (text, buttons, sections, …) fit directly in the card — see the
+// canvas node render below. NODE_HEIGHT is only the pre-measurement
+// fallback (a node's real height is measured once it has painted; see
+// `nodeHeights` state) since cards are no longer a fixed size.
+const NODE_WIDTH = 300;
 const NODE_HEIGHT = 92;
-const CANVAS_WIDTH = 1800;
-const CANVAS_HEIGHT = 1100;
+const CANVAS_WIDTH = 2400;
+const CANVAS_HEIGHT = 2200;
 
 /**
  * Phase 5 — Journey / Automation: node metadata now comes from the ONE
@@ -92,6 +100,39 @@ const CANVAS_HEIGHT = 1100;
  * crashing the canvas.
  */
 const FALLBACK_META = { icon: Zap, color: '#64748b', bg: '#f1f5f9' };
+
+/**
+ * Rounded elbow (step) connector — out of the source's right edge, one
+ * vertical run, into the target's left edge, replacing the earlier
+ * diagonal S-curve. Matches the reference builder's routing and, unlike
+ * a diagonal bezier, never visually crosses through an unrelated node
+ * sitting between source and target on a plain two-column layout.
+ */
+function orthogonalEdgePath(x1: number, y1: number, x2: number, y2: number): string {
+  const STUB = 28;
+  const midX = x1 + Math.max(STUB, (x2 - x1) / 2);
+
+  if (Math.abs(y1 - y2) < 1) {
+    return `M ${x1} ${y1} L ${x2} ${y2}`;
+  }
+
+  const dy = y2 >= y1 ? 1 : -1;
+  const dx2 = x2 >= midX ? 1 : -1;
+  const r = Math.max(0, Math.min(10, Math.abs(y2 - y1) / 2, Math.abs(midX - x1), Math.abs(x2 - midX)));
+
+  if (r === 0) {
+    return `M ${x1} ${y1} L ${midX} ${y1} L ${midX} ${y2} L ${x2} ${y2}`;
+  }
+
+  return [
+    `M ${x1} ${y1}`,
+    `L ${midX - r} ${y1}`,
+    `Q ${midX} ${y1} ${midX} ${y1 + r * dy}`,
+    `L ${midX} ${y2 - r * dy}`,
+    `Q ${midX} ${y2} ${midX + r * dx2} ${y2}`,
+    `L ${x2} ${y2}`,
+  ].join(' ');
+}
 
 function nodeMeta(type: string): { icon: typeof Zap; color: string; bg: string } {
   const definition = getJourneyNode(type);
@@ -125,28 +166,281 @@ function genId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
-function newTriggerGraph(): JourneyGraph {
+/**
+ * A new journey starts with its Start (type: 'trigger') and End nodes
+ * already on the canvas, unconnected — the user wires the rest between
+ * them. Matches the reference builder's "Start+End auto-added" behaviour.
+ * See `stripEndNodes()` for why the End node never reaches the backend.
+ */
+function newJourneyGraph(): JourneyGraph {
   return {
-    nodes: [{ id: genId('trigger'), type: 'trigger', position: { x: 40, y: 200 }, data: {} }],
+    nodes: [
+      { id: genId('trigger'), type: 'trigger', position: { x: 40, y: 160 }, data: {} },
+      { id: genId('end'), type: 'end', position: { x: 40, y: 480 }, data: { ...(getJourneyNode('end')?.defaultConfig ?? {}) } },
+    ],
     edges: [],
   };
 }
 
-function nodePreview(node: JourneyNode): string {
-  switch (node.type) {
-    case 'trigger':
-      return 'Flow entry point';
-    case 'message':
-      return node.data.text?.trim() || 'No message text yet';
-    case 'question':
-      return node.data.prompt_text?.trim() || 'No prompt text yet';
-    case 'condition':
-      return node.data.variable ? `IF {{${node.data.variable}}} …` : 'No variable selected';
-    case 'save_lead':
-      return 'Saves collected answers to Leads';
-    default:
-      return '';
+/**
+ * Every 'end' node (and any edge into one) is UI sugar, stripped before
+ * validation and before the save payload is built — see EndNodeConfig's
+ * docblock (types/journeyNodes.ts) for why this is safe: a node with no
+ * outgoing edge already completes the session today.
+ */
+function stripEndNodes(graph: JourneyGraph): JourneyGraph {
+  const endIds = new Set(graph.nodes.filter((n) => n.type === 'end').map((n) => n.id));
+
+  if (endIds.size === 0) return graph;
+
+  return {
+    nodes: graph.nodes.filter((n) => !endIds.has(n.id)),
+    edges: graph.edges.filter((e) => !endIds.has(e.target) && !endIds.has(e.source)),
+  };
+}
+
+/**
+ * The inverse of stripEndNodes(), run once when a graph is first loaded
+ * onto the canvas (new or existing journey).
+ *
+ * BUG FIXED: stripEndNodes() removes every 'end' node, and every edge
+ * that pointed at one, before a save — correct, since the backend has no
+ * 'end' type and the engine already completes a session once a node has
+ * no outgoing edge (WhatsAppJourneyEngine::advance()). But that also
+ * means a SAVED journey's graph_data never has an 'end' node, so
+ * re-opening it for editing showed either no End node at all, or (once
+ * the user re-added one by hand) only whatever single connection they'd
+ * just drawn — every earlier node that used to converge on End looked
+ * like it had silently lost its connection, because that information
+ * genuinely isn't in the saved data: a "leaf" node (no outgoing edge on
+ * a handle that CAN have one) is indistinguishable from "used to point
+ * at End" — they mean the same thing to the engine.
+ *
+ * So: if the graph has no 'end' node yet (a reload), reconstruct it by
+ * adding one and drawing an edge to it from every such leaf handle,
+ * across every node — exactly recreating the "N nodes converge on End"
+ * picture the user had before the last save, including when several
+ * different nodes all finish there. A brand-new graph (newJourneyGraph())
+ * already has its own 'end' node and is returned unchanged.
+ */
+function ensureEndConnections(graph: JourneyGraph): JourneyGraph {
+  if (graph.nodes.some((n) => n.type === 'end')) return graph;
+
+  const leafHandles: { nodeId: string; handleId: string }[] = [];
+
+  for (const node of graph.nodes) {
+    // save_lead renders no outgoing handle at all (it's a natural
+    // terminus); legacy 'condition' manages its own branch edges on the
+    // edge object rather than one-edge-per-handle, so guessing which of
+    // its branches is "unfilled" would be guessing, not reading data.
+    if (node.type === 'end' || node.type === 'save_lead' || node.type === 'condition') continue;
+
+    const handles = getJourneyNode(node.type)?.sourceHandles ?? [{ id: 'next', label: 'Next' }];
+
+    for (const handle of handles) {
+      const hasEdge = graph.edges.some((e) => e.source === node.id && (e.sourceHandle ?? 'next') === handle.id);
+      if (!hasEdge) leafHandles.push({ nodeId: node.id, handleId: handle.id });
+    }
   }
+
+  const maxY = graph.nodes.length > 0 ? Math.max(...graph.nodes.map((n) => n.position.y)) : 160;
+  const endNode: JourneyNode = {
+    id: genId('end'),
+    type: 'end',
+    position: { x: 40, y: maxY + 260 },
+    data: { ...(getJourneyNode('end')?.defaultConfig ?? {}) },
+  };
+
+  const newEdges: JourneyEdge[] = leafHandles.map(({ nodeId, handleId }) => ({
+    id: genId('edge'),
+    source: nodeId,
+    target: endNode.id,
+    ...(handleId !== 'next' ? { sourceHandle: handleId } : {}),
+  }));
+
+  return {
+    nodes: [...graph.nodes, endNode],
+    edges: [...graph.edges, ...newEdges],
+  };
+}
+
+/**
+ * Node-add palette — a collapsed icon rail that opens a searchable
+ * "Nodes" panel with a grid/list view toggle, matching the reference
+ * builder (which shows node tiles on a side rail instead of an
+ * always-expanded horizontal bar). Still entirely registry-driven:
+ * every node, icon, label, category, entitlement check and
+ * draft-only badge below reads straight from the same
+ * journeyNodesByCategory()/journeyNodeAvailability() the old bar used
+ * — this only changes how it's laid out, not what's in it.
+ */
+function NodePalette({
+  entitlement,
+  onAdd,
+  onBlocked,
+}: {
+  entitlement: JourneyEntitlementContext;
+  onAdd: (type: JourneyNodeType) => void;
+  onBlocked: (reason: string, upgradable: boolean) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState('');
+  const [view, setView] = useState<'grid' | 'list'>('grid');
+
+  const totalCount = JOURNEY_NODE_CATEGORIES.reduce((sum, c) => sum + journeyNodesByCategory(c).length, 0);
+  const query = search.trim().toLowerCase();
+
+  return (
+    <div className="relative flex-shrink-0">
+      <div className="flex w-12 flex-col items-center gap-1.5 rounded-xl border bg-white py-3" style={{ borderColor: indigo.border }}>
+        <button
+          type="button"
+          onClick={() => setOpen((o) => !o)}
+          data-testid="palette-toggle"
+          aria-expanded={open}
+          aria-label="Add node"
+          title="Add node"
+          className="flex h-9 w-9 items-center justify-center rounded-lg"
+          style={open ? { background: activeGradient, color: '#fff' } : { color: indigo.ink }}
+        >
+          <Blocks className="h-4 w-4" />
+        </button>
+        <span className="text-[9px] font-bold uppercase tracking-wide" style={{ color: indigo.muted }}>
+          Nodes
+        </span>
+      </div>
+
+      {open && (
+        <div
+          data-testid="node-palette-panel"
+          onMouseDown={(e) => e.stopPropagation()}
+          className="absolute left-14 top-0 z-20 flex max-h-[80vh] w-80 flex-col rounded-xl border bg-white shadow-xl"
+          style={{ borderColor: indigo.border }}
+        >
+          <div className="flex items-center justify-between gap-2 border-b px-3 py-2.5" style={{ borderColor: indigo.border }}>
+            <span className="font-display text-sm font-bold" style={{ color: indigo.ink }}>
+              Nodes <span className="font-normal" style={{ color: indigo.muted }}>{totalCount}</span>
+            </span>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => setView('grid')}
+                aria-label="Grid view"
+                aria-pressed={view === 'grid'}
+                className="rounded-md p-1.5"
+                style={{ background: view === 'grid' ? '#f1f5f9' : 'transparent', color: indigo.ink }}
+              >
+                <LayoutGrid className="h-3.5 w-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => setView('list')}
+                aria-label="List view"
+                aria-pressed={view === 'list'}
+                className="rounded-md p-1.5"
+                style={{ background: view === 'list' ? '#f1f5f9' : 'transparent', color: indigo.ink }}
+              >
+                <List className="h-3.5 w-3.5" />
+              </button>
+              <button type="button" onClick={() => setOpen(false)} className="rounded-md p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600" aria-label="Close">
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          </div>
+
+          <div className="border-b px-3 py-2" style={{ borderColor: indigo.border }}>
+            <SearchInput value={search} onChange={setSearch} placeholder="Search nodes…" />
+          </div>
+
+          <div className="flex-1 overflow-y-auto px-3 py-3">
+            {JOURNEY_NODE_CATEGORIES.map((category) => {
+              const nodes = journeyNodesByCategory(category).filter(
+                (d) => !query || d.label.toLowerCase().includes(query) || d.description.toLowerCase().includes(query),
+              );
+
+              if (nodes.length === 0) return null;
+
+              return (
+                <div key={category} data-testid={`palette-category-${category}`} className="mb-4">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                    {JOURNEY_NODE_CATEGORY_LABELS[category]}
+                  </span>
+                  <div className={view === 'grid' ? 'mt-1.5 grid grid-cols-3 gap-1.5' : 'mt-1.5 flex flex-col gap-1'}>
+                    {nodes.map((definition) => {
+                      const Icon = definition.icon;
+                      /*
+                        Phase 5 Task 7 — entitlement UX, NOT authorization.
+                        The server re-derives this from the account's own
+                        entitlements and subscription and answers 403
+                        JOURNEY_NODE_NOT_ENTITLED regardless of what this
+                        button does. Disabling it only spares the operator
+                        from configuring a node they were never going to be
+                        allowed to save. See src/journey/nodeEntitlement.ts.
+                      */
+                      const availability = journeyNodeAvailability(definition, entitlement);
+                      // P5-7 — runtime truth (UX): placeable in a draft, not publishable yet.
+                      const runnable = isRuntimeExecutableNodeType(definition.type);
+                      const tooltip =
+                        availability.reason ??
+                        (runnable ? definition.description : `${definition.description} Not executable yet — a journey containing it can only be saved as a draft.`);
+
+                      return (
+                        <button
+                          key={definition.type}
+                          type="button"
+                          data-testid={`palette-node-${definition.type}`}
+                          data-node-category={definition.category}
+                          data-entitled={availability.available ? 'true' : 'false'}
+                          data-runtime={runnable ? 'executable' : 'draft-only'}
+                          aria-disabled={!availability.available}
+                          onClick={() => {
+                            if (!availability.available) {
+                              onBlocked(availability.reason ?? `${definition.label} is not available for this account.`, (availability.reason ?? '').includes('capability'));
+                              return;
+                            }
+                            onAdd(definition.type);
+                          }}
+                          title={tooltip}
+                          className={
+                            view === 'grid'
+                              ? `relative flex flex-col items-center gap-1 rounded-lg border px-1.5 py-2 text-center hover:bg-slate-50 ${availability.available ? '' : 'opacity-40 hover:bg-transparent'}`
+                              : `flex items-center gap-2 rounded-lg border px-2.5 py-1.5 text-left hover:bg-slate-50 ${availability.available ? '' : 'opacity-40 hover:bg-transparent'}`
+                          }
+                          style={{ borderColor: indigo.border, color: definition.color }}
+                        >
+                          <Icon className={view === 'grid' ? 'h-4 w-4' : 'h-3.5 w-3.5 flex-shrink-0'} />
+                          <span
+                            className={view === 'grid' ? 'line-clamp-1 w-full text-[10px] font-semibold' : 'flex-1 text-xs font-semibold'}
+                            style={{ color: indigo.ink }}
+                          >
+                            {definition.label}
+                          </span>
+                          {!availability.available && (
+                            <Lock className={view === 'grid' ? 'absolute right-1 top-1 h-2.5 w-2.5 text-slate-400' : 'h-3 w-3 flex-shrink-0 text-slate-400'} />
+                          )}
+                          {availability.available && !runnable && (
+                            <span
+                              className={
+                                view === 'grid'
+                                  ? 'absolute -right-1 -top-1 rounded bg-slate-100 px-1 text-[7px] font-bold uppercase text-slate-500'
+                                  : 'flex-shrink-0 rounded bg-slate-100 px-1 text-[9px] font-bold uppercase tracking-wide text-slate-500'
+                              }
+                            >
+                              {view === 'grid' ? 'D' : 'Draft only'}
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
 
 /** ---------- Flows list view ---------- */
@@ -385,7 +679,10 @@ function JourneyCanvasEditor({
   const [triggerType, setTriggerType] = useState<FlowTriggerType>(initialFlow?.trigger_type ?? 'keyword');
   const [triggerValue, setTriggerValue] = useState(initialFlow?.trigger_value ?? '');
   const [isActive, setIsActive] = useState(initialFlow?.is_active ?? true);
-  const [graph, setGraph] = useState<JourneyGraph>(initialFlow?.graph_data ?? newTriggerGraph());
+  const [graph, setGraph] = useState<JourneyGraph>(() => ensureEndConnections(initialFlow?.graph_data ?? newJourneyGraph()));
+  /** Measured on-canvas height of each node, keyed by id — see the ref callback on the node render below. */
+  const [nodeHeights, setNodeHeights] = useState<Record<string, number>>({});
+  const nodeHeight = useCallback((id: string) => nodeHeights[id] ?? NODE_HEIGHT, [nodeHeights]);
   const [selection, setSelection] = useState<Selection>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -478,7 +775,7 @@ function JourneyCanvasEditor({
 
   const addNode = (type: JourneyNodeType) => {
     const index = graph.nodes.length;
-    const position = { x: 320 + (index % 3) * 260, y: 40 + Math.floor(index / 3) * 170 };
+    const position = { x: 400 + (index % 3) * 360, y: 40 + Math.floor(index / 3) * 260 };
     // Seeded from the registry so a freshly dropped node already holds a
     // valid-shaped config (delay: 1 minute, api: GET, code: javascript)
     // rather than an empty object the config form has to special-case.
@@ -610,7 +907,7 @@ function JourneyCanvasEditor({
               p.x >= n.position.x &&
               p.x <= n.position.x + NODE_WIDTH &&
               p.y >= n.position.y &&
-              p.y <= n.position.y + NODE_HEIGHT,
+              p.y <= n.position.y + nodeHeight(n.id),
           );
 
           if (!target) return g;
@@ -647,7 +944,7 @@ function JourneyCanvasEditor({
         return null;
       });
     },
-    [canvasRelativePoint],
+    [canvasRelativePoint, nodeHeight],
   );
 
   const onHandleMouseDown = (e: ReactMouseEvent, sourceId: string, sourceHandle = 'next') => {
@@ -664,9 +961,15 @@ function JourneyCanvasEditor({
       setSaveError('Give this journey a name.');
       return;
     }
-    const hasTrigger = graph.nodes.some((n) => n.type === 'trigger');
+
+    // 'end' nodes are canvas-only (see stripEndNodes's docblock) — every
+    // check below, and the payload itself, works off the graph with them
+    // (and any edge into one) already removed.
+    const backendGraph = stripEndNodes(graph);
+
+    const hasTrigger = backendGraph.nodes.some((n) => n.type === 'trigger');
     if (!hasTrigger) {
-      setSaveError('This journey has no Trigger node.');
+      setSaveError('This journey has no Start node.');
       return;
     }
 
@@ -677,15 +980,15 @@ function JourneyCanvasEditor({
     // the Template Manager hit in Phase 4. The backend revalidates
     // independently; this is UX, not authorization.
     const graphErrors = validateJourneyGraph(
-      graph.nodes.map((n) => ({ id: n.id, type: n.type, data: n.data as Record<string, unknown> })),
-      graph.edges,
+      backendGraph.nodes.map((n) => ({ id: n.id, type: n.type, data: n.data as Record<string, unknown> })),
+      backendGraph.edges,
     );
     setNodeErrors(graphErrors);
 
     const firstBadNodeId = Object.keys(graphErrors)[0];
 
     if (firstBadNodeId) {
-      const node = graph.nodes.find((n) => n.id === firstBadNodeId);
+      const node = backendGraph.nodes.find((n) => n.id === firstBadNodeId);
       const label = node ? (getJourneyNode(node.type)?.label ?? node.type) : firstBadNodeId;
       const message = Object.values(graphErrors[firstBadNodeId])[0];
 
@@ -698,7 +1001,7 @@ function JourneyCanvasEditor({
     // P5-7 — a journey is published only when the runtime can run every
     // node. UX mirror of the server's 422 JOURNEY_NOT_PUBLISHABLE (the
     // server decides): say which nodes block it and offer a draft save.
-    const blocking = nonExecutableNodeTypes(graph.nodes);
+    const blocking = nonExecutableNodeTypes(backendGraph.nodes);
 
     if (publish && blocking.length > 0) {
       const labels = blocking.map((type) => getJourneyNode(type)?.label ?? type).join(', ');
@@ -712,7 +1015,7 @@ function JourneyCanvasEditor({
       name: name.trim(),
       trigger_type: triggerType,
       trigger_value: triggerValue.trim() || null,
-      graph_data: graph,
+      graph_data: backendGraph,
       is_active: isActive,
       ...(publish ? {} : { publish: false }),
     };
@@ -786,30 +1089,6 @@ function JourneyCanvasEditor({
         </div>
       </div>
 
-      <div className="mb-4 grid grid-cols-1 gap-3 rounded-xl border p-3 sm:grid-cols-3" style={{ borderColor: indigo.border }}>
-        <label className="block text-xs font-medium text-slate-700">
-          Trigger Type
-          <select className={inputClass} value={triggerType} onChange={(e) => setTriggerType(e.target.value as FlowTriggerType)}>
-            {(Object.keys(TRIGGER_TYPE_LABELS) as FlowTriggerType[]).map((t) => (
-              <option key={t} value={t}>
-                {TRIGGER_TYPE_LABELS[t]}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="block text-xs font-medium text-slate-700 sm:col-span-2">
-          {triggerType === 'keyword' ? 'Keywords (comma-separated)' : triggerType === 'ctwa_referral' ? 'Meta Ad ID (optional — blank matches any ad click)' : 'Trigger Value'}
-          <input
-            type="text"
-            className={inputClass}
-            value={triggerValue}
-            onChange={(e) => setTriggerValue(e.target.value)}
-            disabled={triggerType === 'default'}
-            placeholder={triggerType === 'keyword' ? 'hi, start, menu' : triggerType === 'ctwa_referral' ? 'e.g. 120210000000000' : ''}
-          />
-        </label>
-      </div>
-
       {saveError && (
         <DismissibleAlert className="mb-3 flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
           <XCircle className="mt-0.5 h-4 w-4 flex-shrink-0" />
@@ -817,78 +1096,9 @@ function JourneyCanvasEditor({
         </DismissibleAlert>
       )}
 
-      <div className="mb-3 flex flex-wrap items-center gap-2">
-        <span className="text-xs font-semibold uppercase tracking-wide" style={{ color: indigo.muted }}>
-          Add node:
-        </span>
-        {/*
-          Generated from the node registry, grouped by category. Nothing
-          about a node is hardcoded here: adding one to the registry adds
-          it to this palette, with its own icon, label and description.
-        */}
-        {JOURNEY_NODE_CATEGORIES.map((category) => {
-          const nodes = journeyNodesByCategory(category);
-
-          if (nodes.length === 0) return null;
-
-          return (
-            <div key={category} data-testid={`palette-category-${category}`} className="flex flex-wrap items-center gap-1.5">
-              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                {JOURNEY_NODE_CATEGORY_LABELS[category]}
-              </span>
-              {nodes.map((definition) => {
-                const Icon = definition.icon;
-                /*
-                  Phase 5 Task 7 — entitlement UX, NOT authorization. The
-                  server re-derives this from the account's own
-                  entitlements and subscription and answers 403
-                  JOURNEY_NODE_NOT_ENTITLED regardless of what this
-                  button does. Disabling it only spares the operator from
-                  configuring a node they were never going to be allowed
-                  to save. See src/journey/nodeEntitlement.ts.
-                */
-                const availability = journeyNodeAvailability(definition, entitlement);
-                // P5-7 — runtime truth (UX): placeable in a draft, not publishable yet.
-                const runnable = isRuntimeExecutableNodeType(definition.type);
-
-                return (
-                  <button
-                    key={definition.type}
-                    type="button"
-                    data-testid={`palette-node-${definition.type}`}
-                    data-node-category={definition.category}
-                    data-entitled={availability.available ? 'true' : 'false'}
-                    data-runtime={runnable ? 'executable' : 'draft-only'}
-                    aria-disabled={!availability.available}
-                    onClick={() => {
-                      if (!availability.available) {
-                        setPaletteNotice({ reason: availability.reason ?? `${definition.label} is not available for this account.`, upgradable: (availability.reason ?? '').includes('capability') });
-                        return;
-                      }
-                      setPaletteNotice(null);
-                      addNode(definition.type);
-                    }}
-                    title={availability.reason ?? (runnable ? definition.description : `${definition.description} Not executable yet — a journey containing it can only be saved as a draft.`)}
-                    className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-semibold hover:bg-slate-50 ${availability.available ? '' : 'opacity-40 hover:bg-transparent'}`}
-                    style={{ borderColor: indigo.border, color: definition.color }}
-                  >
-                    <Plus className="h-3 w-3" />
-                    <Icon className="h-3.5 w-3.5" />
-                    {definition.label}
-                    {!availability.available && <Lock className="h-3 w-3 text-slate-400" />}
-                    {availability.available && !runnable && (
-                      <span className="rounded bg-slate-100 px-1 text-[9px] font-bold uppercase tracking-wide text-slate-500">Draft only</span>
-                    )}
-                  </button>
-                );
-              })}
-            </div>
-          );
-        })}
-        <span className="ml-auto text-[11px]" style={{ color: indigo.muted }}>
-          Drag a node's right-edge dot onto another node to connect them. Click a node or connection to edit it.
-        </span>
-      </div>
+      <p className="mb-2 text-[11px]" style={{ color: indigo.muted }}>
+        Drag a node's right-edge dot onto another node to connect them. Click a node or connection to edit it.
+      </p>
 
       {paletteNotice && (
         <div className="flex flex-wrap items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800" role="status" data-testid="palette-notice">
@@ -907,6 +1117,20 @@ function JourneyCanvasEditor({
       )}
 
       <div className="flex min-h-0 flex-1 gap-4">
+        {/*
+          Collapsed icon rail + "Nodes" panel (search, grid/list view),
+          replacing the old always-expanded horizontal category bar — the
+          registry is still the only source of truth for what's listed.
+        */}
+        <NodePalette
+          entitlement={entitlement}
+          onAdd={(type) => {
+            setPaletteNotice(null);
+            addNode(type);
+          }}
+          onBlocked={(reason, upgradable) => setPaletteNotice({ reason, upgradable })}
+        />
+
         <div
           ref={canvasRef}
           onMouseDown={() => setSelection(null)}
@@ -925,11 +1149,11 @@ function JourneyCanvasEditor({
                 const target = nodeById(edge.target);
                 if (!source || !target) return null;
                 const x1 = source.position.x + NODE_WIDTH;
-                const y1 = source.position.y + NODE_HEIGHT / 2;
+                const y1 = source.position.y + nodeHeight(source.id) / 2;
                 const x2 = target.position.x;
-                const y2 = target.position.y + NODE_HEIGHT / 2;
+                const y2 = target.position.y + nodeHeight(target.id) / 2;
+                const d = orthogonalEdgePath(x1, y1, x2, y2);
                 const midX = (x1 + x2) / 2;
-                const d = `M ${x1} ${y1} C ${midX} ${y1}, ${midX} ${y2}, ${x2} ${y2}`;
                 const isSelected = selection?.kind === 'edge' && selection.id === edge.id;
                 const label = edge.is_default ? 'else' : edge.condition ? `${edge.condition.operator} "${edge.condition.value ?? ''}"` : null;
 
@@ -967,7 +1191,7 @@ function JourneyCanvasEditor({
                   const source = nodeById(connectDrag.sourceId);
                   if (!source) return null;
                   const x1 = source.position.x + NODE_WIDTH;
-                  const y1 = source.position.y + NODE_HEIGHT / 2;
+                  const y1 = source.position.y + nodeHeight(source.id) / 2;
                   return (
                     <path
                       d={`M ${x1} ${y1} L ${connectDrag.mouseX} ${connectDrag.mouseY}`}
@@ -989,26 +1213,40 @@ function JourneyCanvasEditor({
               return (
                 <div
                   key={node.id}
+                  ref={(el) => {
+                    if (!el) return;
+                    const h = el.offsetHeight;
+                    setNodeHeights((prev) => (prev[node.id] === h ? prev : { ...prev, [node.id]: h }));
+                  }}
                   data-testid={`canvas-node-${node.id}`}
                   data-node-type={node.type}
+                  // Dragging/selecting the card itself (anywhere outside the
+                  // inline fields below, which stop this from bubbling up)
+                  // works exactly as it did when the card was a fixed-size
+                  // chip — selectCanvasNode() in the test suite still
+                  // targets this element directly.
                   onMouseDown={(e) => onNodeMouseDown(e, node)}
                   className="absolute cursor-move select-none rounded-xl border bg-white shadow-sm"
                   style={{
                     left: node.position.x,
                     top: node.position.y,
                     width: NODE_WIDTH,
-                    minHeight: NODE_HEIGHT,
                     borderColor: isSelected ? indigo.accentSolid : indigo.border,
                     borderWidth: isSelected ? 2 : 1,
                   }}
                 >
-                  <div className="flex items-center gap-1.5 rounded-t-xl px-2.5 py-1.5" style={{ background: meta.bg }}>
+                  <div
+                    className="flex items-center gap-1.5 rounded-t-xl px-2.5 py-1.5"
+                    style={{ background: meta.bg }}
+                  >
                     <Icon className="h-3.5 w-3.5 flex-shrink-0" style={{ color: meta.color }} />
                     <span className="text-xs font-semibold" style={{ color: meta.color }}>
                       {nodeLabel(node.type)}
                     </span>
-                    {node.type !== 'trigger' && (
+                    {/* Start and End anchor the journey — never deletable from the canvas. */}
+                    {node.type !== 'trigger' && node.type !== 'end' && (
                       <button
+                        onMouseDown={(e) => e.stopPropagation()}
                         onClick={(e) => {
                           e.stopPropagation();
                           deleteNode(node.id);
@@ -1020,7 +1258,33 @@ function JourneyCanvasEditor({
                       </button>
                     )}
                   </div>
-                  <p className="line-clamp-2 px-2.5 py-2 text-[11px] text-slate-600">{nodePreview(node)}</p>
+
+                  {/*
+                    Inline, on-card configuration — selecting/clicking here
+                    never starts a drag (no onNodeMouseDown attached), it
+                    just keeps this node selected while its fields are
+                    being edited.
+                  */}
+                  <div
+                    onMouseDown={(e) => {
+                      e.stopPropagation();
+                      setSelection({ kind: 'node', id: node.id });
+                    }}
+                    className="px-2.5 py-2"
+                  >
+                    <NodeInlineFields
+                      node={node}
+                      errors={nodeErrors[node.id]}
+                      knownVariables={knownVariables}
+                      knowledgeBases={knowledgeBases}
+                      aiAgents={aiAgents}
+                      triggerType={triggerType}
+                      triggerValue={triggerValue}
+                      onTriggerTypeChange={setTriggerType}
+                      onTriggerValueChange={setTriggerValue}
+                      onChange={(patch) => updateNodeData(node.id, patch)}
+                    />
+                  </div>
                   {nodeErrors[node.id] && (
                     <p
                       data-testid={`node-error-${node.id}`}
@@ -1065,17 +1329,7 @@ function JourneyCanvasEditor({
           </div>
         </div>
 
-        <div className="w-80 flex-shrink-0 overflow-y-auto rounded-xl border p-4" style={{ borderColor: indigo.border }}>
-          {selectedNode && (
-            <NodeEditorPanel
-              node={selectedNode}
-              errors={nodeErrors[selectedNode.id]}
-              knownVariables={knownVariables}
-              knowledgeBases={knowledgeBases}
-              aiAgents={aiAgents}
-              onChange={(patch) => updateNodeData(selectedNode.id, patch)}
-            />
-          )}
+        <div className="w-72 flex-shrink-0 overflow-y-auto rounded-xl border p-4" style={{ borderColor: indigo.border }}>
           {selectedEdge && (
             <EdgeEditorPanel
               edge={selectedEdge}
@@ -1084,9 +1338,11 @@ function JourneyCanvasEditor({
               onDelete={() => deleteEdge(selectedEdge.id)}
             />
           )}
-          {!selectedNode && !selectedEdge && (
+          {!selectedEdge && (
             <p className="text-xs" style={{ color: indigo.muted }}>
-              Select a node or a connection line to edit its settings here.
+              {selectedNode
+                ? 'Edit this node directly on its card. Click a connection line here to set its branch condition.'
+                : 'Click a node to edit its settings on the card, or a connection line to edit it here.'}
             </p>
           )}
         </div>
@@ -1095,9 +1351,9 @@ function JourneyCanvasEditor({
   );
 }
 
-/** ---------- Node data editor (right-side panel) ---------- */
+/** ---------- Node data editor (now rendered inline, on the card) ---------- */
 
-/** The only five types with a bespoke panel; everything else is schema-driven. */
+/** The only five types with a bespoke inline editor; everything else is schema-driven. */
 const LEGACY_PANEL_TYPES: JourneyLegacyEngineNodeType[] = [
   'trigger',
   'message',
@@ -1106,223 +1362,259 @@ const LEGACY_PANEL_TYPES: JourneyLegacyEngineNodeType[] = [
   'save_lead',
 ];
 
-function NodeEditorPanel({
+/** Compact variant of `inputClass` for use inside a canvas card, where every pixel of width is shared with the next field. */
+const inlineInputClass = `${inputClass} !mt-1`;
+
+/**
+ * Start (type: 'trigger') node's inline "Select Event" + "User Input
+ * Config" — mirrors the reference builder. Maps directly onto the
+ * existing page-level trigger_type / trigger_value fields (no new data
+ * shape): "No Event" is trigger_type 'default' (catch-all), "User Input"
+ * is 'keyword' (the journey starts when the first message matches one of
+ * the given keywords). trigger_type 'ctwa_referral' (ad-click entry) is
+ * not reachable from this simplified selector but is preserved untouched
+ * on a flow that already has it set — nothing here rewrites it unless the
+ * operator explicitly changes the dropdown.
+ */
+function StartNodeFields({
+  triggerType,
+  triggerValue,
+  onTriggerTypeChange,
+  onTriggerValueChange,
+}: {
+  triggerType: FlowTriggerType;
+  triggerValue: string;
+  onTriggerTypeChange: (t: FlowTriggerType) => void;
+  onTriggerValueChange: (v: string) => void;
+}) {
+  const [configOpen, setConfigOpen] = useState(triggerType !== 'default');
+  const hasEvent = triggerType !== 'default';
+
+  return (
+    <div className="space-y-2">
+      <label className="block text-xs font-medium text-slate-700">
+        Select Event
+        <select
+          className={inlineInputClass}
+          value={hasEvent ? 'user_input' : 'no_event'}
+          onChange={(e) => {
+            if (e.target.value === 'no_event') {
+              onTriggerTypeChange('default');
+              setConfigOpen(false);
+            } else {
+              onTriggerTypeChange(triggerType === 'ctwa_referral' ? 'ctwa_referral' : 'keyword');
+              setConfigOpen(true);
+            }
+          }}
+        >
+          <option value="no_event">No Event</option>
+          <option value="user_input">User Input</option>
+        </select>
+      </label>
+
+      {!hasEvent ? (
+        <span className="inline-block rounded bg-slate-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-slate-500">
+          Default
+        </span>
+      ) : (
+        <div className="rounded-lg border p-2" style={{ borderColor: indigo.border }}>
+          <button
+            type="button"
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={() => setConfigOpen((v) => !v)}
+            className="flex w-full items-center justify-between text-xs font-semibold"
+            style={{ color: indigo.ink }}
+          >
+            User Input Config
+            <span>{configOpen ? '−' : '+'}</span>
+          </button>
+          {configOpen && (
+            <label className="mt-2 block text-xs font-medium text-slate-700">
+              {triggerType === 'ctwa_referral' ? 'Meta Ad ID (optional — blank matches any ad click)' : 'Starting message (comma-separated)'}
+              <input
+                type="text"
+                className={inlineInputClass}
+                value={triggerValue}
+                onChange={(e) => onTriggerValueChange(e.target.value)}
+                placeholder={triggerType === 'ctwa_referral' ? 'e.g. 120210000000000' : 'hi, start, menu'}
+              />
+              <span className="mt-1 block text-[11px]" style={{ color: indigo.muted }}>
+                The journey starts when the user's first message matches one of these. Leave blank to match any message.
+              </span>
+            </label>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MessageFields({ node, onChange }: { node: JourneyNode; onChange: (patch: Record<string, unknown>) => void }) {
+  return (
+    <label className="block text-xs font-medium text-slate-700">
+      Message
+      <textarea className={inlineInputClass} rows={4} value={node.data.text ?? ''} onChange={(e) => onChange({ text: e.target.value })} />
+    </label>
+  );
+}
+
+function QuestionFields({
   node,
-  errors,
   knownVariables,
-  knowledgeBases,
-  aiAgents,
   onChange,
 }: {
   node: JourneyNode;
-  errors?: Record<string, string>;
   knownVariables: string[];
-  knowledgeBases: KnowledgeBaseSummary[] | null;
-  aiAgents: AiAgentSummary[] | null;
   onChange: (patch: Record<string, unknown>) => void;
 }) {
-  /*
-    Phase 5 — Journey / Automation.
+  const inputType: QuestionInputType = node.data.input_type ?? 'text';
+  const options: JourneyNodeOption[] = node.data.options ?? [];
+  const validationType: QuestionValidationType = node.data.validation?.type ?? 'none';
 
-    The five legacy engine-executed types keep the hand-written panels
-    below, byte-for-byte: they carry behaviour the shipped
-    WhatsAppJourneyEngine depends on (option ids, validation sub-objects,
-    the condition node's edge-driven branching) that a generic form would
-    not reproduce faithfully, and an existing saved journey must keep
-    editing exactly as it did.
+  const updateOption = (i: number, patch: Partial<JourneyNodeOption>) => {
+    const next = options.map((o, idx) => (idx === i ? { ...o, ...patch } : o));
+    onChange({ options: next });
+  };
+  const addOption = () => onChange({ options: [...options, { id: genId('opt'), title: '' }] });
+  const removeOption = (i: number) => onChange({ options: options.filter((_, idx) => idx !== i) });
 
-    Every other registered type — all 27 palette nodes — is rendered from
-    its registry `configSchema` by ONE component. Before this branch
-    existed, selecting any of them fell through to the Save Lead panel at
-    the bottom of this function: in the palette, with a contract, and
-    still not editable. That was the gap.
-  */
-  if (!LEGACY_PANEL_TYPES.includes(node.type as JourneyLegacyEngineNodeType)) {
-    return (
-      <JourneyNodeConfigForm
-        nodeType={node.type}
-        config={node.data as Record<string, unknown>}
-        errors={errors}
-        knownVariables={knownVariables}
-        knowledgeBases={knowledgeBases}
-        aiAgents={aiAgents}
-        onChange={onChange}
-      />
-    );
-  }
+  return (
+    <div className="space-y-2">
+      <label className="block text-xs font-medium text-slate-700">
+        Prompt
+        <textarea className={inlineInputClass} rows={3} value={node.data.prompt_text ?? ''} onChange={(e) => onChange({ prompt_text: e.target.value })} />
+      </label>
+      <label className="block text-xs font-medium text-slate-700">
+        Save Answer As
+        <input
+          type="text"
+          className={inlineInputClass}
+          value={node.data.variable_name ?? ''}
+          onChange={(e) => onChange({ variable_name: e.target.value.trim().replace(/\s+/g, '_') })}
+          placeholder="e.g. user_name"
+        />
+      </label>
+      <label className="block text-xs font-medium text-slate-700">
+        Answer Type
+        <select className={inlineInputClass} value={inputType} onChange={(e) => onChange({ input_type: e.target.value as QuestionInputType })}>
+          <option value="text">Free text</option>
+          <option value="buttons">Buttons (max 3)</option>
+          <option value="list">List</option>
+        </select>
+      </label>
 
-  if (node.type === 'trigger') {
-    return (
-      <div>
-        <h3 className="mb-2 text-sm font-semibold" style={{ color: indigo.ink }}>
-          Trigger
-        </h3>
-        <p className="text-xs" style={{ color: indigo.muted }}>
-          Every journey starts here. Configure how it's entered (keyword / ad click / default) in the bar above the canvas, then
-          drag this node's dot to the first real step.
-        </p>
-      </div>
-    );
-  }
-
-  if (node.type === 'message') {
-    return (
-      <div>
-        <h3 className="mb-2 text-sm font-semibold" style={{ color: indigo.ink }}>
-          Send Message
-        </h3>
-        <label className="block text-xs font-medium text-slate-700">
-          Message Text
-          <textarea className={inputClass} rows={5} value={node.data.text ?? ''} onChange={(e) => onChange({ text: e.target.value })} />
-        </label>
-      </div>
-    );
-  }
-
-  if (node.type === 'question') {
-    const inputType: QuestionInputType = node.data.input_type ?? 'text';
-    const options: JourneyNodeOption[] = node.data.options ?? [];
-    const validationType: QuestionValidationType = node.data.validation?.type ?? 'none';
-
-    const updateOption = (i: number, patch: Partial<JourneyNodeOption>) => {
-      const next = options.map((o, idx) => (idx === i ? { ...o, ...patch } : o));
-      onChange({ options: next });
-    };
-    const addOption = () => onChange({ options: [...options, { id: genId('opt'), title: '' }] });
-    const removeOption = (i: number) => onChange({ options: options.filter((_, idx) => idx !== i) });
-
-    return (
-      <div className="space-y-3">
-        <h3 className="text-sm font-semibold" style={{ color: indigo.ink }}>
-          Ask Question
-        </h3>
-        <label className="block text-xs font-medium text-slate-700">
-          Prompt Text
-          <textarea
-            className={inputClass}
-            rows={3}
-            value={node.data.prompt_text ?? ''}
-            onChange={(e) => onChange({ prompt_text: e.target.value })}
-          />
-        </label>
-        <label className="block text-xs font-medium text-slate-700">
-          Save Answer As Variable
-          <input
-            type="text"
-            className={inputClass}
-            value={node.data.variable_name ?? ''}
-            onChange={(e) => onChange({ variable_name: e.target.value.trim().replace(/\s+/g, '_') })}
-            placeholder="e.g. user_name"
-          />
-        </label>
-        <label className="block text-xs font-medium text-slate-700">
-          Answer Type
-          <select className={inputClass} value={inputType} onChange={(e) => onChange({ input_type: e.target.value as QuestionInputType })}>
-            <option value="text">Free text</option>
-            <option value="buttons">Buttons (max 3)</option>
-            <option value="list">List</option>
-          </select>
-        </label>
-
-        {inputType !== 'text' && (
-          <div>
-            {inputType === 'list' && (
-              <label className="mb-2 block text-xs font-medium text-slate-700">
-                Menu Button Label
-                <input type="text" className={inputClass} value={node.data.button_text ?? ''} onChange={(e) => onChange({ button_text: e.target.value })} placeholder="Menu" />
-              </label>
-            )}
-            <p className="mb-1 text-xs font-medium text-slate-700">Options</p>
-            <div className="space-y-2">
-              {options.map((opt, i) => (
-                <div key={opt.id} className="flex items-center gap-1.5">
-                  <input
-                    type="text"
-                    className={`${inputClass} !mt-0`}
-                    value={opt.title}
-                    onChange={(e) => updateOption(i, { title: e.target.value })}
-                    placeholder={`Option ${i + 1}`}
-                  />
-                  <button onClick={() => removeOption(i)} className="flex-shrink-0 text-slate-400 hover:text-red-600" aria-label="Remove option">
-                    <X className="h-4 w-4" />
-                  </button>
-                </div>
-              ))}
-              {(inputType !== 'buttons' || options.length < 3) && (
-                <button onClick={addOption} className="text-xs font-semibold" style={{ color: indigo.accentSolid }}>
-                  + Add option
-                </button>
-              )}
-            </div>
-          </div>
-        )}
-
-        {inputType === 'text' && (
-          <>
-            <label className="block text-xs font-medium text-slate-700">
-              Validate Answer As
-              <select
-                className={inputClass}
-                value={validationType}
-                onChange={(e) => onChange({ validation: { ...node.data.validation, type: e.target.value as QuestionValidationType } })}
-              >
-                {VALIDATION_TYPE_OPTIONS.map((opt) => (
-                  <option key={opt.value} value={opt.value}>
-                    {opt.label}
-                  </option>
-                ))}
-              </select>
+      {inputType !== 'text' && (
+        <div>
+          {inputType === 'list' && (
+            <label className="mb-1.5 block text-xs font-medium text-slate-700">
+              Menu Button Label
+              <input type="text" className={inlineInputClass} value={node.data.button_text ?? ''} onChange={(e) => onChange({ button_text: e.target.value })} placeholder="Menu" />
             </label>
-            {validationType !== 'none' && (
-              <label className="block text-xs font-medium text-slate-700">
-                Error Message
+          )}
+          <p className="mb-1 text-xs font-medium text-slate-700">Options</p>
+          <div className="space-y-1.5">
+            {options.map((opt, i) => (
+              <div key={opt.id} className="flex items-center gap-1.5">
                 <input
                   type="text"
-                  className={inputClass}
-                  value={node.data.validation?.error_message ?? ''}
-                  onChange={(e) => onChange({ validation: { ...node.data.validation, type: validationType, error_message: e.target.value } })}
-                  placeholder="Please enter a valid value."
+                  className={`${inputClass} !mt-0`}
+                  value={opt.title}
+                  onChange={(e) => updateOption(i, { title: e.target.value })}
+                  placeholder={`Option ${i + 1}`}
                 />
-              </label>
-            )}
-          </>
-        )}
-
-        {knownVariables.length > 0 && (
-          <p className="text-[11px]" style={{ color: indigo.muted }}>
-            Variables so far: {knownVariables.map((v) => `{{${v}}}`).join(', ')}
-          </p>
-        )}
-      </div>
-    );
-  }
-
-  if (node.type === 'condition') {
-    return (
-      <div className="space-y-3">
-        <h3 className="text-sm font-semibold" style={{ color: indigo.ink }}>
-          Condition
-        </h3>
-        <label className="block text-xs font-medium text-slate-700">
-          Check Variable
-          <select className={inputClass} value={node.data.variable ?? ''} onChange={(e) => onChange({ variable: e.target.value })}>
-            <option value="">— select —</option>
-            {knownVariables.map((v) => (
-              <option key={v} value={v}>
-                {v}
-              </option>
+                <button onMouseDown={(e) => e.stopPropagation()} onClick={() => removeOption(i)} className="flex-shrink-0 text-slate-400 hover:text-red-600" aria-label="Remove option">
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
             ))}
-          </select>
-        </label>
-        <p className="text-[11px]" style={{ color: indigo.muted }}>
-          Drag this node's dot to each possible next step, then click that connection line to set its branch condition (or mark
-          it as the "else" default).
-        </p>
-      </div>
-    );
-  }
+            {(inputType !== 'buttons' || options.length < 3) && (
+              <button onMouseDown={(e) => e.stopPropagation()} onClick={addOption} className="text-xs font-semibold" style={{ color: indigo.accentSolid }}>
+                + Add option
+              </button>
+            )}
+          </div>
+        </div>
+      )}
 
-  // save_lead
+      {inputType === 'text' && (
+        <>
+          <label className="block text-xs font-medium text-slate-700">
+            Validate As
+            <select
+              className={inlineInputClass}
+              value={validationType}
+              onChange={(e) => onChange({ validation: { ...node.data.validation, type: e.target.value as QuestionValidationType } })}
+            >
+              {VALIDATION_TYPE_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          {validationType !== 'none' && (
+            <label className="block text-xs font-medium text-slate-700">
+              Error Message
+              <input
+                type="text"
+                className={inlineInputClass}
+                value={node.data.validation?.error_message ?? ''}
+                onChange={(e) => onChange({ validation: { ...node.data.validation, type: validationType, error_message: e.target.value } })}
+                placeholder="Please enter a valid value."
+              />
+            </label>
+          )}
+        </>
+      )}
+
+      {knownVariables.length > 0 && (
+        <p className="text-[11px]" style={{ color: indigo.muted }}>
+          Variables so far: {knownVariables.map((v) => `{{${v}}}`).join(', ')}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function ConditionFields({
+  node,
+  knownVariables,
+  onChange,
+}: {
+  node: JourneyNode;
+  knownVariables: string[];
+  onChange: (patch: Record<string, unknown>) => void;
+}) {
+  return (
+    <div className="space-y-2">
+      <label className="block text-xs font-medium text-slate-700">
+        Check Variable
+        <select className={inlineInputClass} value={node.data.variable ?? ''} onChange={(e) => onChange({ variable: e.target.value })}>
+          <option value="">— select —</option>
+          {knownVariables.map((v) => (
+            <option key={v} value={v}>
+              {v}
+            </option>
+          ))}
+        </select>
+      </label>
+      <p className="text-[11px]" style={{ color: indigo.muted }}>
+        Drag this node's dot to each next step, then click that connection to set its branch (or mark it "else"). For an
+        IF/ELSE with a Manage Conditions screen, use the Conditional node instead.
+      </p>
+    </div>
+  );
+}
+
+function SaveLeadFields({
+  node,
+  knownVariables,
+  onChange,
+}: {
+  node: JourneyNode;
+  knownVariables: string[];
+  onChange: (patch: Record<string, unknown>) => void;
+}) {
   const selectOptions = (
     <>
       <option value="">— none —</option>
@@ -1335,42 +1627,97 @@ function NodeEditorPanel({
   );
 
   return (
-    <div className="space-y-3">
-      <h3 className="text-sm font-semibold" style={{ color: indigo.ink }}>
-        Save Lead
-      </h3>
-      <p className="text-xs" style={{ color: indigo.muted }}>
-        All collected answers are always saved with the lead — mapping fields below just fills in the Name/Email/Phone columns.
-      </p>
+    <div className="space-y-2">
       <label className="block text-xs font-medium text-slate-700">
         Name Variable
-        <select className={inputClass} value={node.data.name_variable ?? ''} onChange={(e) => onChange({ name_variable: e.target.value || undefined })}>
+        <select className={inlineInputClass} value={node.data.name_variable ?? ''} onChange={(e) => onChange({ name_variable: e.target.value || undefined })}>
           {selectOptions}
         </select>
       </label>
       <label className="block text-xs font-medium text-slate-700">
         Email Variable
-        <select className={inputClass} value={node.data.email_variable ?? ''} onChange={(e) => onChange({ email_variable: e.target.value || undefined })}>
+        <select className={inlineInputClass} value={node.data.email_variable ?? ''} onChange={(e) => onChange({ email_variable: e.target.value || undefined })}>
           {selectOptions}
         </select>
       </label>
       <label className="block text-xs font-medium text-slate-700">
-        Phone Variable (defaults to the sender's WhatsApp number)
-        <select className={inputClass} value={node.data.phone_variable ?? ''} onChange={(e) => onChange({ phone_variable: e.target.value || undefined })}>
+        Phone Variable (defaults to the sender's number)
+        <select className={inlineInputClass} value={node.data.phone_variable ?? ''} onChange={(e) => onChange({ phone_variable: e.target.value || undefined })}>
           {selectOptions}
         </select>
       </label>
       <label className="block text-xs font-medium text-slate-700">
         Completion Message (optional)
-        <textarea
-          className={inputClass}
-          rows={3}
-          value={node.data.completion_message ?? ''}
-          onChange={(e) => onChange({ completion_message: e.target.value })}
-        />
+        <textarea className={inlineInputClass} rows={2} value={node.data.completion_message ?? ''} onChange={(e) => onChange({ completion_message: e.target.value })} />
       </label>
     </div>
   );
+}
+
+/**
+ * Dispatches a node to its inline, on-card editor. Every registered type
+ * — all 27 palette nodes plus 'end' — is rendered from its registry
+ * `configSchema` by JourneyNodeConfigForm (`hideHeader`, since the card's
+ * own header strip already shows the icon and label). The five legacy
+ * engine-executed types (byte-for-byte behaviour WhatsAppJourneyEngine
+ * depends on) and the Start node's event selector keep their own
+ * hand-written bodies, unchanged from the former side-panel version.
+ */
+function NodeInlineFields({
+  node,
+  errors,
+  knownVariables,
+  knowledgeBases,
+  aiAgents,
+  triggerType,
+  triggerValue,
+  onTriggerTypeChange,
+  onTriggerValueChange,
+  onChange,
+}: {
+  node: JourneyNode;
+  errors?: Record<string, string>;
+  knownVariables: string[];
+  knowledgeBases: KnowledgeBaseSummary[] | null;
+  aiAgents: AiAgentSummary[] | null;
+  triggerType: FlowTriggerType;
+  triggerValue: string;
+  onTriggerTypeChange: (t: FlowTriggerType) => void;
+  onTriggerValueChange: (v: string) => void;
+  onChange: (patch: Record<string, unknown>) => void;
+}) {
+  if (!LEGACY_PANEL_TYPES.includes(node.type as JourneyLegacyEngineNodeType)) {
+    return (
+      <JourneyNodeConfigForm
+        nodeType={node.type}
+        config={node.data as Record<string, unknown>}
+        errors={errors}
+        knownVariables={knownVariables}
+        knowledgeBases={knowledgeBases}
+        aiAgents={aiAgents}
+        onChange={onChange}
+        hideHeader
+      />
+    );
+  }
+
+  if (node.type === 'trigger') {
+    return (
+      <StartNodeFields
+        triggerType={triggerType}
+        triggerValue={triggerValue}
+        onTriggerTypeChange={onTriggerTypeChange}
+        onTriggerValueChange={onTriggerValueChange}
+      />
+    );
+  }
+
+  if (node.type === 'message') return <MessageFields node={node} onChange={onChange} />;
+  if (node.type === 'question') return <QuestionFields node={node} knownVariables={knownVariables} onChange={onChange} />;
+  if (node.type === 'condition') return <ConditionFields node={node} knownVariables={knownVariables} onChange={onChange} />;
+
+  // save_lead
+  return <SaveLeadFields node={node} knownVariables={knownVariables} onChange={onChange} />;
 }
 
 function EdgeEditorPanel({

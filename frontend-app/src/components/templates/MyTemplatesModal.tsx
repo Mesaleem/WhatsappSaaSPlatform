@@ -110,8 +110,14 @@ export default function MyTemplatesModal({ onClose }: { onClose: () => void }) {
           {templates !== null && templates.length > 0 && (
             <div className="space-y-4">
               {[
+                // Super-Admin-only (see account_name's own docblock): the non-global
+                // bucket holds every client's/agent's templates for a Super Admin, not
+                // "their own" -- relabeled so the heading doesn't claim otherwise.
                 { heading: 'Global Templates', rows: templates.filter((t) => t.is_global) },
-                { heading: 'My Templates', rows: templates.filter((t) => !t.is_global) },
+                {
+                  heading: templates.some((t) => t.account_name) ? 'Client & Agent Templates' : 'My Templates',
+                  rows: templates.filter((t) => !t.is_global),
+                },
               ]
                 .filter((g) => g.rows.length > 0)
                 .map((g) => (
@@ -138,6 +144,7 @@ export default function MyTemplatesModal({ onClose }: { onClose: () => void }) {
                           )}
                         </button>
                       )}
+                      {t.account_name && <p className="mt-0.5 text-xs font-medium text-indigo-600">{t.account_name}</p>}
                       {t.industry_type && <p className="mt-0.5 text-xs text-slate-500">{t.industry_type}</p>}
                     </div>
                     <span

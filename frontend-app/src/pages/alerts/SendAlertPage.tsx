@@ -19,6 +19,7 @@ import type { ContactGroup } from '../../types/contactGroup';
 import type { AvailableTemplate } from '../../types/templates';
 import { extractCooldownRemainingSeconds, extractErrorMessage } from '../../utils/apiError';
 import DismissibleAlert from '../../components/common/DismissibleAlert';
+import TemplateSearchSelect from '../../components/common/TemplateSearchSelect';
 import ApiKeySetupBanner from '../../components/profile/ApiKeySetupBanner';
 
 /**
@@ -136,7 +137,8 @@ function parsePhoneColumnFromCsv(text: string): string[] {
  * form, the endpoint, and its validation are all unchanged.
  */
 export default function SendAlertPage() {
-  const { isReadOnly } = useAuth();
+  const { isReadOnly, isSuperAdmin } = useAuth();
+  const superAdmin = isSuperAdmin();
 
   // Super Admin Multi-Tenant Scoping: re-check WhatsApp status whenever the
   // Header's client selector changes — a status fetched for one tenant (or
@@ -151,8 +153,23 @@ export default function SendAlertPage() {
 
   useEffect(() => {
     let cancelled = false;
-    whatsappService
-      .status()
+    // [Bugfix, disclosed]: Super Admin sends through their own reserved
+    // platform-device WhatsApp account, never a client's — the exact same
+    // account Device Settings' "Your WhatsApp test device" card already
+    // tracks via selfDeviceStatus() (GET /admin/whatsapp/self-device).
+    // This page used to call the generic, client-scoped status() here
+    // regardless of caller, which checked whatever tenant the header
+    // selector happened to resolve to (or nothing, for Global View) —
+    // not the account Super Admin actually sends from — so the banner
+    // could read "disconnected" even when Device Settings had already
+    // been scanned, and "Go to WhatsApp Setup to Connect" pointed at
+    // /settings/whatsapp, a page built for a single client tenant, not
+    // the platform device. Super Admin now reads the same source of
+    // truth Device Settings uses, full stop — no re-check needed on
+    // selectedAccountId, since the platform device isn't the selected
+    // tenant at all.
+    const request = superAdmin ? whatsappService.selfDeviceStatus() : whatsappService.status();
+    request
       .then((res) => {
         if (!cancelled) setWaStatus(res.status);
       })
@@ -165,7 +182,7 @@ export default function SendAlertPage() {
     return () => {
       cancelled = true;
     };
-  }, [selectedAccountId]);
+  }, [selectedAccountId, superAdmin]);
 
   const isDisconnected = waStatus === 'disconnected';
   const readOnly = isReadOnly();
@@ -207,10 +224,10 @@ export default function SendAlertPage() {
               <span className="font-medium">WhatsApp Disconnected</span>
             </div>
             <Link
-              to="/settings/whatsapp"
+              to={superAdmin ? '/admin/device-settings' : '/settings/whatsapp'}
               className="rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-sm font-semibold text-amber-800 hover:bg-amber-100"
             >
-              Go to WhatsApp Setup to Connect
+              {superAdmin ? 'Go to Device Settings to Connect' : 'Go to WhatsApp Setup to Connect'}
             </Link>
           </div>
         )}
@@ -1013,23 +1030,13 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
               </button>
             </span>
           </div>
-          <select
-            value={noTemplate ? 'none' : templateId}
-            onChange={(e) => {
-              if (e.target.value === 'none') handleSelectNoTemplate();
-              else handleSelectTemplate(e.target.value === '' ? '' : Number(e.target.value));
-            }}
-            className={inputClass}
-          >
-            <option value="">Select a template…</option>
-            <option value="none">No template (write your own message)</option>
-            {templates.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.title}
-                {t.industry_type ? ` — ${t.industry_type}` : ''}
-              </option>
-            ))}
-          </select>
+          <TemplateSearchSelect
+            templates={templates}
+            value={templateId}
+            noTemplate={noTemplate}
+            onSelect={(id) => handleSelectTemplate(id)}
+            onSelectNoTemplate={handleSelectNoTemplate}
+          />
           {requestSuccess && <p className="mt-1.5 text-xs text-emerald-600">{requestSuccess}</p>}
           {showRequestTemplate && (
             <RequestTemplateModal onClose={() => setShowRequestTemplate(false)} onSubmitted={handleTemplateRequested} />
