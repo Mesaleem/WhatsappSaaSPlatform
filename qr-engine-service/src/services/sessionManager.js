@@ -677,6 +677,26 @@ export async function startSession(
     // -- no regression risk for the issue the note above already paid down.
     browser: ['WapHub WhatsApp', 'Chrome', '22.04.4'],
     printQRInTerminal: false,
+    // [Owner instruction, disclosed]: this platform only ever SENDS messages
+    // through a linked number -- it never reads or displays the account's own
+    // chat history, blocklist, or privacy settings, so none of what these
+    // three normally fetch is used anywhere in this codebase (grepped: no
+    // caller reads messaging-history.set, chats.set, contacts.set, or a
+    // blocklist/privacy-settings event). Baileys defaults all three to true.
+    // Turning them off skips that unused work entirely, which matters more
+    // here than usual: a free-tier host (lower CPU/network priority, see
+    // startSession's own reconnect-backoff comment) has less headroom to
+    // absorb extra round-trips and parsing during the already-fragile window
+    // right after pairing. NOTE, precisely: this does NOT touch WhatsApp's
+    // separate, mandatory app-state (contacts/chat-list/pins) sync -- that is
+    // gated by its own sync-state machine, not by these flags, and is also
+    // not the cause of a "blocked on missing key ... parking" log: Baileys
+    // already catches that itself and retries once the key arrives (that IS
+    // what "parking" means) rather than crashing -- it is informational, not
+    // a connection failure, with or without this change.
+    syncFullHistory: false,
+    fireInitQueries: false,
+    markOnlineOnConnect: false,
   });
 
   const record = {
@@ -927,6 +947,15 @@ export async function startSession(
         // record's own pairingPhone through keeps a reconnect mid pairing-
         // code login retrying pairing-code mode (and re-broadcasting a
         // fresh code) instead of reverting.
+        //
+        // The dead socket's own listeners (this very 'connection.update'
+        // handler among them) are removed before the new one is created --
+        // startSession() below registers a fresh set on the new sock, and
+        // without this the old, already-closed socket's listeners stayed
+        // attached (harmless once truly unreferenced and garbage collected,
+        // but not guaranteed to be immediate) instead of being dropped right
+        // away with the socket that owned them.
+        record.sock.ev.removeAllListeners();
         await startSession(id, broadcast, { isReconnect: true, phoneNumber: record.pairingPhone || null });
       }
     } catch (err) {
