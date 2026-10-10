@@ -112,6 +112,11 @@ class WhatsAppNumberController extends Controller
         return [
             'id' => $number->id,
             'phone_number' => $number->phone_number,
+            // True for a default slot auto-created with no number typed yet (see
+            // WhatsAppNumber::PENDING_PLACEHOLDER_PREFIX's own docblock) -- the
+            // frontend must not show phone_number as-is, nor treat it as a real
+            // number to enforce a QR/pairing-code match against.
+            'has_pending_number' => $number->hasPendingPlaceholderNumber(),
             'is_included' => $number->is_included,
             'is_default' => $number->is_default,
             'status' => $number->status,

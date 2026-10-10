@@ -38,14 +38,17 @@ interface QRScannerModalProps {
    * connection below still uses accountId either way; qr-engine-service
    * has no notion of this backend-only distinction.
    *
-   * Passing this also turns OFF the phone-number option: the Super Admin's
-   * test device is QR-only, because its start endpoint takes no number.
+   * [Owner instruction, disclosed]: the Super Admin's own test device supports
+   * pairing-code (phone number) login too, not just QR, exactly like any other
+   * account's default slot -- so this takes the same optional typed number the
+   * default whatsappService.startSession() call below does.
    */
-  startSession?: () => Promise<unknown>;
+  startSession?: (phoneNumber?: string) => Promise<unknown>;
   /**
    * The WhatsApp number slot this modal connects. The live stream only delivers
-   * events for a slot, so it is sent with the connection. Omitted for the Super
-   * Admin's test device, which has no slot.
+   * events for a slot, so it is sent with the connection — including for the Super
+   * Admin's own test device (AdminDeviceSettingsPage.tsx), which has its own
+   * lazily-created slot now too (see WhatsAppController::platformDeviceSlot()).
    */
   numberId?: number | null;
   /**
@@ -67,8 +70,7 @@ function extractErrorMessage(err: unknown, fallback: string): string {
 export default function QRScannerModal({ accountId, onClose, onConnected, startSession, numberId, expectedPhone = null }: QRScannerModalProps) {
   const expectedDigits = expectedPhone ? expectedPhone.replace(/\D/g, '') : null;
   const expectedLabel = expectedDigits ? `+${expectedDigits}` : 'the number added for this slot';
-  const startSessionRequest = startSession ?? (() => whatsappService.startSession(accountId, undefined, numberId));
-  const phoneLoginAvailable = !startSession;
+  const startSessionRequest = startSession ?? ((phoneNumber?: string) => whatsappService.startSession(accountId, phoneNumber, numberId));
 
   const [mode, setMode] = useState<LoginMode>('qr');
   const [status, setStatus] = useState<WhatsAppStatus>('connecting');
@@ -220,8 +222,7 @@ export default function QRScannerModal({ accountId, onClose, onConnected, startS
     setPairingCode(null);
     setPhoneError(null);
     setPhoneBusy(true);
-    whatsappService
-      .startSession(accountId, digits, numberId)
+    startSessionRequest(digits)
       .then((res) => {
         // An already-connected account gets no code; say so instead of waiting.
         if ((res as { status?: string })?.status === 'connected') {
@@ -298,26 +299,24 @@ export default function QRScannerModal({ accountId, onClose, onConnected, startS
           </button>
         </div>
 
-        {phoneLoginAvailable && (
-          <div role="tablist" className="mt-4 grid grid-cols-2 gap-1 rounded-lg bg-slate-100 p-1 text-xs font-medium">
-            <button
-              role="tab"
-              aria-selected={mode === 'qr'}
-              onClick={() => switchMode('qr')}
-              className={`rounded-md px-2 py-1.5 ${mode === 'qr' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
-            >
-              Scan QR code
-            </button>
-            <button
-              role="tab"
-              aria-selected={mode === 'phone'}
-              onClick={() => switchMode('phone')}
-              className={`rounded-md px-2 py-1.5 ${mode === 'phone' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
-            >
-              Phone number
-            </button>
-          </div>
-        )}
+        <div role="tablist" className="mt-4 grid grid-cols-2 gap-1 rounded-lg bg-slate-100 p-1 text-xs font-medium">
+          <button
+            role="tab"
+            aria-selected={mode === 'qr'}
+            onClick={() => switchMode('qr')}
+            className={`rounded-md px-2 py-1.5 ${mode === 'qr' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+          >
+            Scan QR code
+          </button>
+          <button
+            role="tab"
+            aria-selected={mode === 'phone'}
+            onClick={() => switchMode('phone')}
+            className={`rounded-md px-2 py-1.5 ${mode === 'phone' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+          >
+            Phone number
+          </button>
+        </div>
 
         {expectedDigits && mode === 'qr' && (
           <p className="mt-4 rounded-lg bg-slate-50 px-3 py-2 text-center text-xs text-slate-600">

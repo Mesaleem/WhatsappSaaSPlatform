@@ -33,12 +33,13 @@ class WhatsAppController extends Controller
             'last_connected_at' => $session?->last_connected_at,
             // Only meaningful while connected; the webhook clears it otherwise.
             'phone_number' => ($session?->status === 'connected') ? $session?->connected_phone_number : null,
-            // The default number slot. The connect modal passes it to the live stream,
-            // which only delivers events for a slot this account owns.
-            'number_id' => \App\Models\WhatsAppNumber::query()
-                ->where('account_id', $account->id)
-                ->where('is_default', true)
-                ->value('id'),
+            // The default number slot -- auto-created here (not just on start-session)
+            // so it is already known by the time the user opens the connect modal; the
+            // Socket.IO connection it opens joins the room keyed by THIS id, which
+            // must match whatever id the start-session call goes on to send
+            // qr-engine-service, or the QR never reaches the browser (see
+            // ensureDefaultSlot()'s own docblock).
+            'number_id' => $this->ensureDefaultSlot($account)->id,
         ]);
     }
 
@@ -108,18 +109,39 @@ class WhatsAppController extends Controller
 
         return response()->json([
             'account_id' => $account->id,
+            // [Bug fix, disclosed]: the browser's Socket.IO connection must join the
+            // same room qr-engine-service broadcasts to for this device's QR/
+            // connection-update events. Since platformDeviceSlot() started sending
+            // session_id (the slot's own id, not the account id) to qr-engine-service
+            // on start-session, that room is keyed by this id, not account_id -- the
+            // frontend needs it to pass as QRScannerModal's numberId prop, exactly
+            // like it already does for an ordinary tenant's own default slot.
+            'number_id' => $this->platformDeviceSlot($account)->id,
             'status' => $session->status ?? 'disconnected',
             'last_connected_at' => $session?->last_connected_at,
         ]);
     }
 
-    /** POST /api/admin/whatsapp/self-device/start-session — see selfDeviceStatus()'s docblock. */
-    public function selfDeviceStartSession(): JsonResponse
+    /**
+     * POST /api/admin/whatsapp/self-device/start-session — see selfDeviceStatus()'s
+     * docblock. [Owner instruction, disclosed]: like any other account's default
+     * slot, this now supports pairing-code (phone number) login too, not just QR --
+     * it shares buildSessionExtras()'s own rules with startSession() below.
+     */
+    public function selfDeviceStartSession(Request $request): JsonResponse
     {
         $account = Account::platformDevice();
         $slot = $this->platformDeviceSlot($account);
 
-        return $this->forwardToQrEngine('start-session', $account->id, ['session_id' => $slot->id]);
+        $data = $request->validate(['phone_number' => $this->phoneNumberRules()]);
+        $typed = isset($data['phone_number']) ? preg_replace('/\D+/', '', $data['phone_number']) : null;
+
+        $extra = $this->buildSessionExtras($slot, $typed);
+        if ($extra instanceof JsonResponse) {
+            return $extra;
+        }
+
+        return $this->forwardToQrEngine('start-session', $account->id, $extra);
     }
 
     /** POST /api/admin/whatsapp/self-device/logout — see selfDeviceStatus()'s docblock. */
@@ -152,7 +174,7 @@ class WhatsAppController extends Controller
         return \App\Models\WhatsAppNumber::query()->firstOrCreate(
             ['account_id' => $account->id],
             [
-                'phone_number' => 'platform'.$account->id,
+                'phone_number' => \App\Models\WhatsAppNumber::PENDING_PLACEHOLDER_PREFIX.$account->id,
                 'is_included' => true,
                 'is_default' => true,
                 'status' => \App\Models\WhatsAppNumber::STATUS_UNLINKED,
@@ -173,52 +195,80 @@ class WhatsAppController extends Controller
         // WhatsApp shows an 8-character code for the user to enter on the phone
         // (Linked devices -> Link with phone number). Without it, the QR flow
         // runs exactly as before.
-        $data = $request->validate([
-            'phone_number' => [
-                'nullable',
-                'string',
-                'max:25',
-                function (string $attribute, mixed $value, \Closure $fail): void {
-                    $digits = (string) preg_replace('/\D+/', '', (string) $value);
-
-                    // Exactly 10 digits = a national number without its country code.
-                    if (strlen($digits) === 10) {
-                        $fail('This number is missing its country code. Add it in front, for example 91 for India.');
-
-                        return;
-                    }
-
-                    if (! preg_match('/^[1-9][0-9]{7,14}$/', $digits)) {
-                        $fail('Enter the full phone number with country code and no + or spaces, for example 919876543210.');
-                    }
-                },
-            ],
-        ]);
+        $data = $request->validate(['phone_number' => $this->phoneNumberRules()]);
 
         $slot = $this->resolveSlot($request, $account);
         if ($slot instanceof JsonResponse) {
             return $slot;
         }
 
-        // A number slot links only to the number it was added with. A typed number
-        // that differs is refused here, before any WhatsApp call.
         $typed = isset($data['phone_number']) ? preg_replace('/\D+/', '', $data['phone_number']) : null;
-        if ($typed !== null && $typed !== $slot->phone_number) {
+        $extra = $this->buildSessionExtras($slot, $typed);
+        if ($extra instanceof JsonResponse) {
+            return $extra;
+        }
+
+        return $this->forwardToQrEngine('start-session', $account->id, $extra);
+    }
+
+    /** The phone_number validation rules shared by startSession() and selfDeviceStartSession(). */
+    private function phoneNumberRules(): array
+    {
+        return [
+            'nullable',
+            'string',
+            'max:25',
+            function (string $attribute, mixed $value, \Closure $fail): void {
+                $digits = (string) preg_replace('/\D+/', '', (string) $value);
+
+                // Exactly 10 digits = a national number without its country code.
+                if (strlen($digits) === 10) {
+                    $fail('This number is missing its country code. Add it in front, for example 91 for India.');
+
+                    return;
+                }
+
+                if (! preg_match('/^[1-9][0-9]{7,14}$/', $digits)) {
+                    $fail('Enter the full phone number with country code and no + or spaces, for example 919876543210.');
+                }
+            },
+        ];
+    }
+
+    /**
+     * The qr-engine-service `start-session` payload extras for one slot + typed
+     * number, shared by startSession() and selfDeviceStartSession() so the
+     * platform device's own slot follows the exact same rule as every other
+     * account's default slot: a number slot links only to the number it was
+     * added with, and a typed number that differs is refused here, before any
+     * WhatsApp call -- unless this slot has no real number yet at all (the
+     * default slot's placeholder, see WhatsAppNumber::PENDING_PLACEHOLDER_PREFIX's
+     * own docblock), in which case there is nothing yet to compare against and
+     * whatever is typed is accepted.
+     *
+     * @return array<string, mixed>|JsonResponse
+     */
+    private function buildSessionExtras(\App\Models\WhatsAppNumber $slot, ?string $typed): array|JsonResponse
+    {
+        if ($typed !== null && ! $slot->hasPendingPlaceholderNumber() && $typed !== $slot->phone_number) {
             return response()->json([
                 'message' => 'This number is not the one added to this WhatsApp slot.',
                 'error_code' => 'number_mismatch',
             ], 422);
         }
 
-        $extra = [
-            'session_id' => $slot->id,
-            'expected_phone' => $slot->phone_number,
-        ];
+        $extra = ['session_id' => $slot->id];
+        // qr-engine-service only enforces a number match when expected_phone is sent
+        // at all (see sessionManager.js's `if (expectedPhone)`) -- omitted here for a
+        // placeholder slot so ANY real WhatsApp account can connect to it.
+        if (! $slot->hasPendingPlaceholderNumber()) {
+            $extra['expected_phone'] = $slot->phone_number;
+        }
         if ($typed !== null) {
             $extra['phone_number'] = $typed;
         }
 
-        return $this->forwardToQrEngine('start-session', $account->id, $extra);
+        return $extra;
     }
 
     /**
@@ -239,9 +289,12 @@ class WhatsAppController extends Controller
 
     /**
      * The number slot a session request is about: the one named by `number_id`
-     * (must belong to this account), or the account's default slot. Returns a
-     * JSON error when there is none. Accounts without slots fall back to the
-     * legacy account-keyed session, so Super Admin's test device keeps working.
+     * (must belong to this account -- always an ADD-ON slot in practice, since
+     * nothing but the default slot is ever reached implicitly), or the account's
+     * default slot, auto-created if this account has none at all yet (see
+     * ensureDefaultSlot()'s own docblock). An explicitly named `number_id` is never
+     * auto-created -- only ADDING a number (WhatsAppNumberService::add(), a real,
+     * typed, paid-for number) can bring an add-on slot into existence.
      *
      * @return \App\Models\WhatsAppNumber|JsonResponse|null
      */
@@ -249,24 +302,54 @@ class WhatsAppController extends Controller
     {
         $numberId = $request->query('number_id', $request->input('number_id'));
 
-        $query = \App\Models\WhatsAppNumber::query()->where('account_id', $account->id);
-
         if ($numberId !== null && $numberId !== '') {
-            $slot = (clone $query)->whereKey((int) $numberId)->first();
+            $slot = \App\Models\WhatsAppNumber::query()
+                ->where('account_id', $account->id)
+                ->whereKey((int) $numberId)
+                ->first();
 
             return $slot ?? response()->json(['message' => 'WhatsApp number not found.', 'error_code' => 'not_found'], 404);
         }
 
-        $default = (clone $query)->where('is_default', true)->first();
+        return $this->ensureDefaultSlot($account);
+    }
 
-        if ($default === null && ! (clone $query)->exists()) {
-            return response()->json([
-                'message' => 'Add a WhatsApp number to this account first.',
-                'error_code' => 'no_number',
-            ], 422);
+    /**
+     * [Owner instruction, disclosed]: the account's default (included, free) slot no
+     * longer requires its number to be typed in before the first connect -- an
+     * account with no WhatsApp number at all yet gets one auto-created here, with a
+     * placeholder phone_number (WhatsAppNumber::PENDING_PLACEHOLDER_PREFIX), so
+     * "Connect WhatsApp" works immediately. An ADD-ON (paid extra) slot is
+     * unaffected -- it only ever exists once a real number was typed and added
+     * (WhatsAppNumberService::add()), never auto-created here. status() calls this
+     * too (not just start-session), so the slot -- and its id -- already exists by
+     * the time the connect modal opens; its Socket.IO connection and the
+     * start-session call must agree on that id or the QR never reaches the browser.
+     */
+    private function ensureDefaultSlot(Account $account): \App\Models\WhatsAppNumber
+    {
+        $query = \App\Models\WhatsAppNumber::query()->where('account_id', $account->id);
+
+        $default = (clone $query)->where('is_default', true)->first();
+        if ($default !== null) {
+            return $default;
         }
 
-        return $default ?? (clone $query)->orderBy('id')->first();
+        if ((clone $query)->exists()) {
+            // Has at least one slot, none marked default -- should not happen in
+            // practice (the first slot WhatsAppNumberService::add() ever creates for
+            // an account is always is_default); the oldest slot is the least-wrong
+            // fallback rather than creating a second, competing "default".
+            return (clone $query)->orderBy('id')->first();
+        }
+
+        return \App\Models\WhatsAppNumber::query()->create([
+            'account_id' => $account->id,
+            'phone_number' => \App\Models\WhatsAppNumber::PENDING_PLACEHOLDER_PREFIX.$account->id,
+            'is_included' => true,
+            'is_default' => true,
+            'status' => \App\Models\WhatsAppNumber::STATUS_UNLINKED,
+        ]);
     }
 
     /**

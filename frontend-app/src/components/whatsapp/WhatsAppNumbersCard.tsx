@@ -131,7 +131,7 @@ export default function WhatsAppNumbersCard({ accountId, onConnected, reloadKey 
 
   const startEdit = (row: WhatsAppNumberRow) => {
     setEditingId(row.id);
-    setEditValue(row.phone_number);
+    setEditValue(row.has_pending_number ? '' : row.phone_number);
     setEditError(null);
   };
 
@@ -400,7 +400,7 @@ export default function WhatsAppNumbersCard({ accountId, onConnected, reloadKey 
             <div key={row.id} className="flex flex-wrap items-center justify-between gap-3 py-3">
               <div className="min-w-0">
                 <p className="flex items-center gap-2 text-sm font-medium text-slate-900">
-                  +{row.phone_number}
+                  {row.has_pending_number ? <span className="text-slate-400">No number yet</span> : `+${row.phone_number}`}
                   {row.is_default && (
                     <span className="flex items-center gap-1 rounded-full bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-700">
                       <Star className="h-3 w-3" />
@@ -499,7 +499,7 @@ export default function WhatsAppNumbersCard({ accountId, onConnected, reloadKey 
         <QRScannerModal
           accountId={accountId}
           numberId={connectingRow.id}
-          expectedPhone={connectingRow.phone_number}
+          expectedPhone={connectingRow.has_pending_number ? null : connectingRow.phone_number}
           onClose={() => setConnectingId(null)}
           onConnected={() => {
             setConnectingId(null);

@@ -21,6 +21,8 @@ export type WhatsAppNumberStatus = 'pending_payment' | 'unlinked' | 'linked' | '
 export interface WhatsAppNumberRow {
   id: number;
   phone_number: string;
+  /** True for a default slot auto-created with no number typed yet -- show a friendly label, not phone_number as-is. */
+  has_pending_number: boolean;
   is_included: boolean;
   is_default: boolean;
   status: WhatsAppNumberStatus;

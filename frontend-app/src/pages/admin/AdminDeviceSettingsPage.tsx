@@ -50,6 +50,10 @@ function formatLastConnected(value: string | null): string {
  */
 function SuperAdminTestDeviceCard() {
   const [accountId, setAccountId] = useState<number | null>(null);
+  // The Socket.IO room qr-engine-service broadcasts this device's QR/connection-update
+  // events to is keyed by this slot id, not accountId -- see WhatsAppController::
+  // selfDeviceStatus()'s own docblock for why that changed.
+  const [numberId, setNumberId] = useState<number | null>(null);
   const [status, setStatus] = useState<WhatsAppStatus>('disconnected');
   const [isLoading, setIsLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -73,6 +77,7 @@ function SuperAdminTestDeviceCard() {
     try {
       const res = await whatsappService.selfDeviceStatus();
       setAccountId(res.account_id);
+      setNumberId(res.number_id);
       setStatus(res.status);
     } catch (err) {
       const message = extractErrorMessage(err, 'Failed to load your WhatsApp test device status.');
@@ -169,9 +174,10 @@ function SuperAdminTestDeviceCard() {
       {isModalOpen && accountId !== null && (
         <QRScannerModal
           accountId={accountId}
+          numberId={numberId}
           onClose={() => setIsModalOpen(false)}
           onConnected={handleConnected}
-          startSession={() => whatsappService.selfDeviceStartSession()}
+          startSession={(phoneNumber) => whatsappService.selfDeviceStartSession(phoneNumber)}
         />
       )}
 

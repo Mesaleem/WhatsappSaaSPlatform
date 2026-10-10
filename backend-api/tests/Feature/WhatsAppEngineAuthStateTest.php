@@ -297,6 +297,94 @@ class WhatsAppEngineAuthStateTest extends TestCase
     }
 
     /**
+     * [Owner instruction, disclosed]: the platform device's slot supports pairing-code
+     * (phone number) login too, not just QR -- same as any other account's default
+     * slot. Previously selfDeviceStartSession() took no phone_number at all and the
+     * frontend hid the "Phone number" tab whenever a custom startSession was passed.
+     */
+    public function test_a_typed_number_starts_a_pairing_code_session_on_the_platform_device(): void
+    {
+        Http::fake(['*/api/qr/start-session' => Http::response(['status' => 'connecting'], 202)]);
+
+        $this->actingAs($this->superAdmin())
+            ->postJson('/api/admin/whatsapp/self-device/start-session', ['phone_number' => '919876543210'])
+            ->assertOk();
+
+        $platform = \App\Models\Account::platformDevice();
+        $slot = WhatsAppNumber::where('account_id', $platform->id)->firstOrFail();
+
+        Http::assertSent(fn ($request) => str_contains($request->url(), '/api/qr/start-session')
+            && $request['session_id'] === $slot->id
+            && $request['phone_number'] === '919876543210'
+            && ! array_key_exists('expected_phone', $request->data()));
+    }
+
+    /**
+     * Once the platform device's slot has adopted a real number (see
+     * test_the_platform_devices_connected_number_is_adopted_not_refused_as_a_mismatch()),
+     * it behaves like any other pre-typed slot: a DIFFERENT typed number is refused
+     * before any engine call, same as test_a_typed_number_that_is_not_the_slot_number_
+     * is_refused_before_any_engine_call() for an ordinary tenant.
+     */
+    public function test_a_typed_number_that_differs_from_the_platform_devices_adopted_number_is_refused(): void
+    {
+        Http::fake(['*/api/qr/start-session' => Http::response(['status' => 'connecting'], 202)]);
+        $this->actingAs($this->superAdmin())->postJson('/api/admin/whatsapp/self-device/start-session')->assertOk();
+
+        $platform = \App\Models\Account::platformDevice();
+        $slot = WhatsAppNumber::where('account_id', $platform->id)->firstOrFail();
+
+        $this->internal()->postJson('/api/internal/whatsapp-status', [
+            'account_id' => $platform->id,
+            'session_id' => $slot->id,
+            'status' => 'connected',
+            'phone_number' => '919876543210',
+        ])->assertOk();
+
+        $this->actingAs($this->superAdmin())
+            ->postJson('/api/admin/whatsapp/self-device/start-session', ['phone_number' => '917236062374'])
+            ->assertUnprocessable()
+            ->assertJsonPath('error_code', 'number_mismatch');
+    }
+
+    /**
+     * [Owner instruction, disclosed]: "duplicate na ho" -- a real WhatsApp number must
+     * not end up adopted onto two different slots. phone_number is globally UNIQUE
+     * (see the whatsapp_numbers migration), so without this check the second adoption
+     * would throw a raw SQL unique-constraint exception instead of a clean refusal.
+     */
+    public function test_a_number_already_adopted_by_another_slot_is_refused_not_adopted_twice(): void
+    {
+        [$accountA] = $this->tenantWithSlot('919876543210');
+        $slotA = WhatsAppNumber::where('account_id', $accountA->id)->firstOrFail();
+        $this->internal()->postJson('/api/internal/whatsapp-status', [
+            'account_id' => $accountA->id,
+            'session_id' => $slotA->id,
+            'status' => 'connected',
+            'phone_number' => '919876543210',
+        ])->assertOk();
+
+        $accountB = Account::factory()->create();
+        Subscription::factory()->for($accountB)->create(['engine_type' => 'qr']);
+        Http::fake(['*/api/qr/start-session' => Http::response(['status' => 'connecting'], 202)]);
+        $user = User::factory()->create(['account_id' => $accountB->id]);
+        $user->assignRole('admin');
+        $this->actingAs($user)->postJson('/api/whatsapp/start-session')->assertOk();
+        $slotB = WhatsAppNumber::where('account_id', $accountB->id)->firstOrFail();
+        $this->assertTrue($slotB->hasPendingPlaceholderNumber());
+
+        $this->internal()->postJson('/api/internal/whatsapp-status', [
+            'account_id' => $accountB->id,
+            'session_id' => $slotB->id,
+            'status' => 'connected',
+            'phone_number' => '919876543210',
+        ])->assertUnprocessable()->assertJsonPath('error_code', 'number_already_used');
+
+        $this->assertSame(WhatsAppNumber::STATUS_UNLINKED, $slotB->fresh()->status);
+        $this->assertTrue($slotB->fresh()->hasPendingPlaceholderNumber(), 'slot B must not have adopted account A\'s number');
+    }
+
+    /**
      * The platform device's slot starts with a placeholder phone_number (nothing was
      * typed in advance); WhatsAppStatusController::update() must adopt whatever number
      * actually connects for this ONE account instead of refusing it as a mismatch --
@@ -393,19 +481,62 @@ class WhatsAppEngineAuthStateTest extends TestCase
         Http::assertNothingSent();
     }
 
-    public function test_an_account_without_any_number_cannot_start_a_session(): void
+    /**
+     * [Owner instruction, disclosed]: an account's default slot no longer requires a
+     * number typed in advance -- an account with zero WhatsApp number rows gets one
+     * auto-created here (WhatsAppController::ensureDefaultSlot()), with a placeholder
+     * phone_number, and the QR flow proceeds immediately with no expected_phone sent
+     * to qr-engine-service (so any real WhatsApp account can connect to it) -- the
+     * same mechanism the platform device already used, generalised to every account.
+     */
+    public function test_an_account_without_any_number_gets_a_default_slot_auto_created_and_starts_a_session(): void
     {
         $account = Account::factory()->create();
         Subscription::factory()->for($account)->create(['engine_type' => 'qr']);
         $user = User::factory()->create(['account_id' => $account->id]);
         $user->assignRole('admin');
-        Http::fake();
+        Http::fake(['*/api/qr/start-session' => Http::response(['status' => 'connecting'], 202)]);
 
-        $this->actingAs($user)->postJson('/api/whatsapp/start-session')
-            ->assertUnprocessable()
-            ->assertJsonPath('error_code', 'no_number');
+        $this->actingAs($user)->postJson('/api/whatsapp/start-session')->assertOk();
 
-        Http::assertNothingSent();
+        $slot = WhatsAppNumber::where('account_id', $account->id)->firstOrFail();
+        $this->assertTrue($slot->is_default);
+        $this->assertTrue($slot->hasPendingPlaceholderNumber());
+
+        Http::assertSent(fn ($request) => str_contains($request->url(), '/api/qr/start-session')
+            && $request['session_id'] === $slot->id
+            && ! array_key_exists('expected_phone', $request->data())
+            && $request['account_id'] === $account->id);
+    }
+
+    /**
+     * The auto-created default slot's placeholder number is adopted on connect for an
+     * ORDINARY tenant too, exactly like the platform device's own slot (see
+     * test_the_platform_devices_connected_number_is_adopted_not_refused_as_a_mismatch()) --
+     * an already-verified slot (tenantWithSlot()) still refuses a mismatch unchanged,
+     * see test_a_slot_that_links_to_a_different_number_is_refused_and_stays_unlinked().
+     */
+    public function test_an_ordinary_accounts_auto_created_default_slot_adopts_whatever_number_connects(): void
+    {
+        $account = Account::factory()->create();
+        Subscription::factory()->for($account)->create(['engine_type' => 'qr']);
+        $user = User::factory()->create(['account_id' => $account->id]);
+        $user->assignRole('admin');
+        Http::fake(['*/api/qr/start-session' => Http::response(['status' => 'connecting'], 202)]);
+        $this->actingAs($user)->postJson('/api/whatsapp/start-session')->assertOk();
+
+        $slot = WhatsAppNumber::where('account_id', $account->id)->firstOrFail();
+
+        $this->internal()->postJson('/api/internal/whatsapp-status', [
+            'account_id' => $account->id,
+            'session_id' => $slot->id,
+            'status' => 'connected',
+            'phone_number' => '919876543210',
+        ])->assertOk();
+
+        $slot->refresh();
+        $this->assertSame('919876543210', $slot->phone_number);
+        $this->assertSame(WhatsAppNumber::STATUS_LINKED, $slot->status);
     }
 
     public function test_a_ten_digit_number_without_a_country_code_is_refused_with_a_clear_message(): void

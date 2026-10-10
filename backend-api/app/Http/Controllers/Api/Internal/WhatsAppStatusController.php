@@ -44,14 +44,35 @@ class WhatsAppStatusController extends Controller
             $mismatch = $data['status'] === 'connected' && ! empty($data['phone_number']) && $data['phone_number'] !== $slot->phone_number;
 
             if ($mismatch) {
-                // [Bug fix, disclosed]: the platform device's slot (WhatsAppController::
-                // platformDeviceSlot()) starts with a placeholder phone_number -- there
-                // is nothing the Super Admin typed in advance to mismatch against,
-                // unlike an ordinary tenant's slot. The first (and every) real
-                // connection simply adopts whatever number signs in for this ONE
-                // account, instead of being refused -- scoped to is_platform_device so
-                // no ordinary tenant's own mismatch protection changes at all.
-                if (\App\Models\Account::platformDevice()->id === $slot->account_id) {
+                // [Owner instruction, disclosed]: a DEFAULT (included, free) slot never
+                // has a number typed in before connecting -- WhatsAppController::
+                // ensureDefaultSlot()/platformDeviceSlot() auto-create it with a
+                // placeholder phone_number, so there is nothing real to mismatch
+                // against. The first (and every) real connection simply adopts
+                // whatever number signs in for that slot, for ANY account (super
+                // admin, admin, agent). An ADD-ON slot is always added with a real,
+                // pre-verified number (WhatsAppNumberService::add()), so it never has
+                // a pending placeholder and this still refuses a different number.
+                if ($slot->hasPendingPlaceholderNumber()) {
+                    // [Owner instruction, disclosed]: "duplicate na ho" -- the same real
+                    // WhatsApp number must not end up on two slots. phone_number is
+                    // globally UNIQUE (see the whatsapp_numbers migration), so adopting
+                    // one already held by another slot would otherwise throw a raw SQL
+                    // unique-constraint exception instead of a clean refusal.
+                    $takenByAnotherSlot = WhatsAppNumber::query()
+                        ->where('phone_number', $data['phone_number'])
+                        ->whereKeyNot($slot->id)
+                        ->exists();
+
+                    if ($takenByAnotherSlot) {
+                        $slot->forceFill(['status' => WhatsAppNumber::STATUS_UNLINKED])->save();
+
+                        return response()->json([
+                            'message' => 'That WhatsApp number is already connected to another account or number slot.',
+                            'error_code' => 'number_already_used',
+                        ], 422);
+                    }
+
                     $slot->phone_number = $data['phone_number'];
                 } else {
                     $slot->forceFill(['status' => WhatsAppNumber::STATUS_UNLINKED])->save();

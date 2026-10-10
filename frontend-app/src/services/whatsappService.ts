@@ -192,15 +192,18 @@ const whatsappService = {
   // device, so no accountId parameter is needed or accepted.
   selfDeviceStatus() {
     return axiosInstance
-      .get<{ account_id: number; status: WhatsAppStatus; last_connected_at: string | null }>(
+      .get<{ account_id: number; number_id: number; status: WhatsAppStatus; last_connected_at: string | null }>(
         '/admin/whatsapp/self-device',
       )
       .then((res) => res.data);
   },
 
-  selfDeviceStartSession() {
+  selfDeviceStartSession(phoneNumber?: string) {
     return axiosInstance
-      .post<{ message: string }>('/admin/whatsapp/self-device/start-session')
+      .post<{ message: string; status?: string }>(
+        '/admin/whatsapp/self-device/start-session',
+        phoneNumber ? { phone_number: phoneNumber } : undefined,
+      )
       .then((res) => res.data);
   },
 
