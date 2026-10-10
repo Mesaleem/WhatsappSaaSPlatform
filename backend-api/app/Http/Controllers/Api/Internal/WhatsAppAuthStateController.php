@@ -139,8 +139,12 @@ class WhatsAppAuthStateController extends Controller
 
     private function ensureSlotExists(int $numberId): void
     {
-        // Raw query on purpose: the Super Admin's platform device row is hidden
-        // from Account's global scope, and this endpoint must still reach it.
+        // [Bug fix, disclosed]: WhatsAppController::platformDeviceSlot() now lazily
+        // creates a real WhatsAppNumber row for the Super Admin's own "test
+        // WhatsApp" device the first time it connects (see that method's own
+        // docblock for why a plain account-id fallback here could never work --
+        // whatsapp_engine_auth_states.whatsapp_number_id has a hard foreign key to
+        // this table), so a plain existence check is correct again.
         if (! DB::table('whatsapp_numbers')->where('id', $numberId)->exists()) {
             throw new HttpException(404, 'WhatsApp number not found.');
         }

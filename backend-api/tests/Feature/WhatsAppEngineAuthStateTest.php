@@ -244,6 +244,86 @@ class WhatsAppEngineAuthStateTest extends TestCase
         $this->assertDatabaseCount('whatsapp_engine_auth_states', 0);
     }
 
+    /* ---- Super Admin's own "test WhatsApp" device: lazily-created slot, adopted number ---- */
+
+    private function superAdmin(): User
+    {
+        $user = User::factory()->create(['account_id' => null]);
+        $user->assignRole('super_admin');
+
+        return $user;
+    }
+
+    /**
+     * [Bug fix regression test]: whatsapp_engine_auth_states.whatsapp_number_id has a
+     * hard foreign key to whatsapp_numbers, so the platform device's auth-state calls
+     * (keyed by session_id, same as any tenant slot now -- see
+     * WhatsAppController::platformDeviceSlot()) 404'd ("WhatsApp number not found")
+     * until that slot actually existed as a real row, lazily created on first connect.
+     */
+    public function test_the_platform_devices_first_connect_creates_a_real_slot_auth_state_storage_then_works(): void
+    {
+        Http::fake(['*/api/qr/start-session' => Http::response(['status' => 'connecting'], 202)]);
+
+        $this->actingAs($this->superAdmin())
+            ->postJson('/api/admin/whatsapp/self-device/start-session')
+            ->assertOk();
+
+        $platform = \App\Models\Account::platformDevice();
+        $slot = WhatsAppNumber::where('account_id', $platform->id)->firstOrFail();
+
+        Http::assertSent(fn ($request) => str_contains($request->url(), '/api/qr/start-session')
+            && $request['session_id'] === $slot->id
+            && $request['account_id'] === $platform->id);
+
+        $this->internal()->putJson("/api/internal/whatsapp-auth/{$slot->id}", [
+            'set' => ['creds.json' => '{"registered":true}'],
+            'delete' => [],
+        ])->assertOk()->assertJsonPath('stored', 1);
+
+        $entries = $this->internal()->getJson("/api/internal/whatsapp-auth/{$slot->id}")->assertOk()->json('entries');
+        $this->assertSame('{"registered":true}', $entries['creds.json']);
+    }
+
+    /** A second self-device start-session reuses the same slot rather than creating another. */
+    public function test_a_second_self_device_start_session_reuses_the_same_slot(): void
+    {
+        Http::fake(['*/api/qr/start-session' => Http::response(['status' => 'connecting'], 202)]);
+        $this->actingAs($this->superAdmin())->postJson('/api/admin/whatsapp/self-device/start-session')->assertOk();
+        $this->actingAs($this->superAdmin())->postJson('/api/admin/whatsapp/self-device/start-session')->assertOk();
+
+        $platform = \App\Models\Account::platformDevice();
+        $this->assertSame(1, WhatsAppNumber::where('account_id', $platform->id)->count());
+    }
+
+    /**
+     * The platform device's slot starts with a placeholder phone_number (nothing was
+     * typed in advance); WhatsAppStatusController::update() must adopt whatever number
+     * actually connects for this ONE account instead of refusing it as a mismatch --
+     * the way an ordinary tenant's own pre-typed slot still correctly does (see
+     * test_a_slot_that_links_to_a_different_number_is_refused_and_stays_unlinked()).
+     */
+    public function test_the_platform_devices_connected_number_is_adopted_not_refused_as_a_mismatch(): void
+    {
+        Http::fake(['*/api/qr/start-session' => Http::response(['status' => 'connecting'], 202)]);
+        $this->actingAs($this->superAdmin())->postJson('/api/admin/whatsapp/self-device/start-session')->assertOk();
+
+        $platform = \App\Models\Account::platformDevice();
+        $slot = WhatsAppNumber::where('account_id', $platform->id)->firstOrFail();
+        $this->assertNotSame('919876543210', $slot->phone_number, 'the slot must start on a placeholder, not the real number');
+
+        $this->internal()->postJson('/api/internal/whatsapp-status', [
+            'account_id' => $platform->id,
+            'session_id' => $slot->id,
+            'status' => 'connected',
+            'phone_number' => '919876543210',
+        ])->assertOk();
+
+        $slot->refresh();
+        $this->assertSame('919876543210', $slot->phone_number);
+        $this->assertSame(WhatsAppNumber::STATUS_LINKED, $slot->status);
+    }
+
     public function test_the_slot_owner_lookup_names_the_account_and_number(): void
     {
         $account = Account::factory()->create();

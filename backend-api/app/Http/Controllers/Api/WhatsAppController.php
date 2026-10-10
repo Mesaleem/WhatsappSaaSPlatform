@@ -116,13 +116,48 @@ class WhatsAppController extends Controller
     /** POST /api/admin/whatsapp/self-device/start-session — see selfDeviceStatus()'s docblock. */
     public function selfDeviceStartSession(): JsonResponse
     {
-        return $this->forwardToQrEngine('start-session', Account::platformDevice()->id);
+        $account = Account::platformDevice();
+        $slot = $this->platformDeviceSlot($account);
+
+        return $this->forwardToQrEngine('start-session', $account->id, ['session_id' => $slot->id]);
     }
 
     /** POST /api/admin/whatsapp/self-device/logout — see selfDeviceStatus()'s docblock. */
     public function selfDeviceLogout(): JsonResponse
     {
-        return $this->forwardToQrEngine('logout', Account::platformDevice()->id, [], 20);
+        $account = Account::platformDevice();
+        $slot = $this->platformDeviceSlot($account);
+
+        return $this->forwardToQrEngine('logout', $account->id, ['session_id' => $slot->id], 20);
+    }
+
+    /**
+     * [Bug fix, disclosed]: the platform device previously sent only its ACCOUNT id
+     * to qr-engine-service, with no session_id at all, expecting a "legacy
+     * account-keyed session" — but whatsapp_engine_auth_states.whatsapp_number_id
+     * has had a hard foreign key to whatsapp_numbers since the multi-number
+     * refactor, so qr-engine-service's auth-state calls (keyed by session_id when
+     * given, else the account id — see server.js's sessionKeyFrom()) 404'd the
+     * moment it tried to store Baileys' credentials under an id with no
+     * whatsapp_numbers row. Unlike an ordinary tenant, the Super Admin never types
+     * a number in advance (WhatsAppNumberService::add() is never offered here), so
+     * a single placeholder slot is lazily created on first connect instead — its
+     * phone_number is never validated against anything real: WhatsAppStatusController
+     * ::update() adopts whatever number actually signs in for this one account
+     * (is_platform_device) rather than refusing it as a "different number" mismatch,
+     * the way every ordinary tenant's pre-typed slot still does.
+     */
+    private function platformDeviceSlot(Account $account): \App\Models\WhatsAppNumber
+    {
+        return \App\Models\WhatsAppNumber::query()->firstOrCreate(
+            ['account_id' => $account->id],
+            [
+                'phone_number' => 'platform'.$account->id,
+                'is_included' => true,
+                'is_default' => true,
+                'status' => \App\Models\WhatsAppNumber::STATUS_UNLINKED,
+            ],
+        );
     }
 
     /**

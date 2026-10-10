@@ -41,13 +41,26 @@ class WhatsAppStatusController extends Controller
                 return response()->json(['message' => 'WhatsApp number not found on this account.', 'error_code' => 'not_found'], 404);
             }
 
-            if ($data['status'] === 'connected' && ! empty($data['phone_number']) && $data['phone_number'] !== $slot->phone_number) {
-                $slot->forceFill(['status' => WhatsAppNumber::STATUS_UNLINKED])->save();
+            $mismatch = $data['status'] === 'connected' && ! empty($data['phone_number']) && $data['phone_number'] !== $slot->phone_number;
 
-                return response()->json([
-                    'message' => 'That WhatsApp account is a different number from this slot. Link the number you added.',
-                    'error_code' => 'number_mismatch',
-                ], 422);
+            if ($mismatch) {
+                // [Bug fix, disclosed]: the platform device's slot (WhatsAppController::
+                // platformDeviceSlot()) starts with a placeholder phone_number -- there
+                // is nothing the Super Admin typed in advance to mismatch against,
+                // unlike an ordinary tenant's slot. The first (and every) real
+                // connection simply adopts whatever number signs in for this ONE
+                // account, instead of being refused -- scoped to is_platform_device so
+                // no ordinary tenant's own mismatch protection changes at all.
+                if (\App\Models\Account::platformDevice()->id === $slot->account_id) {
+                    $slot->phone_number = $data['phone_number'];
+                } else {
+                    $slot->forceFill(['status' => WhatsAppNumber::STATUS_UNLINKED])->save();
+
+                    return response()->json([
+                        'message' => 'That WhatsApp account is a different number from this slot. Link the number you added.',
+                        'error_code' => 'number_mismatch',
+                    ], 422);
+                }
             }
 
             $slot->forceFill([
