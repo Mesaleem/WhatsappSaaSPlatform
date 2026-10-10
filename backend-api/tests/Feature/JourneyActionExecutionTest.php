@@ -13,6 +13,7 @@ use App\Models\Lead;
 use App\Models\MessageDispatchLog;
 use App\Models\User;
 use App\Models\WhatsAppFlow;
+use App\Models\WhatsAppNumber;
 use App\Models\WhatsAppFlowSession;
 use App\Models\WhatsAppSession;
 use App\Services\Billing\InvoiceCreditService;
@@ -250,9 +251,13 @@ class JourneyActionExecutionTest extends TestCase
         $account = $this->account();
         $user = User::factory()->create(['account_id' => $account->id, 'is_active' => true]);
         $user->assignRole('admin');
+        // Channel-binding gate (Connexxa parity, Task 21) — needed for the
+        // assertCreated() draft saves below.
+        $number = WhatsAppNumber::create(['account_id' => $account->id, 'phone_number' => '91902'.str_pad((string) $account->id, 6, '0', STR_PAD_LEFT), 'status' => WhatsAppNumber::STATUS_LINKED]);
         // P5-7 — a half-built draft saves with `publish: false`; publishing needs a runnable graph.
         $post = fn (array $node, bool $publish = true) => $this->actingAs($user)->postJson('/api/whatsapp/flows', [
             'name' => 'X', 'trigger_type' => 'keyword', 'trigger_value' => 'go', 'is_active' => true, 'publish' => $publish,
+            'whatsapp_number_ids' => [$number->id],
             'graph_data' => ['nodes' => [['id' => 't', 'type' => 'trigger', 'data' => []], $node], 'edges' => [['id' => 'e', 'source' => 't', 'target' => $node['id']]]],
         ]);
 

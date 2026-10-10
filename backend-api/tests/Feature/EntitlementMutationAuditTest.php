@@ -213,8 +213,19 @@ class EntitlementMutationAuditTest extends TestCase
         $this->pay($account, 'business');
         $admin = $this->superAdmin();
         $keep = Plan::where('slug', 'business')->firstOrFail()->capabilities->pluck('slug')->reject(fn ($s) => $s === 'ads')->values()->all();
+        // The seeded 'business' plan carries external_api without
+        // api_installations (deliberately — see Phase1FoundationSeeder's own
+        // docblock on Requirement 7). This request rewrites the bundle, so it
+        // must also supply api_installations with a concrete limit, exactly
+        // as a real Super Admin would.
+        if (! in_array('api_installations', $keep, true)) {
+            $keep[] = 'api_installations';
+        }
 
-        $this->actingAs($admin)->putJson('/api/admin/plans-management/business', ['capabilities' => $keep])->assertOk();
+        $this->actingAs($admin)->putJson('/api/admin/plans-management/business', [
+            'capabilities' => $keep,
+            'capability_limits' => ['api_installations' => 5],
+        ])->assertOk();
         $this->assertTrue($this->holds($account, 'ads'), 'the HTTP request did not reconcile inline');
 
         Auth::forgetGuards();

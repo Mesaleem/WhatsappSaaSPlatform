@@ -264,7 +264,11 @@ class ApiKeyCooldownEnforcementTest extends TestCase
     {
         $account = $this->accountWithAllowance();
         $key = $this->provisionedKey($account);
-        $until = now()->addDays(14);
+        // Truncated to whole seconds: the datetime column has no
+        // sub-second precision, so comparing the reloaded value against
+        // an un-truncated in-memory Carbon via equalTo() would otherwise
+        // always fail by a few microseconds.
+        $until = now()->addDays(14)->startOfSecond();
         $this->service()->setCooldown($key, $until);
 
         // regenerateSecret() (ApiKeyController) only ever touches
@@ -296,7 +300,8 @@ class ApiKeyCooldownEnforcementTest extends TestCase
     {
         $account = $this->accountWithAllowance();
         $key = $this->makeKey($account);
-        $past = now()->subDay();
+        // Truncated to whole seconds — see the equalTo() precision note above.
+        $past = now()->subDay()->startOfSecond();
         $this->service()->setCooldown($key, $past);
 
         // provision() is not a transfer ($replacing === null), so it

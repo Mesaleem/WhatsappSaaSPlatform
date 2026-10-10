@@ -10,6 +10,7 @@ use App\Models\Lead;
 use App\Models\MessageDispatchLog;
 use App\Models\User;
 use App\Models\WhatsAppFlow;
+use App\Models\WhatsAppNumber;
 use App\Models\WhatsAppFlowSession;
 use App\Models\WhatsAppSession;
 use App\Services\Billing\InvoiceCreditService;
@@ -335,9 +336,13 @@ class JourneyRemainingNodesTest extends TestCase
         $account = $this->account();
         $user = User::factory()->create(['account_id' => $account->id, 'is_active' => true]);
         $user->assignRole('admin');
+        // Channel-binding gate (Connexxa parity, Task 21) — needed for the
+        // assertCreated() draft/full saves below.
+        $number = WhatsAppNumber::create(['account_id' => $account->id, 'phone_number' => '91905'.str_pad((string) $account->id, 6, '0', STR_PAD_LEFT), 'status' => WhatsAppNumber::STATUS_LINKED]);
         // P5-7 — a half-built draft saves with `publish: false`; publishing needs a runnable graph.
         $post = fn (array $node, bool $publish = true) => $this->actingAs($user)->postJson('/api/whatsapp/flows', [
             'name' => 'X', 'trigger_type' => 'keyword', 'trigger_value' => 'go', 'is_active' => true, 'publish' => $publish,
+            'whatsapp_number_ids' => [$number->id],
             'graph_data' => ['nodes' => [['id' => 't', 'type' => 'trigger', 'data' => []], $node], 'edges' => [['id' => 'e', 'source' => 't', 'target' => $node['id']]]],
         ]);
 
@@ -368,6 +373,22 @@ class JourneyRemainingNodesTest extends TestCase
         $this->assertSame(['Name?', 'Hi Ada!', 'Bye'], $this->sent($account));
         $this->assertEnded($this->flowSession($account), WhatsAppFlowSession::STATUS_COMPLETED, 'b');
         $this->assertSame(3, (int) $account->currentSubscription()->first()->used_messages);
+    }
+
+    /**
+     * Task 22 — var_system.* (Connexxa parity), through the real engine
+     * path: a `text` node is the one executing node type that gets a
+     * $varSystem built for it today (WhatsAppJourneyEngine's text-send
+     * branch) — see JourneyActionConfig::systemVariables()'s docblock.
+     */
+    public function test_a_text_node_can_interpolate_var_system_userchatid(): void
+    {
+        $account = $this->account();
+        $this->flow($account, [$this->text('a', 'Thanks, {{var_system.userChatId}}!')]);
+
+        $this->inbound($account, 'go');
+
+        $this->assertSame(['Thanks, '.self::PHONE.'!'], $this->sent($account));
     }
 
     public function test_a_text_that_renders_empty_fails_instead_of_sending_nothing(): void

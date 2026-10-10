@@ -4,21 +4,31 @@ import {
   AlertTriangle,
   ArrowLeft,
   Blocks,
+  Globe,
   LayoutGrid,
   List,
   Loader2,
   Lock,
   Plus,
   Send,
+  Sparkles,
+  StickyNote as StickyNoteIcon,
   Trash2,
+  Variable,
   X,
   XCircle,
   Zap,
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import journeyService from '../../services/journeyService';
+import aiService from '../../services/aiService';
 import knowledgeBaseService, { type KnowledgeBaseSummary } from '../../services/knowledgeBaseService';
 import aiAgentService, { type AiAgentSummary } from '../../services/aiAgentService';
+import journeyApiConnectionService from '../../services/journeyApiConnectionService';
+import senderNumberService from '../../services/senderNumberService';
+import type { SenderNumber } from '../../types/senderNumber';
+import ManageApiConnectionsModal from '../../journey/ManageApiConnectionsModal';
+import type { JourneyApiConnection, JourneyStickyNote } from '../../types/journey';
 import {
   JOURNEY_NODE_CATEGORIES,
   JOURNEY_NODE_CATEGORY_LABELS,
@@ -27,10 +37,12 @@ import {
   getJourneyNode,
   isRuntimeExecutableNodeType,
   journeyNodesByCategory,
+  journeySourceHandles,
   nonExecutableNodeTypes,
   validateJourneyGraph,
 } from '../../journey/nodeRegistry';
 import JourneyNodeConfigForm from '../../journey/JourneyNodeConfigForm';
+import ManageVariablesModal from '../../journey/ManageVariablesModal';
 import { journeyNodeAvailability, type JourneyEntitlementContext } from '../../journey/nodeEntitlement';
 import { ClearFiltersButton, SearchInput } from '../../components/common/DataTableControls';
 import { TableCard, inputClass } from '../../components/common/Card';
@@ -86,6 +98,9 @@ const NODE_WIDTH = 300;
 const NODE_HEIGHT = 92;
 const CANVAS_WIDTH = 2400;
 const CANVAS_HEIGHT = 2200;
+// Task 21 — mirrors the server-side cap, WhatsAppFlow::MAX_CHANNELS (also
+// ConnexxaIQ's own "Channels (up to 2)*" cap at journey creation).
+const MAX_JOURNEY_CHANNELS = 2;
 
 /**
  * Phase 5 — Journey / Automation: node metadata now comes from the ONE
@@ -166,6 +181,9 @@ function genId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
+/** Phase 8 Task 16 — sticky-note color swatches. A fixed, small palette, nothing more. */
+const STICKY_NOTE_COLORS = ['#fef08a', '#bbf7d0', '#bfdbfe', '#fbcfe8', '#fed7aa'];
+
 /**
  * A new journey starts with its Start (type: 'trigger') and End nodes
  * already on the canvas, unconnected — the user wires the rest between
@@ -194,6 +212,7 @@ function stripEndNodes(graph: JourneyGraph): JourneyGraph {
   if (endIds.size === 0) return graph;
 
   return {
+    ...graph,
     nodes: graph.nodes.filter((n) => !endIds.has(n.id)),
     edges: graph.edges.filter((e) => !endIds.has(e.target) && !endIds.has(e.source)),
   };
@@ -235,7 +254,7 @@ function ensureEndConnections(graph: JourneyGraph): JourneyGraph {
     // its branches is "unfilled" would be guessing, not reading data.
     if (node.type === 'end' || node.type === 'save_lead' || node.type === 'condition') continue;
 
-    const handles = getJourneyNode(node.type)?.sourceHandles ?? [{ id: 'next', label: 'Next' }];
+    const handles = journeySourceHandles(getJourneyNode(node.type), node.data as Record<string, unknown>);
 
     for (const handle of handles) {
       const hasEdge = graph.edges.some((e) => e.source === node.id && (e.sourceHandle ?? 'next') === handle.id);
@@ -259,6 +278,7 @@ function ensureEndConnections(graph: JourneyGraph): JourneyGraph {
   }));
 
   return {
+    ...graph,
     nodes: [...graph.nodes, endNode],
     edges: [...graph.edges, ...newEdges],
   };
@@ -665,6 +685,20 @@ interface ConnectDragState {
   mouseY: number;
 }
 
+/**
+ * Phase 8 Task 16 — sticky-note dragging. A fully separate drag ref from
+ * NodeDragState/nodeDragRef on purpose: the two never share state or
+ * listeners, so this feature cannot regress node dragging even if it has
+ * a bug of its own.
+ */
+interface StickyDragState {
+  noteId: string;
+  startMouseX: number;
+  startMouseY: number;
+  startNoteX: number;
+  startNoteY: number;
+}
+
 function JourneyCanvasEditor({
   initialFlow,
   onBack,
@@ -679,6 +713,23 @@ function JourneyCanvasEditor({
   const [triggerType, setTriggerType] = useState<FlowTriggerType>(initialFlow?.trigger_type ?? 'keyword');
   const [triggerValue, setTriggerValue] = useState(initialFlow?.trigger_value ?? '');
   const [isActive, setIsActive] = useState(initialFlow?.is_active ?? true);
+  // Task 21 — Channel-binding gate (Connexxa parity): the account's
+  // linked WhatsApp number(s) this journey is bound to. ConnexxaIQ will
+  // not let a journey be built at all without first picking 1-2 channels
+  // on its Create Journey dialog; this mirrors that, using the same
+  // linked-numbers list the alerts "Send from" picker already uses
+  // (senderNumberService — see its docblock).
+  const [channelIds, setChannelIds] = useState<number[]>(initialFlow?.whatsappNumbers?.map((n) => n.id) ?? []);
+  const [availableChannels, setAvailableChannels] = useState<SenderNumber[]>([]);
+  useEffect(() => {
+    senderNumberService
+      .list()
+      .then((list) => {
+        setAvailableChannels(list);
+        setChannelIds((prev) => (prev.length > 0 ? prev : list.find((n) => n.is_default) ? [list.find((n) => n.is_default)!.id] : list[0] ? [list[0].id] : []));
+      })
+      .catch(() => undefined);
+  }, []);
   const [graph, setGraph] = useState<JourneyGraph>(() => ensureEndConnections(initialFlow?.graph_data ?? newJourneyGraph()));
   /** Measured on-canvas height of each node, keyed by id — see the ref callback on the node render below. */
   const [nodeHeights, setNodeHeights] = useState<Record<string, number>>({});
@@ -692,6 +743,7 @@ function JourneyCanvasEditor({
   const [paletteNotice, setPaletteNotice] = useState<{ reason: string; upgradable: boolean } | null>(null);
   const upgrade = useUpgradePath();
   const [testingFlow, setTestingFlow] = useState<WhatsAppFlow | null>(null);
+  const [variablesModalOpen, setVariablesModalOpen] = useState(false);
 
   /*
     Phase 5 Task 7 — the two dimensions the palette greys out on, both
@@ -714,12 +766,27 @@ function JourneyCanvasEditor({
   const canvasRef = useRef<HTMLDivElement>(null);
   const nodeDragRef = useRef<NodeDragState | null>(null);
   const [connectDrag, setConnectDrag] = useState<ConnectDragState | null>(null);
+  // Phase 8 Task 16 — sticky-note canvas annotations. A fully independent
+  // ref from nodeDragRef (see StickyDragState's docblock).
+  const stickyDragRef = useRef<StickyDragState | null>(null);
   /** Field-level configuration errors per node id, from the last save attempt. */
   const [nodeErrors, setNodeErrors] = useState<Record<string, Record<string, string>>>({});
 
+  // Phase 8 Task 14 — "Generate with AI" draft panel. Self-contained,
+  // mirrors TemplateManagerPage's Task 13 panel: it only ever calls
+  // setGraph() with the result (wrapped in ensureEndConnections(), the
+  // same helper every other graph-load path already uses), so nothing
+  // about the canvas, selection, or save flow is touched by this feature.
+  const [showAiJourneyPanel, setShowAiJourneyPanel] = useState(false);
+  const [aiJourneyDescription, setAiJourneyDescription] = useState('');
+  const [aiJourneyGoal, setAiJourneyGoal] = useState('');
+  const [isGeneratingJourney, setIsGeneratingJourney] = useState(false);
+  const [aiJourneyError, setAiJourneyError] = useState<string | null>(null);
+  const [aiJourneyProvider, setAiJourneyProvider] = useState<string | null>(null);
+
   const knownVariables = useMemo(
-    () =>
-      graph.nodes.flatMap((n) => {
+    () => [
+      ...graph.nodes.flatMap((n) => {
         if (n.type === 'question' && n.data.variable_name) return [n.data.variable_name as string];
         // Phase 8 Task 7 — an AI node's reply is a variable too.
         if ((n.type === 'prompt' || n.type === 'agent' || n.type === 'rag') && typeof n.data.outputVariable === 'string' && n.data.outputVariable) {
@@ -727,7 +794,11 @@ function JourneyCanvasEditor({
         }
         return [];
       }),
-    [graph.nodes],
+      // A declared Local Variable (Manage Variables) is suggestable too,
+      // even before any node actually produces it.
+      ...(graph.variables ?? []).map((v) => v.name),
+    ],
+    [graph.nodes, graph.variables],
   );
 
   const nodeById = useCallback((id: string) => graph.nodes.find((n) => n.id === id), [graph.nodes]);
@@ -765,6 +836,46 @@ function JourneyCanvasEditor({
       cancelled = true;
     };
   }, [needsAiAgents, aiAgents]);
+
+  // Task 25 — the edited account's OTHER journeys, for a 'journey' node's
+  // Static-mode picker, fetched once when such a node first exists (null =
+  // not loaded; an account with none yet simply gets an empty list, same
+  // lazy pattern as knowledgeBases/aiAgents above). The journey being
+  // edited right now is excluded — it cannot jump into itself (also
+  // enforced by WhatsAppFlowController::assertSubJourneysOwned()).
+  const [subJourneys, setSubJourneys] = useState<WhatsAppFlow[] | null>(null);
+  const needsSubJourneys = graph.nodes.some((n) => n.type === 'journey');
+  useEffect(() => {
+    if (!needsSubJourneys || subJourneys !== null) return;
+    let cancelled = false;
+    journeyService
+      .list()
+      .then((list) => !cancelled && setSubJourneys(initialFlow ? list.filter((j) => j.id !== initialFlow.id) : list))
+      .catch(() => !cancelled && setSubJourneys([]));
+    return () => {
+      cancelled = true;
+    };
+  }, [needsSubJourneys, subJourneys, initialFlow]);
+
+  // Phase 8 Task 15 — the edited account's saved API connections, fetched
+  // once when an `api` node first exists (null = not loaded; an account
+  // with none yet simply gets an empty list, same lazy pattern as
+  // knowledgeBases/aiAgents above).
+  const [apiConnections, setApiConnections] = useState<JourneyApiConnection[] | null>(null);
+  const needsApiConnections = graph.nodes.some((n) => n.type === 'api');
+  useEffect(() => {
+    if (!needsApiConnections || apiConnections !== null) return;
+    let cancelled = false;
+    journeyApiConnectionService
+      .list()
+      .then((list) => !cancelled && setApiConnections(list))
+      .catch(() => !cancelled && setApiConnections([]));
+    return () => {
+      cancelled = true;
+    };
+  }, [needsApiConnections, apiConnections]);
+  const [showApiConnectionsModal, setShowApiConnectionsModal] = useState(false);
+
 
   const updateNodeData = (nodeId: string, patch: Record<string, unknown>) => {
     setGraph((g) => ({
@@ -806,6 +917,33 @@ function JourneyCanvasEditor({
     setGraph((g) => ({ ...g, edges: g.edges.map((e) => (e.id === edgeId ? { ...e, ...patch } : e)) }));
   };
 
+  // Phase 8 Task 16 — sticky notes are a sibling graph_data key
+  // (graph.stickyNotes), never nodes: no type, no handles, nothing else
+  // reads them. See JourneyStickyNote's docblock in types/journey.ts.
+  const addStickyNote = () => {
+    const note: JourneyStickyNote = {
+      id: genId('note'),
+      x: 40,
+      y: 40,
+      width: 220,
+      height: 160,
+      text: '',
+      color: '#fef08a',
+    };
+    setGraph((g) => ({ ...g, stickyNotes: [...(g.stickyNotes ?? []), note] }));
+  };
+
+  const updateStickyNote = (noteId: string, patch: Partial<JourneyStickyNote>) => {
+    setGraph((g) => ({
+      ...g,
+      stickyNotes: (g.stickyNotes ?? []).map((n) => (n.id === noteId ? { ...n, ...patch } : n)),
+    }));
+  };
+
+  const deleteStickyNote = (noteId: string) => {
+    setGraph((g) => ({ ...g, stickyNotes: (g.stickyNotes ?? []).filter((n) => n.id !== noteId) }));
+  };
+
   /**
    * Node dragging (reposition) and connection dragging (draw a new edge
    * from a node's handle) both attach window-level mousemove/mouseup
@@ -834,6 +972,8 @@ function JourneyCanvasEditor({
 
   const activeDragListenersRef = useRef<{ move: (e: MouseEvent) => void; up: (e: MouseEvent) => void } | null>(null);
   const activeConnectListenersRef = useRef<{ move: (e: MouseEvent) => void; up: (e: MouseEvent) => void } | null>(null);
+  // Phase 8 Task 16 — its own listener-pair ref, same reason stickyDragRef is its own ref.
+  const activeStickyListenersRef = useRef<{ move: (e: MouseEvent) => void; up: (e: MouseEvent) => void } | null>(null);
 
   const onWindowMouseMoveForDrag = useCallback((e: MouseEvent) => {
     const drag = nodeDragRef.current;
@@ -876,6 +1016,50 @@ function JourneyCanvasEditor({
     window.addEventListener('mouseup', onWindowMouseUpForDrag);
   };
 
+  // Phase 8 Task 16 — sticky-note dragging, deliberately a byte-for-byte
+  // mirror of onNodeMouseDown/onWindowMouseMoveForDrag/onWindowMouseUpForDrag
+  // above but through stickyDragRef/activeStickyListenersRef, never
+  // nodeDragRef/activeDragListenersRef — see StickyDragState's docblock.
+  const onStickyMouseMoveForDrag = useCallback((e: MouseEvent) => {
+    const drag = stickyDragRef.current;
+    if (!drag) return;
+    const dx = e.clientX - drag.startMouseX;
+    const dy = e.clientY - drag.startMouseY;
+    setGraph((g) => ({
+      ...g,
+      stickyNotes: (g.stickyNotes ?? []).map((n) =>
+        n.id === drag.noteId
+          ? { ...n, x: Math.max(0, drag.startNoteX + dx), y: Math.max(0, drag.startNoteY + dy) }
+          : n,
+      ),
+    }));
+  }, []);
+
+  const onStickyMouseUpForDrag = useCallback(() => {
+    stickyDragRef.current = null;
+    const listeners = activeStickyListenersRef.current;
+    if (listeners) {
+      window.removeEventListener('mousemove', listeners.move);
+      window.removeEventListener('mouseup', listeners.up);
+    }
+    activeStickyListenersRef.current = null;
+  }, []);
+
+  const onStickyMouseDown = (e: ReactMouseEvent, note: JourneyStickyNote) => {
+    if ((e.target as HTMLElement).dataset.noDrag) return; // the textarea/delete button opt out of dragging
+    e.stopPropagation();
+    stickyDragRef.current = {
+      noteId: note.id,
+      startMouseX: e.clientX,
+      startMouseY: e.clientY,
+      startNoteX: note.x,
+      startNoteY: note.y,
+    };
+    activeStickyListenersRef.current = { move: onStickyMouseMoveForDrag, up: onStickyMouseUpForDrag };
+    window.addEventListener('mousemove', onStickyMouseMoveForDrag);
+    window.addEventListener('mouseup', onStickyMouseUpForDrag);
+  };
+
   const onWindowMouseMoveForConnect = useCallback(
     (e: MouseEvent) => {
       setConnectDrag((prev) => {
@@ -914,7 +1098,7 @@ function JourneyCanvasEditor({
 
           const sourceNode = g.nodes.find((n) => n.id === prev.sourceId);
           const sourceIsLegacyCondition = sourceNode?.type === 'condition';
-          const branches = getJourneyNode(sourceNode?.type ?? '')?.sourceHandles.length ?? 1;
+          const branches = journeySourceHandles(getJourneyNode(sourceNode?.type ?? ''), sourceNode?.data as Record<string, unknown> | undefined, [{ id: 'next', label: 'Next' }]).length;
 
           // A node with ONE outgoing branch has exactly one edge -- replace
           // it. A branching node keeps one edge per branch, so replace only
@@ -956,6 +1140,43 @@ function JourneyCanvasEditor({
     window.addEventListener('mouseup', onWindowMouseUpForConnect);
   };
 
+  /**
+   * Phase 8 Task 14 — calls AIJourneyController::generate() and loads
+   * whatever graph it returns onto the canvas, UNCHANGED (no rewriting
+   * here — see JourneyCopywriterService's own docblock for why that
+   * matters). The user still reviews every node and clicks Save/Publish
+   * themselves; nothing is saved by this handler. A canvas that already
+   * has more than the blank starter (trigger + end) asks for confirmation
+   * first, since this replaces the whole graph rather than merging into it.
+   */
+  const handleGenerateJourneyDraft = async () => {
+    if (!selectedAccount || !aiJourneyDescription.trim()) {
+      return;
+    }
+
+    if (graph.nodes.length > 2 && !window.confirm('This replaces the current canvas with an AI-generated draft. Continue?')) {
+      return;
+    }
+
+    setIsGeneratingJourney(true);
+    setAiJourneyError(null);
+    try {
+      const result = await aiService.generateJourneyDraft({
+        account_id: selectedAccount.id,
+        description: aiJourneyDescription.trim(),
+        goal: aiJourneyGoal.trim() || undefined,
+      });
+      setGraph(ensureEndConnections(result.graph_data as unknown as JourneyGraph));
+      setNodeErrors({});
+      setSelection(null);
+      setAiJourneyProvider(result.provider);
+    } catch (err) {
+      setAiJourneyError(extractErrorMessage(err, 'Could not generate a journey draft.'));
+    } finally {
+      setIsGeneratingJourney(false);
+    }
+  };
+
   const handleSave = (publish = true) => {
     if (!name.trim()) {
       setSaveError('Give this journey a name.');
@@ -984,6 +1205,19 @@ function JourneyCanvasEditor({
       backendGraph.edges,
     );
     setNodeErrors(graphErrors);
+
+    // Task 21 — Channel-binding gate (Connexxa parity). UX mirror of the
+    // server's 422 on `whatsapp_number_ids` (the server still enforces
+    // this independently): a journey can never be saved, draft or
+    // published, with zero channels — same hard block ConnexxaIQ applies
+    // at journey creation.
+    if (channelIds.length === 0) {
+      setSaveError('Select at least one channel (WhatsApp number) for this journey before saving.');
+      const triggerNode = graph.nodes.find((n) => n.type === 'trigger');
+      if (triggerNode) setSelection({ kind: 'node', id: triggerNode.id });
+
+      return;
+    }
 
     const firstBadNodeId = Object.keys(graphErrors)[0];
 
@@ -1017,6 +1251,7 @@ function JourneyCanvasEditor({
       trigger_value: triggerValue.trim() || null,
       graph_data: backendGraph,
       is_active: isActive,
+      whatsapp_number_ids: channelIds,
       ...(publish ? {} : { publish: false }),
     };
 
@@ -1038,6 +1273,19 @@ function JourneyCanvasEditor({
   return (
     <div className="flex h-[calc(100vh-0px)] flex-col p-6">
       {testingFlow && <TestTriggerModal flow={testingFlow} onClose={() => setTestingFlow(null)} />}
+      {variablesModalOpen && (
+        <ManageVariablesModal
+          initialVariables={graph.variables ?? []}
+          onClose={() => setVariablesModalOpen(false)}
+          onSave={(next) => {
+            setGraph((g) => ({ ...g, variables: next }));
+            setVariablesModalOpen(false);
+          }}
+        />
+      )}
+      {showApiConnectionsModal && (
+        <ManageApiConnectionsModal onClose={() => setShowApiConnectionsModal(false)} onChanged={() => setApiConnections(null)} />
+      )}
 
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-3">
@@ -1053,6 +1301,38 @@ function JourneyCanvasEditor({
           />
         </div>
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowAiJourneyPanel((v) => !v)}
+            className="flex items-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-semibold"
+            style={{ borderColor: indigo.border, color: indigo.ink }}
+          >
+            <Sparkles className="h-3.5 w-3.5" />
+            Generate with AI
+          </button>
+          <button
+            onClick={() => setVariablesModalOpen(true)}
+            className="flex items-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-semibold"
+            style={{ borderColor: indigo.border, color: indigo.ink }}
+          >
+            <Variable className="h-3.5 w-3.5" />
+            Variables
+          </button>
+          <button
+            onClick={() => setShowApiConnectionsModal(true)}
+            className="flex items-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-semibold"
+            style={{ borderColor: indigo.border, color: indigo.ink }}
+          >
+            <Globe className="h-3.5 w-3.5" />
+            API Connections
+          </button>
+          <button
+            onClick={addStickyNote}
+            className="flex items-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-semibold"
+            style={{ borderColor: indigo.border, color: indigo.ink }}
+          >
+            <StickyNoteIcon className="h-3.5 w-3.5" />
+            Sticky Note
+          </button>
           {!isNew && (
             <button
               onClick={() => setTestingFlow(initialFlow)}
@@ -1088,6 +1368,44 @@ function JourneyCanvasEditor({
           </button>
         </div>
       </div>
+
+      {showAiJourneyPanel && (
+        <div className="mb-4 rounded-xl border p-4" style={{ borderColor: indigo.border, background: '#FAFAFF' }}>
+          <div className="mb-2 text-xs font-semibold" style={{ color: indigo.ink }}>
+            Describe the conversation you want — a trigger, messages, a question, a branch, a delay, an AI reply, or a
+            CRM hand-off. This fills a DRAFT on the canvas below; nothing is saved until you click Save Journey.
+          </div>
+          <textarea
+            value={aiJourneyDescription}
+            onChange={(e) => setAiJourneyDescription(e.target.value)}
+            placeholder="e.g. Greet the customer, ask for their email, then hand off to a human agent"
+            rows={3}
+            className={inputClass + ' mb-2 w-full'}
+          />
+          <input
+            type="text"
+            value={aiJourneyGoal}
+            onChange={(e) => setAiJourneyGoal(e.target.value)}
+            placeholder="Goal (optional) — e.g. Capture the lead"
+            className={inputClass + ' mb-2 w-full'}
+          />
+          {aiJourneyError && <div className="mb-2 text-xs font-medium text-red-600">{aiJourneyError}</div>}
+          {aiJourneyProvider === 'template' && (
+            <div className="mb-2 text-xs font-medium text-amber-600">
+              AI was unavailable — this is a basic starter draft, not an AI-written one.
+            </div>
+          )}
+          <button
+            onClick={() => void handleGenerateJourneyDraft()}
+            disabled={isGeneratingJourney || !aiJourneyDescription.trim()}
+            className="flex items-center gap-2 rounded-lg px-4 py-2 text-xs font-semibold text-white disabled:opacity-60"
+            style={{ background: activeGradient }}
+          >
+            {isGeneratingJourney ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+            {isGeneratingJourney ? 'Generating…' : 'Generate Draft'}
+          </button>
+        </div>
+      )}
 
       {saveError && (
         <DismissibleAlert className="mb-3 flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
@@ -1278,10 +1596,15 @@ function JourneyCanvasEditor({
                       knownVariables={knownVariables}
                       knowledgeBases={knowledgeBases}
                       aiAgents={aiAgents}
+                      apiConnections={apiConnections}
+                      subJourneys={subJourneys}
                       triggerType={triggerType}
                       triggerValue={triggerValue}
                       onTriggerTypeChange={setTriggerType}
                       onTriggerValueChange={setTriggerValue}
+                      channelIds={channelIds}
+                      availableChannels={availableChannels}
+                      onChannelIdsChange={setChannelIds}
                       onChange={(patch) => updateNodeData(node.id, patch)}
                     />
                   </div>
@@ -1295,6 +1618,25 @@ function JourneyCanvasEditor({
                   )}
 
                   {/*
+                    Incoming connection point — purely visual (the
+                    connect-drop hit-test already accepts a drop anywhere
+                    on the card), added so every node shows a dot on the
+                    side a connection arrives from and a dot on the side
+                    it leaves from, matching the reference builder. Start
+                    is the one node nothing ever points at
+                    (hasTargetHandle: false in the registry).
+                  */}
+                  {(definition?.hasTargetHandle ?? true) && (
+                    <span
+                      data-handle="true"
+                      data-target-handle="true"
+                      className="absolute -left-1.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 rounded-full border-2 border-white"
+                      style={{ background: meta.color }}
+                      title="Connections arrive here"
+                    />
+                  )}
+
+                  {/*
                     One connection point per declared source handle. A
                     branching node (conditional: TRUE / FALSE) therefore
                     shows a labelled dot per branch, and the branch a
@@ -1302,7 +1644,7 @@ function JourneyCanvasEditor({
                     edge — never which dot happens to sit higher.
                   */}
                   {node.type !== 'save_lead' &&
-                    (definition?.sourceHandles ?? [{ id: 'next', label: 'Next' }]).map((handle, handleIndex, handles) => (
+                    journeySourceHandles(definition, node.data as Record<string, unknown>).map((handle, handleIndex, handles) => (
                       <div
                         key={handle.id}
                         data-handle="true"
@@ -1326,6 +1668,69 @@ function JourneyCanvasEditor({
                 </div>
               );
             })}
+
+            {/*
+              Phase 8 Task 16 — sticky notes: plain left/top positioned
+              divs in the SAME wrapper nodes use, no zoom transform
+              (matching the node rendering above). Their own drag
+              mechanism (onStickyMouseDown et al.) is completely
+              independent of onNodeMouseDown's, so this cannot regress
+              node dragging.
+            */}
+            {(graph.stickyNotes ?? []).map((note) => (
+              <div
+                key={note.id}
+                onMouseDown={(e) => onStickyMouseDown(e, note)}
+                className="absolute cursor-move select-none rounded-lg border p-2 shadow-sm"
+                style={{
+                  left: note.x,
+                  top: note.y,
+                  width: note.width ?? 220,
+                  height: note.height ?? 160,
+                  background: note.color ?? '#fef08a',
+                  borderColor: 'rgba(0,0,0,0.08)',
+                }}
+              >
+                <div className="mb-1 flex items-center justify-end gap-1">
+                  {STICKY_NOTE_COLORS.map((color) => (
+                    <button
+                      key={color}
+                      type="button"
+                      data-no-drag="true"
+                      onMouseDown={(e) => e.stopPropagation()}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        updateStickyNote(note.id, { color });
+                      }}
+                      className="h-3 w-3 flex-shrink-0 rounded-full border border-black/10"
+                      style={{ background: color }}
+                      aria-label={`Set color ${color}`}
+                    />
+                  ))}
+                  <button
+                    type="button"
+                    data-no-drag="true"
+                    onMouseDown={(e) => e.stopPropagation()}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      deleteStickyNote(note.id);
+                    }}
+                    className="ml-1 flex-shrink-0 text-slate-500 hover:text-red-600"
+                    aria-label="Delete sticky note"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </div>
+                <textarea
+                  data-no-drag="true"
+                  onMouseDown={(e) => e.stopPropagation()}
+                  value={note.text}
+                  onChange={(e) => updateStickyNote(note.id, { text: e.target.value })}
+                  placeholder="Note…"
+                  className="h-[calc(100%-22px)] w-full resize-none border-none bg-transparent text-xs leading-snug outline-none placeholder:text-slate-500/70"
+                />
+              </div>
+            ))}
           </div>
         </div>
 
@@ -1381,17 +1786,75 @@ function StartNodeFields({
   triggerValue,
   onTriggerTypeChange,
   onTriggerValueChange,
+  channelIds,
+  availableChannels,
+  onChannelIdsChange,
 }: {
   triggerType: FlowTriggerType;
   triggerValue: string;
   onTriggerTypeChange: (t: FlowTriggerType) => void;
   onTriggerValueChange: (v: string) => void;
+  channelIds: number[];
+  availableChannels: SenderNumber[];
+  onChannelIdsChange: (ids: number[]) => void;
 }) {
   const [configOpen, setConfigOpen] = useState(triggerType !== 'default');
   const hasEvent = triggerType !== 'default';
 
   return (
     <div className="space-y-2">
+      {/*
+        Task 21 — Channel-binding gate (Connexxa parity). ConnexxaIQ will
+        not let a journey be built at all without first picking 1-2
+        channels on its own Create Journey dialog ("Channels (up to 2)*");
+        this is that same required field, placed first for the same
+        reason. The options are this account's LINKED numbers (the same
+        list the alerts "Send from" picker uses) — a pending/unlinked
+        slot can't actually carry a journey yet.
+      */}
+      <label className="block text-xs font-medium text-slate-700">
+        Channels (up to {MAX_JOURNEY_CHANNELS})*
+        {availableChannels.length === 0 ? (
+          <p className="mt-1 text-[11px] text-amber-700">
+            No linked WhatsApp number yet. Connect one in WhatsApp Setup before this journey can be saved.
+          </p>
+        ) : (
+          <div className="mt-1 space-y-1 rounded-lg border p-2" style={{ borderColor: indigo.border }}>
+            {availableChannels.map((channel) => {
+              const checked = channelIds.includes(channel.id);
+              const atCap = !checked && channelIds.length >= MAX_JOURNEY_CHANNELS;
+
+              return (
+                <label
+                  key={channel.id}
+                  className={`flex items-center gap-2 text-xs ${atCap ? 'opacity-50' : ''}`}
+                  style={{ color: indigo.ink }}
+                >
+                  <input
+                    type="checkbox"
+                    disabled={atCap}
+                    checked={checked}
+                    onChange={(e) => {
+                      if (e.target.checked) {
+                        onChannelIdsChange([...channelIds, channel.id].slice(0, MAX_JOURNEY_CHANNELS));
+                      } else {
+                        onChannelIdsChange(channelIds.filter((id) => id !== channel.id));
+                      }
+                    }}
+                    className="h-3.5 w-3.5 rounded border-slate-300 text-indigo-600"
+                  />
+                  {channel.phone_number}
+                  {channel.is_default ? ' (default)' : ''}
+                </label>
+              );
+            })}
+          </div>
+        )}
+        {channelIds.length === 0 && availableChannels.length > 0 && (
+          <span className="mt-1 block text-[11px] font-medium text-red-600">Pick at least one channel.</span>
+        )}
+      </label>
+
       <label className="block text-xs font-medium text-slate-700">
         Select Event
         <select
@@ -1669,10 +2132,15 @@ function NodeInlineFields({
   knownVariables,
   knowledgeBases,
   aiAgents,
+  apiConnections,
+  subJourneys,
   triggerType,
   triggerValue,
   onTriggerTypeChange,
   onTriggerValueChange,
+  channelIds,
+  availableChannels,
+  onChannelIdsChange,
   onChange,
 }: {
   node: JourneyNode;
@@ -1680,10 +2148,15 @@ function NodeInlineFields({
   knownVariables: string[];
   knowledgeBases: KnowledgeBaseSummary[] | null;
   aiAgents: AiAgentSummary[] | null;
+  apiConnections: JourneyApiConnection[] | null;
+  subJourneys: WhatsAppFlow[] | null;
   triggerType: FlowTriggerType;
   triggerValue: string;
   onTriggerTypeChange: (t: FlowTriggerType) => void;
   onTriggerValueChange: (v: string) => void;
+  channelIds: number[];
+  availableChannels: SenderNumber[];
+  onChannelIdsChange: (ids: number[]) => void;
   onChange: (patch: Record<string, unknown>) => void;
 }) {
   if (!LEGACY_PANEL_TYPES.includes(node.type as JourneyLegacyEngineNodeType)) {
@@ -1695,6 +2168,8 @@ function NodeInlineFields({
         knownVariables={knownVariables}
         knowledgeBases={knowledgeBases}
         aiAgents={aiAgents}
+        apiConnections={apiConnections}
+        subJourneys={subJourneys}
         onChange={onChange}
         hideHeader
       />
@@ -1708,6 +2183,9 @@ function NodeInlineFields({
         triggerValue={triggerValue}
         onTriggerTypeChange={onTriggerTypeChange}
         onTriggerValueChange={onTriggerValueChange}
+        channelIds={channelIds}
+        availableChannels={availableChannels}
+        onChannelIdsChange={onChannelIdsChange}
       />
     );
   }

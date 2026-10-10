@@ -29,6 +29,11 @@ class SchedulerTopologyTest extends TestCase
         'ops:prune-retention',
         'ops:scheduler-heartbeat',
         'social:refresh-insights',
+        'whatsapp:enforce-terms',
+        'modules:enforce-addons',
+        'subscriptions:send-expiry-reminders',
+        'batches:dispatch-due',
+        'messages:dispatch-scheduled',
     ];
 
     /** @return list<Event> */

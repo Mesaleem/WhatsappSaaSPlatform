@@ -317,7 +317,20 @@ class PlanManagementController extends Controller
             $finalCapabilities,
         );
         $this->assertCapabilityLimitKeysAreBundled($suppliedLimits, $finalCapabilities);
-        $this->assertApiInstallationsConcreteWhenExternalApi($finalCapabilities, $finalCapabilityLimits);
+        // Requirement 7 only re-validates when THIS request actually touches
+        // the bundle or its limits — exactly like the "a price edit can
+        // never silently re-bundle" rule this controller already documents
+        // above. A plan seeded (deliberately — see Phase1FoundationSeeder's
+        // own docblock) with external_api but no api_installations yet must
+        // stay editable for price/quota/etc. fields until a Super Admin
+        // actually touches capabilities or capability_limits; re-checking
+        // the UNCHANGED existing bundle on every unrelated field edit would
+        // permanently lock such a plan. A capability_limits-only request
+        // (bundle untouched) still re-validates — nulling api_installations'
+        // own limit while external_api stays bundled must still be refused.
+        if ($bundleTouched || array_key_exists('capability_limits', $data)) {
+            $this->assertApiInstallationsConcreteWhenExternalApi($finalCapabilities, $finalCapabilityLimits);
+        }
 
         $result = $this->plans->modify(
             $plan,

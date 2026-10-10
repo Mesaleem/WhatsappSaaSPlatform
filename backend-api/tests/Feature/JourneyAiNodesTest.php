@@ -732,6 +732,49 @@ class JourneyAiNodesTest extends TestCase
         $this->assertSame(0, preg_match(JourneyActionConfig::VARIABLE_NAME_PATTERN, JourneyAiNodeRunner::RUNS_KEY), 'no node can write it as an output variable');
     }
 
+    /**
+     * Task 22 — Connexxa variable-system parity: var_local./var_system.
+     * namespaces and dotted-path nesting, unit-level (no DB/engine). See
+     * JourneyActionConfig::renderText()'s docblock for the full contract.
+     */
+    public function test_render_text_resolves_var_local_and_var_system_namespaces(): void
+    {
+        $context = ['name' => 'Asha', 'buyPolicyJson' => ['customer' => ['pan' => 'ABCDE1234F']]];
+        $varSystem = ['userChatId' => '919900000000', 'accountId' => 7];
+
+        // var_local.* — same $context every un-namespaced call already used,
+        // now reachable through the explicit Connexxa-style prefix too.
+        $this->assertSame('Asha', JourneyActionConfig::renderText('{{var_local.name}}', $context));
+        // var_local.* nested dot-path — Connexxa's own confirmed syntax
+        // (e.g. {{var_local.buyPolicyJson.pan}} in the real HDFC journey).
+        $this->assertSame('ABCDE1234F', JourneyActionConfig::renderText('{{var_local.buyPolicyJson.customer.pan}}', $context));
+        // var_system.* — not reachable at all without the namespace; absent $varSystem renders ''.
+        $this->assertSame('919900000000', JourneyActionConfig::renderText('{{var_system.userChatId}}', $context, $varSystem));
+        $this->assertSame('', JourneyActionConfig::renderText('{{var_system.userChatId}}', $context));
+        // A path that doesn't resolve at any depth is '', not an error.
+        $this->assertSame('', JourneyActionConfig::renderText('{{var_local.buyPolicyJson.customer.missing}}', $context));
+        $this->assertSame('', JourneyActionConfig::renderText('{{var_local.missing.deeper}}', $context));
+
+        // Backward compatibility: a bare, un-prefixed placeholder — even
+        // one containing a literal dot, which VARIABLE_NAME_PATTERN has
+        // always allowed in a declared variable name — is still a single
+        // flat key, byte-for-byte the pre-Task-22 behaviour.
+        $this->assertSame('Asha', JourneyActionConfig::renderText('{{name}}', $context));
+        $this->assertSame('', JourneyActionConfig::renderText('{{a.b}}', ['a.b' => '', 'a' => ['b' => 'nested']]), 'a flat key literally named "a.b" wins over any nested-path reinterpretation');
+        $this->assertSame('flat', JourneyActionConfig::renderText('{{a.b}}', ['a.b' => 'flat', 'a' => ['b' => 'nested']]));
+    }
+
+    public function test_system_variables_carries_the_sessions_own_identity(): void
+    {
+        $vars = JourneyActionConfig::systemVariables('919900000000', 7, 42, 100);
+
+        $this->assertSame('919900000000', $vars['userChatId']);
+        $this->assertSame(7, $vars['accountId']);
+        $this->assertSame(42, $vars['flowId']);
+        $this->assertSame(100, $vars['sessionId']);
+        $this->assertArrayHasKey('now', $vars);
+    }
+
     // ================================================================== configuration contract
 
     public static function configs(): array

@@ -195,7 +195,7 @@ class GeminiProviderTest extends TestCase
 
         $this->assertMatchesRegularExpression("/'gemini' => \\[\\s*'api_key' => env\\('GEMINI_API_KEY'\\)/", $config);
         $this->assertStringContainsString("env('AI_GEMINI_MODEL'", $config);
-        $this->assertStringContainsString("'openai,anthropic,gemini'", $config, 'enabled by default; still needs a key and AI_PROVIDER');
+        $this->assertStringContainsString("'openai,anthropic,gemini,groq'", $config, 'enabled by default; still needs a key and AI_PROVIDER');
         $this->assertStringNotContainsString("env('GEMINI_MODEL'", $config, 'the legacy (retired-model) variable is not inherited');
 
         $source = file_get_contents(app_path('Services/Ai/Providers/GeminiProvider.php'));

@@ -231,6 +231,13 @@ export default function MetaConfigCard() {
 
   return (
     <div className="mt-6 border-t border-slate-200 pt-6">
+      {/* Phase 1 — Embedded Signup (MetaEmbeddedSignupCard, rendered above
+          this one) is now the recommended path; this manual form stays as
+          the advanced/fallback option (e.g. a token obtained some other
+          way). Both write to the same WhatsAppSession row. */}
+      <p className="mb-3 text-xs font-medium uppercase tracking-wide text-slate-400">
+        Advanced: manual credentials
+      </p>
       {loadError && (
         <DismissibleAlert className="mb-4 flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
           <XCircle className="h-4 w-4 flex-shrink-0" />

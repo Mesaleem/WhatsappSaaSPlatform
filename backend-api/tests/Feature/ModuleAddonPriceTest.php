@@ -115,7 +115,7 @@ class ModuleAddonPriceTest extends TestCase
         ]);
 
         $this->actingAs($this->superAdmin())->putJson('/api/admin/module-offers/contact_groups', [
-            'label' => 'Custom Contact Groups', 'price' => 110, 'term_months' => 1, 'units_included' => 5, 'is_active' => true,
+            'label' => 'Custom Contact Groups', 'price' => 110, 'term_months' => 1, 'units_included' => 5, 'is_active' => true, 'is_free' => false,
         ])->assertOk();
 
         $this->artisan('modules:enforce-addons')->assertSuccessful();

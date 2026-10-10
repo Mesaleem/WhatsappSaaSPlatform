@@ -23,6 +23,12 @@ class WhatsAppSession extends Model
         'meta_waba_id',
         'meta_access_token',
         'meta_webhook_verify_token',
+        // Phase 1 — Meta Channel Creation (per-tenant Meta App model):
+        // each tenant's own Facebook App credentials for WhatsApp
+        // Embedded Signup. See 2026_10_09_120000_add_meta_app_credentials_*.
+        'meta_app_id',
+        'meta_app_secret',
+        'meta_config_id',
     ];
 
     /**
@@ -50,6 +56,11 @@ class WhatsAppSession extends Model
         // plaintext, and adding the cast would make every existing row
         // fail to decrypt on read.
         'meta_webhook_verify_token',
+        // Phase 1 — tenant's own Meta App Secret. Same defense-in-depth
+        // reasoning as meta_access_token above: never serializes, and
+        // given the `encrypted` cast below (a fresh column, no legacy
+        // plaintext rows to break).
+        'meta_app_secret',
     ];
 
     protected function casts(): array
@@ -59,6 +70,10 @@ class WhatsAppSession extends Model
             // Laravel's built-in encrypted cast — Crypt::encryptString() on
             // write, Crypt::decryptString() on read, transparently.
             'meta_access_token' => 'encrypted',
+            // Phase 1 — fresh column, no legacy plaintext rows, so unlike
+            // meta_webhook_verify_token this one gets the encrypted cast
+            // from day one.
+            'meta_app_secret' => 'encrypted',
         ];
     }
 
@@ -70,5 +85,18 @@ class WhatsAppSession extends Model
     public function hasMetaConfigured(): bool
     {
         return (bool) ($this->meta_phone_number_id && $this->meta_access_token);
+    }
+
+    /**
+     * Phase 1 — true once the tenant has pasted their own Facebook App's
+     * credentials, which is the prerequisite step before the "Connect
+     * with Facebook" (Embedded Signup) button can do anything. Separate
+     * from hasMetaConfigured(): a tenant can have App credentials saved
+     * but not yet have completed Embedded Signup (no WABA/phone number
+     * chosen yet), and vice versa is impossible under the new flow.
+     */
+    public function hasMetaAppConfigured(): bool
+    {
+        return (bool) ($this->meta_app_id && $this->meta_app_secret && $this->meta_config_id);
     }
 }

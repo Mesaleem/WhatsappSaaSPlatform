@@ -26,7 +26,7 @@ return [
     // provider is refused (AI_PROVIDER_UNAVAILABLE).
     // Phase 8 Task 8: gemini added to the default list (still needs its key
     // and AI_PROVIDER=gemini, or an explicit per-call provider, to be used).
-    'enabled' => array_values(array_filter(array_map('trim', explode(',', (string) env('AI_ENABLED_PROVIDERS', 'openai,anthropic,gemini'))))),
+    'enabled' => array_values(array_filter(array_map('trim', explode(',', (string) env('AI_ENABLED_PROVIDERS', 'openai,anthropic,gemini,groq'))))),
 
     // Per-request HTTP timeout, seconds.
     'timeout' => (int) env('AI_TIMEOUT', 30),
@@ -71,6 +71,19 @@ return [
             // Phase 8 Task 9 — embeddings (knowledge bases)
             'embedding_model' => env('AI_GEMINI_EMBEDDING_MODEL', 'gemini-embedding-001'),
             'embedding_dimensions' => env('AI_GEMINI_EMBEDDING_DIMENSIONS'),
+        ],
+        // Phase 8 Task 12 — Groq (OpenAI-compatible chat-completions API).
+        // No embedding_model: Groq has no embeddings endpoint (see
+        // GroqProvider's docblock) — AiManager::embeddingProvider('groq')
+        // correctly throws AI_EMBEDDINGS_UNSUPPORTED, same as anthropic.
+        // MODEL PLACEHOLDER, OWNER MUST VERIFY: Groq deprecates/renames
+        // hosted model ids faster than the other vendors (this is the
+        // exact failure mode Task 12 exists to make DB-fixable without a
+        // redeploy — see ai_provider_settings, added later in this task).
+        'groq' => [
+            'api_key' => env('GROQ_API_KEY'),
+            'base_url' => env('GROQ_BASE_URL', 'https://api.groq.com/openai/v1'),
+            'model' => env('AI_GROQ_MODEL', 'llama-3.3-70b-versatile'),
         ],
     ],
 

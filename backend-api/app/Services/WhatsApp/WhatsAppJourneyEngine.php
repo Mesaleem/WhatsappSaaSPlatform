@@ -20,6 +20,7 @@ use App\Services\Access\JourneyRuntimeEntitlement;
 use App\Services\Crm\CaptureLeadLinker;
 use App\Services\Messaging\InboundEventGate;
 use App\Services\Messaging\MessageQuotaService;
+use App\Services\Templates\TemplateMessageDispatcher;
 use Closure;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
@@ -247,7 +248,16 @@ class WhatsAppJourneyEngine
     public const RESUME_LEASE_SECONDS = 600;
 
     /** Phase 7 Task 7 — nodes whose execution has an external side effect (node_started is recorded). */
-    private const SIDE_EFFECT_NODE_TYPES = ['message', 'question', 'save_lead'];
+    private const SIDE_EFFECT_NODE_TYPES = ['message', 'question', 'save_lead', 'list', 'reply_button'];
+
+    /**
+     * Task 24 — Connexxa parity. The node types that ever leave a
+     * session PAUSED awaiting a reply (current_node_id set, status
+     * ACTIVE, wait_until null — see advance()'s 'question'/'list'/
+     * 'reply_button' branches). continueSession() refuses to resume at
+     * anything outside this list.
+     */
+    private const PAUSABLE_NODE_TYPES = ['question', 'list', 'reply_button'];
 
     /**
      * P5-7 — how long a session paused at a question waits for the answer.
@@ -748,6 +758,16 @@ class WhatsAppJourneyEngine
 
     private function expireUnansweredQuestion(WhatsAppFlowSession $session): bool
     {
+        // Task 24 — this sweep is type-agnostic by its own query (any
+        // active, unleased, stale session), and now covers 'list'/
+        // 'reply_button' pauses the same way it already covered
+        // 'question'. $this->nodeType is only a best-effort trace label
+        // here (the session's own current_node_id/pinned graph is not
+        // loaded for a sweep that is pure housekeeping — see this
+        // method's docblock), so it keeps its original value rather than
+        // guessing; the message itself no longer names 'question'
+        // specifically, since it is just as true of an unanswered list
+        // or button prompt.
         $this->nodeType = 'question';
 
         // Guarded: only a session still awaiting a reply (active, no lease)
@@ -756,7 +776,7 @@ class WhatsAppJourneyEngine
             ->where('status', WhatsAppFlowSession::STATUS_ACTIVE)
             ->whereNull('wait_until')
             ->where(fn ($q) => $q->whereNull('last_interaction_at')->orWhere('last_interaction_at', '<=', now()->subSeconds(self::QUESTION_REPLY_TTL_SECONDS)))
-            ->update(['status' => WhatsAppFlowSession::STATUS_EXPIRED, 'last_error' => 'No reply within '.intdiv(self::QUESTION_REPLY_TTL_SECONDS, 3600).' hours — the question expired.']) === 1;
+            ->update(['status' => WhatsAppFlowSession::STATUS_EXPIRED, 'last_error' => 'No reply within '.intdiv(self::QUESTION_REPLY_TTL_SECONDS, 3600).' hours — expired waiting for a reply.']) === 1;
 
         if ($written) {
             $session->refresh();
@@ -1200,13 +1220,19 @@ class WhatsAppJourneyEngine
     }
 
     /**
-     * Resumes a paused session: the current_node_id MUST be a 'question'
-     * node (the only type that ever leaves a session paused) — captures
-     * the reply, validates it, and advances from there. Always returns
-     * true: once a session exists, this engine owns the conversation for
-     * that phone number until it completes/expires, even if the reply
-     * fails validation (the tenant's customer gets a re-prompt, not a
-     * silent fall-through to unrelated chatbot_rules).
+     * Resumes a paused session: the current_node_id MUST be one of the
+     * PAUSABLE_NODE_TYPES (the only types that ever leave a session
+     * paused) — captures the reply and advances from there. Always
+     * returns true: once a session exists, this engine owns the
+     * conversation for that phone number until it completes/expires,
+     * even if the reply fails validation/matches no option (the
+     * tenant's customer gets a re-prompt, not a silent fall-through to
+     * unrelated chatbot_rules).
+     *
+     * Task 24 — 'list'/'reply_button' joined 'question' as pausable
+     * types; their reply is routed by WHICH option was picked
+     * (continueInteractiveOptionReply()), not captured into a variable
+     * and sent down one NEXT edge the way a question's answer is.
      */
     private function continueSession(WhatsAppFlowSession $session, string $incomingMessage): bool
     {
@@ -1247,14 +1273,15 @@ class WhatsAppJourneyEngine
         // Phase 7 Task 2 — answer against the version the question was asked from.
         $graph = $this->graphFor($session, $flow);
         $node = $graph->findNode($session->current_node_id);
+        $nodeType = $node['type'] ?? null;
 
-        if (! $node || ($node['type'] ?? null) !== 'question') {
-            Log::warning("WhatsAppJourneyEngine: session #{$session->id} paused at a non-question node — marking expired.", [
+        if (! $node || ! in_array($nodeType, self::PAUSABLE_NODE_TYPES, true)) {
+            Log::warning("WhatsAppJourneyEngine: session #{$session->id} paused at a non-pausable node — marking expired.", [
                 'flow_id' => $flow->id,
                 'current_node_id' => $session->current_node_id,
             ]);
-            $this->nodeType = $node['type'] ?? null;
-            $this->expire($session, "A reply arrived while the session was stopped at node '{$session->current_node_id}', which is not a question (an interrupted run).", 'internal_error');
+            $this->nodeType = $nodeType;
+            $this->expire($session, "A reply arrived while the session was stopped at node '{$session->current_node_id}', which cannot await a reply (an interrupted run).", 'internal_error');
 
             return true;
         }
@@ -1262,10 +1289,16 @@ class WhatsAppJourneyEngine
         $data = $node['data'] ?? [];
         $trimmed = trim($incomingMessage);
         $this->runSession = $session;
+        $this->nodeType = $nodeType;
+
+        // Task 24 — 'list'/'reply_button' route by the TAPPED option, not
+        // a captured variable + single NEXT edge; see that method's own
+        // docblock for the matching/fallback rules.
+        if ($nodeType !== 'question') {
+            return $this->continueInteractiveOptionReply($account, $flow, $session, $graph, $node, $trimmed);
+        }
 
         $validationError = $this->validateAnswer($trimmed, $data['validation'] ?? null);
-
-        $this->nodeType = 'question';
 
         if ($validationError !== null) {
             $subscription = $account->currentSubscription;
@@ -1297,6 +1330,146 @@ class WhatsAppJourneyEngine
         $this->runImmediate($account, $flow, $session, (string) $nextEdge['target']);
 
         return true;
+    }
+
+    /**
+     * Task 24 — Connexxa parity. Resumes a paused 'list'/'reply_button'
+     * node: matches the incoming text against each of the node's own
+     * options (its row/button title, falling back to id — the SAME two
+     * fields MetaWebhookController::handleInboundMessages() already
+     * flattens an interactive reply into, in that same order), trimmed
+     * and case-insensitively exactly like JourneyConditionEvaluator's
+     * own text comparisons. The FIRST matching option's position
+     * selects its own fixed handle (JourneyActionConfig::
+     * LIST_ROW_HANDLES / REPLY_BUTTON_HANDLES) — never a captured
+     * variable or a single NEXT edge, unlike 'question'.
+     *
+     * NO MATCH re-prompts (re-sends the short reminder + the SAME
+     * interactive message again) rather than guessing or silently
+     * stranding the session: a genuine WhatsApp button/list tap always
+     * echoes back one of the node's own option ids/titles, so a
+     * mismatch only happens from free-text typed in reply, a version
+     * drift between send and reply, or a non-Meta engine — the same
+     * "re-ask, don't guess" contract validateAnswer() already gives a
+     * malformed 'question' reply.
+     *
+     * NO EDGE on the matched handle (the author never wired that
+     * option) is a VALID dead end — same settled semantics as an
+     * unwired 'conditional'/'classifier' branch (resolveConditionalTarget()/
+     * resolveConditionalGroupsTarget()): the session completes, nothing
+     * downstream runs, nothing is guessed.
+     *
+     * @param array<string, mixed> $node
+     */
+    private function continueInteractiveOptionReply(Account $account, WhatsAppFlow $flow, WhatsAppFlowSession $session, WhatsAppFlowVersion|WhatsAppFlow $graph, array $node, string $trimmed): bool
+    {
+        $type = (string) $node['type'];
+        $data = is_array($node['data'] ?? null) ? $node['data'] : [];
+        $options = $type === 'list' ? $this->flattenListRows($data) : (is_array($data['buttons'] ?? null) ? $data['buttons'] : []);
+        $handles = $type === 'list' ? JourneyActionConfig::LIST_ROW_HANDLES : JourneyActionConfig::REPLY_BUTTON_HANDLES;
+
+        $index = $this->matchInteractiveOption($options, $trimmed);
+
+        if ($index === null) {
+            $subscription = $account->currentSubscription;
+            $this->sendText($account, $subscription, $session->phone_number, 'Please choose one of the options below.', $flow->id);
+            $type === 'list'
+                ? $this->sendListNode($account, $subscription, $session->phone_number, $data, $flow->id)
+                : $this->sendReplyButtonsNode($account, $subscription, $session->phone_number, $data, $flow->id);
+            $this->trace($session, Ev::REPLY_RECEIVED, ['node_type' => $type, 'result' => 'invalid', 'details' => ['dispatch_log_id' => $this->lastDispatchLogId]]);
+
+            return true;
+        }
+
+        $this->trace($session, Ev::REPLY_RECEIVED, ['node_type' => $type, 'result' => 'answered']);
+
+        $handle = $handles[$index] ?? null;
+        $matches = $handle === null ? [] : array_values(array_filter(
+            $graph->outgoingEdges($node['id']),
+            fn (array $edge) => ($edge['sourceHandle'] ?? null) === $handle,
+        ));
+
+        if (count($matches) > 1) {
+            $this->failSession($session, "Node '{$node['id']}' ({$type}): more than one connection leaves the '{$handle}' option.", 'invalid_configuration');
+
+            return true;
+        }
+
+        $session->last_interaction_at = now();
+
+        if ($matches === []) {
+            $this->nodeSucceeded($session, 'dead_end');
+            $this->complete($session);
+
+            return true;
+        }
+
+        // Phase 7 Task 9 — run lease, written with the first checkpoint (same as the question path above).
+        $session->wait_until = $this->runLease();
+        $this->runImmediate($account, $flow, $session, (string) $matches[0]['target']);
+
+        return true;
+    }
+
+    /**
+     * Task 24 — the incoming text against each option's title (falling
+     * back to id), trimmed and case-insensitively, in the options'
+     * stored order. Returns the index of the FIRST match, or null.
+     *
+     * @param array<int, mixed> $options each a ['id' => ..., 'title' => ...] (list row / reply button)
+     */
+    private function matchInteractiveOption(array $options, string $incoming): ?int
+    {
+        $needle = mb_strtolower(trim($incoming));
+
+        if ($needle === '') {
+            return null;
+        }
+
+        foreach (array_values($options) as $i => $option) {
+            if (! is_array($option)) {
+                continue;
+            }
+
+            $title = mb_strtolower(trim((string) ($option['title'] ?? '')));
+            $id = mb_strtolower(trim((string) ($option['id'] ?? '')));
+
+            if (($title !== '' && $title === $needle) || ($id !== '' && $id === $needle)) {
+                return $i;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Task 24 — a 'list' node's rows, flattened across every section in
+     * document order (the SAME order sendListNode() builds the Cloud
+     * API payload in, and the SAME order the frontend registry's
+     * sourceHandles() maps to LIST_ROW_HANDLES on the canvas) — so
+     * option index i here is always row i's own handle.
+     *
+     * @param array<string, mixed> $data
+     * @return array<int, array<string, mixed>>
+     */
+    private function flattenListRows(array $data): array
+    {
+        $sections = is_array($data['sections'] ?? null) ? $data['sections'] : [];
+        $rows = [];
+
+        foreach ($sections as $section) {
+            if (! is_array($section)) {
+                continue;
+            }
+
+            foreach (is_array($section['rows'] ?? null) ? $section['rows'] : [] as $row) {
+                if (is_array($row)) {
+                    $rows[] = $row;
+                }
+            }
+        }
+
+        return $rows;
     }
 
     /**
@@ -1720,6 +1893,30 @@ class WhatsAppJourneyEngine
                 return;
             }
 
+            // Task 24 — Connexxa parity. 'list' / 'reply_button': an
+            // interactive send that PAUSES the session for a reply, same
+            // as 'question' immediately above — as distinct from every
+            // other interactive-shaped node (catalog/product/flow below),
+            // which sends and continues straight on. The paused reply is
+            // routed by the OPTION the customer picked, not a single NEXT
+            // edge — see continueSession()'s 'list'/'reply_button' branch.
+            if ($type === 'list' || $type === 'reply_button') {
+                $sent = $type === 'list'
+                    ? $this->sendListNode($account, $subscription, $session->phone_number, $data, $flow->id)
+                    : $this->sendReplyButtonsNode($account, $subscription, $session->phone_number, $data, $flow->id);
+                $this->requireSent($resumed, $sent, $node['id']);
+                $this->nodeSucceeded($session, 'prompted');
+
+                $this->transition($session, [
+                    'current_node_id' => $node['id'],
+                    'status' => WhatsAppFlowSession::STATUS_ACTIVE,
+                    'wait_until' => null,
+                    'last_interaction_at' => now(),
+                ]);
+
+                return;
+            }
+
             if ($type === 'condition' || $type === 'conditional') {
                 // Phase 7 Task 4 — both branching nodes go through the one
                 // evaluator, against the session's own context, on the
@@ -1844,7 +2041,16 @@ class WhatsAppJourneyEngine
                 // Node entitlement (capability/provider) was re-checked above
                 // for every catalog node (P5-7; Phase 7 Task 8 semantics).
                 if ($type === 'text') {
-                    $text = JourneyActionConfig::renderText((string) $data['text'], $session->context_data ?? []);
+                    // Task 22 — var_system.* (Connexxa parity): the one
+                    // namespace a text node can reach that var_local
+                    // (the session's own collected answers) never could.
+                    $varSystem = JourneyActionConfig::systemVariables(
+                        $session->phone_number,
+                        (int) $session->account_id,
+                        (int) $session->flow_id,
+                        (int) $session->id,
+                    );
+                    $text = JourneyActionConfig::renderText((string) $data['text'], $session->context_data ?? [], $varSystem);
 
                     if (trim($text) === '') {
                         $this->failSession($session, "Node '{$nodeId}' (text): the message is empty once its variables are filled in.", 'invalid_configuration');
@@ -1859,6 +2065,257 @@ class WhatsAppJourneyEngine
                     $sent = $this->sendMedia($account, $subscription, $session->phone_number, (string) $type, $data, $flow->id);
                 }
 
+                $this->requireSent($resumed, $sent, $node['id']);
+                $this->nodeSucceeded($session, 'sent');
+
+                $next = Collection::make($graph->outgoingEdges($node['id']))->first();
+
+                if (! $next) {
+                    $this->complete($session);
+
+                    return;
+                }
+
+                $nodeId = (string) $next['target'];
+
+                continue;
+            }
+
+            // Task 26 — Connexxa parity, scoped: the 'code' node. Pure,
+            // synchronous, in-process computation (JourneyCodeSandbox —
+            // NOT real JavaScript, see that class's own docblock) — no
+            // outbound send, so unlike every node above this one it has
+            // no entry in SIDE_EFFECT_NODE_TYPES and needs no queued
+            // wait (unlike the AI nodes below, which call a real
+            // provider). Config was already checked above
+            // (JourneyActionConfig::error()); a script that is
+            // well-formed at save time can still fail at run time
+            // (e.g. a variable path that resolves to a non-numeric
+            // string used in arithmetic) — same "never guess past a
+            // bad definition" contract as the two branching nodes'
+            // InvalidJourneyCondition.
+            if ($type === 'code') {
+                $varSystem = JourneyActionConfig::systemVariables(
+                    $session->phone_number,
+                    (int) $session->account_id,
+                    (int) $session->flow_id,
+                    (int) $session->id,
+                );
+
+                try {
+                    $output = JourneyCodeSandbox::run((string) $data['code'], $session->context_data ?? [], $varSystem);
+                } catch (JourneyCodeSandboxException $e) {
+                    $this->failSession($session, "Code node '{$node['id']}': ".$e->getMessage(), 'invalid_configuration');
+
+                    return;
+                }
+
+                $context = $session->context_data ?? [];
+                $context[(string) $data['outputVariable']] = $output;
+                $session->forceFill(['context_data' => $context]);
+                $this->nodeSucceeded($session, 'computed');
+
+                $next = Collection::make($graph->outgoingEdges($node['id']))->first();
+
+                if (! $next) {
+                    $this->complete($session);
+
+                    return;
+                }
+
+                $nodeId = (string) $next['target'];
+
+                continue;
+            }
+
+            // Phase 3 — Meta Template. Re-uses the same send-gate
+            // classification as plain send() above (so requireSent()'s
+            // retry/permanent decision is identical), then the EXISTING
+            // TemplateMessageDispatcher -- the shared send path the
+            // internal Send Alert form and the public Template Message
+            // API already use -- rather than re-implementing template
+            // resolution, Meta component translation or quota consumption
+            // a second time inside this engine.
+            if ($type === 'template') {
+                $this->trace($session, Ev::NODE_STARTED, ['node_type' => $type]);
+
+                $refusal = app(JourneySendGate::class)->refusal($account, $subscription);
+
+                if ($refusal !== null) {
+                    if ($refusal['category'] === 'entitlement_blocked' && $this->runSession) {
+                        $this->auditDecision($this->runSession, (int) $account->id, false, [
+                            'action' => 'journey.node.send', 'node_type' => $type, 'reason' => $refusal['reason'],
+                            'category' => $account->isAdministrativelyActive() ? 'no_active_subscription' : 'account_suspended',
+                            'provider' => $subscription?->engine_type,
+                        ]);
+                    }
+
+                    $this->lastSendError = $refusal['reason'];
+                    $this->lastSendCategory = $refusal['category'];
+                    $this->lastSendRetryable = $refusal['retryable'];
+                    $this->lastDispatchLogId = (int) MessageDispatchLog::record($account->id, 'journey', $session->phone_number, success: false, errorReason: $account->hasActiveSubscription() ? 'Quota exhausted.' : 'No active subscription.', referenceType: 'whatsapp_flow', referenceId: $flow->id, messagePreview: '[template]')->id;
+
+                    $sent = false;
+                } else {
+                    $templateId = (int) ($data['templateId'] ?? 0);
+                    $variables = is_array($data['variables'] ?? null) ? $data['variables'] : [];
+
+                    $result = TemplateMessageDispatcher::dispatch($account->id, $templateId, $session->phone_number, $variables, 'journey');
+                    $sent = $result['status'] === 'sent';
+
+                    if ($sent) {
+                        $this->lastDispatchLogId = $result['dispatch_log_id'] ?? null;
+                    } else {
+                        // TemplateMessageDispatcher already wrote its own
+                        // MessageDispatchLog row (source 'journey') for
+                        // this failure; its id is not part of that
+                        // method's return shape on failure, so
+                        // lastDispatchLogId stays null here -- a
+                        // disclosed, pre-existing gap in that method, not
+                        // something to change inside this engine.
+                        $this->lastSendError = $result['message'] ?? 'The template could not be sent.';
+                        $this->lastSendCategory = 'provider_failure';
+                        $this->lastSendRetryable = false;
+                        $this->lastDispatchLogId = null;
+                    }
+                }
+
+                $this->requireSent($resumed, $sent, $node['id']);
+                $this->nodeSucceeded($session, 'sent');
+
+                $next = Collection::make($graph->outgoingEdges($node['id']))->first();
+
+                if (! $next) {
+                    $this->complete($session);
+
+                    return;
+                }
+
+                $nodeId = (string) $next['target'];
+
+                continue;
+            }
+
+            // Phase 4 — Meta Catalog/Product. Builds a Cloud API
+            // 'interactive' payload and sends it through the SAME send()
+            // primitive the media nodes already use above (gate, driver
+            // resolution, quota consumption, MessageDispatchLog — nothing
+            // new, no second send path). 'product' is a single-product
+            // detail message; 'catalog' sends a multi-product list when
+            // productIds are configured, or the whole catalog otherwise.
+            if ($type === 'catalog' || $type === 'product') {
+                $this->trace($session, Ev::NODE_STARTED, ['node_type' => $type]);
+
+                $body = trim((string) ($data['body'] ?? ''));
+
+                if ($type === 'product') {
+                    $metaData = [
+                        'type' => 'interactive',
+                        'interactive' => array_filter([
+                            'type' => 'product',
+                            'body' => $body !== '' ? ['text' => $body] : null,
+                            'action' => [
+                                'catalog_id' => (string) ($data['catalogId'] ?? ''),
+                                'product_retailer_id' => (string) ($data['productId'] ?? ''),
+                            ],
+                        ], static fn ($v) => $v !== null),
+                    ];
+                    $preview = $body !== '' ? $body : '[product]';
+                } else {
+                    $productIds = array_values(array_filter(array_map(
+                        'strval',
+                        is_array($data['productIds'] ?? null) ? $data['productIds'] : [],
+                    ), static fn (string $id) => $id !== ''));
+
+                    if ($productIds !== []) {
+                        $metaData = [
+                            'type' => 'interactive',
+                            'interactive' => [
+                                'type' => 'product_list',
+                                // Meta requires body text on a product_list message.
+                                'body' => ['text' => $body !== '' ? $body : 'Check out these products.'],
+                                'action' => [
+                                    'catalog_id' => (string) ($data['catalogId'] ?? ''),
+                                    // One section: this node has no section/title
+                                    // configuration in the builder today (see
+                                    // ListConfigModal for the pattern a future
+                                    // multi-section UI would follow).
+                                    'sections' => [[
+                                        'title' => 'Products',
+                                        'product_items' => array_map(
+                                            static fn (string $id) => ['product_retailer_id' => $id],
+                                            $productIds,
+                                        ),
+                                    ]],
+                                ],
+                            ],
+                        ];
+                    } else {
+                        $metaData = [
+                            'type' => 'interactive',
+                            'interactive' => array_filter([
+                                'type' => 'catalog_message',
+                                'body' => $body !== '' ? ['text' => $body] : null,
+                                'action' => ['name' => 'catalog_message'],
+                            ], static fn ($v) => $v !== null),
+                        ];
+                    }
+
+                    $preview = $body !== '' ? $body : '[catalog]';
+                }
+
+                $sent = $this->send($account, $subscription, $session->phone_number, $preview, $metaData, $flow->id, $preview);
+                $this->requireSent($resumed, $sent, $node['id']);
+                $this->nodeSucceeded($session, 'sent');
+
+                $next = Collection::make($graph->outgoingEdges($node['id']))->first();
+
+                if (! $next) {
+                    $this->complete($session);
+
+                    return;
+                }
+
+                $nodeId = (string) $next['target'];
+
+                continue;
+            }
+
+            // Phase 5 — Meta Flow. Sends a Cloud API 'interactive' type
+            // 'flow' message through the same send() primitive as every
+            // other node above. flow_action is always 'navigate' — this
+            // app stores no Flow data-exchange endpoint of its own, so
+            // 'data_exchange' is not an option here. flow_token only has
+            // to be unique per send; it is not looked up anywhere later.
+            if ($type === 'flow') {
+                $this->trace($session, Ev::NODE_STARTED, ['node_type' => $type]);
+
+                $body = trim((string) ($data['body'] ?? ''));
+                $flowToken = 'journey_'.$session->id.'_'.$node['id'].'_'.time();
+
+                $metaData = [
+                    'type' => 'interactive',
+                    'interactive' => array_filter([
+                        'type' => 'flow',
+                        'body' => $body !== '' ? ['text' => $body] : null,
+                        'action' => [
+                            'name' => 'flow',
+                            'parameters' => [
+                                'flow_message_version' => '3',
+                                'flow_token' => $flowToken,
+                                'flow_id' => (string) ($data['flowId'] ?? ''),
+                                'flow_cta' => (string) ($data['flowCta'] ?? ''),
+                                'flow_action' => 'navigate',
+                                'flow_action_payload' => [
+                                    'screen' => (string) ($data['screenName'] ?? ''),
+                                ],
+                            ],
+                        ],
+                    ], static fn ($v) => $v !== null),
+                ];
+
+                $preview = $body !== '' ? $body : '[flow]';
+                $sent = $this->send($account, $subscription, $session->phone_number, $preview, $metaData, $flow->id, $preview);
                 $this->requireSent($resumed, $sent, $node['id']);
                 $this->nodeSucceeded($session, 'sent');
 
@@ -1934,14 +2391,52 @@ class WhatsAppJourneyEngine
      * `conditional` node: rules combined by `match` (all = AND, any = OR),
      * then exactly the edge on the resulting "true"/"false" handle.
      *
+     * Phase: multi-group IF/ELSE-IF/ELSE (Connexxa parity). A non-empty
+     * `data.groups` switches this node into multi-branch mode, dispatched
+     * to resolveConditionalGroupsTarget() below; the legacy `conditions`/
+     * `match` keys are untouched and remain the sole path for every
+     * already-saved node, which never has a `groups` key.
+     *
      * @param array<int, array<string, mixed>> $edges
      * @param array<string, mixed> $data
      * @throws InvalidJourneyCondition
      */
     private function resolveConditionalTarget(array $edges, array $data, WhatsAppFlowSession $session): ?string
     {
+        if (! empty($data['groups'])) {
+            return $this->resolveConditionalGroupsTarget($edges, $data['groups'], $session);
+        }
+
         $result = $this->conditions->evaluateAll($data['conditions'] ?? null, $data['match'] ?? null, $session->context_data ?? []);
         $handle = $result ? 'true' : 'false';
+
+        $branch = array_values(array_filter($edges, fn (array $edge) => ($edge['sourceHandle'] ?? null) === $handle));
+
+        if (count($branch) > 1) {
+            throw new InvalidJourneyCondition("More than one connection leaves the '{$handle}' branch.");
+        }
+
+        return $branch === [] ? null : (string) $branch[0]['target'];
+    }
+
+    /**
+     * `conditional` node, multi-group mode: groups are tested top-down,
+     * first match wins (JourneyConditionEvaluator::evaluateGroups()); no
+     * match falls to JourneyActionConfig::CONDITIONAL_ELSE_HANDLE. The
+     * matched group's index maps to JourneyActionConfig::
+     * CONDITIONAL_GROUP_HANDLES[$index] exactly as the canvas wires it.
+     *
+     * @param array<int, array<string, mixed>> $edges
+     * @param array<int, array<string, mixed>> $groups
+     * @throws InvalidJourneyCondition
+     */
+    private function resolveConditionalGroupsTarget(array $edges, array $groups, WhatsAppFlowSession $session): ?string
+    {
+        $index = $this->conditions->evaluateGroups($groups, $session->context_data ?? []);
+
+        $handle = $index === null
+            ? JourneyActionConfig::CONDITIONAL_ELSE_HANDLE
+            : (JourneyActionConfig::CONDITIONAL_GROUP_HANDLES[$index] ?? JourneyActionConfig::CONDITIONAL_ELSE_HANDLE);
 
         $branch = array_values(array_filter($edges, fn (array $edge) => ($edge['sourceHandle'] ?? null) === $handle));
 
@@ -2086,6 +2581,82 @@ class WhatsAppJourneyEngine
         }
 
         return $this->send($account, $subscription, $phone, $promptText, $metaData, $flowId);
+    }
+
+    /**
+     * Task 24 — the 'list' palette node: a Cloud API interactive list
+     * message built DIRECTLY from the node's own config shape
+     * (body/buttonText/sections — ListNodeConfig in the frontend
+     * registry), as distinct from the legacy 'question' node's
+     * input_type:'list' above (prompt_text/button_text/options, one flat
+     * section). Same wire shape (Cloud API 'interactive' type 'list'),
+     * different source fields, so this is its own small builder rather
+     * than a reuse of sendQuestion() with field-name translation.
+     *
+     * @param array<string, mixed> $data
+     */
+    private function sendListNode(Account $account, ?Subscription $subscription, string $phone, array $data, ?int $flowId): bool
+    {
+        $body = (string) ($data['body'] ?? '');
+        $sections = is_array($data['sections'] ?? null) ? $data['sections'] : [];
+
+        $metaData = [
+            'type' => 'interactive',
+            'interactive' => [
+                'type' => 'list',
+                'body' => ['text' => $body],
+                'action' => [
+                    'button' => (string) ($data['buttonText'] ?? 'Choose'),
+                    'sections' => Collection::make($sections)->map(fn ($section) => [
+                        'title' => (string) (is_array($section) ? ($section['title'] ?? '') : ''),
+                        'rows' => Collection::make(is_array($section) ? ($section['rows'] ?? []) : [])
+                            ->map(fn ($row) => array_filter([
+                                'id' => (string) (is_array($row) ? ($row['id'] ?? '') : ''),
+                                'title' => (string) (is_array($row) ? ($row['title'] ?? '') : ''),
+                                'description' => is_array($row) && ! empty($row['description']) ? (string) $row['description'] : null,
+                            ], static fn ($v) => $v !== null))
+                            ->values()->all(),
+                    ])->values()->all(),
+                ],
+            ],
+        ];
+
+        return $this->send($account, $subscription, $phone, $body, $metaData, $flowId, $body !== '' ? $body : '[list]');
+    }
+
+    /**
+     * Task 24 — the 'reply_button' palette node: a Cloud API quick-reply
+     * message built from the node's own config shape (body/buttons —
+     * ReplyButtonNodeConfig in the frontend registry). Capped at
+     * JourneyActionConfig::REPLY_BUTTON_HANDLES's length (3), the same
+     * WhatsApp hard limit MAX_INTERACTIVE_BUTTONS already enforces for
+     * the legacy question node above.
+     *
+     * @param array<string, mixed> $data
+     */
+    private function sendReplyButtonsNode(Account $account, ?Subscription $subscription, string $phone, array $data, ?int $flowId): bool
+    {
+        $body = (string) ($data['body'] ?? '');
+        $buttons = is_array($data['buttons'] ?? null) ? $data['buttons'] : [];
+
+        $metaData = [
+            'type' => 'interactive',
+            'interactive' => [
+                'type' => 'button',
+                'body' => ['text' => $body],
+                'action' => [
+                    'buttons' => Collection::make($buttons)->take(self::MAX_INTERACTIVE_BUTTONS)->map(fn ($button) => [
+                        'type' => 'reply',
+                        'reply' => [
+                            'id' => (string) (is_array($button) ? ($button['id'] ?? '') : ''),
+                            'title' => mb_substr((string) (is_array($button) ? ($button['title'] ?? '') : ''), 0, self::MAX_BUTTON_TITLE_LENGTH),
+                        ],
+                    ])->values()->all(),
+                ],
+            ],
+        ];
+
+        return $this->send($account, $subscription, $phone, $body, $metaData, $flowId, $body !== '' ? $body : '[buttons]');
     }
 
     /**

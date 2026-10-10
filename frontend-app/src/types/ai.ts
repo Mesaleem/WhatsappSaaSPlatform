@@ -47,3 +47,90 @@ export interface GenerateAdCopyResult {
   provider: string;
   variants: AdCopyVariant[];
 }
+
+/**
+ * Phase 8 Task 12 (continued) — Super Admin's platform-level AI provider/
+ * model settings (AiGatewayController). Mirrors SocialProviderConfigRow's
+ * shape/contract (types/social.ts) for the same reason that controller
+ * mirrors SocialGatewayController: a DB-editable override ahead of
+ * config('ai.*'), so a deprecated/renamed model or a rotated key is fixed
+ * from this screen with no env change or redeploy.
+ */
+export type AiProvider = 'openai' | 'anthropic' | 'gemini' | 'groq';
+
+export interface AiProviderSettingsRow {
+  provider: AiProvider;
+  /** null = no platform override; AI_ENABLED_PROVIDERS decides. true/false = an explicit Super Admin override either way. */
+  is_enabled: boolean | null;
+  model: string | null;
+  allowed_models: string[];
+  api_key_set: boolean;
+  base_url: string | null;
+  tokens_per_credit_override: number | null;
+  notes: string | null;
+  updated_by: number | null;
+  updated_at: string | null;
+}
+
+/** POST /api/admin/ai/provider-settings/{provider} — partial update; an omitted api_key is left untouched. */
+export interface UpdateAiProviderSettingsPayload {
+  is_enabled?: boolean | null;
+  model?: string | null;
+  allowed_models?: string[] | null;
+  api_key?: string | null;
+  base_url?: string | null;
+  tokens_per_credit_override?: number | null;
+  notes?: string | null;
+}
+
+/**
+ * Phase 8 Task 13 — "Generate with AI" draft for the Template Designer
+ * (AITemplateController). account_id is REQUIRED: it names which
+ * account's AI credits pay for the draft (AiAuthorizer has no "global
+ * AI" path), independent of which account the eventually-SAVED template
+ * belongs to — this endpoint never saves anything itself.
+ */
+export interface GenerateTemplateDraftPayload {
+  account_id: number;
+  purpose: string;
+  category: 'MARKETING' | 'UTILITY' | 'AUTHENTICATION';
+  tone?: string;
+  variable_keys?: string[];
+}
+
+/** provider: the AI provider that served the draft, or 'template' — the deterministic, zero-external-call fallback used when every configured provider is unavailable/failed/timed out (never charged). */
+export interface GenerateTemplateDraftResult {
+  provider: string;
+  title: string;
+  template_body: string;
+}
+
+/**
+ * Phase 8 Task 14 — "Generate with AI" draft for the Journey Builder
+ * (AIJourneyController). account_id is REQUIRED for the same reason as
+ * GenerateTemplateDraftPayload — AiAuthorizer has no "global AI" path.
+ * This endpoint never saves a WhatsAppFlow; the caller loads graph_data
+ * onto JourneyCanvasEditor's own canvas and the user reviews/saves it
+ * through the existing Save/Publish flow.
+ */
+export interface GenerateJourneyDraftPayload {
+  account_id: number;
+  description: string;
+  goal?: string;
+}
+
+/**
+ * graph_data is intentionally typed loosely here (not imported from
+ * ../types/journey) — JourneyCanvasEditor is the one place that knows
+ * how to merge it into its own JourneyGraph/JourneyNode/JourneyEdge
+ * shapes (adding the canvas-only 'end' node, etc.), and this file has no
+ * reason to import the Journey Builder's types just to pass them through
+ * unopened.
+ */
+export interface GenerateJourneyDraftResult {
+  provider: string;
+  graph_data: {
+    nodes: Array<{ id: string; type: string; position: { x: number; y: number }; data: Record<string, unknown> }>;
+    edges: Array<{ id: string; source: string; target: string; sourceHandle?: string }>;
+  };
+}

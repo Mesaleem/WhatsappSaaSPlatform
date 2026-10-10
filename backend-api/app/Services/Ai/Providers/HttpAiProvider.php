@@ -81,6 +81,8 @@ abstract class HttpAiProvider implements AiProvider
         try {
             $response = $send($request);
         } catch (ConnectionException $e) {
+            // No vendor response was ever received here - vendorHttpStatus
+            // stays null (the default).
             throw $this->isTimeout($e) ? AiException::timeout($this->name(), $e) : AiException::providerFailed($this->name(), $e);
         } catch (AiException $e) {
             throw $e;
@@ -89,7 +91,9 @@ abstract class HttpAiProvider implements AiProvider
         }
 
         if ($response->status() === 408 || $response->status() === 504) {
-            throw AiException::timeout($this->name());
+            // The vendor DID answer, with its own timeout-shaped status -
+            // carry it, unlike the connection-level case above.
+            throw AiException::timeout($this->name(), vendorHttpStatus: $response->status());
         }
 
         if (! $response->successful()) {

@@ -66,6 +66,14 @@ class RolePermissionSeeder extends Seeder
         // (SocialGatewayController — same tier as manage-billing-settings),
         // never a tenant's own connected social accounts.
         'manage-social-settings',
+        // Phase 8 Task 12 (continued) — platform-level AI provider/
+        // model settings (AiGatewayController). Super-Admin-only, same
+        // tier as manage-social-settings/manage-billing-settings, for
+        // the exact same reason: it is a platform credential/config
+        // vault, not a tenant-facing feature. Also granted by its own
+        // migration (add_manage_ai_settings_permission) — see that
+        // file's docblock for why both exist.
+        'manage-ai-settings',
         'manage-social-accounts',
         'launch-meta-ads',
         'manage-social-leads',

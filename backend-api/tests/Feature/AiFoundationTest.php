@@ -586,14 +586,37 @@ class AiFoundationTest extends TestCase
 
         $starterBundle = Plan::where('slug', 'starter')->firstOrFail()->capabilities->pluck('slug')->all();
 
+        // The seeded 'starter' plan already carries external_api without
+        // api_installations (deliberately — see Phase1FoundationSeeder's own
+        // docblock on Requirement 7). Backfill a concrete limit first, the
+        // same way a real Super Admin would via the admin UI, so the ai
+        // add/remove below only ever touches 'ai' and data.added/data.removed
+        // stay accurate.
+        if (! in_array('api_installations', $starterBundle, true)) {
+            $this->actingAs($superAdmin)->putJson('/api/admin/plans-management/starter', [
+                'capabilities' => [...$starterBundle, 'api_installations'],
+                'capability_limits' => ['api_installations' => 5],
+            ])->assertOk();
+            $starterBundle[] = 'api_installations';
+        }
+
         // Assign `ai` through the existing admin endpoint (reconciliation runs on the sync queue).
-        $this->actingAs($superAdmin)->putJson('/api/admin/plans-management/starter', ['capabilities' => [...$starterBundle, 'ai']])
-            ->assertOk()->assertJsonPath('data.added', ['ai']);
+        // capability_limits must be resupplied on every bundle-rewriting PUT —
+        // the controller resolves an unresupplied limit as null whenever
+        // `capabilities` is present at all (see PlanManagementController::
+        // update()'s own comment on $finalCapabilityLimits), so omitting it
+        // here would re-null api_installations' limit just backfilled above.
+        $this->actingAs($superAdmin)->putJson('/api/admin/plans-management/starter', [
+            'capabilities' => [...$starterBundle, 'ai'],
+            'capability_limits' => ['api_installations' => 5],
+        ])->assertOk()->assertJsonPath('data.added', ['ai']);
         $this->assertInstanceOf(AiAuthorization::class, $this->allow($customerUser->fresh()), 'entitlement granted to the plan\'s accounts');
 
         // Remove it again.
-        $this->actingAs($superAdmin)->putJson('/api/admin/plans-management/starter', ['capabilities' => $starterBundle])
-            ->assertOk()->assertJsonPath('data.removed', ['ai']);
+        $this->actingAs($superAdmin)->putJson('/api/admin/plans-management/starter', [
+            'capabilities' => $starterBundle,
+            'capability_limits' => ['api_installations' => 5],
+        ])->assertOk()->assertJsonPath('data.removed', ['ai']);
         $this->assertAiError(AiException::CAPABILITY_UNAVAILABLE, fn () => $this->allow($customerUser->fresh()));
 
         // A price-only edit leaves the bundle (and AI access) untouched.

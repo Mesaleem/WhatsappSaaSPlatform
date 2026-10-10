@@ -5,6 +5,7 @@ import whatsappService from '../../services/whatsappService';
 import QRScannerModal from '../../components/qr/QRScannerModal';
 import WhatsAppNumbersCard from '../../components/whatsapp/WhatsAppNumbersCard';
 import MetaConfigCard from '../../components/settings/MetaConfigCard';
+import MetaEmbeddedSignupCard from '../../components/settings/MetaEmbeddedSignupCard';
 import type { WhatsAppStatus } from '../../types/whatsapp';
 import ApiKeySetupBanner from '../../components/profile/ApiKeySetupBanner';
 
@@ -115,7 +116,12 @@ export default function WhatsAppSetupPage() {
             )}
           </div>
 
-          {engineType === 'meta' && <MetaConfigCard />}
+          {engineType === 'meta' && (
+            <>
+              <MetaEmbeddedSignupCard />
+              <MetaConfigCard />
+            </>
+          )}
 
           {engineType === 'qr' && (
             <div className="mt-6 border-t border-slate-200 pt-6">

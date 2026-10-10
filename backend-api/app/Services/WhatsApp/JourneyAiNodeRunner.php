@@ -140,6 +140,13 @@ final class JourneyAiNodeRunner
         $nodeId = (string) ($node['id'] ?? '');
         $data = is_array($node['data'] ?? null) ? $node['data'] : [];
         $context = is_array($session->context_data) ? $session->context_data : [];
+        // Task 22 — var_system.* (Connexxa parity); see JourneyActionConfig::systemVariables().
+        $varSystem = JourneyActionConfig::systemVariables(
+            $session->phone_number,
+            (int) $session->account_id,
+            (int) $session->flow_id,
+            (int) $session->id,
+        );
 
         $nodeKey = self::nodeKey($nodeId);
         $visit = self::visits($context, $nodeKey);
@@ -150,10 +157,10 @@ final class JourneyAiNodeRunner
         }
 
         if ($type === 'agent' && self::registeredAgentId($data) !== null) {
-            return $this->runRegisteredAgent($account, $session, $nodeId, $nodeKey, $visit, $operationKey, $data, $context, $persist);
+            return $this->runRegisteredAgent($account, $session, $nodeId, $nodeKey, $visit, $operationKey, $data, $context, $persist, $varSystem);
         }
 
-        $request = $this->request($type, $nodeId, $data, $context);
+        $request = $this->request($type, $nodeId, $data, $context, $varSystem);
 
         try {
             $authorization = $this->authorizer->forAccount($account, self::MODULE, self::SOURCE);
@@ -355,7 +362,7 @@ final class JourneyAiNodeRunner
      * @param  array<string, mixed>  $context
      * @return array{variable: string, text: string, node_key: string, visit: int, operation_id: int|null, credits_charged: int, agent_version_id: int, tool_calls: int, model_calls: int}
      */
-    private function runRegisteredAgent(Account $account, WhatsAppFlowSession $session, string $nodeId, string $nodeKey, int $visit, string $operationKey, array $data, array $context, ?Closure $persist): array
+    private function runRegisteredAgent(Account $account, WhatsAppFlowSession $session, string $nodeId, string $nodeKey, int $visit, string $operationKey, array $data, array $context, ?Closure $persist, array $varSystem = []): array
     {
         $agentId = (int) self::registeredAgentId($data);
 
@@ -387,7 +394,7 @@ final class JourneyAiNodeRunner
             throw new JourneyStepFailed("Node '{$nodeId}' (agent): the AI agent has no configuration.", 'invalid_configuration', false);
         }
 
-        $task = $this->agentTask($nodeId, $data, $context);
+        $task = $this->agentTask($nodeId, $data, $context, $varSystem);
         $steps = is_array($state['steps'] ?? null) ? array_values($state['steps']) : [];
 
         $write = function (array $steps) use (&$context, $nodeKey, $visit, $version, $agentId, $persist): bool {
@@ -451,14 +458,15 @@ final class JourneyAiNodeRunner
      *
      * @param  array<string, mixed>  $data
      * @param  array<string, mixed>  $context
+     * @param  array<string, mixed>  $varSystem  Task 22 — var_system.* (Connexxa parity)
      */
-    private function agentTask(string $nodeId, array $data, array $context): string
+    private function agentTask(string $nodeId, array $data, array $context, array $varSystem = []): string
     {
         $variables = array_filter($context, fn ($key) => is_string($key) && ! str_starts_with($key, '@'), ARRAY_FILTER_USE_KEY);
         $max = (int) config('ai.agents.max_input_chars', 4000);
         $parts = [];
 
-        $instructions = trim(JourneyActionConfig::renderText((string) ($data['instructions'] ?? ''), $variables));
+        $instructions = trim(JourneyActionConfig::renderText((string) ($data['instructions'] ?? ''), $variables, $varSystem));
         if ($instructions !== '') {
             $parts[] = $instructions;
         }
@@ -506,18 +514,19 @@ final class JourneyAiNodeRunner
     /**
      * @param  array<string, mixed>  $data
      * @param  array<string, mixed>  $context
+     * @param  array<string, mixed>  $varSystem  Task 22 — var_system.* (Connexxa parity)
      */
-    private function request(string $type, string $nodeId, array $data, array $context): AiRequest
+    private function request(string $type, string $nodeId, array $data, array $context, array $varSystem = []): AiRequest
     {
         unset($context[self::RUNS_KEY]);
         $max = (int) config('ai.journey.max_input_chars', 4000);
         $cut = static fn (string $text): string => mb_substr(trim($text), 0, $max);
 
         if ($type === 'prompt') {
-            $prompt = $cut(JourneyActionConfig::renderText((string) $data['prompt'], $context));
+            $prompt = $cut(JourneyActionConfig::renderText((string) $data['prompt'], $context, $varSystem));
             $system = null;
         } else {
-            $system = $cut(JourneyActionConfig::renderText((string) $data['instructions'], $context));
+            $system = $cut(JourneyActionConfig::renderText((string) $data['instructions'], $context, $varSystem));
             $inputVariable = trim((string) ($data['inputVariable'] ?? ''));
 
             if ($inputVariable === '') {

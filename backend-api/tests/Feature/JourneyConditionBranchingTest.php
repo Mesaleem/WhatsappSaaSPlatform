@@ -12,6 +12,7 @@ use App\Models\Lead;
 use App\Models\MessageDispatchLog;
 use App\Models\User;
 use App\Models\WhatsAppFlow;
+use App\Models\WhatsAppNumber;
 use App\Models\WhatsAppFlowSession;
 use App\Models\WhatsAppSession;
 use App\Services\Billing\InvoiceCreditService;
@@ -333,6 +334,141 @@ class JourneyConditionBranchingTest extends TestCase
 
         $this->assertSame([], $this->branchOutput($account));
         $this->assertSame(WhatsAppFlowSession::STATUS_COMPLETED, $this->flowSession($account)->status);
+    }
+
+    // ==================================================================
+    // Connexxa-parity multi-group Conditional (IF/ELSE-IF/ELSE)
+    // ==================================================================
+
+    /**
+     * Conditional node in multi-group mode: $groups is a list of
+     * [conditions, match] pairs, tested top-down. One message node per
+     * group ("G1".."GN") plus a trailing "ELSE" node, wired to
+     * group_1..group_N / else exactly as the canvas would.
+     */
+    private function conditionalGroupsFlow(Account $account, array $groups, ?array $questions = null, bool $withElse = true): WhatsAppFlow
+    {
+        $nodes = [['id' => 'c', 'type' => 'conditional', 'data' => ['groups' => $groups]]];
+        $edges = [];
+        foreach (array_keys($groups) as $i) {
+            $label = 'g'.$i;
+            $nodes[] = $this->msg($label, 'G'.($i + 1));
+            $edges[] = $this->e('c', $label, ['sourceHandle' => "group_{$i}"]);
+        }
+        if ($withElse) {
+            $nodes[] = $this->msg('e', 'ELSE');
+            $edges[] = $this->e('c', 'e', ['sourceHandle' => 'else']);
+        }
+
+        return $this->flow($account, $nodes, $edges, questions: $questions);
+    }
+
+    public function test_conditional_groups_first_match_wins_top_down(): void
+    {
+        $account = $this->qrAccount();
+        // Group 1 and group 2 would both match "gold plan"; group 1 must win.
+        $this->conditionalGroupsFlow($account, [
+            ['conditions' => [['variable' => 'ans', 'operator' => 'contains', 'value' => 'plan']], 'match' => 'all'],
+            ['conditions' => [['variable' => 'ans', 'operator' => 'contains', 'value' => 'gold']], 'match' => 'all'],
+        ]);
+
+        $this->runJourney($account, 'gold plan');
+        $this->assertSame(['G1'], $this->branchOutput($account));
+    }
+
+    public function test_conditional_groups_falls_through_to_the_second_when_the_first_misses(): void
+    {
+        $account = $this->qrAccount();
+        $this->conditionalGroupsFlow($account, [
+            ['conditions' => [['variable' => 'ans', 'operator' => 'equals', 'value' => 'a']], 'match' => 'all'],
+            ['conditions' => [['variable' => 'ans', 'operator' => 'equals', 'value' => 'b']], 'match' => 'all'],
+        ]);
+
+        $this->runJourney($account, 'b');
+        $this->assertSame(['G2'], $this->branchOutput($account));
+    }
+
+    public function test_conditional_groups_no_match_falls_to_else(): void
+    {
+        $account = $this->qrAccount();
+        $this->conditionalGroupsFlow($account, [
+            ['conditions' => [['variable' => 'ans', 'operator' => 'equals', 'value' => 'a']], 'match' => 'all'],
+            ['conditions' => [['variable' => 'ans', 'operator' => 'equals', 'value' => 'b']], 'match' => 'all'],
+        ]);
+
+        $this->runJourney($account, 'z');
+        $this->assertSame(['ELSE'], $this->branchOutput($account));
+    }
+
+    public function test_conditional_groups_with_no_edge_on_else_completes_silently(): void
+    {
+        $account = $this->qrAccount();
+        $this->conditionalGroupsFlow($account, [
+            ['conditions' => [['variable' => 'ans', 'operator' => 'equals', 'value' => 'a']], 'match' => 'all'],
+        ], withElse: false);
+
+        $this->runJourney($account, 'z');
+
+        $this->assertSame([], $this->branchOutput($account));
+        $this->assertSame(WhatsAppFlowSession::STATUS_COMPLETED, $this->flowSession($account)->status);
+    }
+
+    public function test_an_empty_groups_array_runs_the_legacy_true_false_conditional_unchanged(): void
+    {
+        // A node that still carries legacy conditions/match plus an empty
+        // (or absent) groups key must keep behaving exactly as before —
+        // groups is the sole mode switch, and empty means "not groups-mode".
+        $account = $this->qrAccount();
+        $nodes = [
+            ['id' => 'c', 'type' => 'conditional', 'data' => ['groups' => [], 'conditions' => [['variable' => 'ans', 'operator' => 'equals', 'value' => 'yes']], 'match' => 'all']],
+            $this->msg('yes', 'YES'), $this->msg('no', 'NO'),
+        ];
+        $edges = [$this->e('c', 'yes', ['sourceHandle' => 'true']), $this->e('c', 'no', ['sourceHandle' => 'false'])];
+        $this->flow($account, $nodes, $edges);
+
+        $this->runJourney($account, 'yes');
+        $this->assertSame(['YES'], $this->branchOutput($account));
+    }
+
+    public function test_conditional_groups_save_validation_rejects_too_many_malformed_or_ambiguous(): void
+    {
+        $account = $this->qrAccount();
+        $g = fn (string $var, string $value) => ['conditions' => [['variable' => $var, 'operator' => 'equals', 'value' => $value]], 'match' => 'all'];
+        $a = $this->msg('a', 'A');
+
+        // More than 5 groups (JourneyActionConfig::CONDITIONAL_GROUP_HANDLES's length).
+        $tooMany = array_fill(0, 6, $g('ans', 'x'));
+        $this->saveAs($account, [['id' => 'c', 'type' => 'conditional', 'data' => ['groups' => $tooMany]], $a], [$this->e('c', 'a', ['sourceHandle' => 'group_1'])])
+            ->assertStatus(422)->assertJsonValidationErrors('graph_data.nodes.1.data.groups');
+
+        // A malformed group (not an object).
+        $this->saveAs($account, [['id' => 'c', 'type' => 'conditional', 'data' => ['groups' => ['ans == 1']]], $a], [$this->e('c', 'a', ['sourceHandle' => 'group_1'])])
+            ->assertStatus(422)->assertJsonValidationErrors('graph_data.nodes.1.data.groups');
+
+        // groups not a list.
+        $this->saveAs($account, [['id' => 'c', 'type' => 'conditional', 'data' => ['groups' => ['k' => $g('ans', 'x')]]], $a], [$this->e('c', 'a', ['sourceHandle' => 'group_1'])])
+            ->assertStatus(422)->assertJsonValidationErrors('graph_data.nodes.1.data.groups');
+
+        // An edge on a groups-mode node must declare group_1.."group_N"/else — "true" is the legacy node's vocabulary, not this one's.
+        $this->saveAs($account, [['id' => 'c', 'type' => 'conditional', 'data' => ['groups' => [$g('ans', 'x')]]], $a], [$this->e('c', 'a', ['sourceHandle' => 'true'])])
+            ->assertStatus(422)->assertJsonValidationErrors('graph_data.nodes.1.sourceHandle');
+    }
+
+    public function test_conditional_groups_save_validation_accepts_a_valid_definition(): void
+    {
+        $account = $this->qrAccount();
+        $a = $this->msg('a', 'A');
+        $b = $this->msg('b', 'B');
+
+        $this->saveAs($account, [
+            ['id' => 'c', 'type' => 'conditional', 'data' => ['groups' => [
+                ['conditions' => [['variable' => 'ans', 'operator' => 'equals', 'value' => 'a']], 'match' => 'all'],
+                ['conditions' => [['variable' => 'ans', 'operator' => 'equals', 'value' => 'b']], 'match' => 'all'],
+            ]]], $a, $b,
+        ], [
+            $this->e('c', 'a', ['sourceHandle' => 'group_1']),
+            $this->e('c', 'b', ['sourceHandle' => 'group_2']),
+        ])->assertCreated();
     }
 
     // ==================================================================
@@ -680,8 +816,15 @@ class JourneyConditionBranchingTest extends TestCase
         $user = User::factory()->create(['account_id' => $account->id, 'is_active' => true]);
         $user->assignRole('admin');
 
+        // Channel-binding gate (Connexxa parity, Task 21).
+        $number = WhatsAppNumber::firstOrCreate(
+            ['account_id' => $account->id],
+            ['phone_number' => '91903'.str_pad((string) $account->id, 6, '0', STR_PAD_LEFT), 'status' => WhatsAppNumber::STATUS_LINKED],
+        );
+
         return $this->actingAs($user)->postJson('/api/whatsapp/flows', [
             'name' => 'Branching', 'trigger_type' => 'keyword', 'trigger_value' => 'go', 'is_active' => true, 'publish' => $publish,
+            'whatsapp_number_ids' => [$number->id],
             'graph_data' => ['nodes' => [['id' => 't', 'type' => 'trigger', 'data' => []], ...$nodes], 'edges' => [$this->e('t', $nodes[0]['id']), ...$edges]],
         ]);
     }

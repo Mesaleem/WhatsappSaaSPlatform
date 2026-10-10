@@ -10,6 +10,7 @@ use App\Models\ChatbotRule;
 use App\Models\Invoice;
 use App\Models\JourneyExecutionEvent;
 use App\Models\MessageDispatchLog;
+use App\Models\MessageTemplate;
 use App\Models\Provider;
 use App\Models\ProviderCapability;
 use App\Models\Subscription;
@@ -210,16 +211,35 @@ class JourneyRuntimeSafetyTest extends TestCase
     public function test_the_runtime_executable_list_is_exact_and_every_other_palette_node_is_unsupported(): void
     {
         $this->assertSame(
-            ['trigger', 'message', 'question', 'condition', 'save_lead', 'delay', 'conditional', 'text', 'image', 'video', 'document', 'audio', 'prompt', 'agent', 'rag'],
+            ['trigger', 'message', 'question', 'condition', 'save_lead', 'delay', 'conditional', 'text', 'image', 'video', 'document', 'audio', 'prompt', 'agent', 'rag', 'template', 'catalog', 'product', 'flow', 'list', 'reply_button', 'code'],
             JourneyNodeCatalog::RUNTIME_EXECUTABLE_TYPES
         );
 
         // Phase 8 Task 7: prompt + agent became executable (metered AI); Task 10: rag.
+        // Phase 3: template became executable (TemplateMessageDispatcher).
+        // Phase 4: catalog + product became executable (send() primitive).
+        // Phase 5: flow became executable (send() primitive).
+        // Phase 8 Task 16: 'classifier' joins the palette as a 14th
+        // draft-only type, same bucket as 'api'/'payment'/etc — see
+        // JourneyNodeCatalog::RUNTIME_EXECUTABLE_TYPES' own docblock.
+        // Task 24: list + reply_button became executable (send() + a
+        // dedicated per-option resume path) — the unsupported count
+        // drops from 14 to 12. Task 26: 'code' became executable (its
+        // own closed expression-language sandbox, NOT real JavaScript —
+        // JourneyCodeSandbox) — drops from 12 to 11.
         $unsupported = array_values(array_diff(WhatsAppFlow::NODE_TYPES, JourneyNodeCatalog::RUNTIME_EXECUTABLE_TYPES));
-        $this->assertCount(17, $unsupported);
+        $this->assertCount(11, $unsupported);
         $this->assertSame([], array_diff(JourneyNodeCatalog::RUNTIME_EXECUTABLE_TYPES, WhatsAppFlow::NODE_TYPES));
 
-        foreach (['api', 'payment', 'email', 'code', 'flow', 'catalog', 'product', 'template', 'journey', 'human_intervention', 'sticker', 'list', 'external_url', 'reply_button', 'location', 'location_request', 'address_request'] as $type) {
+        $this->assertTrue(JourneyNodeCatalog::isRuntimeExecutable('template'));
+        $this->assertTrue(JourneyNodeCatalog::isRuntimeExecutable('catalog'));
+        $this->assertTrue(JourneyNodeCatalog::isRuntimeExecutable('product'));
+        $this->assertTrue(JourneyNodeCatalog::isRuntimeExecutable('flow'));
+        $this->assertTrue(JourneyNodeCatalog::isRuntimeExecutable('list'));
+        $this->assertTrue(JourneyNodeCatalog::isRuntimeExecutable('reply_button'));
+        $this->assertTrue(JourneyNodeCatalog::isRuntimeExecutable('code'));
+
+        foreach (['api', 'payment', 'email', 'journey', 'human_intervention', 'sticker', 'external_url', 'location', 'location_request', 'address_request', 'classifier'] as $type) {
             $this->assertFalse(JourneyNodeCatalog::isRuntimeExecutable($type), $type);
         }
     }
@@ -637,6 +657,208 @@ class JourneyRuntimeSafetyTest extends TestCase
         $flowA = WhatsAppFlow::where('account_id', $a->id)->firstOrFail();
         $this->actingAs($this->admin($b))->getJson(self::FLOWS."/{$flowA->id}")->assertNotFound();
         $this->actingAs($this->admin($b))->postJson(self::FLOWS."/{$flowA->id}/toggle")->assertNotFound();
+    }
+
+    // ================================================================== template node (21)
+
+    /**
+     * Phase 3 — a 'template' node sends through the existing
+     * TemplateMessageDispatcher (the same path the Send Alert form and
+     * the public Template Message API use), not a second implementation.
+     * Uses a Meta-provider account because JourneyNodeCatalog gates the
+     * template node to providers => ['meta'].
+     */
+    public function test_21_a_template_node_sends_an_approved_template(): void
+    {
+        $account = $this->account('business');
+        $template = MessageTemplate::create([
+            'account_id' => $account->id,
+            'template_code' => 'T_'.uniqid(),
+            'title' => 'Order Confirmation',
+            'template_body' => 'Hi {{ name }}, your order is confirmed.',
+            'status' => 'approved',
+        ]);
+
+        $this->flow($account, [
+            $this->text('a', 'Before'),
+            ['id' => 'tpl', 'type' => 'template', 'data' => ['templateId' => $template->id, 'variables' => ['name' => 'Asha']]],
+        ]);
+
+        $this->inbound($account, 'go');
+
+        $this->assertSame(['Before', 'Hi Asha, your order is confirmed.'], $this->sent($account));
+        $this->assertSame(WhatsAppFlowSession::STATUS_COMPLETED, $this->flowSession($account)->status);
+    }
+
+    public function test_21b_a_template_node_with_an_unapproved_or_missing_template_fails_the_session(): void
+    {
+        $account = $this->account('business');
+
+        $this->flow($account, [
+            $this->text('a', 'Before'),
+            ['id' => 'tpl', 'type' => 'template', 'data' => ['templateId' => 999999, 'variables' => []]],
+        ]);
+
+        $this->inbound($account, 'go');
+
+        $s = $this->flowSession($account);
+        $this->assertSame(['Before'], $this->sent($account));
+        $this->assertSame('tpl', $s->current_node_id);
+        $this->assertNotSame(WhatsAppFlowSession::STATUS_COMPLETED, $s->status);
+    }
+
+    // ================================================================== catalog/product node (22-23)
+
+    /**
+     * Phase 4 — a 'product' node sends a single-product interactive
+     * message through the engine's own send() primitive (the same one
+     * sendMedia() uses) — no second send path. Gated by the 'commerce'
+     * capability (JourneyNodeCatalog), on top of 'whatsapp_send', and
+     * to Meta accounts only (MetaCloudApiDriver supports 'interactive',
+     * Baileys does not), so this uses a Meta-provider account with
+     * 'commerce' granted.
+     */
+    public function test_22_a_product_node_sends_a_single_product_message(): void
+    {
+        $account = $this->account('business');
+        $this->grantManually($account, 'commerce');
+
+        $this->flow($account, [
+            $this->text('a', 'Before'),
+            ['id' => 'p', 'type' => 'product', 'data' => ['catalogId' => 'cat_1', 'productId' => 'sku_1', 'body' => 'Have a look']],
+        ]);
+
+        $this->inbound($account, 'go');
+
+        $this->assertSame(['Before', 'Have a look'], $this->sent($account));
+        $this->assertSame(WhatsAppFlowSession::STATUS_COMPLETED, $this->flowSession($account)->status);
+
+        $call = collect($this->calls)->firstWhere(fn ($c) => str_contains($c['url'], 'graph.facebook.com'));
+        $this->assertSame('interactive', $call['type'] ?? null);
+        $this->assertSame('product', $call['interactive']['type'] ?? null);
+        $this->assertSame('cat_1', $call['interactive']['action']['catalog_id'] ?? null);
+        $this->assertSame('sku_1', $call['interactive']['action']['product_retailer_id'] ?? null);
+    }
+
+    /**
+     * A 'catalog' node with configured productIds sends a product_list;
+     * without any, it falls back to a whole-catalog message.
+     */
+    public function test_23_a_catalog_node_sends_a_product_list_or_whole_catalog_message(): void
+    {
+        $account = $this->account('business');
+        $this->grantManually($account, 'commerce');
+
+        $this->flow($account, [
+            ['id' => 'c', 'type' => 'catalog', 'data' => ['catalogId' => 'cat_1', 'productIds' => ['sku_1', 'sku_2']]],
+        ]);
+
+        $this->inbound($account, 'go');
+
+        $this->assertSame(['[catalog]'], $this->sent($account));
+        $this->assertSame(WhatsAppFlowSession::STATUS_COMPLETED, $this->flowSession($account)->status);
+
+        $call = collect($this->calls)->firstWhere(fn ($c) => str_contains($c['url'], 'graph.facebook.com'));
+        $this->assertSame('product_list', $call['interactive']['type'] ?? null);
+        $this->assertSame('cat_1', $call['interactive']['action']['catalog_id'] ?? null);
+        $this->assertSame(
+            ['sku_1', 'sku_2'],
+            array_column($call['interactive']['action']['sections'][0]['product_items'] ?? [], 'product_retailer_id')
+        );
+    }
+
+    public function test_23b_a_catalog_node_with_no_product_ids_sends_the_whole_catalog(): void
+    {
+        $account = $this->account('business');
+        $this->grantManually($account, 'commerce');
+
+        $this->flow($account, [
+            ['id' => 'c', 'type' => 'catalog', 'data' => ['catalogId' => 'cat_1']],
+        ]);
+
+        $this->inbound($account, 'go');
+
+        $this->assertSame(WhatsAppFlowSession::STATUS_COMPLETED, $this->flowSession($account)->status);
+
+        $call = collect($this->calls)->firstWhere(fn ($c) => str_contains($c['url'], 'graph.facebook.com'));
+        $this->assertSame('catalog_message', $call['interactive']['type'] ?? null);
+        $this->assertSame('catalog_message', $call['interactive']['action']['name'] ?? null);
+    }
+
+    public function test_23c_a_catalog_or_product_node_is_denied_without_the_commerce_capability(): void
+    {
+        $account = $this->account('business'); // no 'commerce' grant
+
+        $this->flow($account, [
+            ['id' => 'p', 'type' => 'product', 'data' => ['catalogId' => 'cat_1', 'productId' => 'sku_1']],
+        ]);
+
+        $this->inbound($account, 'go');
+
+        $this->assertSame([], $this->sent($account));
+        $this->assertNotSame(WhatsAppFlowSession::STATUS_COMPLETED, $this->flowSession($account)->status);
+    }
+
+    // ================================================================== flow node (24)
+
+    /**
+     * Phase 5 — a 'flow' node sends a Cloud API interactive 'flow'
+     * message through the engine's own send() primitive, with
+     * flow_action always 'navigate' (this app has no Flow
+     * data-exchange endpoint of its own).
+     */
+    public function test_24_a_flow_node_sends_a_meta_flow_message(): void
+    {
+        $account = $this->account('business');
+
+        $this->flow($account, [
+            ['id' => 'f', 'type' => 'flow', 'data' => ['flowId' => 'flow_1', 'flowCta' => 'Start', 'screenName' => 'WELCOME', 'body' => 'Please fill this in']],
+        ]);
+
+        $this->inbound($account, 'go');
+
+        $this->assertSame(['Please fill this in'], $this->sent($account));
+        $this->assertSame(WhatsAppFlowSession::STATUS_COMPLETED, $this->flowSession($account)->status);
+
+        $call = collect($this->calls)->firstWhere(fn ($c) => str_contains($c['url'], 'graph.facebook.com'));
+        $this->assertSame('flow', $call['interactive']['type'] ?? null);
+        $this->assertSame('flow', $call['interactive']['action']['name'] ?? null);
+        $this->assertSame('flow_1', $call['interactive']['action']['parameters']['flow_id'] ?? null);
+        $this->assertSame('Start', $call['interactive']['action']['parameters']['flow_cta'] ?? null);
+        $this->assertSame('navigate', $call['interactive']['action']['parameters']['flow_action'] ?? null);
+        $this->assertSame('WELCOME', $call['interactive']['action']['parameters']['flow_action_payload']['screen'] ?? null);
+        $this->assertNotEmpty($call['interactive']['action']['parameters']['flow_token'] ?? null);
+    }
+
+    public function test_24b_a_flow_node_missing_its_cta_or_screen_fails_the_session_before_sending(): void
+    {
+        $account = $this->account('business');
+
+        $this->flow($account, [
+            $this->text('a', 'Before'),
+            ['id' => 'f', 'type' => 'flow', 'data' => ['flowId' => 'flow_1', 'flowCta' => '', 'screenName' => 'WELCOME']],
+        ]);
+
+        $this->inbound($account, 'go');
+
+        $s = $this->flowSession($account);
+        $this->assertSame(['Before'], $this->sent($account));
+        $this->assertSame('f', $s->current_node_id);
+        $this->assertNotSame(WhatsAppFlowSession::STATUS_COMPLETED, $s->status);
+    }
+
+    public function test_24c_a_flow_node_is_denied_for_a_non_meta_qr_account(): void
+    {
+        $account = $this->account('growth'); // QR engine
+
+        $this->flow($account, [
+            ['id' => 'f', 'type' => 'flow', 'data' => ['flowId' => 'flow_1', 'flowCta' => 'Start', 'screenName' => 'WELCOME']],
+        ]);
+
+        $this->inbound($account, 'go');
+
+        $this->assertSame([], $this->sent($account));
+        $this->assertNotSame(WhatsAppFlowSession::STATUS_COMPLETED, $this->flowSession($account)->status);
     }
 
     // ================================================================== helpers

@@ -197,7 +197,7 @@ class ApiKeyBindingAdminController extends Controller
             'reason' => ['required', 'string', 'max:500'],
         ]);
         $key = ApiKey::findOrFail($keyId);
-        $until = $data['until'] !== null ? \Illuminate\Support\Carbon::parse($data['until']) : now();
+        $until = ($data['until'] ?? null) !== null ? \Illuminate\Support\Carbon::parse($data['until']) : now();
 
         try {
             $this->bindings->overrideCooldown($key, $until, $request->user(), $data['reason']);

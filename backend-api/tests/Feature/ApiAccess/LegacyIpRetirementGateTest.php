@@ -297,6 +297,10 @@ class LegacyIpRetirementGateTest extends TestCase
             'ip_registered_at' => now()->subYears(2),
         ])->save();
         $key = $this->makeKey($account, 'Legacy');
+        // A base deadline (Task 5's own backfill) must exist before it can be
+        // extended — effectiveLegacyDeadline() deliberately treats a NULL base
+        // as nothing to extend (see ApiKeyBindingService's own docblock).
+        $key->forceFill(['legacy_binding_grace_expires_at' => now()->addDays(3)])->save();
         $admin = $this->superAdmin();
         $this->service()->extendLegacyDeadline($key, now()->addDays(10), $admin, 'migration window');
 
@@ -318,6 +322,9 @@ class LegacyIpRetirementGateTest extends TestCase
         $account->forceFill(['authorized_server_ip' => '203.0.113.10'])->save();
         $keyA = $this->makeKey($account, 'A');
         $keyB = $this->makeKey($account, 'B');
+        // Same base-deadline-first requirement as above — only Key A gets one,
+        // so Key B must stay without a deadline regardless of Key A's extension.
+        $keyA->forceFill(['legacy_binding_grace_expires_at' => now()->addDays(3)])->save();
         $admin = $this->superAdmin();
 
         $this->service()->extendLegacyDeadline($keyA, now()->addDays(30), $admin, 'Key A only');

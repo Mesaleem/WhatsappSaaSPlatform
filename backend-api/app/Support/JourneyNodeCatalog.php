@@ -130,6 +130,16 @@ final class JourneyNodeCatalog
         'rag' => ['capabilities' => ['ai'], 'providers' => ['none']],
         // Handing a conversation to a human is a CRM/inbox function.
         'human_intervention' => ['capabilities' => ['crm'], 'providers' => ['none']],
+        // Phase 8 Task 16 — LLM-based intent routing (branches a classifier
+        // chose, as distinct from 'conditional', which branches on a
+        // rule evaluated against a variable). Reuses the existing 'ai'
+        // capability, same reasoning as 'agent'/'rag' above. NOT in
+        // RUNTIME_EXECUTABLE_TYPES below — see that constant's docblock:
+        // it stays persistable as a DRAFT only, the same bucket every
+        // other not-yet-wired palette node (api, payment, catalog, …)
+        // is already in, so adding it here changes no existing journey's
+        // behaviour and needs no engine change.
+        'classifier' => ['capabilities' => ['ai'], 'providers' => ['none']],
 
         // ---- Utility (4) ----
         'code' => ['capabilities' => ['custom_code'], 'providers' => ['none']],
@@ -156,18 +166,47 @@ final class JourneyNodeCatalog
      *            prompt + agent (Phase 8 T7 — through MeteredAiService),
      *            rag (Phase 8 T10 — KnowledgeRetriever + MeteredAiService)
      *
-     * The other 17 palette types depend on integrations this platform does
-     * not have yet (an outbound HTTP runner, a code sandbox, email
-     * sending from a journey, payment links, commerce catalogs, interactive
-     * Cloud API messages, template sends from a journey, sub-journeys,
-     * human hand-off) — they stay persistable as DRAFTS, never publishable.
-     * The frontend registry's `runtimeSupported` flag mirrors this list and
+     * The other 14 palette types depend on integrations this platform does
+     * not have yet (an outbound HTTP runner, email sending from a
+     * journey, payment links, commerce catalogs, template sends from a
+     * journey, sub-journeys, human hand-off) — they stay persistable as
+     * DRAFTS, never publishable. The frontend registry's
+     * `RUNTIME_EXECUTABLE_NODE_TYPES` export mirrors this list and
      * JourneyRuntimeSafetyTest fails on any disagreement.
      */
     public const RUNTIME_EXECUTABLE_TYPES = [
         'trigger', 'message', 'question', 'condition', 'save_lead',
         'delay', 'conditional', 'text', 'image', 'video', 'document', 'audio',
         'prompt', 'agent', 'rag',
+        // Phase 3 — Meta Template: wired into WhatsAppJourneyEngine via
+        // the existing TemplateMessageDispatcher (same shared send path
+        // the Send Alert form and the public Template Message API use).
+        'template',
+        // Phase 4 — Meta Catalog/Product: wired into WhatsAppJourneyEngine
+        // via the existing send() primitive (same pattern as the media
+        // nodes), building a Cloud API 'interactive' payload
+        // (product / product_list / catalog_message).
+        'catalog', 'product',
+        // Phase 5 — Meta Flow: wired into WhatsAppJourneyEngine via the
+        // existing send() primitive, building a Cloud API
+        // 'interactive' type 'flow' payload.
+        'flow',
+        // Task 24 — Connexxa parity: List and Reply Buttons each get a
+        // genuine per-option outgoing handle (JourneyActionConfig::
+        // LIST_ROW_HANDLES / REPLY_BUTTON_HANDLES), as distinct from the
+        // legacy 'question' node's input_type:'list'/'buttons' (still one
+        // NEXT edge for every answer, untouched). Wired into
+        // WhatsAppJourneyEngine via the existing send() primitive to send,
+        // and a dedicated resume path to route by the tapped option.
+        'list', 'reply_button',
+        // Task 26 — Connexxa parity, scoped: NOT real JavaScript (see
+        // JourneyCodeSandbox's docblock for the explicit scope decision,
+        // confirmed with the account owner). A tiny closed expression
+        // language of this platform's own — arithmetic, string
+        // concatenation, comparisons, booleans, if/else — against
+        // var_local/var_system, writing one output variable. No loops,
+        // no function calls, no eval of any kind.
+        'code',
     ];
 
     public static function isRuntimeExecutable(mixed $nodeType): bool

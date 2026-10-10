@@ -7,6 +7,10 @@ use App\Models\ApiKey;
 use App\Models\ApiKeyBinding;
 use App\Models\ApiKeySecurityEvent;
 use App\Models\Invoice;
+use App\Services\ApiAccess\InstallationAllowanceResolver;
+use App\Models\Plan;
+use App\Models\Capability;
+use App\Models\AccountEntitlement;
 use App\Models\Subscription;
 use App\Models\User;
 use App\Services\ApiAccess\ApiKeyBindingService;
@@ -64,6 +68,53 @@ class InstallationBindingAuthenticationTest extends TestCase
     private function account(): Account
     {
         return Account::factory()->create();
+    }
+
+    /**
+     * Phase 4 Task 6 (installation-allowance enforcement) postdates this
+     * file. provision()'s allowance check is per-ACCOUNT, so a test
+     * provisioning more than one live binding on the SAME account needs a
+     * concrete limit above DEFAULT_ALLOWANCE (1) — mirrors
+     * AdminVisibilityTest::accountWithAllowance().
+     */
+    private function grantInstallationAllowance(Account $account, int $limit): void
+    {
+        $capability = Capability::firstOrCreate(
+            ['slug' => InstallationAllowanceResolver::CAPABILITY],
+            ['label' => 'API Installations', 'category' => 'platform']
+        );
+
+        AccountEntitlement::firstOrCreate([
+            'account_id' => $account->id,
+            'capability_id' => $capability->id,
+        ], [
+            'source' => AccountEntitlement::SOURCE_MANUAL_GRANT,
+        ]);
+
+        $plan = Plan::create([
+            'slug' => 'installation-allowance-'.Str::random(8),
+            'label' => 'Installation Allowance Test Plan',
+            'price' => 100,
+            'duration_days' => 30,
+            'engine_type' => 'qr',
+            'billing_model' => 'flat_quota',
+        ]);
+        $plan->capabilities()->attach($capability->id, ['usage_limit' => $limit]);
+
+        Invoice::create([
+            'account_id' => $account->id,
+            'invoice_number' => 'INV-'.Str::random(10),
+            'plan_key' => $plan->slug,
+            'plan_label' => $plan->label,
+            'amount' => 100,
+            'tax_amount' => 0,
+            'total_amount' => 100,
+            'currency' => 'INR',
+            'payment_gateway' => 'razorpay',
+            'gateway_order_id' => 'order_'.Str::random(10),
+            'status' => 'paid',
+            'paid_at' => now(),
+        ]);
     }
 
     private function makeKey(Account $account, string $name = 'Key'): ApiKey
@@ -194,6 +245,9 @@ class InstallationBindingAuthenticationTest extends TestCase
     public function test_key_as_credential_cannot_authenticate_key_b(): void
     {
         $account = $this->account();
+        // Two keys end up with live bindings on the SAME account — needs
+        // allowance >= 2 (Task 6 postdates this file).
+        $this->grantInstallationAllowance($account, 2);
         [$keyA, $credentialA] = $this->boundKey($account, '203.0.113.10');
         [$keyB, $credentialB] = $this->boundKey($account, '203.0.113.11');
 
@@ -307,7 +361,11 @@ class InstallationBindingAuthenticationTest extends TestCase
     public function test_legacy_key_at_exact_deadline_boundary_authenticates(): void
     {
         $account = $this->account();
-        $deadline = now()->addDay();
+        // Truncated to whole seconds: the datetime column has no
+        // sub-second precision, so legacyKey()'s ->fresh() reload would
+        // otherwise come back a few microseconds earlier than this
+        // in-memory value, making now() falsely "greater than" it.
+        $deadline = now()->addDay()->startOfSecond();
         $key = $this->legacyKey($account, '203.0.113.10', $deadline);
         Carbon::setTestNow($deadline); // now === deadline exactly
 

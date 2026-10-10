@@ -121,3 +121,52 @@ export interface SaveMetaConfigResponse extends MetaConfigResponse {
   verified_name: string | null;
   display_phone_number: string | null;
 }
+
+/**
+ * Phase 1 — Meta Channel Creation (per-tenant Meta App model). The
+ * tenant's own Facebook App (ID/Secret/Config ID), the prerequisite for
+ * the "Connect with Facebook" Embedded Signup button. Mirrors backend-api's
+ * MetaConfigController::appCredentials()/saveAppCredentials().
+ */
+export interface MetaAppCredentialsResponse {
+  configured: boolean;
+  meta_app_id: string | null;
+  meta_config_id: string | null;
+}
+
+export interface SaveMetaAppCredentialsPayload {
+  meta_app_id: string;
+  meta_app_secret: string;
+  meta_config_id: string;
+}
+
+export interface SaveMetaAppCredentialsResponse {
+  message: string;
+  meta_app_id: string;
+  meta_config_id: string;
+}
+
+/** GET /whatsapp/meta-config/oauth/start — what FB.login()'s WhatsApp Embedded Signup call needs. Never the App Secret. */
+export interface MetaOAuthStartResponse {
+  meta_app_id: string;
+  meta_config_id: string;
+}
+
+/**
+ * POST /whatsapp/meta-config/oauth/exchange — sent once FB.login()'s
+ * Embedded Signup callback fires with a `code` and the chosen WABA/number
+ * (Meta's SDK message event carries waba_id/phone_number_id directly).
+ */
+export interface MetaOAuthExchangePayload {
+  code: string;
+  waba_id: string;
+  phone_number_id: string;
+}
+
+export interface MetaOAuthExchangeResponse {
+  message: string;
+  meta_phone_number_id: string;
+  meta_waba_id: string;
+  connection_status: string;
+}
+

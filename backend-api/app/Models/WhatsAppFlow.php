@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use App\Models\Concerns\HasJourneyGraph;
 use App\Models\Concerns\MasksJourneySecrets;
@@ -50,6 +51,15 @@ class WhatsAppFlow extends Model
     /** IMPLEMENT: Dynamic Route Master with Super-Admin Bypass & Global Audit Tracking — module label shown in the Activity Logs UI. */
     protected string $auditModuleName = 'WhatsApp Flows';
     public const TRIGGER_TYPES = ['keyword', 'ctwa_referral', 'default'];
+
+    /**
+     * Channel-binding gate (Connexxa parity) — see the
+     * whatsapp_flow_numbers migration's docblock for the full scope note.
+     * A journey must be bound to at least one of the account's
+     * WhatsAppNumber slots, and at most this many, matching ConnexxaIQ's
+     * own "Channels (up to 2)*" cap at journey creation.
+     */
+    public const MAX_CHANNELS = 2;
 
     /**
      * P5-7: the complete list of RUNTIME-EXECUTABLE types (these five plus
@@ -105,8 +115,8 @@ class WhatsAppFlow extends Model
         'prompt', 'text', 'image', 'video', 'document', 'audio', 'sticker',
         // Interactive (6)
         'list', 'external_url', 'reply_button', 'location', 'location_request', 'address_request',
-        // Advanced (10)
-        'flow', 'api', 'payment', 'template', 'conditional', 'catalog', 'product', 'agent', 'rag', 'human_intervention',
+        // Advanced (11) — Phase 8 Task 16 adds 'classifier'.
+        'flow', 'api', 'payment', 'template', 'conditional', 'catalog', 'product', 'agent', 'rag', 'human_intervention', 'classifier',
         // Utility (4)
         'code', 'email', 'journey', 'delay',
     ];
@@ -189,6 +199,17 @@ class WhatsAppFlow extends Model
     public function sessions(): HasMany
     {
         return $this->hasMany(WhatsAppFlowSession::class, 'flow_id');
+    }
+
+    /**
+     * The channel(s) (WhatsAppNumber slots) this journey is bound to.
+     * Creation/update time only today — see whatsapp_flow_numbers'
+     * migration docblock for why this does not yet filter inbound
+     * trigger matching.
+     */
+    public function whatsappNumbers(): BelongsToMany
+    {
+        return $this->belongsToMany(WhatsAppNumber::class, 'whatsapp_flow_numbers')->withTimestamps();
     }
 
     public function scopeForAccount(Builder $query, int $accountId): Builder

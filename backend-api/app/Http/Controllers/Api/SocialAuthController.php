@@ -38,11 +38,17 @@ use Throwable;
  *  3. bind()      — authenticated. Redeems the nonce for the SAME account
  *     AND the SAME user that started the flow and stores the chosen assets.
  *
- * CSRF / account-binding (Phase 9 Task 1): redirect() no longer returns the
- * nonce — it reaches the SPA only through the popup's postMessage, which is
- * locked to the configured frontend origin — so someone who tricks another
- * person into completing THEIR authorization URL never learns the nonce and
- * cannot bind that person's assets; bind() also requires the initiating user.
+ * CSRF / account-binding: redirect() returns the nonce to its OWN
+ * authenticated caller (the SPA needs it to poll result() — the popup's
+ * window.opener postMessage is unreliable once the popup has gone through
+ * facebook.com, which severs the opener via Cross-Origin-Opener-Policy).
+ * This is safe to hand back over redirect()'s own authenticated response:
+ * the actual CSRF/account-binding defense lives in bind() (and result()),
+ * which independently re-verifies the nonce's cached grant was started by
+ * THIS SAME account_id AND user_id (see bind() below) before redeeming it.
+ * So even a nonce an attacker somehow obtained could never bind assets to
+ * a different account or user than the one that started that specific
+ * authorization — knowing the nonce alone is not enough.
  *
  * AUTHORIZATION: the route group applies auth, tenant.isolation,
  * subscription.guard, permission:manage-social-accounts,

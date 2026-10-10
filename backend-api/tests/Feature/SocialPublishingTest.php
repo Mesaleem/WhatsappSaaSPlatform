@@ -806,11 +806,27 @@ class SocialPublishingTest extends TestCase
         // Publishing endpoints of the providers appear nowhere else in app/.
         $offenders = [];
         foreach (new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator(app_path())) as $file) {
-            if (! $file->isFile() || $file->getExtension() !== 'php' || str_contains($file->getPathname(), '/Services/Social/Publishing/')) {
+            // getPathname() uses the native OS separator (backslash on
+            // Windows), so normalize before matching the forward-slash
+            // exclusion pattern - otherwise every file under
+            // Services/Social/Publishing/ is wrongly treated as an
+            // offender on Windows.
+            $normalizedPath = str_replace('\\', '/', $file->getPathname());
+            if (! $file->isFile() || $file->getExtension() !== 'php' || str_contains($normalizedPath, '/Services/Social/Publishing/')) {
                 continue;
             }
-            if (preg_match('#/media_publish|/ugcPosts|registerUpload#', file_get_contents($file->getPathname()))) {
-                $offenders[] = $file->getFilename();
+            // Token-scan, not a raw-string match: a docblock comment that merely
+            // MENTIONS one of these endpoint names (e.g. explaining what a queued
+            // job replaces) must never count as a provider call living outside
+            // the publisher layer - only an actual T_STRING/T_CONSTANT_ENCAPSED_STRING
+            // token does. Same convention as BlockingWaitRemovalTest::blockingCallsIn().
+            foreach (token_get_all(file_get_contents($file->getPathname())) as $token) {
+                if (is_array($token) && in_array($token[0], [T_CONSTANT_ENCAPSED_STRING, T_STRING], true)
+                    && preg_match('#/media_publish|/ugcPosts|registerUpload#', $token[1])) {
+                    $offenders[] = $file->getFilename();
+
+                    break;
+                }
             }
         }
         $this->assertSame([], $offenders);

@@ -118,7 +118,9 @@ export type JourneyAdvancedNodeType =
   | 'product'
   | 'agent'
   | 'rag'
-  | 'human_intervention';
+  | 'human_intervention'
+  /** Phase 8 Task 16 — LLM-based intent routing. Draft-only: see JourneyNodeCatalog on the backend. */
+  | 'classifier';
 
 export type JourneyUtilityNodeType = 'code' | 'email' | 'journey' | 'delay' | 'end';
 
@@ -195,6 +197,19 @@ export interface ListNodeConfig {
   sections: ListSection[];
 }
 
+/**
+ * Task 24 — Connexxa parity. Each row across every section gets its OWN
+ * outgoing handle (mirrors backend JourneyActionConfig::LIST_ROW_HANDLES).
+ * Position i, flattened across sections in document order, maps to
+ * element i here — the same order ListConfigModal stores sections/rows
+ * in and the same order the backend's WhatsAppJourneyEngine flattens
+ * them when routing a reply. Capped at 10 — WhatsApp's own Cloud API
+ * limit on total rows across a list message's sections (the existing
+ * 'list' node validate() below already enforces this count).
+ */
+export const LIST_ROW_HANDLE_IDS = ['row_1', 'row_2', 'row_3', 'row_4', 'row_5', 'row_6', 'row_7', 'row_8', 'row_9', 'row_10'] as const;
+export const MAX_LIST_ROWS = LIST_ROW_HANDLE_IDS.length;
+
 export interface ReplyButton {
   id: string;
   title: string;
@@ -202,6 +217,13 @@ export interface ReplyButton {
 
 /** WhatsApp allows at most three quick-reply buttons — enforced in schema AND UI validation. */
 export const MAX_REPLY_BUTTONS = 3;
+
+/**
+ * Task 24 — Connexxa parity. Same per-option handle as LIST_ROW_HANDLE_IDS,
+ * for a 'reply_button' node (mirrors backend JourneyActionConfig::
+ * REPLY_BUTTON_HANDLES). Capped at MAX_REPLY_BUTTONS.
+ */
+export const REPLY_BUTTON_HANDLE_IDS = ['button_1', 'button_2', 'button_3'] as const;
 
 export interface ReplyButtonNodeConfig {
   body: string;
@@ -232,6 +254,29 @@ export interface AddressRequestNodeConfig {
 export interface FlowNodeConfig {
   flowId: string;
   body?: string;
+}
+
+/**
+ * Task 25 — Connexxa parity. The 'journey' (sub-journey) node's jump
+ * mode. Absent `mode` is the pre-Task-25 shape and means 'static' with
+ * the journey's own default entry — every journey saved before this
+ * feature keeps meaning exactly what it always meant, fully backward
+ * compatible (see JourneyActionConfig::journeyError()'s docblock on
+ * the backend for the full save-time contract).
+ */
+export type SubJourneyMode = 'static' | 'dynamic';
+
+export interface SubJourneyNodeConfig {
+  /** Absent/'static' = legacy shape, unchanged meaning. */
+  mode?: SubJourneyMode;
+  /** Static only: the target journey's id (as a string, matching the picker's <select> value). */
+  journeyId?: string;
+  /** Static only: an explicit node id to jump straight into; empty = the target journey's own default entry. */
+  startNodeId?: string;
+  /** Dynamic only: a {{ }}-renderable expression for the target journey id (Task 22's renderText/var_local/var_system). */
+  journeyIdTemplate?: string;
+  /** Dynamic only: a {{ }}-renderable expression for the target node id. */
+  nodeIdTemplate?: string;
 }
 
 export type ApiMethod = 'GET' | 'POST';
@@ -326,15 +371,41 @@ export interface ConditionalRule {
  * Branch identity is EXPLICIT: the node declares its outgoing handles and
  * an edge records which one it leaves from (`sourceHandle`). Nothing
  * depends on where a box sits on the canvas.
+ *
+ * Task 23 — Connexxa IF/ELSE-IF/ELSE parity. `groups`, when present and
+ * non-empty, switches the node into multi-branch mode: each group is its
+ * own IF/ELSE-IF test (own conditions + match), tested top-down, first
+ * match wins, its own outgoing handle is CONDITIONAL_GROUP_HANDLE_IDS[i].
+ * No match falls to the fixed CONDITIONAL_ELSE_HANDLE. `conditions`/
+ * `match` stay exactly as they always were — the single-branch TRUE/FALSE
+ * shape every journey saved before this feature already uses — and are
+ * simply ignored once `groups` is non-empty (set only when the author
+ * explicitly adds an ELSE IF branch; see nodeRegistry.tsx's
+ * 'conditionGroups' field). Backend mirror: WhatsAppFlow's
+ * JourneyConditionEvaluator::evaluateGroups() /
+ * JourneyActionConfig::CONDITIONAL_GROUP_HANDLES.
  */
 export interface ConditionalNodeConfig {
   conditions: ConditionalRule[];
   /** How multiple rules combine. */
   match?: 'all' | 'any';
+  /** Task 23 — multi-branch mode; see this interface's docblock. */
+  groups?: ConditionalGroup[];
+}
+
+export interface ConditionalGroup {
+  conditions: ConditionalRule[];
+  match?: 'all' | 'any';
 }
 
 export const CONDITIONAL_TRUE_HANDLE = 'true';
 export const CONDITIONAL_FALSE_HANDLE = 'false';
+
+/** Task 23 — up to 5 IF/ELSE-IF branches (mirrors JourneyActionConfig::CONDITIONAL_GROUP_HANDLES; same 5-slot cap convention as CLASSIFIER_BRANCH_HANDLES). */
+export const CONDITIONAL_GROUP_HANDLE_IDS = ['group_1', 'group_2', 'group_3', 'group_4', 'group_5'] as const;
+export const CONDITIONAL_MAX_GROUPS = CONDITIONAL_GROUP_HANDLE_IDS.length;
+/** Task 23 — the fixed fallback handle when no group matches (mirrors JourneyActionConfig::CONDITIONAL_ELSE_HANDLE). */
+export const CONDITIONAL_ELSE_HANDLE = 'else';
 
 export interface CatalogNodeConfig {
   catalogId: string;
@@ -366,6 +437,30 @@ export interface HumanInterventionNodeConfig {
   queueId?: string;
   message?: string;
 }
+
+/**
+ * Phase 8 Task 16 — LLM-based intent routing: an input variable is
+ * classified against up to 5 named branches, each with its own outgoing
+ * handle (CLASSIFIER_BRANCH_HANDLES), the same "branch identity is
+ * explicit, never inferred from canvas geometry" contract ConditionalNodeConfig
+ * uses. Draft-only today — not in RUNTIME_EXECUTABLE_NODE_TYPES, so this
+ * is a configuration contract only; nothing executes it yet.
+ */
+export interface JourneyClassifierBranch {
+  label: string;
+  /** Optional free-text description of the branch, passed to the model as context. */
+  intent?: string;
+}
+
+export interface ClassifierNodeConfig {
+  inputVariable: string;
+  outputVariable: string;
+  branches?: JourneyClassifierBranch[];
+  /** Optional model override; empty defers to the account's configured default (see the AI provider/model selector). */
+  model?: string;
+}
+
+export const CLASSIFIER_BRANCH_HANDLES = ['branch_1', 'branch_2', 'branch_3', 'branch_4', 'branch_5'] as const;
 
 /**
  * CONFIGURATION CONTRACT ONLY. This code is never evaluated in the
@@ -436,6 +531,7 @@ export interface JourneyNodeConfigMap {
   agent: AgentNodeConfig;
   rag: RagNodeConfig;
   human_intervention: HumanInterventionNodeConfig;
+  classifier: ClassifierNodeConfig;
   code: CodeNodeConfig;
   email: EmailNodeConfig;
   journey: JourneyRefNodeConfig;
@@ -469,6 +565,8 @@ export type JourneyFieldType =
   | 'buttons'
   | 'sections'
   | 'conditions'
+  /** Task 23 — the conditional node's IF/ELSE-IF/ELSE branches; see ConditionalNodeConfig's docblock. */
+  | 'conditionGroups'
   | 'keyvalue'
   /** A repeatable list of plain strings (e.g. catalog product IDs). */
   | 'strings'
@@ -477,7 +575,13 @@ export type JourneyFieldType =
   /** Phase 8 Task 10 — one of the edited account's knowledge bases (options loaded from the API). */
   | 'knowledgeBase'
   /** Phase 8 Task 11 — one of the edited account's registered AI agents (options loaded from the API). */
-  | 'aiAgent';
+  | 'aiAgent'
+  /** Phase 8 Task 15 — one of the edited account's saved API connections (options loaded from the API). */
+  | 'apiConnection'
+  /** Phase 8 Task 16 — the classifier node's up-to-5 named branches, positionally mapped to CLASSIFIER_BRANCH_HANDLES. */
+  | 'classifierBranches'
+  /** Task 25 — one of the edited account's OTHER journeys, for a sub-journey node's Static-mode target (options loaded from the API). */
+  | 'subJourney';
 
 export interface JourneyFieldOption {
   value: string;

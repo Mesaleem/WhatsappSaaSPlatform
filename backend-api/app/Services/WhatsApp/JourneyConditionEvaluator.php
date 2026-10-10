@@ -126,6 +126,80 @@ class JourneyConditionEvaluator
     }
 
     /**
+     * Task 23 — Connexxa IF/ELSE-IF/ELSE parity. `groups` tested top-down
+     * (group 0 = IF, group 1 = first ELSE IF, …); the index of the FIRST
+     * one whose own rules evaluate true (by its own `match`, exactly
+     * like evaluateAll()), or null when none matched (the caller then
+     * takes the fixed 'else' handle — see JourneyActionConfig::
+     * CONDITIONAL_ELSE_HANDLE). Every group's rules are validated (by
+     * the same conditionListErrors() a single group already uses)
+     * before ANY is evaluated, so a malformed group later in the list
+     * can't be skipped by an earlier group matching first.
+     *
+     * @param  list<array{conditions: mixed, match: mixed}>  $groups
+     * @param  array<string, mixed>  $context
+     * @throws InvalidJourneyCondition
+     */
+    public function evaluateGroups(array $groups, array $context): ?int
+    {
+        $errors = self::conditionGroupsErrors($groups, requireRules: true);
+
+        if ($errors !== []) {
+            throw new InvalidJourneyCondition($errors[0]);
+        }
+
+        foreach ($groups as $i => $group) {
+            if ($this->evaluateAll($group['conditions'] ?? [], $group['match'] ?? null, $context)) {
+                return $i;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Task 23 — problems with a `conditional` node's `groups` list (the
+     * multi-branch shape), using the exact SAME per-group validation
+     * conditionListErrors() already applies to the single-branch shape —
+     * the engine evaluates every branch, legacy or grouped, by identical
+     * rules, so the two validators must agree. $requireRules mirrors
+     * conditionListErrors()' own save-time/run-time distinction.
+     *
+     * @return list<string>
+     */
+    public static function conditionGroupsErrors(mixed $groups, bool $requireRules): array
+    {
+        if (! is_array($groups) || ! array_is_list($groups)) {
+            return ['Conditional branches must be a list.'];
+        }
+
+        // Same namespace as JourneyActionConfig — no import needed.
+        $max = count(JourneyActionConfig::CONDITIONAL_GROUP_HANDLES);
+
+        if (count($groups) > $max) {
+            return ["A Conditional node may have at most {$max} branches."];
+        }
+
+        $errors = [];
+
+        foreach ($groups as $i => $group) {
+            $n = $i + 1;
+
+            if (! is_array($group)) {
+                $errors[] = "Branch {$n} must be an object.";
+
+                continue;
+            }
+
+            foreach (self::conditionListErrors($group['conditions'] ?? [], $group['match'] ?? null, $requireRules) as $error) {
+                $errors[] = "Branch {$n}: {$error}";
+            }
+        }
+
+        return $errors;
+    }
+
+    /**
      * Definition problems for one operator/value pair, or null when valid.
      * Shared by save-time validation and runtime so the two never disagree.
      */

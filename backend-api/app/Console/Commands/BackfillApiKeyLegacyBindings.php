@@ -6,6 +6,7 @@ use App\Models\Account;
 use App\Models\ApiKey;
 use App\Models\ApiKeyBinding;
 use App\Services\ApiAccess\ApiKeyBindingService;
+use App\Services\ApiAccess\ApiKeyCooldownActiveException;
 use App\Services\ApiAccess\InstallationAllowanceExceededException;
 use Illuminate\Console\Command;
 use Illuminate\Database\QueryException;
@@ -113,6 +114,17 @@ class BackfillApiKeyLegacyBindings extends Command
             'grace_deadlines_already_set_untouched' => 0,
             'races_lost_skipped' => 0,
             'allowance_exceeded_skipped' => 0,
+            // A key whose binding was revoked (by a Super Admin, or by
+            // destroyKey()) is still in its 14-day post-revoke cooldown
+            // (Phase 4 Task 9) when this runs. The class docblock's
+            // decision matrix does not special-case this - cooldown is a
+            // security control against repeated actor-initiated rebinds,
+            // and this command deliberately does not bypass it for a
+            // candidate that is, structurally, still "legacy-IP-dependent"
+            // but presently blocked. Skipped and reported rather than
+            // treated as an error; rerun after the cooldown clears (or an
+            // explicit overrideCooldown()) resolves it.
+            'cooldown_blocked_skipped' => 0,
             'multi_key_ambiguous_accounts' => 0,
             'multi_live_binding_anomalies' => 0,
             'errors' => 0,
@@ -270,6 +282,11 @@ class BackfillApiKeyLegacyBindings extends Command
         } catch (InstallationAllowanceExceededException $e) {
             $stats['allowance_exceeded_skipped']++;
             $this->warn("Skipped key #{$key->id}: account #{$e->accountId} is already at its installation allowance ({$e->currentCount}/{$e->allowance}).");
+
+            return;
+        } catch (ApiKeyCooldownActiveException $e) {
+            $stats['cooldown_blocked_skipped']++;
+            $this->warn("Skipped key #{$key->id}: still in cooldown until {$e->cooldownUntil->toIso8601String()} (see class docblock - never auto-bypassed by this command).");
 
             return;
         } catch (QueryException $e) {

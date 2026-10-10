@@ -89,6 +89,15 @@ class AiException extends RuntimeException
         string $message,
         public readonly int $httpStatus,
         ?Throwable $previous = null,
+        // Null for a connection-level failure (no vendor response was ever
+        // received - a DNS/TLS/timeout failure before any HTTP status
+        // exists); set to the vendor's own status code when a response WAS
+        // received (e.g. the provider itself answered 408/504). Distinct
+        // from httpStatus, which is always this APPLICATION's outward
+        // status for the error category (504 for every PROVIDER_TIMEOUT,
+        // vendor-returned or not) and must never be null, since it is what
+        // render() sends to our own API callers.
+        public readonly ?int $vendorHttpStatus = null,
     ) {
         parent::__construct($message, 0, $previous);
     }
@@ -168,9 +177,9 @@ class AiException extends RuntimeException
         return new self(self::PROVIDER_FAILED, "The AI provider '{$provider}' could not complete the request.", 502, $previous);
     }
 
-    public static function timeout(string $provider, ?Throwable $previous = null): self
+    public static function timeout(string $provider, ?Throwable $previous = null, ?int $vendorHttpStatus = null): self
     {
-        return new self(self::PROVIDER_TIMEOUT, "The AI provider '{$provider}' did not respond in time.", 504, $previous);
+        return new self(self::PROVIDER_TIMEOUT, "The AI provider '{$provider}' did not respond in time.", 504, $previous, $vendorHttpStatus);
     }
 
     public static function embeddingsUnsupported(string $provider): self

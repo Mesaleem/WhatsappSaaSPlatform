@@ -337,7 +337,12 @@ class InstallationAllowanceEnforcementTest extends TestCase
         // binding were not freed before the new one's count check.
         $new = $this->service()->rebind($key, $admin, ['ip_policy' => 'SINGLE_IP', 'authorized_ips' => ['203.0.113.9']]);
 
-        $this->assertSame(ApiKeyBinding::STATUS_PENDING, $new->status);
+        // authorized_ips was declared, so createLive() marks this ACTIVE
+        // immediately (credential-pending is a separate concept - see
+        // hasCredential() - not reflected in `status`); consistent with
+        // every other declared-IP binding in this suite (e.g.
+        // test_destroy_does_not_affect_an_unrelated_keys_binding above).
+        $this->assertSame(ApiKeyBinding::STATUS_ACTIVE, $new->status);
         $this->assertSame(1, $this->service()->countLiveInstallations($account->id));
     }
 

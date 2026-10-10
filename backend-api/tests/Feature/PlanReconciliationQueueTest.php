@@ -91,7 +91,7 @@ class PlanReconciliationQueueTest extends TestCase
         Queue::fake();
         $admin = $this->superAdmin();
 
-        $this->actingAs($admin)->putJson(self::PLANS.'/business', ['capabilities' => $this->bundleWithoutAds()])
+        $this->actingAs($admin)->putJson(self::PLANS.'/business', ['capabilities' => $this->bundleWithoutAds(), 'capability_limits' => ['api_installations' => 5]])
             ->assertOk()->assertJsonPath('data.bundle_changed', true);
 
         Queue::assertPushedOn('plan-reconciliation', ReconcilePlanAccountsJob::class);
@@ -118,7 +118,7 @@ class PlanReconciliationQueueTest extends TestCase
         $account = $this->paidTenant();
         $admin = $this->superAdmin();
 
-        $this->actingAs($admin)->putJson(self::PLANS.'/business', ['capabilities' => $this->bundleWithoutAds()])->assertOk();
+        $this->actingAs($admin)->putJson(self::PLANS.'/business', ['capabilities' => $this->bundleWithoutAds(), 'capability_limits' => ['api_installations' => 5]])->assertOk();
 
         // 5. The HTTP request did NOT run the fleet reconciliation itself.
         $this->assertTrue($this->holds($account, 'ads'), 'the request returned before any customer was reconciled');
@@ -172,7 +172,7 @@ class PlanReconciliationQueueTest extends TestCase
         $this->assertSame('sync', config('queue.default'));
         $account = $this->paidTenant();
 
-        $this->actingAs($this->superAdmin())->putJson(self::PLANS.'/business', ['capabilities' => $this->bundleWithoutAds()])->assertOk();
+        $this->actingAs($this->superAdmin())->putJson(self::PLANS.'/business', ['capabilities' => $this->bundleWithoutAds(), 'capability_limits' => ['api_installations' => 5]])->assertOk();
 
         $this->assertFalse($this->holds($account, 'ads'));
         $this->assertSame(AccountEntitlement::REVOKED_PLAN_DOWNGRADE, AccountEntitlement::where('account_id', $account->id)->where('capability_id', Capability::where('slug', 'ads')->value('id'))->value('revoked_reason'));

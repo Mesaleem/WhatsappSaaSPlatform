@@ -44,7 +44,7 @@ class JourneyNodePaletteTest extends TestCase
 
     private const INTERACTIVE_NODES = ['list', 'external_url', 'reply_button', 'location', 'location_request', 'address_request'];
 
-    private const ADVANCED_NODES = ['flow', 'api', 'payment', 'template', 'conditional', 'catalog', 'product', 'agent', 'rag', 'human_intervention'];
+    private const ADVANCED_NODES = ['flow', 'api', 'payment', 'template', 'conditional', 'catalog', 'product', 'agent', 'rag', 'human_intervention', 'classifier'];
 
     private const UTILITY_NODES = ['code', 'email', 'journey', 'delay'];
 
@@ -165,7 +165,8 @@ class JourneyNodePaletteTest extends TestCase
     public function test_the_model_declares_exactly_the_twenty_seven_palette_types(): void
     {
         $this->assertSame($this->paletteTypes(), WhatsAppFlow::PALETTE_NODE_TYPES);
-        $this->assertCount(27, WhatsAppFlow::PALETTE_NODE_TYPES);
+        // Phase 8 Task 16 added 'classifier' as a 28th palette type.
+        $this->assertCount(28, WhatsAppFlow::PALETTE_NODE_TYPES);
     }
 
     public function test_every_palette_type_is_unique(): void
@@ -186,7 +187,7 @@ class JourneyNodePaletteTest extends TestCase
 
     public function test_the_accepted_set_is_the_union_of_both(): void
     {
-        $this->assertCount(32, WhatsAppFlow::NODE_TYPES);
+        $this->assertCount(33, WhatsAppFlow::NODE_TYPES);
         $this->assertSame(
             array_values(array_unique(WhatsAppFlow::NODE_TYPES)),
             WhatsAppFlow::NODE_TYPES,
@@ -219,7 +220,7 @@ class JourneyNodePaletteTest extends TestCase
             $this->assertContains($type, $types, "{$type} was not persisted");
         }
 
-        $this->assertSame(27, WhatsAppFlow::where('account_id', $t['account']->id)->count());
+        $this->assertSame(28, WhatsAppFlow::where('account_id', $t['account']->id)->count());
     }
 
     public function test_a_node_configuration_round_trips_unchanged(): void

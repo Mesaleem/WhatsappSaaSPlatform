@@ -505,7 +505,12 @@ class PlanLifecycleReconciliationTest extends TestCase
         ));
 
         $this->actingAs($this->superAdmin())
-            ->putJson(self::PLANS.'/business', ['capabilities' => $keep])
+            // Requirement 7: touching the bundle on a plan that includes
+            // external_api must resupply a concrete api_installations
+            // limit (Phase1FoundationSeeder deliberately leaves it
+            // unset) - same as every other bundle-touching PUT in this
+            // suite.
+            ->putJson(self::PLANS.'/business', ['capabilities' => $keep, 'capability_limits' => ['api_installations' => 5]])
             ->assertStatus(200)
             ->assertJsonPath('data.bundle_changed', true)
             ->assertJsonPath('data.removed', ['ads']);
@@ -523,7 +528,7 @@ class PlanLifecycleReconciliationTest extends TestCase
         $bundle = Plan::where('slug', 'starter')->firstOrFail()->capabilities->pluck('slug')->all();
 
         $this->actingAs($this->superAdmin())
-            ->putJson(self::PLANS.'/starter', ['capabilities' => [...$bundle, 'ai']])
+            ->putJson(self::PLANS.'/starter', ['capabilities' => [...$bundle, 'ai'], 'capability_limits' => ['api_installations' => 5]])
             ->assertStatus(200)
             ->assertJsonPath('data.added', ['ai']);
 

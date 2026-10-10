@@ -293,7 +293,7 @@ class ModuleAddonTest extends TestCase
     {
         [, $user] = $this->client();
         $this->actingAs($this->superAdmin())->putJson('/api/admin/module-offers/contact_groups', [
-            'label' => 'Custom Contact Groups', 'price' => 120, 'term_months' => 2, 'units_included' => 5, 'is_active' => true,
+            'label' => 'Custom Contact Groups', 'price' => 120, 'term_months' => 2, 'units_included' => 5, 'is_active' => true, 'is_free' => false,
         ])->assertOk();
 
         $this->actingAs($user)->getJson('/api/module-addons')
@@ -308,7 +308,7 @@ class ModuleAddonTest extends TestCase
     {
         [, $user] = $this->client();
         $this->actingAs($this->superAdmin())->putJson('/api/admin/module-offers/contact_groups', [
-            'label' => 'Custom Contact Groups', 'price' => 99, 'term_months' => 1, 'units_included' => 5, 'is_active' => false,
+            'label' => 'Custom Contact Groups', 'price' => 99, 'term_months' => 1, 'units_included' => 5, 'is_active' => false, 'is_free' => false,
         ])->assertOk();
 
         $this->actingAs($user)->postJson('/api/module-addons/request', ['module' => 'contact_groups', 'units' => 3])
@@ -418,14 +418,20 @@ class ModuleAddonTest extends TestCase
         ModuleAddonOffer::where('module', 'contact_groups')->update(['is_free' => true]);
         $offer = ModuleAddonOffer::where('module', 'contact_groups')->first();
 
-        $this->actingAs($admin)->putJson('/api/admin/module-offers/contact_groups', [
+        $response = $this->actingAs($admin)->putJson('/api/admin/module-offers/contact_groups', [
             'label' => $offer->label,
             'price' => (float) $offer->price,
             'term_months' => $offer->term_months,
             'units_included' => $offer->units_included,
             'is_active' => $offer->is_active,
             'is_free' => false,
-        ])->assertOk()->assertJsonPath('data.is_free', false)->assertJsonPath('data.price', (float) $offer->price);
+        ])->assertOk()->assertJsonPath('data.is_free', false);
+        // Not assertJsonPath(..., (float) $offer->price): a whole-number
+        // price (99.00) round-trips through json_encode() as the bare
+        // JSON number 99, which json_decode()s back as a PHP int, not a
+        // float - a well-known PHP float/JSON quirk, not a price bug.
+        // Compare numerically instead of by PHP type.
+        $this->assertEqualsWithDelta((float) $offer->price, (float) $response->json('data.price'), 0.001);
 
         $this->assertFalse(app(\App\Services\Billing\ModuleAddonService::class)->isFree('contact_groups'));
         [, $user] = $this->client();

@@ -31,6 +31,9 @@ use App\Http\Controllers\Api\V1\GroupController as V1GroupController;
 use App\Http\Controllers\Api\V1\UnifiedMessageController;
 use App\Http\Controllers\Api\ClientApiKeyController;
 use App\Http\Controllers\Api\MessageTemplateController;
+use App\Http\Controllers\Api\AITemplateController;
+use App\Http\Controllers\Api\AIJourneyController;
+use App\Http\Controllers\Api\JourneyApiConnectionController;
 use App\Http\Controllers\Api\Internal\WhatsAppStatusController;
 use App\Http\Controllers\Api\Internal\WhatsAppInboundController;
 use App\Http\Controllers\Api\Internal\WhatsAppAuthStateController;
@@ -62,6 +65,7 @@ use App\Http\Controllers\Api\CommentAutomationRuleController;
 use App\Http\Controllers\Api\SocialInboxController;
 use App\Http\Controllers\Api\SocialWebhookController;
 use App\Http\Controllers\Api\Admin\SocialGatewayController;
+use App\Http\Controllers\Api\Admin\AiGatewayController;
 use App\Http\Controllers\Api\LeadController;
 use App\Http\Controllers\Api\CrmLeadController;
 use App\Http\Controllers\Api\CrmContactController;
@@ -492,6 +496,17 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::get('/', [MetaConfigController::class, 'show']);
             Route::post('/', [MetaConfigController::class, 'store']);
             Route::post('/test-connection', [MetaConfigController::class, 'testConnection']);
+
+            // Phase 1 — Meta Channel Creation / Embedded Signup (per-tenant
+            // Meta App model). app-credentials = step 1 (paste the
+            // tenant's own App ID/Secret/Config ID); oauth/start = step 2
+            // (hand the frontend what FB.login() needs); oauth/exchange =
+            // step 3 (code -> token, webhook subscribe, number register,
+            // persist). See the roadmap doc's Phase 1 section.
+            Route::get('/app-credentials', [MetaConfigController::class, 'appCredentials']);
+            Route::post('/app-credentials', [MetaConfigController::class, 'saveAppCredentials']);
+            Route::get('/oauth/start', [MetaConfigController::class, 'oauthStart']);
+            Route::post('/oauth/exchange', [MetaConfigController::class, 'oauthExchange']);
         });
 
         // Module 9: Developer Portal — API key management + outbound webhook
@@ -580,6 +595,8 @@ Route::middleware('auth:sanctum')->group(function () {
                 Route::get('/{id}/versions/{versionId}', [WhatsAppFlowController::class, 'showVersion'])->whereNumber(['id', 'versionId']);
             });
             Route::middleware('permission:manage-chatbot|whatsapp.create')->post('/', [WhatsAppFlowController::class, 'store']);
+            // Phase 8 Task 14 — "Generate with AI": returns a DRAFT graph only, never saves a WhatsAppFlow row. Same permission tier as store().
+            Route::middleware('permission:manage-chatbot|whatsapp.create')->post('/ai-generate', [AIJourneyController::class, 'generate']);
             Route::middleware('permission:manage-chatbot|whatsapp.edit')->group(function () {
                 Route::put('/{id}', [WhatsAppFlowController::class, 'update']);
                 Route::post('/{id}/toggle', [WhatsAppFlowController::class, 'toggle']);
@@ -589,6 +606,18 @@ Route::middleware('auth:sanctum')->group(function () {
                 Route::post('/{id}/versions/{versionId}/publish', [WhatsAppFlowController::class, 'publishVersion'])->whereNumber(['id', 'versionId']);
             });
             Route::middleware('permission:manage-chatbot|whatsapp.delete')->delete('/{id}', [WhatsAppFlowController::class, 'destroy']);
+        });
+
+        // Phase 8 Task 15 — "Manage All APIs": a named, reusable API
+        // connection an `api` node references by id instead of re-entering
+        // its endpoint/credentials per node. Same module/capability/
+        // permission tiers as the Journey Builder itself — see
+        // JourneyApiConnectionController's docblock.
+        Route::middleware(['module.guard:chatbot', 'capability.guard:journey_automation'])->prefix('whatsapp/api-connections')->group(function () {
+            Route::middleware('permission:manage-chatbot|whatsapp.view')->get('/', [JourneyApiConnectionController::class, 'index']);
+            Route::middleware('permission:manage-chatbot|whatsapp.create')->post('/', [JourneyApiConnectionController::class, 'store']);
+            Route::middleware('permission:manage-chatbot|whatsapp.edit')->put('/{id}', [JourneyApiConnectionController::class, 'update']);
+            Route::middleware('permission:manage-chatbot|whatsapp.delete')->delete('/{id}', [JourneyApiConnectionController::class, 'destroy']);
         });
 
         // Phase 8 Task 9 — Knowledge Base foundation (retrieval for the future
@@ -1455,6 +1484,9 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::middleware('permission:manage-templates')->prefix('message-templates')->group(function () {
         Route::get('/', [MessageTemplateController::class, 'index']);
         Route::post('/', [MessageTemplateController::class, 'store']);
+        // Phase 8 Task 13 — "Generate with AI" draft for the Template
+        // Designer form; never creates a MessageTemplate row itself.
+        Route::post('/ai-generate', [AITemplateController::class, 'generate']);
         Route::put('/{id}', [MessageTemplateController::class, 'update']);
         Route::patch('/{id}/approve', [MessageTemplateController::class, 'approve']);
         Route::patch('/{id}/reject', [MessageTemplateController::class, 'reject']);
@@ -1572,5 +1604,13 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::middleware('permission:manage-social-settings')->prefix('admin/social')->group(function () {
         Route::get('/provider-configs', [SocialGatewayController::class, 'index']);
         Route::post('/provider-configs/{provider}', [SocialGatewayController::class, 'update']);
+    });
+
+    // Phase 8 Task 12 (continued) — platform-level AI provider/model
+    // settings (AiGatewayController), same shape and tier as the
+    // Social provider-configs group just above.
+    Route::middleware('permission:manage-ai-settings')->prefix('admin/ai')->group(function () {
+        Route::get('/provider-settings', [AiGatewayController::class, 'index']);
+        Route::post('/provider-settings/{provider}', [AiGatewayController::class, 'update']);
     });
 });

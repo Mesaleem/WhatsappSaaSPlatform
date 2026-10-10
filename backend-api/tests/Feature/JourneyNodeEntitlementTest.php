@@ -262,6 +262,16 @@ class JourneyNodeEntitlementTest extends TestCase
             unset($registry[$legacy]);
         }
 
+        // 'end' is canvas-only UI sugar (EndNodeConfig's own docblock: "UI
+        // sugar, never sent to the backend") — stripEndNodes() removes it
+        // from graph_data before every save, so it has no row in
+        // JourneyNodeCatalog::NODES and never will. Pre-existing registry
+        // entry, not one of the 5 grandfathered legacy types above, so it
+        // needs its own exclusion here rather than being swept up by the
+        // loop.
+        $this->assertArrayNotHasKey('end', JourneyNodeCatalog::NODES, "'end' is canvas-only and must stay ungated.");
+        unset($registry['end']);
+
         $this->assertSame(
             array_values(WhatsAppFlow::PALETTE_NODE_TYPES),
             array_keys(JourneyNodeCatalog::NODES),

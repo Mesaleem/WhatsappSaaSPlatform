@@ -122,9 +122,54 @@ export interface JourneyEdge {
   sourceHandle?: string;
 }
 
+export type JourneyVariableDataType = 'string' | 'number' | 'boolean' | 'json';
+
+/**
+ * A declared "Local Variable" — see ManageVariablesModal.tsx. UI-only:
+ * documentation/autocomplete for the variable names a journey's nodes
+ * already produce (a Question's `variable_name`, a Prompt/Agent/RAG
+ * node's `outputVariable`) or expect to receive from elsewhere (e.g. a
+ * CTWA referral payload). Declaring one here does not create it and its
+ * `defaultValue` is never seeded into a session — nothing in
+ * WhatsAppJourneyEngine reads this list. That keeps it a zero-backend-risk
+ * addition: `graph_data` validates only its `nodes`/`edges` keys
+ * (WhatsAppFlowController::validateFlow()), so this sibling key rides
+ * along unvalidated and unused server-side, exactly like `end` nodes did
+ * before stripEndNodes() — except this one IS meant to reach the backend
+ * and come back on reload, purely so the list survives a save.
+ */
+export interface JourneyVariableDeclaration {
+  id: string;
+  name: string;
+  dataType: JourneyVariableDataType;
+  defaultValue?: string;
+}
+
+/**
+ * Phase 8 Task 16 — a free-floating canvas annotation (not a node: no
+ * type, no handles, nothing ever reads or executes it). Same
+ * zero-backend-risk shape as JourneyVariableDeclaration above: `graph_data`
+ * validates only its `nodes`/`edges` keys, so this sibling key rides
+ * along unvalidated and unused server-side — it exists purely so sticky
+ * notes survive a save/reload in the builder.
+ */
+export interface JourneyStickyNote {
+  id: string;
+  x: number;
+  y: number;
+  width?: number;
+  height?: number;
+  text: string;
+  color?: string;
+}
+
 export interface JourneyGraph {
   nodes: JourneyNode[];
   edges: JourneyEdge[];
+  /** Local Variable declarations — see JourneyVariableDeclaration. Absent on every graph saved before this feature. */
+  variables?: JourneyVariableDeclaration[];
+  /** Canvas annotations — see JourneyStickyNote. Absent on every graph saved before this feature. */
+  stickyNotes?: JourneyStickyNote[];
 }
 
 export interface WhatsAppFlow {
@@ -139,6 +184,16 @@ export interface WhatsAppFlow {
   is_active: boolean;
   created_at: string | null;
   updated_at: string | null;
+  /**
+   * Task 21 — Channel-binding gate (Connexxa parity). Present on
+   * index()/show()/store()/update() responses (eager-loaded
+   * `id, phone_number` only). Eloquent's relationsToArray() keeps this key
+   * exactly as the relation was loaded ('whatsappNumbers', not
+   * snake-cased) — see WhatsAppFlow::whatsappNumbers() and the
+   * whatsapp_flow_numbers migration's scope-note docblock: this is a
+   * creation/update-time binding only, not yet an inbound-routing filter.
+   */
+  whatsappNumbers?: { id: number; phone_number: string }[];
 }
 
 export interface SaveFlowPayload {
@@ -153,6 +208,14 @@ export interface SaveFlowPayload {
    * false saves a draft version.
    */
   publish?: boolean;
+  /**
+   * Task 21 — Channel-binding gate (Connexxa parity). Required, 1 to
+   * WhatsAppFlow.MAX_CHANNELS (2) ids, each one of the account's own
+   * WhatsAppNumber slots (WhatsAppFlowController::validateFlow() /
+   * assertWhatsAppNumbersOwned()). Matches ConnexxaIQ's own "Channels (up
+   * to 2)*" required field at journey creation.
+   */
+  whatsapp_number_ids: number[];
 }
 
 /** 'waiting' / 'failed' / 'cancelled' — Phase 7 Task 1 temporal backbone; 'blocked' — Task 1.6 (account lost Journey entitlement; state kept). */
@@ -175,4 +238,35 @@ export interface WhatsAppFlowSession {
   last_error?: string | null;
   last_interaction_at: string | null;
   created_at: string | null;
+}
+
+/**
+ * Phase 8 Task 15 — "Manage All APIs": a named, reusable API connection
+ * (base URL + headers + query) an `api` node references via
+ * `data.apiConnectionId` instead of re-entering the same endpoint and
+ * credentials per node. Account-scoped — never shared across tenants.
+ */
+export interface JourneyApiConnectionPair {
+  key: string;
+  value: string | null;
+  /** true when `value` is JourneySecrets' mask ('********') standing in for an already-saved secret — leave untouched to keep it, type to replace it. */
+  masked?: boolean;
+}
+
+export interface JourneyApiConnection {
+  id: number;
+  name: string;
+  base_url: string | null;
+  headers: JourneyApiConnectionPair[];
+  query: JourneyApiConnectionPair[];
+  notes: string | null;
+  updated_at: string | null;
+}
+
+export interface SaveJourneyApiConnectionPayload {
+  name: string;
+  base_url?: string | null;
+  headers?: JourneyApiConnectionPair[];
+  query?: JourneyApiConnectionPair[];
+  notes?: string | null;
 }

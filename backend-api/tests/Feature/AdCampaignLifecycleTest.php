@@ -683,15 +683,29 @@ class AdCampaignLifecycleTest extends TestCase
         $user = $this->user($account->fresh());
         $admin = $this->superAdmin();
         $bundle = Plan::where('slug', 'business')->firstOrFail()->capabilities->pluck('slug')->all();
+        // The seeded 'business' plan already carries external_api without
+        // api_installations (deliberately — see Phase1FoundationSeeder's own
+        // docblock on Requirement 7). Any request that rewrites this plan's
+        // capabilities bundle must now also supply api_installations with a
+        // concrete limit, exactly as a real Super Admin would via the admin
+        // UI — this test is about the 'ads' capability, not that rule, so it
+        // just carries the capability through unchanged on both PUTs below.
+        $bundleWithInstallations = array_values(array_unique([...$bundle, 'api_installations']));
 
         $this->actingAs($user)->getJson('/api/social/ads')->assertOk();
         $this->actingAs($user)->getJson('/api/auth/me')->assertJsonPath('user.capabilities.ads', true);
 
-        $this->actingAs($admin)->putJson('/api/admin/plans-management/business', ['capabilities' => array_values(array_diff($bundle, ['ads']))])->assertOk();
+        $this->actingAs($admin)->putJson('/api/admin/plans-management/business', [
+            'capabilities' => array_values(array_diff($bundleWithInstallations, ['ads'])),
+            'capability_limits' => ['api_installations' => 5],
+        ])->assertOk();
         $this->actingAs($user)->getJson('/api/social/ads')->assertForbidden()->assertJsonPath('error_code', 'CAPABILITY_NOT_ENTITLED');
         $this->actingAs($user)->getJson('/api/auth/me')->assertJsonPath('user.capabilities.ads', false);
 
-        $this->actingAs($admin)->putJson('/api/admin/plans-management/business', ['capabilities' => $bundle])->assertOk();
+        $this->actingAs($admin)->putJson('/api/admin/plans-management/business', [
+            'capabilities' => $bundleWithInstallations,
+            'capability_limits' => ['api_installations' => 5],
+        ])->assertOk();
         $this->actingAs($user)->getJson('/api/social/ads')->assertOk();
         $this->actingAs($user)->getJson('/api/auth/me')->assertJsonPath('user.capabilities.ads', true);
     }

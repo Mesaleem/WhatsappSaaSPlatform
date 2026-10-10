@@ -195,7 +195,14 @@ class SocialAccountFoundationTest extends TestCase
         $admin = $this->user($account);
 
         $connect = $this->actingAs($admin)->getJson('/api/social/oauth/meta/redirect')->assertOk();
-        $this->assertArrayNotHasKey('nonce', $connect->json(), 'the nonce only ever reaches the SPA through the popup');
+        // redirect() hands the nonce back to its OWN authenticated caller so
+        // the SPA can poll result() (see class docblock) — the real CSRF/
+        // account-binding defense is bind()/result() re-verifying account_id
+        // AND user_id server-side, not keeping the nonce secret from the SPA.
+        // startConnect() below makes its own independent redirect() call (a
+        // fresh nonce), so only assert the shape here, not equality with it.
+        $this->assertIsString($connect->json('nonce'));
+        $this->assertNotSame('', $connect->json('nonce'));
         $flow = $this->startConnect($admin);
         $this->assertSame([$account->id, $admin->id, 'meta'], [$flow['state']['account_id'], $flow['state']['user_id'], $flow['state']['provider']]);
         $this->assertStringStartsWith('https://www.facebook.com/', $flow['url']);

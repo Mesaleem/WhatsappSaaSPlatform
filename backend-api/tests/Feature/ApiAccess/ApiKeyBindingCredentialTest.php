@@ -5,6 +5,11 @@ namespace Tests\Feature\ApiAccess;
 use App\Models\Account;
 use App\Models\ApiKey;
 use App\Models\ApiKeyBinding;
+use App\Services\ApiAccess\InstallationAllowanceResolver;
+use App\Models\Plan;
+use App\Models\Invoice;
+use App\Models\Capability;
+use App\Models\AccountEntitlement;
 use App\Models\User;
 use App\Services\ApiAccess\ApiKeyBindingService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -47,6 +52,53 @@ class ApiKeyBindingCredentialTest extends TestCase
     private function admin(): User
     {
         return User::factory()->create();
+    }
+
+    /**
+     * Phase 4 Task 6 (installation-allowance enforcement) postdates this
+     * file. provision()'s allowance check is per-ACCOUNT, so any test
+     * provisioning more than one live binding on the SAME account needs a
+     * concrete limit above the DEFAULT_ALLOWANCE of 1 — mirrors
+     * AdminVisibilityTest::accountWithAllowance().
+     */
+    private function grantInstallationAllowance(Account $account, int $limit): void
+    {
+        $capability = Capability::firstOrCreate(
+            ['slug' => InstallationAllowanceResolver::CAPABILITY],
+            ['label' => 'API Installations', 'category' => 'platform']
+        );
+
+        AccountEntitlement::firstOrCreate([
+            'account_id' => $account->id,
+            'capability_id' => $capability->id,
+        ], [
+            'source' => AccountEntitlement::SOURCE_MANUAL_GRANT,
+        ]);
+
+        $plan = Plan::create([
+            'slug' => 'installation-allowance-'.Str::random(8),
+            'label' => 'Installation Allowance Test Plan',
+            'price' => 100,
+            'duration_days' => 30,
+            'engine_type' => 'qr',
+            'billing_model' => 'flat_quota',
+        ]);
+        $plan->capabilities()->attach($capability->id, ['usage_limit' => $limit]);
+
+        Invoice::create([
+            'account_id' => $account->id,
+            'invoice_number' => 'INV-'.Str::random(10),
+            'plan_key' => $plan->slug,
+            'plan_label' => $plan->label,
+            'amount' => 100,
+            'tax_amount' => 0,
+            'total_amount' => 100,
+            'currency' => 'INR',
+            'payment_gateway' => 'razorpay',
+            'gateway_order_id' => 'order_'.Str::random(10),
+            'status' => 'paid',
+            'paid_at' => now(),
+        ]);
     }
 
     private function makeKey(Account $account, string $name = 'Key'): ApiKey
@@ -127,6 +179,9 @@ class ApiKeyBindingCredentialTest extends TestCase
     public function test_key_as_credential_cannot_authenticate_key_bs_binding(): void
     {
         $account = Account::factory()->create();
+        // Two live bindings on the SAME account — needs allowance >= 2
+        // (Task 6 postdates this file; see grantInstallationAllowance()).
+        $this->grantInstallationAllowance($account, 2);
         $keyA = $this->makeKey($account, 'Key A');
         $keyB = $this->makeKey($account, 'Key B');
 

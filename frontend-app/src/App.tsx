@@ -32,6 +32,7 @@ import SocialAccountsPage from './pages/social/SocialAccountsPage';
 import MetaAdsPage from './pages/social/MetaAdsPage';
 import AdsDashboardPage from './pages/social/AdsDashboardPage';
 import AdminSocialSettingsPage from './pages/admin/AdminSocialSettingsPage';
+import AdminAiSettingsPage from './pages/admin/AdminAiSettingsPage';
 import SocialInboxPage from './pages/social/SocialInboxPage';
 import CommentRulesPage from './pages/social/CommentRulesPage';
 import LeadsPage from './pages/social/LeadsPage';
@@ -390,6 +391,15 @@ export default function App() {
               element={
                 <ProtectedRoute permission="manage-social-settings">
                   <AdminSocialSettingsPage />
+                </ProtectedRoute>
+              }
+            />
+            {/* Phase 8 Task 12 (continued) — platform AI provider/model settings. */}
+            <Route
+              path="/admin/ai-settings"
+              element={
+                <ProtectedRoute permission="manage-ai-settings">
+                  <AdminAiSettingsPage />
                 </ProtectedRoute>
               }
             />

@@ -117,7 +117,11 @@ class CooldownOverrideTest extends TestCase
         $key = $this->makeKey($account);
         $this->service()->setCooldown($key, now()->addDays(14));
 
-        $shortUntil = now()->addDays(2);
+        // Truncated to whole seconds: the datetime column has no
+        // sub-second precision, so comparing the reloaded value against
+        // an un-truncated in-memory Carbon via equalTo() would otherwise
+        // always fail by a few microseconds.
+        $shortUntil = now()->addDays(2)->startOfSecond();
         $this->service()->overrideCooldown($key->fresh(), $shortUntil, $this->admin(), 'customer escalation, approved early reconnect');
 
         $fresh = $key->fresh();

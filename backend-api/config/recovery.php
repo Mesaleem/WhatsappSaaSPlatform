@@ -69,11 +69,16 @@ return [
         'webhook_subscriptions' => ['secret'],
         'mail_settings' => ['password'],
         'social_accounts' => ['access_token', 'refresh_token'],
-        'whatsapp_sessions' => ['meta_access_token'],
+        // meta_app_secret added alongside meta_access_token - Phase (2026-10-09)
+        // per-tenant Meta app credentials migration (add_meta_app_credentials_to_whatsapp_sessions_table).
+        'whatsapp_sessions' => ['meta_access_token', 'meta_app_secret'],
         // Baileys ('qr' engine) credentials. Losing APP_KEY means every WhatsApp
         // connection must be re-paired, so this belongs in the escrow runbook.
         'whatsapp_engine_auth_states' => ['value'],
         'accounts' => ['gemini_api_key'],
+        // Phase 8 Task 12 — AiProviderSettings::api_key (EncryptedOrNull),
+        // the DB override for a provider's API key (see AiManager::resolve()).
+        'ai_provider_settings' => ['api_key'],
     ],
 
     // Rows sampled per encrypted column when checking decryptability.

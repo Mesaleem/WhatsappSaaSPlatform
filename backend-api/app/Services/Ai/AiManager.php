@@ -2,10 +2,12 @@
 
 namespace App\Services\Ai;
 
+use App\Models\AiProviderSettings;
 use App\Services\Ai\Contracts\AiProvider;
 use App\Services\Ai\Contracts\EmbeddingProvider;
 use App\Services\Ai\Providers\AnthropicProvider;
 use App\Services\Ai\Providers\GeminiProvider;
+use App\Services\Ai\Providers\GroqProvider;
 use App\Services\Ai\Providers\OpenAiProvider;
 use Closure;
 
@@ -43,6 +45,8 @@ class AiManager
             'anthropic' => fn (array $config) => new AnthropicProvider($config),
             // Phase 8 Task 8
             'gemini' => fn (array $config) => new GeminiProvider($config),
+            // Phase 8 Task 12
+            'groq' => fn (array $config) => new GroqProvider($config),
         ];
     }
 
@@ -105,10 +109,46 @@ class AiManager
         return $provider;
     }
 
+    /**
+     * Phase 8 Task 12 (continued) — DB-level override seam. A Super
+     * Admin row (AiProviderSettings) can force a provider on/off
+     * (is_enabled explicit true/false) over AI_ENABLED_PROVIDERS, and
+     * can override model/api_key/base_url over config('ai.providers.*')
+     * — the fix for a retired/renamed model (or a key that needs
+     * rotating) without an env edit + redeploy. A row that leaves a
+     * field null never changes that field's existing env-config
+     * behaviour; no row at all (or the table not yet migrated) is
+     * exactly today's behaviour. tokens_per_credit_override is folded
+     * into config('ai.credits.tokens_per_credit_overrides') here so
+     * billing code stays provider-neutral (it only ever reads that
+     * config array, never this table).
+     */
+    private function dbSettingsFor(string $name): ?AiProviderSettings
+    {
+        try {
+            return AiProviderSettings::findByProviderCached($name);
+        } catch (\Throwable) {
+            // Table not migrated yet, or DB unreachable during boot/CLI —
+            // behave exactly as if no override row exists.
+            return null;
+        }
+    }
+
+    private function isEnabled(string $name): bool
+    {
+        $settings = $this->dbSettingsFor($name);
+
+        if ($settings !== null && $settings->is_enabled !== null) {
+            return $settings->is_enabled;
+        }
+
+        return in_array($name, (array) config('ai.enabled', []), true);
+    }
+
     /** @throws AiException */
     private function resolve(string $name): AiProvider|EmbeddingProvider
     {
-        if (! isset($this->factories[$name]) || ! in_array($name, (array) config('ai.enabled', []), true)) {
+        if (! isset($this->factories[$name]) || ! $this->isEnabled($name)) {
             throw AiException::providerUnavailable($name);
         }
 
@@ -116,7 +156,18 @@ class AiManager
             return $this->resolved[$name];
         }
 
-        $provider = ($this->factories[$name])((array) config("ai.providers.{$name}", []));
+        $settings = $this->dbSettingsFor($name);
+        $providerConfig = (array) config("ai.providers.{$name}", []);
+
+        if ($settings !== null) {
+            $providerConfig = array_merge($providerConfig, $settings->configOverrides());
+
+            if ($settings->tokens_per_credit_override !== null) {
+                config(["ai.credits.tokens_per_credit_overrides.{$name}" => $settings->tokens_per_credit_override]);
+            }
+        }
+
+        $provider = ($this->factories[$name])($providerConfig);
 
         if (! ($provider instanceof AiProvider || $provider instanceof EmbeddingProvider) || $provider->name() !== $name) {
             throw AiException::providerUnavailable($name);

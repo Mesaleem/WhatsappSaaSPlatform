@@ -14,6 +14,7 @@ use App\Models\KnowledgeDocument;
 use App\Models\MessageDispatchLog;
 use App\Models\User;
 use App\Models\WhatsAppFlow;
+use App\Models\WhatsAppNumber;
 use App\Models\WhatsAppFlowSession;
 use App\Models\WhatsAppSession;
 use App\Services\Ai\AiException;
@@ -266,6 +267,15 @@ class JourneyRagNodeTest extends TestCase
         return $user->fresh();
     }
 
+    /** Channel-binding gate (Connexxa parity, Task 21). */
+    private function channelFor(Account $account): WhatsAppNumber
+    {
+        return WhatsAppNumber::firstOrCreate(
+            ['account_id' => $account->id],
+            ['phone_number' => '91904'.str_pad((string) $account->id, 6, '0', STR_PAD_LEFT), 'status' => WhatsAppNumber::STATUS_LINKED],
+        );
+    }
+
     // ================================================================== execution
 
     public function test_a_rag_node_retrieves_generates_and_stores_the_answer_through_the_worker(): void
@@ -393,8 +403,10 @@ class JourneyRagNodeTest extends TestCase
         $mine = $this->indexedBase($account);
         $other = $this->indexedBase($this->account(), name: 'Other');
         $user = $this->user($account);
+        $number = $this->channelFor($account);
         $payload = fn (int|string $kb) => [
             'name' => 'RAG', 'trigger_type' => 'keyword', 'trigger_value' => 'go',
+            'whatsapp_number_ids' => [$number->id],
             'graph_data' => ['nodes' => [['id' => 't', 'type' => 'trigger', 'data' => []], $this->rag('r', $kb)], 'edges' => [['id' => 'e', 'source' => 't', 'target' => 'r']]],
         ];
 
@@ -419,21 +431,24 @@ class JourneyRagNodeTest extends TestCase
         $subBase = $this->indexedBase($sub, name: 'Sub KB');
         $agentUser = $this->user($agent, 'agent');
         $agentUser->assignRole('admin');
-        $payload = fn (int $kb) => [
+        $subNumber = $this->channelFor($sub);
+        $payload = fn (int $kb, int $numberId) => [
             'name' => 'RAG', 'trigger_type' => 'keyword', 'trigger_value' => 'go',
+            'whatsapp_number_ids' => [$numberId],
             'graph_data' => ['nodes' => [['id' => 't', 'type' => 'trigger', 'data' => []], $this->rag('r', $kb)], 'edges' => [['id' => 'e', 'source' => 't', 'target' => 'r']]],
         ];
 
         // the agent's OWN knowledge base cannot be used in its sub-client's journey
-        $this->actingAs($agentUser)->postJson('/api/whatsapp/flows?account_id='.$sub->id, $payload($agentBase->id))->assertStatus(422);
-        $this->actingAs($agentUser)->postJson('/api/whatsapp/flows?account_id='.$sub->id, $payload($subBase->id))->assertCreated();
+        $this->actingAs($agentUser)->postJson('/api/whatsapp/flows?account_id='.$sub->id, $payload($agentBase->id, $subNumber->id))->assertStatus(422);
+        $this->actingAs($agentUser)->postJson('/api/whatsapp/flows?account_id='.$sub->id, $payload($subBase->id, $subNumber->id))->assertCreated();
 
         $superAdmin = User::factory()->create(['account_id' => null, 'is_active' => true]);
         $superAdmin->assignRole('super_admin');
         $client = $this->account();
         $clientBase = $this->indexedBase($client, name: 'Client KB');
-        $this->actingAs($superAdmin)->postJson('/api/whatsapp/flows?account_id='.$client->id, $payload($subBase->id))->assertStatus(422);
-        $this->actingAs($superAdmin)->postJson('/api/whatsapp/flows?account_id='.$client->id, $payload($clientBase->id))->assertCreated();
+        $clientNumber = $this->channelFor($client);
+        $this->actingAs($superAdmin)->postJson('/api/whatsapp/flows?account_id='.$client->id, $payload($subBase->id, $clientNumber->id))->assertStatus(422);
+        $this->actingAs($superAdmin)->postJson('/api/whatsapp/flows?account_id='.$client->id, $payload($clientBase->id, $clientNumber->id))->assertCreated();
 
         // The selected client's own entitlements decide at RUN time, where AI is
         // used and billed: a Super Admin may save a journey for a client (the
@@ -441,9 +456,11 @@ class JourneyRagNodeTest extends TestCase
         // without `ai` the rag node is refused before any retrieval or charge.
         $starter = $this->account(100, 'starter');
         $starterBase = KnowledgeBase::create(['account_id' => $starter->id, 'name' => 'Starter KB', 'embedding_provider' => 'fake', 'embedding_model' => 'bow', 'embedding_dimensions' => 256]);
-        $this->actingAs($superAdmin->fresh())->postJson('/api/whatsapp/flows?account_id='.$starter->id, $payload($clientBase->id))->assertStatus(422);
+        $starterNumber = $this->channelFor($starter);
+        $this->actingAs($superAdmin->fresh())->postJson('/api/whatsapp/flows?account_id='.$starter->id, $payload($clientBase->id, $starterNumber->id))->assertStatus(422);
         $this->actingAs($superAdmin->fresh())->postJson('/api/whatsapp/flows?account_id='.$starter->id, [
             'name' => 'RAG', 'trigger_type' => 'keyword', 'trigger_value' => 'go', 'publish' => false,
+            'whatsapp_number_ids' => [$starterNumber->id],
             'graph_data' => ['nodes' => [['id' => 't', 'type' => 'trigger', 'data' => []], $this->q('q'), $this->rag('r', $starterBase->id)], 'edges' => [['id' => 'e', 'source' => 't', 'target' => 'q'], ['id' => 'e2', 'source' => 'q', 'target' => 'r']]],
         ])->assertCreated();
         $this->flow($starter, [$this->q('q'), $this->rag('r', $starterBase->id)]);

@@ -288,6 +288,8 @@ const NAV_ITEMS: NavItem[] = [
   { label: 'Admin Gateway Settings', to: '/admin/billing/gateway-settings', icon: Settings, tint: NAV_TINTS.gateway, superAdminOnly: true },
   // Social Media Marketing & Meta Ads Automation Expansion (Phase 2).
   { label: 'Social Gateway Settings', to: '/admin/social-settings', icon: Settings, tint: NAV_TINTS.social, superAdminOnly: true },
+  // Phase 8 Task 12 (continued) — platform AI provider/model settings, same tier as the two gateway-settings items above.
+  { label: 'AI Gateway Settings', to: '/admin/ai-settings', icon: Bot, tint: NAV_TINTS.gateway, superAdminOnly: true },
   // Super Admin WhatsApp Device Integration — link/view/disconnect/reconnect any client's device from one screen.
   { label: 'Device Settings', to: '/admin/device-settings', icon: Smartphone, tint: NAV_TINTS.whatsapp, superAdminOnly: true },
   { label: 'API Access', to: '/admin/api-access', icon: Settings, tint: NAV_TINTS.gateway, superAdminOnly: true },

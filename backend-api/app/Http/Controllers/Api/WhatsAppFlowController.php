@@ -10,6 +10,7 @@ use App\Models\JourneyExecutionEvent;
 use App\Models\WhatsAppFlow;
 use App\Models\WhatsAppFlowSession;
 use App\Models\WhatsAppFlowVersion;
+use App\Models\WhatsAppNumber;
 use App\Services\Access\EntitlementAuditLogger;
 use App\Services\Access\JourneyNodeAuthorizer;
 use App\Services\WhatsApp\JourneyActionConfig;
@@ -53,7 +54,7 @@ class WhatsAppFlowController extends Controller
     {
         $account = $this->account($request);
 
-        $flows = WhatsAppFlow::forAccount($account->id)->latest()->get();
+        $flows = WhatsAppFlow::forAccount($account->id)->with('whatsappNumbers:id,phone_number')->latest()->get();
 
         return response()->json(['data' => $flows]);
     }
@@ -63,7 +64,7 @@ class WhatsAppFlowController extends Controller
     {
         $account = $this->account($request);
 
-        $flow = WhatsAppFlow::forAccount($account->id)->find($id);
+        $flow = WhatsAppFlow::forAccount($account->id)->with('whatsappNumbers:id,phone_number')->find($id);
         $this->abortIfMissingFlow($request, $account, $flow, $id);
 
         return response()->json(['data' => $flow]);
@@ -77,6 +78,9 @@ class WhatsAppFlowController extends Controller
         $this->assertNodesEntitled($request, $account, $data['graph_data']['nodes'], $this->saveAction($request), null);
         $this->assertKnowledgeBasesOwned($account, $data['graph_data']['nodes']);
         $this->assertAgentsOwned($request, $account, $data['graph_data']['nodes']);
+        $this->assertApiConnectionsOwned($account, $data['graph_data']['nodes']);
+        $this->assertSubJourneysOwned($account, $data['graph_data']['nodes'], null);
+        $this->assertWhatsAppNumbersOwned($account, $data['whatsapp_number_ids']);
 
         // P5-7 — a journey that is published (the default) must be executable.
         if ($this->publishFlag($request)) {
@@ -94,8 +98,9 @@ class WhatsAppFlowController extends Controller
         // Phase 7 Task 2 — saving snapshots version 1; `publish: false` keeps it a draft.
         $flow->publishOnSave = $this->publishFlag($request);
         $flow->save();
+        $flow->whatsappNumbers()->sync($data['whatsapp_number_ids']);
 
-        return response()->json(['message' => 'Flow created.', 'data' => $flow->fresh()], 201);
+        return response()->json(['message' => 'Flow created.', 'data' => $flow->fresh()->load('whatsappNumbers')], 201);
     }
 
     public function update(Request $request, int $id): JsonResponse
@@ -109,6 +114,9 @@ class WhatsAppFlowController extends Controller
         $this->assertNodesEntitled($request, $account, $data['graph_data']['nodes'], $this->saveAction($request), $flow->id);
         $this->assertKnowledgeBasesOwned($account, $data['graph_data']['nodes']);
         $this->assertAgentsOwned($request, $account, $data['graph_data']['nodes']);
+        $this->assertApiConnectionsOwned($account, $data['graph_data']['nodes']);
+        $this->assertSubJourneysOwned($account, $data['graph_data']['nodes'], $flow->id);
+        $this->assertWhatsAppNumbersOwned($account, $data['whatsapp_number_ids']);
 
         // P5-7 — publishing (the default) requires an executable graph; a
         // draft save (`publish: false`) that switches the journey ON requires
@@ -130,8 +138,9 @@ class WhatsAppFlowController extends Controller
         // (published unless `publish: false`); running sessions keep theirs.
         $flow->publishOnSave = $this->publishFlag($request);
         $flow->save();
+        $flow->whatsappNumbers()->sync($data['whatsapp_number_ids']);
 
-        return response()->json(['message' => 'Flow updated.', 'data' => $flow->fresh()]);
+        return response()->json(['message' => 'Flow updated.', 'data' => $flow->fresh()->load('whatsappNumbers')]);
     }
 
     /**
@@ -490,6 +499,126 @@ class WhatsAppFlowController extends Controller
         }
     }
 
+    /**
+     * Phase 8 Task 15 — an `api` node's `apiConnectionId` must name a
+     * JourneyApiConnection of the journey's OWN (target) account;
+     * another account's id is reported exactly like a missing one — the
+     * same no-existence-leak posture as assertKnowledgeBasesOwned() and
+     * assertAgentsOwned(). The `api` node is not runtime-executable yet
+     * (JourneyNodeCatalog::RUNTIME_EXECUTABLE_TYPES), so there is no
+     * "again at run time" check to add here — this save-time guard is
+     * the only one, and will stay the only one until an engine for this
+     * node type exists.
+     *
+     * @param  array<int, mixed>  $nodes
+     */
+    private function assertApiConnectionsOwned(Account $account, array $nodes): void
+    {
+        $errors = [];
+
+        foreach ($nodes as $i => $node) {
+            $id = is_array($node) && ($node['type'] ?? null) === 'api' && is_array($node['data'] ?? null) ? ($node['data']['apiConnectionId'] ?? null) : null;
+
+            if ($id === null || $id === '') {
+                continue;
+            }
+
+            if (! JourneyActionConfig::positiveId($id) || ! \App\Models\JourneyApiConnection::query()->forAccount((int) $account->id)->whereKey((int) $id)->exists()) {
+                $errors["graph_data.nodes.{$i}.data.apiConnectionId"] = ['API connection not found.'];
+            }
+        }
+
+        if ($errors !== []) {
+            throw ValidationException::withMessages($errors);
+        }
+    }
+
+    /**
+     * Task 25 — a 'journey' node's Static-mode `journeyId` must name a
+     * WhatsAppFlow of the journey's OWN (target) account; another
+     * account's id is reported exactly like a missing one, the same
+     * no-existence-leak posture as assertKnowledgeBasesOwned()/
+     * assertAgentsOwned()/assertApiConnectionsOwned() above. A journey
+     * may not point at itself (there is no runtime yet to detect that
+     * loop, so it is refused here instead of being saved as a dead
+     * end). Dynamic-mode nodes (`journeyIdTemplate`) name no id here —
+     * they are resolved, if ever, at run time — so this check is a
+     * no-op for them. Like assertApiConnectionsOwned(), this node is
+     * not runtime-executable yet (JourneyNodeCatalog::
+     * RUNTIME_EXECUTABLE_TYPES), so this save-time guard is the only
+     * one, and will stay the only one until an engine for this node
+     * type exists.
+     *
+     * @param  array<int, mixed>  $nodes
+     */
+    private function assertSubJourneysOwned(Account $account, array $nodes, ?int $excludeFlowId): void
+    {
+        $errors = [];
+
+        foreach ($nodes as $i => $node) {
+            if (! is_array($node) || ($node['type'] ?? null) !== 'journey' || ! is_array($node['data'] ?? null)) {
+                continue;
+            }
+
+            $data = $node['data'];
+
+            if (($data['mode'] ?? 'static') !== 'static') {
+                continue;
+            }
+
+            $id = $data['journeyId'] ?? null;
+
+            if ($id === null || $id === '') {
+                continue;
+            }
+
+            if (! JourneyActionConfig::positiveId($id)) {
+                $errors["graph_data.nodes.{$i}.data.journeyId"] = ['Journey not found.'];
+
+                continue;
+            }
+
+            if ($excludeFlowId !== null && (int) $id === $excludeFlowId) {
+                $errors["graph_data.nodes.{$i}.data.journeyId"] = ['A journey cannot run itself.'];
+
+                continue;
+            }
+
+            if (! WhatsAppFlow::query()->forAccount((int) $account->id)->whereKey((int) $id)->exists()) {
+                $errors["graph_data.nodes.{$i}.data.journeyId"] = ['Journey not found.'];
+            }
+        }
+
+        if ($errors !== []) {
+            throw ValidationException::withMessages($errors);
+        }
+    }
+
+    /**
+     * Channel-binding gate, ownership half: every id the client sent must
+     * actually be one of THIS account's WhatsAppNumber slots. Same
+     * never-trust-client-ids pattern as assertApiConnectionsOwned() above
+     * — a cross-tenant id is rejected, not silently dropped.
+     *
+     * @param  array<int, mixed>  $whatsappNumberIds
+     */
+    private function assertWhatsAppNumbersOwned(Account $account, array $whatsappNumberIds): void
+    {
+        $owned = WhatsAppNumber::query()
+            ->where('account_id', $account->id)
+            ->whereIn('id', $whatsappNumberIds)
+            ->pluck('id')
+            ->all();
+
+        $missing = array_diff($whatsappNumberIds, $owned);
+
+        if ($missing !== []) {
+            throw ValidationException::withMessages([
+                'whatsapp_number_ids' => ['One or more selected channels are not on this account.'],
+            ]);
+        }
+    }
+
     private function validateFlow(Request $request, ?WhatsAppFlow $existing = null): array
     {
         $data = $request->validate([
@@ -500,6 +629,14 @@ class WhatsAppFlowController extends Controller
             'graph_data.nodes' => ['required', 'array', 'min:1'],
             'graph_data.edges' => ['required', 'array'],
             'is_active' => ['nullable', 'boolean'],
+            // Channel-binding gate (Connexxa parity) — see
+            // WhatsAppFlow::MAX_CHANNELS and the whatsapp_flow_numbers
+            // migration's docblock. Required on both create and update:
+            // a journey can never end up with zero channels, matching
+            // ConnexxaIQ, which will not let a journey be built at all
+            // without first picking one.
+            'whatsapp_number_ids' => ['required', 'array', 'min:1', 'max:'.WhatsAppFlow::MAX_CHANNELS],
+            'whatsapp_number_ids.*' => ['integer'],
         ]);
 
         $nodes = $data['graph_data']['nodes'];
@@ -533,6 +670,31 @@ class WhatsAppFlowController extends Controller
         // Phase 5 -- branch identity must be explicit on the wire, not
         // inferred from canvas geometry. See nodeConfigErrors()' docblock.
         foreach ($this->branchErrors($nodes, $data['graph_data']['edges'] ?? []) as $key => $messages) {
+            $errors[$key] = $messages;
+        }
+
+        // Phase 8 Task 16 — same "branch identity must be explicit"
+        // requirement, for the classifier node's fixed branch slots.
+        // Kept as its own method rather than folded into branchErrors()
+        // above, so the conditional node's existing, already-tested
+        // behaviour is not touched by this change at all.
+        foreach ($this->classifierBranchErrors($nodes, $data['graph_data']['edges'] ?? []) as $key => $messages) {
+            $errors[$key] = $messages;
+        }
+
+        // Connexxa-parity multi-group Conditional (IF/ELSE-IF/ELSE) — same
+        // "branch identity must be explicit" requirement as above, for a
+        // conditional node's data.groups branch slots. Sibling to
+        // classifierBranchErrors() rather than a branchErrors() change, so
+        // the legacy true/false conditional node's validation is untouched.
+        foreach ($this->conditionalGroupBranchErrors($nodes, $data['graph_data']['edges'] ?? []) as $key => $messages) {
+            $errors[$key] = $messages;
+        }
+
+        // Task 24 — Connexxa parity: same "branch identity must be
+        // explicit" requirement, for a 'list'/'reply_button' node's
+        // per-option handle slots.
+        foreach ($this->interactiveOptionBranchErrors($nodes, $data['graph_data']['edges'] ?? []) as $key => $messages) {
             $errors[$key] = $messages;
         }
 
@@ -660,10 +822,23 @@ class WhatsAppFlowController extends Controller
             $data = is_array($node['data'] ?? null) ? $node['data'] : [];
 
             if ($type === 'conditional') {
-                $problems = JourneyConditionEvaluator::conditionListErrors($data['conditions'] ?? [], $data['match'] ?? null, requireRules: false);
+                // Multi-group mode (Connexxa parity): a non-empty data.groups
+                // is validated by conditionGroupsErrors() instead of the
+                // legacy single-list check below — the two are mutually
+                // exclusive on the wire, same switch the engine itself uses
+                // in WhatsAppJourneyEngine::resolveConditionalTarget().
+                if (! empty($data['groups'])) {
+                    $problems = JourneyConditionEvaluator::conditionGroupsErrors($data['groups'], requireRules: false);
 
-                if ($problems !== []) {
-                    $errors["graph_data.nodes.{$i}.data.conditions"] = $problems;
+                    if ($problems !== []) {
+                        $errors["graph_data.nodes.{$i}.data.groups"] = $problems;
+                    }
+                } else {
+                    $problems = JourneyConditionEvaluator::conditionListErrors($data['conditions'] ?? [], $data['match'] ?? null, requireRules: false);
+
+                    if ($problems !== []) {
+                        $errors["graph_data.nodes.{$i}.data.conditions"] = $problems;
+                    }
                 }
             }
 
@@ -729,6 +904,15 @@ class WhatsAppFlowController extends Controller
                 continue;
             }
 
+            // Connexxa-parity multi-group mode governs its own branch
+            // identity in conditionalGroupBranchErrors() below — this
+            // legacy true/false check must not also run against it, or a
+            // groups-mode node would be required to satisfy BOTH handle
+            // vocabularies at once.
+            if (! empty($node['data']['groups'])) {
+                continue;
+            }
+
             foreach ($edges as $edge) {
                 if (($edge['source'] ?? null) !== $node['id']) {
                     continue;
@@ -737,6 +921,162 @@ class WhatsAppFlowController extends Controller
                 if (! in_array($edge['sourceHandle'] ?? null, self::CONDITIONAL_HANDLES, true)) {
                     $errors["graph_data.nodes.{$i}.sourceHandle"] = [
                         'Every connection leaving a Conditional node must declare sourceHandle "true" or "false".',
+                    ];
+
+                    break;
+                }
+            }
+        }
+
+        return $errors;
+    }
+
+    /**
+     * Connexxa-parity multi-group Conditional (IF/ELSE-IF/ELSE) — every
+     * edge leaving a 'conditional' node that is in multi-group mode
+     * (non-empty data.groups) must declare sourceHandle naming one of
+     * that node's actual group handles (JourneyActionConfig::
+     * CONDITIONAL_GROUP_HANDLES, truncated to the node's own group count)
+     * or JourneyActionConfig::CONDITIONAL_ELSE_HANDLE. Mirrors
+     * classifierBranchErrors()'s precedent; kept as a sibling to
+     * branchErrors() rather than folded into it, so the legacy true/false
+     * conditional node's validation (above) is untouched — see that
+     * method's new skip-guard for the other half of this split.
+     *
+     * @param  array<int, array<string, mixed>>  $nodes
+     * @param  array<int, array<string, mixed>>  $edges
+     * @return array<string, array<int, string>>
+     */
+    private function conditionalGroupBranchErrors(array $nodes, array $edges): array
+    {
+        $errors = [];
+
+        foreach ($nodes as $i => $node) {
+            if (($node['type'] ?? null) !== 'conditional' || empty($node['id'])) {
+                continue;
+            }
+
+            $groups = $node['data']['groups'] ?? null;
+
+            if (empty($groups) || ! is_array($groups)) {
+                continue;
+            }
+
+            $allowedHandles = array_merge(
+                array_slice(JourneyActionConfig::CONDITIONAL_GROUP_HANDLES, 0, count($groups)),
+                [JourneyActionConfig::CONDITIONAL_ELSE_HANDLE],
+            );
+
+            foreach ($edges as $edge) {
+                if (($edge['source'] ?? null) !== $node['id']) {
+                    continue;
+                }
+
+                if (! in_array($edge['sourceHandle'] ?? null, $allowedHandles, true)) {
+                    $errors["graph_data.nodes.{$i}.sourceHandle"] = [
+                        'Every connection leaving a Conditional node\'s branch must declare which branch it is.',
+                    ];
+
+                    break;
+                }
+            }
+        }
+
+        return $errors;
+    }
+
+    /**
+     * Phase 8 Task 16 — every edge leaving a 'classifier' node must
+     * declare sourceHandle naming one of JourneyActionConfig::
+     * CLASSIFIER_BRANCH_HANDLES, exactly like branchErrors() already
+     * requires for 'conditional' (see that method's docblock for why
+     * explicit branch identity matters). A sibling method, not a change
+     * to branchErrors() itself — see this task's call site above.
+     *
+     * @param  array<int, array<string, mixed>>  $nodes
+     * @param  array<int, array<string, mixed>>  $edges
+     * @return array<string, array<int, string>>
+     */
+    private function classifierBranchErrors(array $nodes, array $edges): array
+    {
+        $errors = [];
+
+        foreach ($nodes as $i => $node) {
+            if (($node['type'] ?? null) !== 'classifier' || empty($node['id'])) {
+                continue;
+            }
+
+            foreach ($edges as $edge) {
+                if (($edge['source'] ?? null) !== $node['id']) {
+                    continue;
+                }
+
+                if (! in_array($edge['sourceHandle'] ?? null, JourneyActionConfig::CLASSIFIER_BRANCH_HANDLES, true)) {
+                    $errors["graph_data.nodes.{$i}.sourceHandle"] = [
+                        'Every connection leaving a Classifier node must declare which branch it is.',
+                    ];
+
+                    break;
+                }
+            }
+        }
+
+        return $errors;
+    }
+
+    /**
+     * Task 24 — Connexxa parity: every edge leaving a 'list' node must
+     * declare sourceHandle naming one of JourneyActionConfig::
+     * LIST_ROW_HANDLES, truncated to that node's own row count (rows
+     * flattened across all its sections, in document order — the SAME
+     * order WhatsAppJourneyEngine::flattenListRows()/sendListNode() use,
+     * so position i always means the same row on both sides); every
+     * edge leaving a 'reply_button' node must declare one of
+     * REPLY_BUTTON_HANDLES, truncated to its own button count. Mirrors
+     * classifierBranchErrors()'s precedent; kept as its own method
+     * rather than folded into branchErrors() (which only ever governed
+     * 'conditional') or classifierBranchErrors() (only 'classifier').
+     *
+     * @param  array<int, array<string, mixed>>  $nodes
+     * @param  array<int, array<string, mixed>>  $edges
+     * @return array<string, array<int, string>>
+     */
+    private function interactiveOptionBranchErrors(array $nodes, array $edges): array
+    {
+        $errors = [];
+
+        foreach ($nodes as $i => $node) {
+            $type = $node['type'] ?? null;
+
+            if (($type !== 'list' && $type !== 'reply_button') || empty($node['id'])) {
+                continue;
+            }
+
+            $nodeData = is_array($node['data'] ?? null) ? $node['data'] : [];
+
+            if ($type === 'list') {
+                $optionCount = 0;
+
+                foreach (is_array($nodeData['sections'] ?? null) ? $nodeData['sections'] : [] as $section) {
+                    $optionCount += is_array($section) && is_array($section['rows'] ?? null) ? count($section['rows']) : 0;
+                }
+
+                $allowedHandles = array_slice(JourneyActionConfig::LIST_ROW_HANDLES, 0, $optionCount);
+                $label = 'List';
+            } else {
+                $optionCount = is_array($nodeData['buttons'] ?? null) ? count($nodeData['buttons']) : 0;
+                $allowedHandles = array_slice(JourneyActionConfig::REPLY_BUTTON_HANDLES, 0, $optionCount);
+                $label = 'Reply Buttons';
+            }
+
+            foreach ($edges as $edge) {
+                if (($edge['source'] ?? null) !== $node['id']) {
+                    continue;
+                }
+
+                if (! in_array($edge['sourceHandle'] ?? null, $allowedHandles, true)) {
+                    $errors["graph_data.nodes.{$i}.sourceHandle"] = [
+                        "Every connection leaving a {$label} node must declare which option it is.",
                     ];
 
                     break;

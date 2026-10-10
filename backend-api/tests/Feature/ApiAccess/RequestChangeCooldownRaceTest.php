@@ -147,6 +147,12 @@ class RequestChangeCooldownRaceTest extends TestCase
     {
         $account = $this->accountWithAllowance();
         $key = $this->provisionedKey($account);
+        // Refreshed BEFORE DB::listen is registered: fresh() itself issues
+        // an unlocked SELECT on api_keys, which would otherwise be
+        // recorded as a spurious, premature "api_keys" entry and make
+        // this assertion fail regardless of requestChange()'s real lock
+        // order.
+        $key = $key->fresh();
 
         $order = [];
         DB::listen(function ($query) use (&$order, $account, $key) {
@@ -159,7 +165,7 @@ class RequestChangeCooldownRaceTest extends TestCase
             }
         });
 
-        $this->service()->requestChange($key->fresh(), $this->admin(), [
+        $this->service()->requestChange($key, $this->admin(), [
             'reason' => 'moving servers',
             'ip_policy' => 'SINGLE_IP',
             'requested_ips' => ['203.0.113.64'],

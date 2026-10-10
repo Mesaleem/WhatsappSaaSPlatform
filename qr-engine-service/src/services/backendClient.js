@@ -60,6 +60,15 @@ function ownerFields(sessionKey) {
  * QR pairing flow for the user who is actively scanning.
  */
 export async function notifyBackend(sessionKey, status, extra = {}) {
+  // Computed once, outside the try: ownerFields() is a pure Map lookup
+  // with no I/O, so it can never be the cause of the failure this catch
+  // block is reporting, and having it in scope here is what the log
+  // line actually needs (the previous version referenced an `accountId`
+  // that was never a parameter of this function — a ReferenceError
+  // thrown from inside the catch itself, defeating the whole point of
+  // this being fire-and-forget).
+  const { account_id: accountId } = ownerFields(sessionKey);
+
   try {
     await backendHttp.post(
       '/api/internal/whatsapp-status',

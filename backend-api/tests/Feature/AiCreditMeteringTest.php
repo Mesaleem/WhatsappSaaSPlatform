@@ -651,7 +651,13 @@ class AiCreditMeteringTest extends TestCase
         $offenders = [];
         foreach (new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator(app_path())) as $file) {
             if ($file->isFile() && $file->getExtension() === 'php' && ! str_ends_with($file->getPathname(), 'AiCreditPricing.php')
-                && str_contains(file_get_contents($file->getPathname()), 'tokens_per_credit')) {
+                // Match the bare pricing key/formula only — NOT the
+                // legitimate, separately-documented per-model
+                // 'tokens_per_credit_override(s)' column/config name
+                // that AiProviderSettings/AiGatewayController/AiManager
+                // read and write (AiCreditPricing.php alone still folds
+                // that override into the one pricing formula).
+                && preg_match('/tokens_per_credit(?!_overrides?)/', file_get_contents($file->getPathname()))) {
                 $offenders[] = basename($file->getPathname());
             }
         }

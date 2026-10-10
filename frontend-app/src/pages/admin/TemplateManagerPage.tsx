@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import accountService from '../../services/accountService';
 import templateService from '../../services/templateService';
+import aiService from '../../services/aiService';
 import { useAuth } from '../../core/context/AuthContext';
 import type { Account } from '../../types/account';
 import type {
@@ -237,6 +238,19 @@ function TemplateModal({
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Phase 8 Task 13 — "Generate with AI" draft panel. Self-contained:
+  // it only ever calls setTitle()/setTemplateBody() with the result, the
+  // same two setters the form's own inputs already use, so the existing
+  // {{token}} -> variablesSchema sync effect (above) picks up any
+  // placeholders the draft introduces with no extra wiring here.
+  const [showAiPanel, setShowAiPanel] = useState(false);
+  const [aiPurpose, setAiPurpose] = useState('');
+  const [aiTone, setAiTone] = useState('');
+  const [aiVariableKeys, setAiVariableKeys] = useState('');
+  const [isGeneratingDraft, setIsGeneratingDraft] = useState(false);
+  const [aiDraftError, setAiDraftError] = useState<string | null>(null);
+  const [aiDraftProvider, setAiDraftProvider] = useState<string | null>(null);
+
   const variables = useMemo(() => extractVariables(templateBody), [templateBody]);
   /** Live preview of what generateTemplateCode() will derive server-side if Template Code is left blank. */
   const suggestedCode = useMemo(() => slugifyTitle(title), [title]);
@@ -259,6 +273,44 @@ function TemplateModal({
 
   const updateVariableField = (key: string, patch: Partial<TemplateVariableSchemaField>) => {
     setVariablesSchema((prev) => prev.map((f) => (f.key === key ? { ...f, ...patch } : f)));
+  };
+
+  /**
+   * Phase 8 Task 13 — calls AITemplateController::generate() and fills
+   * title/templateBody with whatever it returns, UNCHANGED (no rewriting
+   * or "improving" the result here — see TemplateCopywriterService's own
+   * docblock for why that matters). accountId must already be chosen:
+   * it is who pays for the draft, independent of who the saved template
+   * ends up belonging to.
+   */
+  const handleGenerateDraft = async () => {
+    if (accountId === '' || !aiPurpose.trim()) {
+      return;
+    }
+
+    setIsGeneratingDraft(true);
+    setAiDraftError(null);
+    try {
+      const result = await aiService.generateTemplateDraft({
+        account_id: accountId,
+        purpose: aiPurpose.trim(),
+        category: category || 'MARKETING',
+        tone: aiTone.trim() || undefined,
+        variable_keys: aiVariableKeys
+          .split(',')
+          .map((k) => k.trim())
+          .filter(Boolean),
+      });
+      setTemplateBody(result.template_body);
+      if (!title.trim()) {
+        setTitle(result.title);
+      }
+      setAiDraftProvider(result.provider);
+    } catch (err) {
+      setAiDraftError(extractMessage(err, 'Could not generate a draft.'));
+    } finally {
+      setIsGeneratingDraft(false);
+    }
   };
 
   /**
@@ -580,15 +632,81 @@ function TemplateModal({
           </div>
 
           <div>
-            <label className="text-sm font-medium text-slate-700">
-              Template body — use {'{{variable_name}}'} for dynamic tags <span className="text-red-500">*</span>
-            </label>
+            <div className="flex items-center justify-between">
+              <label className="text-sm font-medium text-slate-700">
+                Template body — use {'{{variable_name}}'} for dynamic tags <span className="text-red-500">*</span>
+              </label>
+              <button
+                type="button"
+                onClick={() => setShowAiPanel((v) => !v)}
+                className="inline-flex items-center gap-1 text-xs font-medium text-indigo-600 hover:text-indigo-700"
+              >
+                <Sparkles className="h-3.5 w-3.5" />
+                Generate with AI
+              </button>
+            </div>
+
+            {showAiPanel && (
+              <div className="mt-2 space-y-2 rounded-lg border border-indigo-100 bg-indigo-50/50 p-3">
+                {accountId === '' && (
+                  <p className="text-xs text-amber-700">Select an account above first — it pays the AI credit for this draft.</p>
+                )}
+                <div>
+                  <label className="text-xs font-medium text-slate-700">What is this message for?</label>
+                  <textarea
+                    value={aiPurpose}
+                    onChange={(e) => setAiPurpose(e.target.value)}
+                    rows={2}
+                    placeholder="e.g. Confirm a customer's appointment for tomorrow"
+                    className={`${inputClass} text-sm`}
+                  />
+                </div>
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  <div>
+                    <label className="text-xs font-medium text-slate-700">Tone (optional)</label>
+                    <input
+                      value={aiTone}
+                      onChange={(e) => setAiTone(e.target.value)}
+                      placeholder="Professional"
+                      className={`${inputClass} text-sm`}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-slate-700">Variable names (optional, comma-separated)</label>
+                    <input
+                      value={aiVariableKeys}
+                      onChange={(e) => setAiVariableKeys(e.target.value)}
+                      placeholder="customer_name, appointment_time"
+                      className={`${inputClass} text-sm`}
+                    />
+                  </div>
+                </div>
+                {aiDraftError && <p className="text-xs text-red-600">{aiDraftError}</p>}
+                {aiDraftProvider === 'template' && !aiDraftError && (
+                  <p className="text-xs text-slate-500">
+                    AI was unavailable, so a simple draft was generated instead — feel free to edit it below.
+                  </p>
+                )}
+                <div className="flex justify-end">
+                  <button
+                    type="button"
+                    onClick={() => void handleGenerateDraft()}
+                    disabled={isGeneratingDraft || accountId === '' || !aiPurpose.trim()}
+                    className="flex items-center gap-2 rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:opacity-60"
+                  >
+                    {isGeneratingDraft ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+                    Generate Draft
+                  </button>
+                </div>
+              </div>
+            )}
+
             <textarea
               value={templateBody}
               onChange={(e) => setTemplateBody(e.target.value)}
               rows={5}
               placeholder="Hello {{name}}, your dose {{dose_name}} is scheduled at {{dose_time}}."
-              className={`${inputClass} font-mono text-sm`}
+              className={`${inputClass} mt-2 font-mono text-sm`}
             />
           </div>
 

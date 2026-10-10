@@ -181,6 +181,10 @@ class AdminVisibilityTest extends TestCase
         $account = $this->accountWithAllowance();
         $account->forceFill(['authorized_server_ip' => '203.0.113.10'])->save();
         $key = $this->makeKey($account, 'Legacy');
+        // A base deadline (Task 5's own backfill) must exist before it can be
+        // extended — effectiveLegacyDeadline() deliberately treats a NULL base
+        // as nothing to extend (see ApiKeyBindingService's own docblock).
+        $key->forceFill(['legacy_binding_grace_expires_at' => now()->addDays(3)])->save();
         $admin = $this->superAdmin();
         $deadline = now()->addDays(10);
         $this->service()->extendLegacyDeadline($key, $deadline, $admin, 'migration window');

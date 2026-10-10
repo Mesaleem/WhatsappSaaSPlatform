@@ -39,6 +39,22 @@ class ApiBindingSecurityEventsTest extends TestCase
 {
     use RefreshDatabase;
 
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        // record()'s dedupe (Phase 4 Task 11, by design: a caller
+        // retrying against an active cooldown must not flood the audit
+        // log) keys on event+binding/key id over the array cache store
+        // (CACHE_STORE=array, phpunit.xml). RefreshDatabase rolls back
+        // each test's transaction, so SQLite reuses the same low
+        // api_key ids across tests - without this flush, a dedupe slot
+        // left by an earlier test (e.g. another EV_COOLDOWN_DENIED
+        // test) silently swallows THIS test's own event, failing the
+        // assertNotNull() below with no production bug involved.
+        \Illuminate\Support\Facades\Cache::flush();
+    }
+
     private function service(): ApiKeyBindingService
     {
         return app(ApiKeyBindingService::class);
@@ -235,7 +251,7 @@ class ApiBindingSecurityEventsTest extends TestCase
         $owner = User::factory()->create(['account_id' => $account->id]);
         $admin = $this->admin();
 
-        $changeRequest = $this->service()->requestChange($key->fresh(), $owner, ['ip_policy' => 'SINGLE_IP', 'authorized_ips' => ['203.0.113.2']]);
+        $changeRequest = $this->service()->requestChange($key->fresh(), $owner, ['ip_policy' => 'SINGLE_IP', 'requested_ips' => ['203.0.113.2'], 'reason' => 'approved transfer to new server']);
         $this->service()->approve($changeRequest, $admin);
 
         $event = $this->latestEvent(ApiKeyBindingService::EV_CHANGE_APPROVED, $key->id);
@@ -351,7 +367,7 @@ class ApiBindingSecurityEventsTest extends TestCase
         [$key] = $this->provisionedKey($account, 'A', '203.0.113.1');
         $owner = User::factory()->create(['account_id' => $account->id]);
         $admin = $this->admin();
-        $changeRequest = $this->service()->requestChange($key->fresh(), $owner, ['ip_policy' => 'SINGLE_IP', 'authorized_ips' => ['203.0.113.2']]);
+        $changeRequest = $this->service()->requestChange($key->fresh(), $owner, ['ip_policy' => 'SINGLE_IP', 'requested_ips' => ['203.0.113.2'], 'reason' => 'approved transfer to new server']);
 
         $this->service()->approve($changeRequest, $admin);
 
@@ -387,7 +403,7 @@ class ApiBindingSecurityEventsTest extends TestCase
         $this->service()->revoke($key->fresh(), $admin, 'revoke to trigger cooldown');
 
         try {
-            $this->service()->requestChange($key->fresh(), $owner, ['ip_policy' => 'SINGLE_IP', 'authorized_ips' => ['203.0.113.3']]);
+            $this->service()->requestChange($key->fresh(), $owner, ['ip_policy' => 'SINGLE_IP', 'requested_ips' => ['203.0.113.3'], 'reason' => 'requested while key is in cooldown']);
             $this->fail('Expected ApiKeyCooldownActiveException while the key is in cooldown.');
         } catch (\App\Services\ApiAccess\ApiKeyCooldownActiveException $e) {
             // expected

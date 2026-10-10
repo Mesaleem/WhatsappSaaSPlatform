@@ -164,6 +164,13 @@ class BackfillApiKeyLegacyBindingsTest extends TestCase
         $this->assertNull($key->fresh()->liveBinding(), 'fixture assumption: the key must have no live binding after the binding is revoked.');
         $this->assertSame(1, ApiKeyBinding::where('api_key_id', $key->id)->where('status', ApiKeyBinding::STATUS_REVOKED)->count());
 
+        // revoke() starts the same flat 14-day cooldown (Phase 4 Task 9) as
+        // a completed transfer. The backfill command deliberately never
+        // bypasses this security control (see BackfillApiKeyLegacyBindings
+        // class docblock), so travel past it to exercise the eligible-
+        // candidate path itself, same pattern as TransferAtomicityTest.
+        $this->travel(15)->days();
+
         $this->runBackfill();
 
         // The historical revoked row is untouched — never resurrected, never reused.
@@ -414,11 +421,15 @@ class BackfillApiKeyLegacyBindingsTest extends TestCase
 
         $this->service()->createLegacyBackfillBinding($key, '203.0.113.61');
 
-        $this->expectException(\Illuminate\Database\QueryException::class);
-        // Deliberately bypasses the command's own lockForUpdate() guard —
-        // this proves the SCHEMA itself refuses a second live row for this
-        // key, which is the backstop the command's race-handling relies
-        // on when a concurrent writer does not go through that lock at all.
+        // createLiveBindingEnforced()'s own lockForUpdate() + live()->exists()
+        // guard (ApiKeyBindingService::createLiveBindingEnforced()) now
+        // always runs first and refuses this in-process, same-seam double
+        // call with a clear InvalidArgumentException — the raw unique-index
+        // QueryException is unreachable through this method and is kept
+        // only as the out-of-process backstop the command's own docblock
+        // describes (see BackfillApiKeyLegacyBindings::bindOneLegacyKey()).
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('This API key already has a live authorized server.');
         $this->service()->createLegacyBackfillBinding($key->fresh(), '203.0.113.61');
     }
 
@@ -428,11 +439,16 @@ class BackfillApiKeyLegacyBindingsTest extends TestCase
         $key = $this->makeKey($account);
         $this->service()->createLegacyBackfillBinding($key, '203.0.113.62');
 
+        // Same reasoning as the test above: in-process, this is now
+        // caught by createLiveBindingEnforced()'s own guard, not the raw
+        // DB constraint. The command treats this InvalidArgumentException
+        // exactly the same as a unique-violation QueryException — both are
+        // "already resolved by someone else" (see bindOneLegacyKey()).
         try {
             $this->service()->createLegacyBackfillBinding($key->fresh(), '203.0.113.62');
-            $this->fail('expected a unique-constraint QueryException.');
-        } catch (\Illuminate\Database\QueryException $e) {
-            $this->assertTrue($this->service()->isUniqueViolation($e), 'this is exactly the exception the backfill command catches and treats as "already resolved by someone else".');
+            $this->fail('expected an InvalidArgumentException.');
+        } catch (\InvalidArgumentException $e) {
+            $this->assertSame('This API key already has a live authorized server.', $e->getMessage());
         }
     }
 }

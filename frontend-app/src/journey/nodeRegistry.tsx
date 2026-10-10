@@ -27,6 +27,7 @@ import {
   ShoppingBag,
   Smile,
   Sparkles,
+  Split,
   Square,
   Target,
   UserPlus,
@@ -35,13 +36,20 @@ import {
 } from 'lucide-react';
 
 import {
+  CONDITIONAL_ELSE_HANDLE,
   CONDITIONAL_FALSE_HANDLE,
+  CONDITIONAL_GROUP_HANDLE_IDS,
+  CONDITIONAL_MAX_GROUPS,
   CONDITIONAL_TRUE_HANDLE,
   DELAY_UNITS,
+  LIST_ROW_HANDLE_IDS,
+  MAX_LIST_ROWS,
   MAX_REPLY_BUTTONS,
   NUMERIC_CONDITIONAL_OPERATORS,
+  REPLY_BUTTON_HANDLE_IDS,
   UNARY_CONDITIONAL_OPERATORS,
   type AnyJourneyNodeType,
+  type ConditionalGroup,
   type ConditionalOperator,
   type JourneyNodeCapability,
   type JourneyNodeCategory,
@@ -50,6 +58,9 @@ import {
   type JourneyNodeHandle,
   type JourneyNodeProvider,
   type JourneyPaletteNodeType,
+  type ListSection,
+  type ReplyButton,
+  type SubJourneyMode,
 } from '../types/journeyNodes';
 
 /**
@@ -132,8 +143,16 @@ export interface JourneyNodeDefinition {
   capabilities?: JourneyNodeCapability[];
   /** Seeded provider slugs this node can run on. UX metadata only. */
   providers?: JourneyNodeProvider[];
-  /** Outgoing connection points. More than one = an explicitly branching node. */
-  sourceHandles: JourneyNodeHandle[];
+  /**
+   * Outgoing connection points. More than one = an explicitly branching
+   * node. Almost always a fixed array. Task 23 — 'conditional' alone
+   * uses the function form, so a legacy saved node (no `data.groups`)
+   * keeps rendering its original 2 fixed TRUE/FALSE handles pixel-for-
+   * pixel, and only a node the author has explicitly switched into
+   * multi-branch mode grows the group_1..N + else handles — see
+   * journeySourceHandles() below, the one place this is ever resolved.
+   */
+  sourceHandles: JourneyNodeHandle[] | ((data: Record<string, unknown>) => JourneyNodeHandle[]);
   /** False only for the entry node, which nothing may connect into. */
   hasTargetHandle: boolean;
   /** Seed written into graph_data when a node is dropped on the canvas. */
@@ -152,11 +171,67 @@ export interface JourneyNodeDefinition {
 
 const NEXT: JourneyNodeHandle[] = [{ id: 'next', label: 'Next' }];
 
+/**
+ * Phase 8 Task 16 — the classifier's 5 fixed branch slots (see
+ * JourneyActionConfig::CLASSIFIER_BRANCH_HANDLES on the backend; these
+ * ids must match exactly). A branch's label is per-instance DATA
+ * (config.branches[i].label), not part of the handle itself — the
+ * handle only fixes HOW MANY slots exist and their wire identity,
+ * exactly like CONDITIONAL_TRUE_HANDLE/CONDITIONAL_FALSE_HANDLE do for
+ * the 2-handle conditional node.
+ */
+const CLASSIFIER_BRANCH_HANDLE_IDS = ['branch_1', 'branch_2', 'branch_3', 'branch_4', 'branch_5'] as const;
+const CLASSIFIER_HANDLES: JourneyNodeHandle[] = CLASSIFIER_BRANCH_HANDLE_IDS.map((id, i) => ({ id, label: `Branch ${i + 1}` }));
+
+
 const str = (config: Record<string, unknown>, key: string): string =>
   typeof config[key] === 'string' ? (config[key] as string).trim() : '';
 
 const arr = (config: Record<string, unknown>, key: string): unknown[] =>
   Array.isArray(config[key]) ? (config[key] as unknown[]) : [];
+
+type ConditionalRuleLike = { variable?: string; operator?: ConditionalOperator; value?: string };
+
+/**
+ * Task 23 — the single-branch rule-list validation the 'conditional'
+ * node has always applied (JourneyConditionEvaluator's own rules on the
+ * backend), extracted so it validates ONE branch whether that branch is
+ * the legacy single set of conditions or one group in multi-branch
+ * mode — the engine evaluates every branch by this exact same logic
+ * either way, so the two editors must agree on it too.
+ */
+const conditionGroupError = (conditions: ConditionalRuleLike[]): string | null => {
+  if (conditions.length === 0) {
+    return 'Add at least one condition.';
+  }
+
+  if (conditions.some((r) => !r.variable || !r.variable.trim())) {
+    return 'Every condition needs a variable.';
+  }
+
+  if (conditions.some((r) => !r.operator)) {
+    return 'Every condition needs an operator.';
+  }
+
+  const needsValue = (r: ConditionalRuleLike) => !!r.operator && !UNARY_CONDITIONAL_OPERATORS.includes(r.operator);
+
+  if (conditions.some((r) => needsValue(r) && r.operator !== 'equals' && r.operator !== 'not_equals' && (r.value ?? '') === '')) {
+    return 'Every condition needs a value (except "is set" / "is not set").';
+  }
+
+  if (
+    conditions.some(
+      (r) =>
+        !!r.operator &&
+        NUMERIC_CONDITIONAL_OPERATORS.includes(r.operator) &&
+        ((r.value ?? '').trim() === '' || !Number.isFinite(Number((r.value ?? '').trim()))),
+    )
+  ) {
+    return 'Number comparisons need a numeric value.';
+  }
+
+  return null;
+};
 
 const truncate = (value: string, max = 48): string =>
   value.length > max ? `${value.slice(0, max - 1)}…` : value;
@@ -371,14 +446,29 @@ const INTERACTIVE_NODES: JourneyNodeDefinition[] = [
   {
     type: 'list',
     label: 'List',
-    description: 'WhatsApp interactive list with selectable rows.',
+    description: 'WhatsApp interactive list — each row gets its own outgoing branch.',
     category: 'interactive',
     icon: List,
     color: '#7c3aed',
     background: '#f5f3ff',
     capabilities: ['whatsapp_send'],
     providers: ['meta'],
-    sourceHandles: NEXT,
+    // Task 24 — Connexxa parity: one handle PER ROW (flattened across
+    // every section, in document order), instead of a single NEXT edge.
+    // Mirrors 'conditional's own data-aware sourceHandles (nodeRegistry's
+    // journeySourceHandles() is the one place this is ever resolved).
+    // Position i always maps to LIST_ROW_HANDLE_IDS[i] — the SAME
+    // mapping the backend's WhatsAppJourneyEngine::flattenListRows() /
+    // JourneyActionConfig::LIST_ROW_HANDLES use when routing a reply.
+    sourceHandles: (data) => {
+      const sections = (Array.isArray(data.sections) ? data.sections : []) as ListSection[];
+      const rows = sections.flatMap((s) => (Array.isArray(s.rows) ? s.rows : []));
+
+      return rows.slice(0, MAX_LIST_ROWS).map((row, i) => ({
+        id: LIST_ROW_HANDLE_IDS[i],
+        label: row.title?.trim() || `Row ${i + 1}`,
+      }));
+    },
     hasTargetHandle: true,
     defaultConfig: { body: '', buttonText: 'Choose', sections: [] },
     configSchema: [
@@ -387,14 +477,47 @@ const INTERACTIVE_NODES: JourneyNodeDefinition[] = [
       { key: 'sections', label: 'Sections', type: 'sections', required: true, help: 'At least one section, each with at least one row.' },
     ],
     validate: (c): JourneyNodeConfigErrors => {
-      const sections = arr(c, 'sections') as { title?: string; rows?: unknown[] }[];
+      // WhatsApp's own interactive-list limits (Cloud API) — not a UI
+      // preference. See ListConfigModal.tsx, which caps input to the
+      // same numbers so a journey can't get here over the limit.
+      const sections = arr(c, 'sections') as { title?: string; rows?: { title?: string; description?: string }[] }[];
+
+      if (str(c, 'buttonText').length > 20) {
+        return { buttonText: 'WhatsApp allows at most 20 characters for the list button text.' };
+      }
 
       if (sections.length === 0) {
         return { sections: 'Add at least one section.' };
       }
 
+      if (sections.length > 10) {
+        return { sections: `WhatsApp allows at most 10 sections (this has ${sections.length}).` };
+      }
+
       if (sections.some((s) => !Array.isArray(s.rows) || s.rows.length === 0)) {
         return { sections: 'Every section needs at least one row.' };
+      }
+
+      const totalRows = sections.reduce((sum, s) => sum + (Array.isArray(s.rows) ? s.rows.length : 0), 0);
+
+      if (totalRows > 10) {
+        return { sections: `WhatsApp allows at most 10 rows total across all sections (this has ${totalRows}).` };
+      }
+
+      for (const s of sections) {
+        if ((s.title ?? '').length > 24) {
+          return { sections: 'Every section title must be 24 characters or fewer.' };
+        }
+
+        for (const r of s.rows ?? []) {
+          if ((r.title ?? '').length > 24) {
+            return { sections: 'Every row title must be 24 characters or fewer.' };
+          }
+
+          if ((r.description ?? '').length > 72) {
+            return { sections: 'Every row description must be 72 characters or fewer.' };
+          }
+        }
       }
 
       return {};
@@ -431,14 +554,26 @@ const INTERACTIVE_NODES: JourneyNodeDefinition[] = [
   {
     type: 'reply_button',
     label: 'Reply Buttons',
-    description: `Quick reply buttons — at most ${MAX_REPLY_BUTTONS}.`,
+    description: `Quick reply buttons — at most ${MAX_REPLY_BUTTONS}, each its own outgoing branch.`,
     category: 'interactive',
     icon: MousePointerClick,
     color: '#7c3aed',
     background: '#f5f3ff',
     capabilities: ['whatsapp_send'],
     providers: ['meta'],
-    sourceHandles: NEXT,
+    // Task 24 — Connexxa parity: one handle PER BUTTON instead of a
+    // single NEXT edge. Same journeySourceHandles() mechanism as
+    // 'list'/'conditional' above. Position i maps to
+    // REPLY_BUTTON_HANDLE_IDS[i] — the SAME mapping the backend's
+    // JourneyActionConfig::REPLY_BUTTON_HANDLES uses when routing a reply.
+    sourceHandles: (data) => {
+      const buttons = (Array.isArray(data.buttons) ? data.buttons : []) as ReplyButton[];
+
+      return buttons.slice(0, MAX_REPLY_BUTTONS).map((button, i) => ({
+        id: REPLY_BUTTON_HANDLE_IDS[i],
+        label: button.title?.trim() || `Button ${i + 1}`,
+      }));
+    },
     hasTargetHandle: true,
     defaultConfig: { body: '', buttons: [] },
     configSchema: [
@@ -540,9 +675,11 @@ const ADVANCED_NODES: JourneyNodeDefinition[] = [
     providers: ['meta'],
     sourceHandles: NEXT,
     hasTargetHandle: true,
-    defaultConfig: { flowId: '' },
+    defaultConfig: { flowId: '', flowCta: '', screenName: '' },
     configSchema: [
       { key: 'flowId', label: 'Meta Flow ID', type: 'text', required: true },
+      { key: 'flowCta', label: 'Button label (CTA)', type: 'text', required: true, help: "Shown on the button that opens the Flow — Meta's flow_cta." },
+      { key: 'screenName', label: 'Starting screen', type: 'text', required: true, help: 'The first screen id to open in the Flow, as defined in Meta Flow Builder.' },
       { key: 'body', label: 'Body', type: 'textarea' },
     ],
     summarize: (c) => str(c, 'flowId') || null,
@@ -562,6 +699,13 @@ const ADVANCED_NODES: JourneyNodeDefinition[] = [
     hasTargetHandle: true,
     defaultConfig: { method: 'GET', url: '' },
     configSchema: [
+      // Phase 8 Task 15 — "Manage All APIs": pick a saved connection to
+      // reuse its base URL/headers/query instead of entering them below.
+      // A REAL, authorized reference (checked on save by
+      // WhatsAppFlowController::assertApiConnectionsOwned()) — unlike the
+      // pre-existing `credentialRef` text field below, which names
+      // nothing and resolves nothing yet.
+      { key: 'apiConnectionId', label: 'Saved API Connection', type: 'apiConnection', help: 'Optional — fills this node from a connection saved in "Manage API Connections".' },
       { key: 'method', label: 'Method', type: 'select', required: true, options: [{ value: 'GET', label: 'GET' }, { value: 'POST', label: 'POST' }] },
       { key: 'url', label: 'URL', type: 'url', required: true, placeholder: 'https://api.example.com/v1/thing' },
       { key: 'headers', label: 'Headers', type: 'keyvalue', help: 'Values of credential-like headers (e.g. Authorization) are encrypted on save and never shown again — leave a saved value blank to keep it.' },
@@ -622,7 +766,7 @@ const ADVANCED_NODES: JourneyNodeDefinition[] = [
   {
     type: 'conditional',
     label: 'Conditional',
-    description: 'Branch on a condition. Has explicit TRUE and FALSE outputs.',
+    description: 'Branch on a condition. TRUE/FALSE by default, or add ELSE IF branches for up to 5 outcomes + ELSE.',
     category: 'advanced',
     icon: GitBranch,
     color: '#d97706',
@@ -632,57 +776,63 @@ const ADVANCED_NODES: JourneyNodeDefinition[] = [
     // mean "only accounts without an engine". See
     // JourneyNodeCatalog::PLATFORM_PROVIDER on the backend.
     providers: ['none'],
-    // Branch identity is the handle id, never the position on the canvas.
-    sourceHandles: [
-      { id: CONDITIONAL_TRUE_HANDLE, label: 'TRUE' },
-      { id: CONDITIONAL_FALSE_HANDLE, label: 'FALSE' },
-    ],
+    // Task 23 — Connexxa IF/ELSE-IF/ELSE parity. A legacy node (no
+    // `data.groups`) keeps its original 2 fixed TRUE/FALSE handles,
+    // pixel-for-pixel; only once the author explicitly adds an ELSE IF
+    // branch (nodeRegistry.tsx's 'conditionGroups' field) does this grow
+    // group_1..N + a trailing 'else'. See journeySourceHandles() and
+    // ConditionalNodeConfig's docblock.
+    sourceHandles: (data) => {
+      const groups = Array.isArray(data.groups) ? (data.groups as ConditionalGroup[]) : [];
+
+      if (groups.length === 0) {
+        return [
+          { id: CONDITIONAL_TRUE_HANDLE, label: 'TRUE' },
+          { id: CONDITIONAL_FALSE_HANDLE, label: 'FALSE' },
+        ];
+      }
+
+      return [
+        ...groups.map((_, i) => ({ id: CONDITIONAL_GROUP_HANDLE_IDS[i], label: i === 0 ? 'IF' : `ELSE IF ${i}` })),
+        { id: CONDITIONAL_ELSE_HANDLE, label: 'ELSE' },
+      ];
+    },
     hasTargetHandle: true,
     defaultConfig: { conditions: [], match: 'all' },
     configSchema: [
-      { key: 'conditions', label: 'Conditions', type: 'conditions', required: true },
-      { key: 'match', label: 'Match', type: 'select', options: [{ value: 'all', label: 'All conditions' }, { value: 'any', label: 'Any condition' }] },
+      { key: 'conditions', label: 'Branches', type: 'conditionGroups', required: true },
     ],
     validate: (c): JourneyNodeConfigErrors => {
-      const conditions = arr(c, 'conditions') as { variable?: string; operator?: ConditionalOperator; value?: string }[];
+      const groups = Array.isArray(c.groups) ? (c.groups as ConditionalGroup[]) : [];
 
-      if (conditions.length === 0) {
-        return { conditions: 'Add at least one condition.' };
+      if (groups.length === 0) {
+        const error = conditionGroupError(arr(c, 'conditions') as ConditionalRuleLike[]);
+
+        return error ? { conditions: error } : {};
       }
 
-      if (conditions.some((r) => !r.variable || !r.variable.trim())) {
-        return { conditions: 'Every condition needs a variable.' };
+      if (groups.length > CONDITIONAL_MAX_GROUPS) {
+        return { conditions: `A Conditional node may have at most ${CONDITIONAL_MAX_GROUPS} branches.` };
       }
 
-      if (conditions.some((r) => !r.operator)) {
-        return { conditions: 'Every condition needs an operator.' };
-      }
+      for (const group of groups) {
+        const error = conditionGroupError((group.conditions ?? []) as ConditionalRuleLike[]);
 
-      // Phase 7 Task 4 — the same rules the engine applies (JourneyConditionEvaluator).
-      const needsValue = (r: { operator?: ConditionalOperator }) =>
-        !!r.operator && !UNARY_CONDITIONAL_OPERATORS.includes(r.operator);
-
-      if (conditions.some((r) => needsValue(r) && r.operator !== 'equals' && r.operator !== 'not_equals' && (r.value ?? '') === '')) {
-        return { conditions: 'Every condition needs a value (except "is set" / "is not set").' };
-      }
-
-      if (
-        conditions.some(
-          (r) =>
-            !!r.operator &&
-            NUMERIC_CONDITIONAL_OPERATORS.includes(r.operator) &&
-            ((r.value ?? '').trim() === '' || !Number.isFinite(Number((r.value ?? '').trim()))),
-        )
-      ) {
-        return { conditions: 'Number comparisons need a numeric value.' };
+        if (error) return { conditions: error };
       }
 
       return {};
     },
     summarize: (c) => {
-      const n = arr(c, 'conditions').length;
+      const groups = Array.isArray(c.groups) ? (c.groups as ConditionalGroup[]) : [];
 
-      return n ? `${n} condition${n === 1 ? '' : 's'}` : null;
+      if (groups.length === 0) {
+        const n = arr(c, 'conditions').length;
+
+        return n ? `${n} condition${n === 1 ? '' : 's'}` : null;
+      }
+
+      return `${groups.length} branch${groups.length === 1 ? '' : 'es'} + ELSE`;
     },
   },
   {
@@ -820,6 +970,46 @@ const ADVANCED_NODES: JourneyNodeDefinition[] = [
     ],
     summarize: (c) => str(c, 'queueId') || null,
   },
+  {
+    type: 'classifier',
+    label: 'Classifier',
+    description: 'Route to one of up to 5 branches by classifying an input with AI (uses AI credits).',
+    category: 'advanced',
+    icon: Split,
+    color: '#7c3aed',
+    background: '#f5f3ff',
+    capabilities: ['ai'],
+    providers: ['none'],
+    // Branch identity is the handle id, never the position on the canvas —
+    // same contract as the conditional node's TRUE/FALSE handles above.
+    sourceHandles: CLASSIFIER_HANDLES,
+    hasTargetHandle: true,
+    defaultConfig: { inputVariable: '', outputVariable: 'classifier_branch', branches: [{ label: '' }, { label: '' }] },
+    configSchema: [
+      { key: 'inputVariable', label: 'Input variable', type: 'variable', required: true, placeholder: 'e.g. an answer collected earlier' },
+      { key: 'outputVariable', label: 'Save matched branch as', type: 'variable', required: true, placeholder: 'classifier_branch' },
+      { key: 'branches', label: 'Branches', type: 'classifierBranches', required: true, help: 'Up to 5. Each branch here is positionally wired to one of this node\'s 5 outgoing connectors.' },
+    ],
+    validate: (c): JourneyNodeConfigErrors => {
+      const errors: JourneyNodeConfigErrors = aiVariableErrors(c, ['inputVariable', 'outputVariable']);
+      const branches = arr(c, 'branches') as { label?: string }[];
+
+      if (branches.length === 0) {
+        errors.branches = 'Add at least one branch.';
+      } else if (branches.length > CLASSIFIER_BRANCH_HANDLE_IDS.length) {
+        errors.branches = `A Classifier node may have at most ${CLASSIFIER_BRANCH_HANDLE_IDS.length} branches.`;
+      } else if (branches.some((b) => !b.label || !b.label.trim())) {
+        errors.branches = 'Every branch needs a label.';
+      }
+
+      return errors;
+    },
+    summarize: (c) => {
+      const branches = arr(c, 'branches') as { label?: string }[];
+
+      return branches.length ? `${branches.length} branch${branches.length === 1 ? '' : 'es'}` : null;
+    },
+  },
 ];
 
 // ===================================================================
@@ -830,7 +1020,16 @@ const UTILITY_NODES: JourneyNodeDefinition[] = [
   {
     type: 'code',
     label: 'Code',
-    description: 'Run custom logic. Executed server-side in a sandbox, never in the browser.',
+    // Task 26 — Connexxa parity, scoped: NOT real JavaScript. Executing
+    // arbitrary journey-author script on this server is a real
+    // sandbox-escape/RCE surface this platform should not carry (no
+    // embedded JS engine is reliably available on a stock XAMPP
+    // install, and shelling to Node.js is worse, not better) — see
+    // the backend's JourneyCodeSandbox docblock for the full reasoning,
+    // confirmed with the account owner before this was built. Instead
+    // this runs a tiny, closed expression language of this platform's
+    // own.
+    description: "Compute a value from this journey's variables — not JavaScript; a small built-in expression language (see the editor's own help text).",
     category: 'utility',
     icon: Code,
     color: '#475569',
@@ -840,14 +1039,26 @@ const UTILITY_NODES: JourneyNodeDefinition[] = [
     providers: ['none'],
     sourceHandles: NEXT,
     hasTargetHandle: true,
-    defaultConfig: { language: 'javascript', code: '' },
+    defaultConfig: { code: '', outputVariable: '' },
     configSchema: [
-      { key: 'language', label: 'Language', type: 'select', required: true, options: [{ value: 'javascript', label: 'JavaScript' }] },
-      { key: 'code', label: 'Code', type: 'code', required: true, help: 'Stored only. This is never evaluated in the browser.' },
-      { key: 'inputMapping', label: 'Inputs', type: 'keyvalue' },
-      { key: 'outputMapping', label: 'Outputs', type: 'keyvalue' },
+      {
+        key: 'code',
+        label: 'Code',
+        type: 'code',
+        required: true,
+        help:
+          "Not JavaScript. A small expression language: let x = 1; if (var_local.score >= 50) { output = 'pass'; } else { output = 'fail'; } " +
+          'Supports: let/assignment, if/else, numbers, strings, true/false/null, + - * / %, == != < <= > >=, && || !, ?: — ' +
+          'and var_local.<path> / var_system.<path> to read this journey\'s own variables. No loops, no function calls.',
+      },
+      {
+        key: 'outputVariable',
+        label: 'Output variable',
+        type: 'variable',
+        required: true,
+        help: "The value of the script's last `output = ...;` assignment is stored here (empty if the script never sets one).",
+      },
     ],
-    validate: (c): JourneyNodeConfigErrors => (str(c, 'language') === 'javascript' ? {} : { language: 'Only JavaScript is supported.' }),
     summarize: (c) => {
       const lines = str(c, 'code').split('\n').filter(Boolean).length;
 
@@ -893,7 +1104,7 @@ const UTILITY_NODES: JourneyNodeDefinition[] = [
   {
     type: 'journey',
     label: 'Sub-journey',
-    description: 'Run another journey, then continue.',
+    description: 'Jump into another journey — Static (pick a journey, optionally a specific node) or Dynamic (runtime-variable-bound journey/node IDs), then continue.',
     category: 'utility',
     icon: Route,
     color: '#475569',
@@ -902,9 +1113,68 @@ const UTILITY_NODES: JourneyNodeDefinition[] = [
     providers: ['none'],
     sourceHandles: NEXT,
     hasTargetHandle: true,
-    defaultConfig: { journeyId: '' },
-    configSchema: [{ key: 'journeyId', label: 'Journey', type: 'text', required: true }],
-    summarize: (c) => str(c, 'journeyId') || null,
+    // Task 25 — Connexxa parity. Absent `mode` is the pre-Task-25 shape
+    // (static, default entry) — fully backward compatible. All 5
+    // fields below are always rendered (configSchema has no
+    // conditional-visibility mechanism — see JourneyNodeField; every
+    // other multi-mode node in this registry, e.g. 'agent', follows
+    // the same always-show-every-field convention), each one's help
+    // text naming which mode it applies to.
+    defaultConfig: { mode: 'static', journeyId: '', startNodeId: '', journeyIdTemplate: '', nodeIdTemplate: '' },
+    configSchema: [
+      {
+        key: 'mode',
+        label: 'Jump mode',
+        type: 'select',
+        options: [
+          { value: 'static', label: 'Static — pick a journey' },
+          { value: 'dynamic', label: 'Dynamic — journey/node ID from a variable' },
+        ],
+        help: 'Static always jumps to the same journey. Dynamic resolves the target at run time from {{ variable }} expressions.',
+      },
+      {
+        key: 'journeyId',
+        label: 'Journey',
+        type: 'subJourney',
+        help: 'Static mode only. The journey to run.',
+      },
+      {
+        key: 'startNodeId',
+        label: 'Start node id (optional)',
+        type: 'text',
+        help: "Static mode only. Leave empty to start at the journey's own default entry. Enter a specific node's id to jump straight to it.",
+      },
+      {
+        key: 'journeyIdTemplate',
+        label: 'Journey ID expression',
+        type: 'text',
+        placeholder: '{{ var_local.targetJourneyId }}',
+        help: 'Dynamic mode only. A {{ variable }} expression resolving to the target journey\'s id at run time.',
+      },
+      {
+        key: 'nodeIdTemplate',
+        label: 'Node ID expression',
+        type: 'text',
+        placeholder: '{{ var_local.targetNodeId }}',
+        help: 'Dynamic mode only. A {{ variable }} expression resolving to the target node id at run time.',
+      },
+    ],
+    validate: (c): JourneyNodeConfigErrors => {
+      const mode: SubJourneyMode = str(c, 'mode') === 'dynamic' ? 'dynamic' : 'static';
+
+      if (mode === 'dynamic') {
+        return str(c, 'journeyIdTemplate') ? {} : { journeyIdTemplate: 'Enter a journey ID expression, or switch to Static mode.' };
+      }
+
+      return str(c, 'journeyId') ? {} : { journeyId: 'Pick a journey, or switch to Dynamic mode.' };
+    },
+    summarize: (c) => {
+      if (str(c, 'mode') === 'dynamic') {
+        return str(c, 'journeyIdTemplate') ? `→ ${str(c, 'journeyIdTemplate')}` : null;
+      }
+
+      return str(c, 'journeyId') || null;
+    },
   },
   {
     type: 'end',
@@ -1126,6 +1396,25 @@ export function isKnownJourneyNodeType(type: string): boolean {
   return BY_TYPE.has(type);
 }
 
+/**
+ * Task 23 — the ONE place `sourceHandles` is ever resolved. Every call
+ * site that used to read `definition.sourceHandles` directly now calls
+ * this instead, passing the owning node's own `data` — see
+ * JourneyNodeDefinition.sourceHandles' docblock for why that matters
+ * (only 'conditional' actually varies by data; every other type's
+ * function ignores the argument and returns its fixed array exactly as
+ * before).
+ */
+export function journeySourceHandles(
+  definition: JourneyNodeDefinition | undefined,
+  data: Record<string, unknown> | undefined,
+  fallback: JourneyNodeHandle[] = [{ id: 'next', label: 'Next' }],
+): JourneyNodeHandle[] {
+  if (!definition) return fallback;
+
+  return typeof definition.sourceHandles === 'function' ? definition.sourceHandles(data ?? {}) : definition.sourceHandles;
+}
+
 /** Palette nodes for one category, in registry order. */
 export function journeyNodesByCategory(category: JourneyNodeCategory): JourneyNodeDefinition[] {
   return JOURNEY_PALETTE_NODES.filter((definition) => definition.category === category);
@@ -1146,6 +1435,26 @@ export const RUNTIME_EXECUTABLE_NODE_TYPES: readonly string[] = [
   'trigger', 'message', 'question', 'condition', 'save_lead',
   'delay', 'conditional', 'text', 'image', 'video', 'document', 'audio',
   'prompt', 'agent', 'rag',
+  // Phase 3 — Meta Template: wired into WhatsAppJourneyEngine via the
+  // existing TemplateMessageDispatcher. Mirrors backend's
+  // JourneyNodeCatalog::RUNTIME_EXECUTABLE_TYPES.
+  'template',
+  // Phase 4 — Meta Catalog/Product: wired into WhatsAppJourneyEngine via
+  // the existing send() primitive. Mirrors backend's
+  // JourneyNodeCatalog::RUNTIME_EXECUTABLE_TYPES.
+  'catalog', 'product',
+  // Phase 5 — Meta Flow: wired into WhatsAppJourneyEngine via the
+  // existing send() primitive. Mirrors backend's
+  // JourneyNodeCatalog::RUNTIME_EXECUTABLE_TYPES.
+  'flow',
+  // Task 24 — Connexxa parity: List and Reply Buttons each get a
+  // genuine per-option outgoing handle. Mirrors backend's
+  // JourneyNodeCatalog::RUNTIME_EXECUTABLE_TYPES.
+  'list', 'reply_button',
+  // Task 26 — Connexxa parity, scoped: NOT real JavaScript — a tiny
+  // closed expression language of this platform's own (JourneyCodeSandbox
+  // on the backend). Mirrors backend's JourneyNodeCatalog::RUNTIME_EXECUTABLE_TYPES.
+  'code',
 ];
 
 export function isRuntimeExecutableNodeType(type: string): boolean {

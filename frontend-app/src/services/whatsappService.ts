@@ -12,6 +12,12 @@ import type {
   SaveMetaConfigResponse,
   TestMetaConnectionPayload,
   TestMetaConnectionResult,
+  MetaAppCredentialsResponse,
+  SaveMetaAppCredentialsPayload,
+  SaveMetaAppCredentialsResponse,
+  MetaOAuthStartResponse,
+  MetaOAuthExchangePayload,
+  MetaOAuthExchangeResponse,
 } from '../types/whatsapp';
 
 const BASE = '/whatsapp';
@@ -218,6 +224,33 @@ const whatsappService = {
   testMetaConnection(payload: TestMetaConnectionPayload) {
     return axiosInstance
       .post<TestMetaConnectionResult>(`${BASE}/meta-config/test-connection`, payload)
+      .then((res) => res.data);
+  },
+
+  // Phase 1 — Meta Channel Creation / Embedded Signup (per-tenant Meta
+  // App model). See the roadmap doc's Phase 1 section + MetaConfigController's
+  // appCredentials()/saveAppCredentials()/oauthStart()/oauthExchange().
+  getMetaAppCredentials() {
+    return axiosInstance
+      .get<MetaAppCredentialsResponse>(`${BASE}/meta-config/app-credentials`)
+      .then((res) => res.data);
+  },
+
+  saveMetaAppCredentials(payload: SaveMetaAppCredentialsPayload) {
+    return axiosInstance
+      .post<SaveMetaAppCredentialsResponse>(`${BASE}/meta-config/app-credentials`, payload)
+      .then((res) => res.data);
+  },
+
+  startMetaOAuth() {
+    return axiosInstance
+      .get<MetaOAuthStartResponse>(`${BASE}/meta-config/oauth/start`)
+      .then((res) => res.data);
+  },
+
+  exchangeMetaOAuthCode(payload: MetaOAuthExchangePayload) {
+    return axiosInstance
+      .post<MetaOAuthExchangeResponse>(`${BASE}/meta-config/oauth/exchange`, payload)
       .then((res) => res.data);
   },
   /** Super Admin only. The price of one extra number, GST included. */

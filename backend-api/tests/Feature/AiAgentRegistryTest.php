@@ -11,6 +11,7 @@ use App\Models\Capability;
 use App\Models\Invoice;
 use App\Models\User;
 use App\Models\WhatsAppFlow;
+use App\Models\WhatsAppNumber;
 use App\Services\Ai\Agents\Tools\CrmCaptureCurrentLeadTool;
 use App\Services\Ai\Agents\Tools\CrmFindCurrentLeadTool;
 use App\Services\Ai\Agents\Tools\CrmUpdateLeadStatusTool;
@@ -303,8 +304,14 @@ class AiAgentRegistryTest extends TestCase
         $admin = $this->user($account);
         $mine = $this->create($admin, ['name' => 'Mine']);
         $foreign = $this->create($this->user($this->tenant()), ['name' => 'Theirs']);
+        // Channel-binding gate (Connexxa parity, Task 21) — assertCreated()
+        // below needs a real channel; the 422 assertions elsewhere in this
+        // test are already failing for their own reason, so this extra key
+        // doesn't change what they're actually checking.
+        $number = WhatsAppNumber::create(['account_id' => $account->id, 'phone_number' => '91901'.str_pad((string) $account->id, 6, '0', STR_PAD_LEFT), 'status' => WhatsAppNumber::STATUS_LINKED]);
         $payload = fn (int|string $agentId) => [
             'name' => 'Agent journey', 'trigger_type' => 'keyword', 'trigger_value' => 'go',
+            'whatsapp_number_ids' => [$number->id],
             'graph_data' => ['nodes' => [
                 ['id' => 't', 'type' => 'trigger', 'data' => []],
                 ['id' => 'a', 'type' => 'agent', 'data' => ['registeredAgentId' => (string) $agentId, 'outputVariable' => 'reply']],

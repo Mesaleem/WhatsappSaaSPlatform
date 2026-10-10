@@ -166,6 +166,15 @@ class TransferAtomicityTest extends TestCase
         $first = $this->service()->rebind($key, $admin, ['ip_policy' => 'SINGLE_IP', 'authorized_ips' => ['203.0.113.9']]);
         $this->assertSame(1, $this->service()->countLiveInstallations($account->id));
 
+        // Phase 4 Task 9 added a 14-day per-key cooldown after every completed
+        // transfer (rebind()/approve()), so a second transfer attempted before it
+        // expires is deliberately refused (ApiKeyCooldownActiveException) - see
+        // createLiveBindingEnforced()'s own comment on this. Travel past it between
+        // chained transfers so this test exercises transfer ATOMICITY, which is
+        // what it is actually testing, not cooldown enforcement (covered by
+        // ApiKeyCooldownEnforcementTest).
+        $this->travel(15)->days();
+
         $second = $this->service()->rebind($key->fresh(), $admin, ['ip_policy' => 'SINGLE_IP', 'authorized_ips' => ['203.0.113.10']]);
         $this->assertSame(1, $this->service()->countLiveInstallations($account->id));
         $this->assertNotSame($first->id, $second->id);
@@ -183,8 +192,32 @@ class TransferAtomicityTest extends TestCase
         $key = $this->provisionedKey($account, 'Key', '203.0.113.1');
         $admin = $this->admin();
 
+        // Phase 4 Task 9 added a 14-day per-key cooldown after every completed
+        // transfer (rebind()/approve()), so a second transfer attempted before it
+        // expires is deliberately refused (ApiKeyCooldownActiveException) - see
+        // createLiveBindingEnforced()'s own comment on this. Travel past it between
+        // chained transfers so this test exercises transfer ATOMICITY, which is
+        // what it is actually testing, not cooldown enforcement (covered by
+        // ApiKeyCooldownEnforcementTest).
+        $this->travel(15)->days();
         $this->service()->rebind($key->fresh(), $admin, ['ip_policy' => 'SINGLE_IP', 'authorized_ips' => ['203.0.113.2']]);
+        // Phase 4 Task 9 added a 14-day per-key cooldown after every completed
+        // transfer (rebind()/approve()), so a second transfer attempted before it
+        // expires is deliberately refused (ApiKeyCooldownActiveException) - see
+        // createLiveBindingEnforced()'s own comment on this. Travel past it between
+        // chained transfers so this test exercises transfer ATOMICITY, which is
+        // what it is actually testing, not cooldown enforcement (covered by
+        // ApiKeyCooldownEnforcementTest).
+        $this->travel(15)->days();
         $this->service()->rebind($key->fresh(), $admin, ['ip_policy' => 'SINGLE_IP', 'authorized_ips' => ['203.0.113.3']]);
+        // Phase 4 Task 9 added a 14-day per-key cooldown after every completed
+        // transfer (rebind()/approve()), so a second transfer attempted before it
+        // expires is deliberately refused (ApiKeyCooldownActiveException) - see
+        // createLiveBindingEnforced()'s own comment on this. Travel past it between
+        // chained transfers so this test exercises transfer ATOMICITY, which is
+        // what it is actually testing, not cooldown enforcement (covered by
+        // ApiKeyCooldownEnforcementTest).
+        $this->travel(15)->days();
         $final = $this->service()->rebind($key->fresh(), $admin, ['ip_policy' => 'SINGLE_IP', 'authorized_ips' => ['203.0.113.4']]);
 
         $this->assertSame(1, ApiKeyBinding::where('api_key_id', $key->id)->live()->count());
@@ -349,7 +382,23 @@ class TransferAtomicityTest extends TestCase
         $key = $this->provisionedKey($account, 'Key', '203.0.113.1');
         $admin = $this->admin();
 
+        // Phase 4 Task 9 added a 14-day per-key cooldown after every completed
+        // transfer (rebind()/approve()), so a second transfer attempted before it
+        // expires is deliberately refused (ApiKeyCooldownActiveException) - see
+        // createLiveBindingEnforced()'s own comment on this. Travel past it between
+        // chained transfers so this test exercises transfer ATOMICITY, which is
+        // what it is actually testing, not cooldown enforcement (covered by
+        // ApiKeyCooldownEnforcementTest).
+        $this->travel(15)->days();
         $this->service()->rebind($key->fresh(), $admin, ['ip_policy' => 'SINGLE_IP', 'authorized_ips' => ['203.0.113.2']]);
+        // Phase 4 Task 9 added a 14-day per-key cooldown after every completed
+        // transfer (rebind()/approve()), so a second transfer attempted before it
+        // expires is deliberately refused (ApiKeyCooldownActiveException) - see
+        // createLiveBindingEnforced()'s own comment on this. Travel past it between
+        // chained transfers so this test exercises transfer ATOMICITY, which is
+        // what it is actually testing, not cooldown enforcement (covered by
+        // ApiKeyCooldownEnforcementTest).
+        $this->travel(15)->days();
         $this->service()->rebind($key->fresh(), $admin, ['ip_policy' => 'SINGLE_IP', 'authorized_ips' => ['203.0.113.3']]);
 
         $this->assertSame(2, ApiKeyBinding::where('api_key_id', $key->id)->where('status', ApiKeyBinding::STATUS_REVOKED)->count());
