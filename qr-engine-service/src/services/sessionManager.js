@@ -796,7 +796,24 @@ export async function startSession(
         const phoneNumber = String(sock.user?.id ?? '').split(/[:@]/)[0].replace(/\D/g, '') || null;
         // Saved before it is announced: a page that reloads its number list on the
         // live event must already see the new status.
-        await notifyBackend(id, 'connected', { phone_number: phoneNumber });
+        const backendResult = await notifyBackend(id, 'connected', { phone_number: phoneNumber });
+
+        // [Owner instruction, disclosed]: a default/placeholder slot accepts ANY
+        // real number (see backend-api's WhatsAppNumber::hasPendingPlaceholderNumber()
+        // docblock) -- but that same real number may ALREADY be adopted on a
+        // different slot/account, which only backend-api can know (it is the one
+        // place every slot is visible). backend-api refuses that with 409
+        // number_already_used and rolls its own row back to unlinked; without this
+        // check the Baileys session here stayed genuinely connected to WhatsApp
+        // regardless, and the browser was told "connected" either way. Logged out
+        // the same way an engine-side number_mismatch already is.
+        if (backendResult?.error_code === 'number_already_used') {
+          console.log(`[qr-engine] NUMBER_ALREADY_USED account_id=${id}: backend-api refused this number; logging it out`);
+          broadcast(id, { status: 'disconnected', qr: null, error: 'number_already_used' });
+          await logoutSession(id, broadcast);
+          return;
+        }
+
         broadcast(id, { status: 'connected', qr: null });
       }
 

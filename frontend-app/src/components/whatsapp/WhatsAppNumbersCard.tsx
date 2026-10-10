@@ -345,10 +345,14 @@ export default function WhatsAppNumbersCard({ accountId, onConnected, reloadKey 
         {rows.map((row) => {
           const status = STATUS_LABEL[row.status];
           const busy = busyId === row.id;
-          const canConnect = row.status !== 'pending_payment' && row.status !== 'linked';
+          // A paused slot (add-on term or subscription ended) cannot be connected until
+          // it is paid for again -- the server now refuses it too (number_paused).
+          const canConnect = row.status !== 'pending_payment' && row.status !== 'linked' && row.status !== 'paused';
           // Shown only when the server allows it (linked, paid, all numbers linked, subscription active).
           const canSetDefault = row.can_set_default;
-          const canRemove = !row.is_included && row.status === 'pending_payment' && !row.locked;
+          // A never-paid reservation can be dropped while unlocked; a paused (expired)
+          // add-on can always be deleted outright, regardless of the account's lock.
+          const canRemove = !row.is_included && (row.status === 'paused' || (row.status === 'pending_payment' && !row.locked));
           // Self-service edit: offered once the slot is disconnected (or was never
           // connected). While linked, disconnect first -- the server enforces the same rule.
           const canEdit = row.status !== 'linked';
@@ -469,7 +473,9 @@ export default function WhatsAppNumbersCard({ accountId, onConnected, reloadKey 
           <div className="w-full max-w-sm rounded-xl bg-white p-6 shadow-xl">
             <h2 className="text-base font-semibold text-slate-900">Remove this number?</h2>
             <p className="mt-2 text-sm text-slate-600">
-              +{confirmRemove.phone_number} will be removed from your WhatsApp numbers. Its unpaid invoice is not affected.
+              {confirmRemove.status === 'paused'
+                ? `+${confirmRemove.phone_number} will be removed from your WhatsApp numbers. It already ran its paid term; buying this number again starts a new one.`
+                : `+${confirmRemove.phone_number} will be removed from your WhatsApp numbers. Its unpaid invoice is not affected.`}
             </p>
             <div className="mt-5 flex justify-end gap-2">
               <button

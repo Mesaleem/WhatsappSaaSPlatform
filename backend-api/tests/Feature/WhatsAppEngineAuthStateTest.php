@@ -482,6 +482,54 @@ class WhatsAppEngineAuthStateTest extends TestCase
     }
 
     /**
+     * [Owner instruction, disclosed]: an unpaid add-on must not be connectable at all --
+     * previously only the frontend hid the Connect button for it, so a direct API call
+     * naming its number_id could still start a real session on a number nobody paid for.
+     */
+    public function test_start_session_on_an_unpaid_addon_is_refused_before_any_engine_call(): void
+    {
+        [$account, $user] = $this->tenantWithSlot('919876543210');
+        $unpaid = WhatsAppNumber::query()->create([
+            'account_id' => $account->id,
+            'phone_number' => '917236062374',
+            'is_included' => false,
+            'is_default' => false,
+            'status' => WhatsAppNumber::STATUS_PENDING_PAYMENT,
+        ]);
+        Http::fake();
+
+        $this->actingAs($user)
+            ->postJson("/api/whatsapp/start-session?number_id={$unpaid->id}")
+            ->assertStatus(409)
+            ->assertJsonPath('error_code', 'number_not_paid');
+
+        Http::assertNothingSent();
+    }
+
+    /** Same as above, for an add-on whose term/subscription has ended (status=paused). */
+    public function test_start_session_on_a_paused_addon_is_refused_before_any_engine_call(): void
+    {
+        [$account, $user] = $this->tenantWithSlot('919876543210');
+        $paused = WhatsAppNumber::query()->create([
+            'account_id' => $account->id,
+            'phone_number' => '917236062374',
+            'is_included' => false,
+            'is_default' => false,
+            'status' => WhatsAppNumber::STATUS_PAUSED,
+            'locked_at' => now(),
+            'term_ends_at' => now()->subDay(),
+        ]);
+        Http::fake();
+
+        $this->actingAs($user)
+            ->postJson("/api/whatsapp/start-session?number_id={$paused->id}")
+            ->assertStatus(409)
+            ->assertJsonPath('error_code', 'number_paused');
+
+        Http::assertNothingSent();
+    }
+
+    /**
      * [Owner instruction, disclosed]: an account's default slot no longer requires a
      * number typed in advance -- an account with zero WhatsApp number rows gets one
      * auto-created here (WhatsAppController::ensureDefaultSlot()), with a placeholder

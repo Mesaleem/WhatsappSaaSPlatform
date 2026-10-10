@@ -59,6 +59,21 @@ function ownerFields(sessionKey) {
  * Failures are logged, never thrown — a webhook outage must not break the
  * QR pairing flow for the user who is actively scanning.
  */
+/**
+ * [Owner instruction, disclosed]: a "connected" notification can come back
+ * REFUSED (e.g. error_code "number_already_used" — a default/placeholder slot
+ * adopted a real number another slot already holds) rather than just failing
+ * to deliver. This used to be purely fire-and-forget (nothing returned, every
+ * failure just logged), so a refusal here never reached the one caller that
+ * actually needs to react to it -- the Baileys session stayed live and
+ * genuinely linked on WhatsApp's own side while backend-api's own row for it
+ * had already been rolled back to unlinked, and the browser was told
+ * "connected" regardless. Now returns the parsed response body on success,
+ * or null on any failure (network error OR a non-2xx status) so a caller
+ * that cares (sessionManager.js's 'connected' handler) can tell the two
+ * apart from a harmless, ignorable delivery failure (every other call site
+ * here still only logs and moves on, unchanged).
+ */
 export async function notifyBackend(sessionKey, status, extra = {}) {
   // Computed once, outside the try: ownerFields() is a pure Map lookup
   // with no I/O, so it can never be the cause of the failure this catch
@@ -70,16 +85,23 @@ export async function notifyBackend(sessionKey, status, extra = {}) {
   const { account_id: accountId } = ownerFields(sessionKey);
 
   try {
-    await backendHttp.post(
+    const response = await backendHttp.post(
       '/api/internal/whatsapp-status',
       { ...ownerFields(sessionKey), status, ...extra },
       { headers: { 'X-Internal-Secret': INTERNAL_API_SECRET } },
     );
+
+    return response.data;
   } catch (err) {
     console.error(
       `[backendClient] failed to notify backend-api of status="${status}" for account_id=${accountId}:`,
       err.response?.data ?? err.message,
     );
+
+    // A REFUSAL (backend-api answered with a body, e.g. 409 number_already_used)
+    // is handed back so a caller can react to it; a bare network/timeout failure
+    // (no err.response at all) has nothing to react to beyond the log above.
+    return err.response?.data ?? null;
   }
 }
 

@@ -250,6 +250,28 @@ class WhatsAppController extends Controller
      */
     private function buildSessionExtras(\App\Models\WhatsAppNumber $slot, ?string $typed): array|JsonResponse
     {
+        // [Owner instruction, disclosed]: an add-on slot that has never been paid for
+        // (pending_payment) or whose term/subscription has ended (paused) must not be
+        // connectable at all -- previously only the FRONTEND hid the Connect button
+        // for these, so a direct API call with that slot's number_id could still
+        // start a real WhatsApp session on an unpaid/expired number. Never reached by
+        // the platform device's own slot (platformDeviceSlot() never sets either
+        // status) or an ordinary default slot (ensureDefaultSlot() starts it
+        // unlinked; it only becomes paused if the WHOLE subscription lapses, which
+        // correctly blocks it here too).
+        if ($slot->status === \App\Models\WhatsAppNumber::STATUS_PENDING_PAYMENT) {
+            return response()->json([
+                'message' => 'This number has not been paid for yet. Complete its payment before connecting.',
+                'error_code' => 'number_not_paid',
+            ], 409);
+        }
+        if ($slot->status === \App\Models\WhatsAppNumber::STATUS_PAUSED) {
+            return response()->json([
+                'message' => 'This number is paused because its term or subscription has ended. Renew it before connecting.',
+                'error_code' => 'number_paused',
+            ], 409);
+        }
+
         if ($typed !== null && ! $slot->hasPendingPlaceholderNumber() && $typed !== $slot->phone_number) {
             return response()->json([
                 'message' => 'This number is not the one added to this WhatsApp slot.',

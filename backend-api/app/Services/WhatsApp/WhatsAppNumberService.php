@@ -222,18 +222,33 @@ class WhatsAppNumberService
 
     public function remove(Account $account, int $id): void
     {
+        $target = $this->findOwned($account, $id);
+
+        if ($target->is_included) {
+            throw new WhatsAppNumberException('The number included in your plan cannot be removed.', 'included_number');
+        }
+
+        // [Owner instruction, disclosed]: an add-on whose term has ENDED (status
+        // paused -- WhatsAppAddonService::enforceTerms()) may always be deleted,
+        // regardless of the account-wide isLocked() state below. That lock exists to
+        // protect a number that IS currently paid for from being edited mid-term; a
+        // paused slot is no longer part of what is currently paid for, so it must
+        // not be trapped forever just because something ELSE on the account is still
+        // locked. Buying the SAME number again still reuses this slot instead
+        // (WhatsAppAddonService::purchase()'s own paused-reuse branch) -- removal is
+        // only for a number the tenant does not want to keep at all.
+        if ($target->status === WhatsAppNumber::STATUS_PAUSED) {
+            $target->delete();
+
+            return;
+        }
+
         if ($this->isLocked($account)) {
             throw new WhatsAppNumberException(
                 'Your WhatsApp numbers are locked until your plan expires.',
                 'numbers_locked',
                 409,
             );
-        }
-
-        $target = $this->findOwned($account, $id);
-
-        if ($target->is_included) {
-            throw new WhatsAppNumberException('The number included in your plan cannot be removed.', 'included_number');
         }
 
         if ($target->status !== WhatsAppNumber::STATUS_PENDING_PAYMENT) {

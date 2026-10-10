@@ -170,6 +170,15 @@ export default function QRScannerModal({ accountId, onClose, onConnected, startS
         );
         return;
       }
+      if (payload.error === 'number_already_used') {
+        // A default/placeholder slot can accept any number, but this one is already
+        // linked to a different account or slot — backend-api refused it and the
+        // engine has logged this device out again.
+        setQr(null);
+        setPairingCode(null);
+        setSocketError('This WhatsApp number is already connected elsewhere. It was refused and logged out — use a different number.');
+        return;
+      }
       if (payload.error) {
         setSocketError('The WhatsApp engine hit an internal error. Try refreshing.');
       }
@@ -179,8 +188,10 @@ export default function QRScannerModal({ accountId, onClose, onConnected, startS
   // Open the socket and kick off (or resume) the Baileys session.
   useEffect(() => {
     connectSocket();
-    startSessionRequest().catch(() => {
-      setSocketError('Failed to start the WhatsApp session. Please try again.');
+    startSessionRequest().catch((err: unknown) => {
+      // Surfaces the server's own reason (e.g. this add-on number has not been
+      // paid for, or is paused) instead of a generic failure message.
+      setSocketError(extractErrorMessage(err, 'Failed to start the WhatsApp session. Please try again.'));
     });
 
     return () => {
@@ -212,8 +223,8 @@ export default function QRScannerModal({ accountId, onClose, onConnected, startS
     setSocketError(null);
     setQr(null);
     setSecondsLeft(QR_TTL_SECONDS);
-    startSessionRequest().catch(() => {
-      setSocketError('Failed to refresh the QR code. Please try again.');
+    startSessionRequest().catch((err: unknown) => {
+      setSocketError(extractErrorMessage(err, 'Failed to refresh the QR code. Please try again.'));
     });
   };
 

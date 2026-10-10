@@ -182,6 +182,32 @@ class WhatsAppNumberTest extends TestCase
         $this->assertDatabaseMissing('whatsapp_numbers', ['id' => $extra['id']]);
     }
 
+    /**
+     * [Owner instruction, disclosed]: "plan expire hone ke baad remove ka button add kr
+     * dena" -- an add-on whose term has ended (paused) can be deleted outright, even
+     * though the account is otherwise locked (paid numbers exist) -- the lock protects
+     * a number that IS currently paid for, not a dead slot nobody wants to keep.
+     */
+    public function test_a_paused_addon_can_be_removed_even_though_the_account_is_locked(): void
+    {
+        [$account, $user] = $this->tenant();
+        $included = $this->actingAs($user)->postJson('/api/whatsapp/numbers', ['phone_number' => '919876543210'])->json('data');
+        $paused = WhatsAppNumber::query()->create([
+            'account_id' => $account->id,
+            'phone_number' => '917236062374',
+            'is_included' => false,
+            'is_default' => false,
+            'status' => WhatsAppNumber::STATUS_PAUSED,
+            'locked_at' => now(),
+            'term_ends_at' => now()->subDay(),
+        ]);
+
+        $this->actingAs($user)->deleteJson("/api/whatsapp/numbers/{$paused->id}")->assertOk();
+        $this->assertDatabaseMissing('whatsapp_numbers', ['id' => $paused->id]);
+        // The included number (also locked) is unaffected.
+        $this->assertDatabaseHas('whatsapp_numbers', ['id' => $included['id']]);
+    }
+
     public function test_a_locked_account_cannot_add_remove_or_change_the_default(): void
     {
         [$account, $user] = $this->tenant();
