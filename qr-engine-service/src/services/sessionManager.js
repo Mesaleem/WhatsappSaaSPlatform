@@ -8,7 +8,7 @@ import {
 } from '@whiskeysockets/baileys';
 import axios from 'axios';
 import { notifyBackend, notifyInboundMessage, registerSessionOwner, hasSessionOwner, fetchNumberOwner } from './backendClient.js';
-import { loadAuthState, drainAuthState, clearAuthState, listPairedAccountIds } from './authStore.js';
+import { loadAuthState, drainAuthState, clearAuthState, listPairedAccountIds, isPairedCreds } from './authStore.js';
 
 const MAX_RECONNECT_ATTEMPTS = 5;
 // The number each number slot must link to, keyed by session key. A login on
@@ -625,7 +625,21 @@ export async function startSession(
   // pairing request (seen as "PAIRING_CODE_REQUEST_FAILED: Connection
   // Closed" followed by a logged-out close). Only reached when the account
   // is not connected: a connected session returned earlier.
-  if (phoneNumber) {
+  //
+  // [Bug fix, disclosed]: NOT on our own reconnect (isReconnect=true), though
+  // -- the mandatory stream:error 515 restart that WhatsApp sends right after
+  // ANY first-time pairing (QR or phone number, completely normal, not a
+  // failure) fires BEFORE connection:'open', so creds.update may already have
+  // saved the real, just-paired credentials while record.pairingPhone is
+  // still set (only cleared once 'open' actually fires). The reconnect call
+  // passes that same pairingPhone through so pairing-code mode survives a
+  // restart that happens BEFORE pairing ever completes (see that call site's
+  // own comment) -- but if it HAD already completed, clearing auth state here
+  // wiped the credentials that were just saved, one line before loading them
+  // back, forcing a brand new QR/code every time and never actually
+  // connecting. A genuinely NEW phone-login request is never a reconnect, so
+  // this still clears stale creds for that case exactly as before.
+  if (phoneNumber && !isReconnect) {
     await clearAuthState(id);
   }
   const authHandle = await loadAuthState(id);
@@ -683,7 +697,16 @@ export async function startSession(
 
   // A number is only meaningful for an account that is not paired yet.
   // Already-paired accounts keep their session and ignore the number.
-  if (phoneNumber) {
+  // [Bug fix, disclosed]: this comment describes the intent, but nothing below
+  // actually checked it -- so a reconnect resuming ALREADY-paired
+  // credentials (the mandatory post-pairing 515 restart, see the
+  // clearAuthState guard above) still re-armed pairingPhone/the pairing
+  // timer, which could re-request a pairing code (and re-broadcast one to
+  // the browser) for a socket that was already paired, before 'open' caught
+  // up and cleared it. isPairedCreds() (not creds.registered alone -- see
+  // its own docblock) makes this actually match the comment: a resumed,
+  // already-paired session ignores the number.
+  if (phoneNumber && ! isPairedCreds(state.creds)) {
     record.pairingPhone = String(phoneNumber).replace(/\D/g, '');
     record.pairingTimer = setTimeout(() => {
       if (sessions.get(id) !== record || record.pairingCode || record.status === 'connected') return;
