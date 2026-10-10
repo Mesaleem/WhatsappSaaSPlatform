@@ -1216,10 +1216,10 @@ its create action. It now prunes only after a list request has **succeeded**
 an invalid/foreign `?account_id=`, so nothing is exposed by keeping it until the list loads.
 Affects every client-scoped page (all benefit).
 
-### `frontend-app/.env.local` points the dev UI at a remote backend
+### `frontend-app/.env.production.local` points the dev UI at a remote backend
 
-`frontend-app/.env.local` (gitignored, machine-local) sets
-`VITE_API_BASE_URL=https://sahilmoney.in/WapHubBackend/api`, overriding `.env`'s
+`frontend-app/.env.production.local` (gitignored, machine-local) sets
+`VITE_API_BASE_URL=https://sahilmoney.in/WebHubs/api`, overriding `.env`'s
 `http://localhost:8000/api`. A UI run from that machine talks to that deployed backend and its
 database, not to the local `wa_saas_platform`. Backend changes and data migrations must be
 deployed there before they are visible in that UI.
