@@ -3,7 +3,7 @@ import { ChevronDown, Plus, Trash2, X } from 'lucide-react';
 
 import { inputClass } from '../components/common/Card';
 import { indigo, activeGradient } from '../theme/signalIndigo';
-import type { ConditionalOperator } from '../types/journeyNodes';
+import type { ConditionalOperator, ConditionalRule } from '../types/journeyNodes';
 
 /**
  * Phase 5 follow-up — "Manage Conditions" modal for the `conditional`
@@ -80,7 +80,8 @@ export default function ManageConditionsModal({
   /** The node's current `match` field — 'all' (AND, default) or 'any' (OR). */
   initialMatch?: MatchMode;
   knownVariables: string[];
-  onSave: (conditions: RuleDraft[], match: MatchMode) => void;
+  /** Only rows with a non-empty `variable` are ever passed here — see save() below. */
+  onSave: (conditions: ConditionalRule[], match: MatchMode) => void;
   onClose: () => void;
 }) {
   const [rules, setRules] = useState<RuleDraft[]>(
@@ -106,8 +107,13 @@ export default function ManageConditionsModal({
   };
 
   const save = () => {
-    // Drop fully-empty trailing rows rather than saving a blank condition.
-    const cleaned = rules.filter((r) => (r.variable ?? '').trim() !== '');
+    // Drop fully-empty trailing rows rather than saving a blank condition, and narrow each
+    // remaining row's optional `variable`/`operator` to ConditionalRule's required ones — the
+    // filter already guarantees `variable` is non-empty; `operator` defaults the same way a new
+    // row already does (see rules' own initial state above).
+    const cleaned: ConditionalRule[] = rules
+      .filter((r) => (r.variable ?? '').trim() !== '')
+      .map((r) => ({ ...r, variable: (r.variable ?? '').trim(), operator: r.operator ?? 'equals' }));
     onSave(cleaned, matchMode);
   };
 

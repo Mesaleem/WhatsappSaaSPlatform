@@ -13,6 +13,7 @@ import {
   isKnownJourneyNodeType,
   isRuntimeExecutableNodeType,
   journeyNodesByCategory,
+  journeySourceHandles,
   nonExecutableNodeTypes,
   validateJourneyGraph,
   validateJourneyNodeConfig,
@@ -420,14 +421,14 @@ describe('legacy question node (Phase 7 Task 5)', () => {
 
 describe('conditional node branches', () => {
   it('declares explicit TRUE and FALSE handles', () => {
-    const handles = getJourneyNode('conditional')!.sourceHandles;
+    const handles = journeySourceHandles(getJourneyNode('conditional'), {});
 
     expect(handles.map((h) => h.id)).toEqual([CONDITIONAL_TRUE_HANDLE, CONDITIONAL_FALSE_HANDLE]);
     expect(handles.map((h) => h.label)).toEqual(['TRUE', 'FALSE']);
   });
 
   it('is the only palette node with more than one outgoing branch', () => {
-    const branching = JOURNEY_PALETTE_NODES.filter((d) => d.sourceHandles.length > 1).map((d) => d.type);
+    const branching = JOURNEY_PALETTE_NODES.filter((d) => journeySourceHandles(d, {}).length > 1).map((d) => d.type);
 
     expect(branching).toEqual(['conditional']);
   });

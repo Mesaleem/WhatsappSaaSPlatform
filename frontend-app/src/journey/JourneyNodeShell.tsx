@@ -3,6 +3,7 @@ import type { ComponentType } from 'react';
 import {
   JOURNEY_NODE_DEFINITIONS,
   getJourneyNode,
+  journeySourceHandles,
   type JourneyNodeDefinition,
 } from './nodeRegistry';
 import type { AnyJourneyNodeType } from '../types/journeyNodes';
@@ -80,6 +81,7 @@ export function JourneyNodeShell({
   const Icon = definition.icon;
   const summary = definition.summarize?.(data) ?? null;
   const hasErrors = errors !== undefined && Object.keys(errors).length > 0;
+  const handles = journeySourceHandles(definition, data);
 
   return (
     <div
@@ -127,7 +129,7 @@ export function JourneyNodeShell({
         shows them — which is exactly the conditional node today.
       */}
       <div className="flex justify-end gap-3 border-t border-slate-100 px-3 py-1">
-        {definition.sourceHandles.map((handle) => (
+        {handles.map((handle) => (
           <button
             key={handle.id}
             type="button"
@@ -137,7 +139,7 @@ export function JourneyNodeShell({
             onMouseDown={() => onStartConnect?.(id, handle.id)}
             className="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400 hover:text-indigo-600"
           >
-            {definition.sourceHandles.length > 1 && <span>{handle.label}</span>}
+            {handles.length > 1 && <span>{handle.label}</span>}
             <span className="h-2.5 w-2.5 rounded-full border-2 border-white bg-slate-400" />
           </button>
         ))}

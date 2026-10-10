@@ -2168,7 +2168,14 @@ function NodeInlineFields({
         knownVariables={knownVariables}
         knowledgeBases={knowledgeBases}
         aiAgents={aiAgents}
-        apiConnections={apiConnections}
+        // JourneyApiConnectionPair.value is `string | null` (a header/query entry can have no
+        // value at all); the config form's own ApiKeyValue requires a plain string for its
+        // controlled text inputs, same as every other headers/query editor it already renders.
+        apiConnections={apiConnections?.map((c) => ({
+          ...c,
+          headers: c.headers.map((h) => ({ ...h, value: h.value ?? '' })),
+          query: c.query.map((q) => ({ ...q, value: q.value ?? '' })),
+        })) ?? null}
         subJourneys={subJourneys}
         onChange={onChange}
         hideHeader

@@ -1581,9 +1581,10 @@ export function validateJourneyGraph(
     const nodeErrors = validateJourneyNodeConfig(node.type, node.data ?? {});
     const definition = getJourneyNode(node.type);
 
-    if (definition && definition.sourceHandles.length > 1 && !definition.legacy) {
+    const handles = journeySourceHandles(definition, node.data);
+    if (definition && handles.length > 1 && !definition.legacy) {
       const outgoing = edges.filter((edge) => edge.source === node.id);
-      const valid = new Set(definition.sourceHandles.map((handle) => handle.id));
+      const valid = new Set(handles.map((handle) => handle.id));
 
       if (outgoing.some((edge) => !edge.sourceHandle || !valid.has(edge.sourceHandle))) {
         nodeErrors.branches = `Every connection leaving this node must use one of: ${[...valid].join(', ')}.`;

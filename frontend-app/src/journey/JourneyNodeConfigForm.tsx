@@ -3,7 +3,7 @@ import { Plus, X } from 'lucide-react';
 
 import { inputClass } from '../components/common/Card';
 import { indigo } from '../theme/signalIndigo';
-import { getJourneyNode } from './nodeRegistry';
+import { getJourneyNode, journeySourceHandles } from './nodeRegistry';
 import ManageConditionsModal from './ManageConditionsModal';
 import ListConfigModal from './ListConfigModal';
 import {
@@ -170,6 +170,8 @@ export default function JourneyNodeConfigForm({
       </p>
     );
   }
+
+  const sourceHandles = journeySourceHandles(definition, config);
 
   const renderField = (field: JourneyNodeField) => {
     const error = errors[field.key];
@@ -794,10 +796,10 @@ export default function JourneyNodeConfigForm({
 
       {definition.configSchema.map(renderField)}
 
-      {definition.sourceHandles.length > 1 && (
+      {sourceHandles.length > 1 && (
         <p className="text-[11px]" style={{ color: indigo.muted }}>
           This node branches: drag the{' '}
-          {definition.sourceHandles.map((handle) => handle.label).join(' / ')} dot to the step that branch
+          {sourceHandles.map((handle) => handle.label).join(' / ')} dot to the step that branch
           should continue to. The branch is recorded on the connection itself, not on where the boxes sit.
         </p>
       )}
