@@ -875,7 +875,19 @@ export async function startSession(
         await notifyBackend(id, 'connecting');
         // Back off between attempts so a struggling connection is not hammered.
         await new Promise((resolve) => setTimeout(resolve, Math.min(30000, 2000 * record.reconnectAttempts)));
-        await startSession(id, broadcast, { isReconnect: true });
+        // [Bug fix, disclosed]: this reconnect call previously never passed
+        // phoneNumber, so startSession() built a brand new record with
+        // pairingPhone=null -- silently dropping pairing-code mode back to
+        // plain QR on every reconnect, while the browser kept showing the
+        // now-orphaned old code (nothing ever told it to clear/replace it).
+        // On a flakier connection (more reconnects -- e.g. the production
+        // host vs. local) this meant the code on screen could belong to a
+        // session that had already quietly reverted to QR underneath it,
+        // so WhatsApp correctly rejected it as invalid. Passing the current
+        // record's own pairingPhone through keeps a reconnect mid pairing-
+        // code login retrying pairing-code mode (and re-broadcasting a
+        // fresh code) instead of reverting.
+        await startSession(id, broadcast, { isReconnect: true, phoneNumber: record.pairingPhone || null });
       }
     } catch (err) {
       // A failure in this handler must never crash the process or take
