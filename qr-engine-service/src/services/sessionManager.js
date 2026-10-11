@@ -8,7 +8,7 @@ import {
 } from '@whiskeysockets/baileys';
 import axios from 'axios';
 import { notifyBackend, notifyInboundMessage, registerSessionOwner, hasSessionOwner, fetchNumberOwner } from './backendClient.js';
-import { loadAuthState, drainAuthState, clearAuthState, listPairedAccountIds, isPairedCreds } from './authStore.js';
+import { loadAuthState, drainAuthState, clearAuthState, listPairedAccountIds } from './authStore.js';
 
 const MAX_RECONNECT_ATTEMPTS = 5;
 // The number each number slot must link to, keyed by session key. A login on
@@ -687,26 +687,13 @@ export async function startSession(
     // One identity is used for every session, because the restart that follows
     // pairing must present the same device as the request that started it.
     //
-    // [Branded device name, disclosed, scoped]: WhatsApp's own Linked
-    // Devices label comes from TWO separate fields of this triple, verified
-    // against Baileys' own source (node_modules/@whiskeysockets/baileys/
-    // lib/Utils/validate-connection.js -- generateRegistrationNode(), used
-    // for every session including QR) --
-    //   element[0] -> sent as `os` in the DeviceProps companion payload;
-    //                 this is the text WhatsApp shows for the device.
-    //   element[1] -> resolved through getPlatformType()/getCompanionPlatformId()
-    //                 to a recognized WAProto PlatformType enum value
-    //                 (CHROME/FIREFOX/EDGE/...) -- THIS is the field whose
-    //                 past rename ("WA SaaS Platform", see the note above)
-    //                 broke pairing-code linking, and it also feeds the
-    //                 pairing-code companion_platform_display string
-    //                 (`${browser[1]} (${browser[0]})`) directly.
-    // Browsers.ubuntu('Chrome') => ['Ubuntu', 'Chrome', '22.04.4']. Renaming
-    // only element[0] here swaps the shown device name from "Ubuntu" to
-    // "WapHub WhatsApp" while leaving element[1] untouched at the exact
-    // literal string ('Chrome') already proven safe for pairing-code login
-    // -- no regression risk for the issue the note above already paid down.
-    browser: ['WapHub WhatsApp', 'Chrome', '22.04.4'],
+    // A 2026-10-08 rename to ['WapHub WhatsApp', 'Chrome', ...] was reverted
+    // for the same reason: pairing-code login sends
+    // companion_platform_display = `${browser[1]} (${browser[0]})`, which the
+    // custom name turned into "Chrome (WapHub WhatsApp)". QR login never sends
+    // that field, which matches QR still working while pairing-code broke after
+    // the 2026-10-08 rename. Linked Devices now shows "Ubuntu" again.
+    browser: Browsers.ubuntu('Chrome'),
     printQRInTerminal: false,
     // [Owner instruction, disclosed]: this platform only ever SENDS messages
     // through a linked number -- it never reads or displays the account's own
@@ -747,37 +734,15 @@ export async function startSession(
 
   sock.ev.on('creds.update', saveCreds);
 
-  // [Diagnostic logging, disclosed]: creds.registered flips true inside
-  // Baileys itself the moment WhatsApp's server ACCEPTS the pairing-code
-  // handshake's companion_finish stage (verified by reading
-  // node_modules/@whiskeysockets/baileys/lib/Socket/messages-recv.js) --
-  // well before connection.update ever reaches 'open'. Logging this
-  // transition separately tells apart two very different failure points:
-  // "WhatsApp never accepted the code at all" (this never logs) vs. "the
-  // code WAS accepted but something after that, before 'open', still goes
-  // wrong" (this logs, then CONNECTION_OPEN never follows).
-  if (record.pairingPhone) {
-    let wasRegistered = !!state.creds.registered;
-    sock.ev.on('creds.update', (update) => {
-      if (update?.registered === true && !wasRegistered) {
-        wasRegistered = true;
-        console.log(`[qr-engine] PAIRING_CODE_ACCEPTED account_id=${id}: WhatsApp confirmed the code -- creds.registered is now true`);
-      }
-    });
-  }
-
   // A number is only meaningful for an account that is not paired yet.
   // Already-paired accounts keep their session and ignore the number.
-  // [Bug fix, disclosed]: this comment describes the intent, but nothing below
-  // actually checked it -- so a reconnect resuming ALREADY-paired
-  // credentials (the mandatory post-pairing 515 restart, see the
-  // clearAuthState guard above) still re-armed pairingPhone/the pairing
-  // timer, which could re-request a pairing code (and re-broadcast one to
-  // the browser) for a socket that was already paired, before 'open' caught
-  // up and cleared it. isPairedCreds() (not creds.registered alone -- see
-  // its own docblock) makes this actually match the comment: a resumed,
-  // already-paired session ignores the number.
-  if (phoneNumber && ! isPairedCreds(state.creds)) {
+  // Gated on creds.registered, NOT isPairedCreds(): Baileys' own
+  // requestPairingCode() sets creds.me the moment a code is REQUESTED, long
+  // before the user types it, and isPairedCreds() counts creds.me as paired
+  // (correct for QR, wrong here) -- so a reconnect while still waiting for the
+  // code dropped out of pairing mode. registered flips true only at
+  // companion_finish, i.e. once WhatsApp actually accepted the code.
+  if (phoneNumber && ! state.creds.registered) {
     record.pairingPhone = String(phoneNumber).replace(/\D/g, '');
     record.pairingTimer = setTimeout(() => {
       if (sessions.get(id) !== record || record.pairingCode || record.status === 'connected') return;
@@ -785,6 +750,15 @@ export async function startSession(
       broadcast(id, { status: record.status, qr: record.qr, error: 'pairing_code_timeout' });
     }, PAIRING_CODE_TIMEOUT_MS);
     record.pairingTimer.unref?.();
+
+    // Logs when WhatsApp accepts the entered code (creds.registered flips true
+    // at companion_finish), so the log tells "code never accepted" apart from
+    // "accepted, but the connection still didn't open afterwards".
+    sock.ev.on('creds.update', (update) => {
+      if (update?.registered === true) {
+        console.log(`[qr-engine] PAIRING_CODE_ACCEPTED account_id=${id}`);
+      }
+    });
   }
 
   // Module 10 (qr-engine-service side, previously the disclosed "no
