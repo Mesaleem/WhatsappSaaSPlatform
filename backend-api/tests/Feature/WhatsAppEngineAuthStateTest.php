@@ -506,6 +506,24 @@ class WhatsAppEngineAuthStateTest extends TestCase
         Http::assertNothingSent();
     }
 
+    /**
+     * The included number is paused while the subscription lapses and nothing else
+     * un-pauses it on renewal, so start-session must un-pause it once the
+     * subscription is active again -- otherwise a renewed client could never reconnect.
+     */
+    public function test_a_paused_included_number_reconnects_once_the_subscription_is_active_again(): void
+    {
+        [$account, $user, $slot] = $this->tenantWithSlot('919876543210');
+        $slot->forceFill(['status' => WhatsAppNumber::STATUS_PAUSED])->save();
+        Http::fake(['*/api/qr/start-session' => Http::response(['status' => 'connecting'], 202)]);
+
+        $this->actingAs($user)->postJson('/api/whatsapp/start-session')->assertOk();
+
+        $this->assertSame(WhatsAppNumber::STATUS_UNLINKED, $slot->fresh()->status);
+        Http::assertSent(fn ($request) => str_contains($request->url(), '/api/qr/start-session')
+            && $request['session_id'] === $slot->id);
+    }
+
     /** Same as above, for an add-on whose term/subscription has ended (status=paused). */
     public function test_start_session_on_a_paused_addon_is_refused_before_any_engine_call(): void
     {

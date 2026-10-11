@@ -265,6 +265,15 @@ class WhatsAppController extends Controller
                 'error_code' => 'number_not_paid',
             ], 409);
         }
+        // The included number is paused while the subscription is inactive, and
+        // nothing un-pauses it on renewal -- reconnecting used to be the only way
+        // back. So once the subscription is active again, un-pause it here
+        // instead of refusing. (A paused add-on still needs to be bought again.)
+        if ($slot->status === \App\Models\WhatsAppNumber::STATUS_PAUSED
+            && $slot->is_included
+            && $slot->account?->hasActiveSubscription()) {
+            $slot->forceFill(['status' => \App\Models\WhatsAppNumber::STATUS_UNLINKED])->save();
+        }
         if ($slot->status === \App\Models\WhatsAppNumber::STATUS_PAUSED) {
             return response()->json([
                 'message' => 'This number is paused because its term or subscription has ended. Renew it before connecting.',

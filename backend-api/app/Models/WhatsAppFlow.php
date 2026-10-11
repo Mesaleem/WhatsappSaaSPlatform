@@ -209,7 +209,9 @@ class WhatsAppFlow extends Model
      */
     public function whatsappNumbers(): BelongsToMany
     {
-        return $this->belongsToMany(WhatsAppNumber::class, 'whatsapp_flow_numbers')->withTimestamps();
+        // Keys named explicitly: Laravel would derive whats_app_flow_id /
+        // whats_app_number_id from the class names, which don't exist.
+        return $this->belongsToMany(WhatsAppNumber::class, 'whatsapp_flow_numbers', 'flow_id', 'whatsapp_number_id')->withTimestamps();
     }
 
     public function scopeForAccount(Builder $query, int $accountId): Builder
