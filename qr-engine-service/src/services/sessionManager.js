@@ -540,7 +540,14 @@ async function requestPairingCode(record, id, broadcast, attempt = 0) {
     console.log(`[qr-engine] PAIRING_CODE_ISSUED account_id=${id}`);
     broadcast(id, { status: record.status, qr: record.qr, pairing_code: code });
   } catch (err) {
-    console.error(`[qr-engine] PAIRING_CODE_REQUEST_FAILED account_id=${id}:`, err?.message || err);
+    // [Diagnostic logging, disclosed]: err?.message alone can hide a
+    // structured WhatsApp-side status (e.g. an IQ error node's code), which
+    // typically lands on err.output/err.data/err.content, not .message.
+    console.error(`[qr-engine] PAIRING_CODE_REQUEST_FAILED account_id=${id}:`, err?.message || err, {
+      output: err?.output,
+      data: err?.data,
+      content: err?.content,
+    });
   } finally {
     record.pairingInFlight = false;
   }
@@ -739,6 +746,25 @@ export async function startSession(
   sessions.set(id, record);
 
   sock.ev.on('creds.update', saveCreds);
+
+  // [Diagnostic logging, disclosed]: creds.registered flips true inside
+  // Baileys itself the moment WhatsApp's server ACCEPTS the pairing-code
+  // handshake's companion_finish stage (verified by reading
+  // node_modules/@whiskeysockets/baileys/lib/Socket/messages-recv.js) --
+  // well before connection.update ever reaches 'open'. Logging this
+  // transition separately tells apart two very different failure points:
+  // "WhatsApp never accepted the code at all" (this never logs) vs. "the
+  // code WAS accepted but something after that, before 'open', still goes
+  // wrong" (this logs, then CONNECTION_OPEN never follows).
+  if (record.pairingPhone) {
+    let wasRegistered = !!state.creds.registered;
+    sock.ev.on('creds.update', (update) => {
+      if (update?.registered === true && !wasRegistered) {
+        wasRegistered = true;
+        console.log(`[qr-engine] PAIRING_CODE_ACCEPTED account_id=${id}: WhatsApp confirmed the code -- creds.registered is now true`);
+      }
+    });
+  }
 
   // A number is only meaningful for an account that is not paired yet.
   // Already-paired accounts keep their session and ignore the number.

@@ -235,6 +235,12 @@ app.post('/api/qr/start-session', requireInternalSecret, async (req, res) => {
     }
   }
 
+  // [Diagnostic logging, disclosed]: this line alone answers "did the
+  // number/pairing-code request actually reach Render at all" -- every
+  // start-session hit printed identically before this (QR-only or with a
+  // phone number), so there was no way to tell them apart in the log.
+  console.log(`[qr-engine] START_SESSION_REQUEST account_id=${accountId} session_key=${sessionKey} phone_number=${phoneNumber ?? '(none -- QR only)'}`);
+
   try {
     // Answer at once and start in the background. Loading credentials and
     // fetching the WhatsApp version can take longer than the backend's
