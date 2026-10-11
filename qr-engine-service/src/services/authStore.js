@@ -283,9 +283,11 @@ export async function listPairedAccountIds() {
 }
 
 /**
- * "Paired" means the device identity exists. Baileys 7 rc14 sets creds.me on
- * every successful pairing, but it sets creds.registered only for the
- * phone-link flow, so `registered` alone would miss every QR-paired account.
+ * "Paired" means the device identity exists. Baileys sets creds.me on every
+ * successful pairing, but it sets creds.registered only for the phone-link
+ * flow (companion_finish in Socket/messages-recv.js, verified against both
+ * 6.7.24 and the earlier 7.0.0-rc14), so `registered` alone would miss
+ * every QR-paired account.
  */
 export function isPairedCreds(creds) {
   return creds?.registered === true || !!creds?.me?.id;
