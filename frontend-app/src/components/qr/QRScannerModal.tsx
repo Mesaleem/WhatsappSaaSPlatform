@@ -369,7 +369,8 @@ export default function QRScannerModal({ accountId, onClose, onConnected, startS
                   <div className="flex items-center gap-4">
                     <button
                       onClick={() => phoneDigits && requestPairingCode(phoneDigits)}
-                      className="flex items-center gap-1.5 text-xs font-medium text-indigo-600 hover:text-indigo-700"
+                      disabled={phoneBusy}
+                      className="flex items-center gap-1.5 text-xs font-medium text-indigo-600 hover:text-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       <RefreshCw className="h-3.5 w-3.5" />
                       Get a new code
@@ -410,7 +411,7 @@ export default function QRScannerModal({ accountId, onClose, onConnected, startS
                   </p>
                   <button
                     type="submit"
-                    disabled={!(expectedDigits ?? phoneInput.replace(/\D/g, ''))}
+                    disabled={phoneBusy || !(expectedDigits ?? phoneInput.replace(/\D/g, ''))}
                     className="rounded-lg bg-indigo-600 px-3 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     Get pairing code

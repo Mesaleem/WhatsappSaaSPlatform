@@ -24,6 +24,17 @@ const LOGOUT_WAIT_MS = 5000;
 // A pairing request waits for the WhatsApp socket to open: up to 30 tries, 1 s apart.
 const PAIRING_REQUEST_RETRIES = 30;
 const PAIRING_REQUEST_RETRY_MS = 1000;
+// [Bug fix, disclosed]: a start-session call for the SAME phone number as an
+// already-issued, still-fresh code used to always tear the socket down and
+// issue a brand new one (see startSession()'s canSwitchToPhone) -- correct
+// for a deliberate "Get a new code" click after actually waiting, but an
+// accidental rapid double-click/double-submit (no busy-guard existed on
+// either button -- also fixed, in QRScannerModal.tsx) tore down and
+// reissued a code the user was still in the middle of typing, seconds after
+// the first one arrived, with WhatsApp then correctly rejecting the
+// now-stale code as invalid. Below this window a repeat request for the
+// same number just re-emits the existing code instead of restarting.
+const MIN_PAIRING_CODE_REISSUE_MS = 8000;
 
 const logger = pino({ level: process.env.LOG_LEVEL || 'silent' });
 
@@ -525,6 +536,7 @@ async function requestPairingCode(record, id, broadcast, attempt = 0) {
   try {
     const code = await record.sock.requestPairingCode(record.pairingPhone);
     record.pairingCode = code;
+    record.pairingCodeIssuedAt = Date.now();
     console.log(`[qr-engine] PAIRING_CODE_ISSUED account_id=${id}`);
     broadcast(id, { status: record.status, qr: record.qr, pairing_code: code });
   } catch (err) {
@@ -598,7 +610,19 @@ export async function startSession(
     // A pairing-code request needs a socket that is still unpaired. If a QR
     // socket is waiting for a scan, replace it with a fresh one; a connected
     // session is never touched.
-    const canSwitchToPhone = !!phoneNumber && existing.status === 'connecting';
+    //
+    // [Bug fix, disclosed]: a request for the SAME number as an already-
+    // issued, still-fresh (< MIN_PAIRING_CODE_REISSUE_MS old) code is treated
+    // like the "already running" case below instead of tearing the socket
+    // down -- see that constant's own docblock. A genuinely different number,
+    // or the same number after that window has passed (a deliberate "Get a
+    // new code"), still switches exactly as before.
+    const sameFreshCode = !!phoneNumber
+      && existing.pairingPhone === String(phoneNumber).replace(/\D/g, '')
+      && existing.pairingCode
+      && existing.pairingCodeIssuedAt
+      && (Date.now() - existing.pairingCodeIssuedAt) < MIN_PAIRING_CODE_REISSUE_MS;
+    const canSwitchToPhone = !!phoneNumber && existing.status === 'connecting' && !sameFreshCode;
     if (!canSwitchToPhone) {
       // Already running — re-emit current state so a newly opened modal
       // catches up instead of waiting indefinitely for the next event.
@@ -707,6 +731,7 @@ export async function startSession(
     reconnectAttempts: 0,
     authHandle,
     pairingCode: null,
+    pairingCodeIssuedAt: null,
     pairingPhone: null,
     pairingInFlight: false,
     pairingTimer: null,
@@ -831,6 +856,7 @@ export async function startSession(
         record.status = 'connected';
         record.qr = null;
         record.pairingCode = null;
+        record.pairingCodeIssuedAt = null;
         record.pairingPhone = null;
         clearTimeout(record.pairingTimer);
         record.reconnectAttempts = 0;
