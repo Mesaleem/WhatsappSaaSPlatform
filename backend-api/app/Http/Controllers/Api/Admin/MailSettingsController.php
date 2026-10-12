@@ -99,11 +99,11 @@ class MailSettingsController extends Controller
 
         $to = $request->user()->email;
         $fromAddress = $merged->from_address ?: $to;
-        $fromName = $merged->from_name ?: 'WhatsApp SaaS Platform';
+        $fromName = $merged->from_name ?: 'WapHub';
 
         try {
             Mail::mailer(self::TEST_MAILER_NAME)->raw(
-                "This is a test email from your WhatsApp SaaS Platform.\n\n".
+                "This is a test email from WapHub.\n\n".
                 "If you're reading this, your SMTP configuration is working correctly.",
                 function ($message) use ($to, $fromAddress, $fromName) {
                     $message->to($to)

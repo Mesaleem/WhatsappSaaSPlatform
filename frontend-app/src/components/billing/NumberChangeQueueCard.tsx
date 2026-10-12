@@ -69,7 +69,7 @@ export default function NumberChangeQueueCard({ onChanged }: { onChanged?: () =>
                 type="button"
                 disabled={busyId === row.id}
                 onClick={() => setApproving(row)}
-                className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-60"
+                className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
               >
                 Approve
               </button>

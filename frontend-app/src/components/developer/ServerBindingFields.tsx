@@ -105,7 +105,7 @@ export default function ServerBindingFields({
             checked={value.acknowledged}
             onChange={(e) => set('acknowledged', e.target.checked)}
             aria-invalid={Boolean(errors.acknowledge_server_binding)}
-            className="mt-0.5 h-4 w-4 rounded border-slate-300 text-indigo-600"
+            className="mt-0.5 h-4 w-4 rounded border-slate-300 text-emerald-700"
           />
           <span>I understand and agree that this key may only be used from my authorized server.</span>
         </label>

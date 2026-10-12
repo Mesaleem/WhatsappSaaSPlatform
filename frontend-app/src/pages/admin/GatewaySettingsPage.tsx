@@ -22,7 +22,7 @@ import { extractErrorMessage as extractMessage } from '../../utils/apiError';
 import DismissibleAlert from '../../components/common/DismissibleAlert';
 
 const inputClass =
-  'mt-1.5 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100';
+  'mt-1.5 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100';
 
 
 interface GatewayCardProps {
@@ -117,7 +117,7 @@ function GatewayCard({ settings, onSaved }: GatewayCardProps) {
                 key={m}
                 onClick={() => setMode(m)}
                 className={`rounded-full px-3 py-1 font-medium capitalize ${
-                  mode === m ? 'bg-indigo-600 text-white' : 'text-slate-600 hover:bg-slate-50'
+                  mode === m ? 'bg-emerald-600 text-white' : 'text-slate-600 hover:bg-slate-50'
                 }`}
               >
                 {m}
@@ -129,7 +129,7 @@ function GatewayCard({ settings, onSaved }: GatewayCardProps) {
               type="checkbox"
               checked={isEnabled}
               onChange={(e) => setIsEnabled(e.target.checked)}
-              className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+              className="h-4 w-4 rounded border-slate-300 text-emerald-700 focus:ring-emerald-500"
             />
             Enabled
           </label>
@@ -143,7 +143,7 @@ function GatewayCard({ settings, onSaved }: GatewayCardProps) {
         <button
           type="button"
           onClick={() => void handleCopyWebhookUrl()}
-          className="inline-flex items-center gap-1 font-medium text-indigo-600 hover:text-indigo-700"
+          className="inline-flex items-center gap-1 font-medium text-emerald-700 hover:text-emerald-800"
         >
           <Copy className="h-3 w-3" />
           {copied ? 'Copied' : 'Copy'}
@@ -249,7 +249,7 @@ function GatewayCard({ settings, onSaved }: GatewayCardProps) {
           type="button"
           onClick={() => void handleSave()}
           disabled={isSaving}
-          className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:opacity-60"
+          className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-60"
         >
           {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <KeyRound className="h-4 w-4" />}
           Save {settings.gateway === 'razorpay' ? 'Razorpay' : 'Stripe'} Settings
@@ -330,7 +330,7 @@ function MailSettingsCard({ settings, onSaved }: { settings: MailSettings; onSav
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <h3 className="flex items-center gap-2 text-base font-semibold text-slate-900">
-            <Mail className="h-4 w-4 text-indigo-600" />
+            <Mail className="h-4 w-4 text-emerald-700" />
             SMTP Email Configuration
           </h3>
           {settings.is_configured ? (
@@ -409,7 +409,7 @@ function MailSettingsCard({ settings, onSaved }: { settings: MailSettings; onSav
         </div>
         <div>
           <label className="text-xs font-medium text-slate-700">From Name</label>
-          <input value={fromName} onChange={(e) => setFromName(e.target.value)} className={inputClass} placeholder="WhatsApp SaaS Platform" />
+          <input value={fromName} onChange={(e) => setFromName(e.target.value)} className={inputClass} placeholder="WapHub" />
         </div>
       </div>
 
@@ -456,7 +456,7 @@ function MailSettingsCard({ settings, onSaved }: { settings: MailSettings; onSav
           type="button"
           onClick={() => void handleSave()}
           disabled={isSaving}
-          className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:opacity-60"
+          className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-60"
         >
           {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Mail className="h-4 w-4" />}
           Save Mail Settings
@@ -507,7 +507,7 @@ export default function GatewaySettingsPage() {
             Back to dashboard
           </Link>
           <h1 className="mt-2 flex items-center gap-2 text-xl font-semibold text-slate-900">
-            <ShieldCheck className="h-5 w-5 text-indigo-600" />
+            <ShieldCheck className="h-5 w-5 text-emerald-700" />
             Payment Gateway Settings
           </h1>
           <p className="mt-1 text-sm text-slate-500">

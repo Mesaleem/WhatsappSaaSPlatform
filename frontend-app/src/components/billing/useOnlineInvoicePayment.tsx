@@ -67,7 +67,7 @@ export function useOnlineInvoicePayment(options: { onPaid: () => void; onError: 
           key: order.key_id,
           amount: order.amount,
           currency: order.currency,
-          name: 'WhatsApp SaaS Platform',
+          name: 'WapHub',
           description: invoice.plan_label,
           order_id: order.order_id,
           handler: (response: RazorpaySuccessResponse) => {
@@ -78,7 +78,7 @@ export function useOnlineInvoicePayment(options: { onPaid: () => void; onError: 
               razorpay_signature: response.razorpay_signature,
             }).catch((err: unknown) => options.onError(errorText(err, 'Payment could not be verified. If money was deducted, it will still be reconciled automatically.')));
           },
-          theme: { color: '#4f46e5' },
+          theme: { color: '#059669' },
         });
         rzp.open();
       } else {

@@ -126,7 +126,7 @@ export default function NotificationBell() {
               Notifications
             </span>
             {items.some((n) => !n.is_read) && (
-              <button onClick={() => void handleMarkAllRead()} className="text-xs font-medium text-indigo-600 hover:text-indigo-700">
+              <button onClick={() => void handleMarkAllRead()} className="text-xs font-medium text-emerald-700 hover:text-emerald-800">
                 Mark all read
               </button>
             )}
@@ -142,12 +142,12 @@ export default function NotificationBell() {
                   key={n.id}
                   onClick={() => openNotification(n)}
                   className={`block w-full border-b px-3 py-2.5 text-left text-sm last:border-b-0 hover:bg-slate-50 ${
-                    n.is_read ? '' : 'bg-indigo-50/50'
+                    n.is_read ? '' : 'bg-emerald-50/50'
                   }`}
                   style={{ borderColor: indigo.border }}
                 >
                   <div className="flex items-start gap-2">
-                    {!n.is_read && <span className="mt-1.5 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-indigo-600" />}
+                    {!n.is_read && <span className="mt-1.5 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-emerald-600" />}
                     <div className="min-w-0 flex-1">
                       <div className="truncate font-medium text-slate-900">{n.title}</div>
                       <div className="mt-0.5 text-xs text-slate-400">{timeAgo(n.created_at)}</div>

@@ -35,7 +35,7 @@ type Pending =
   | { kind: 'status' };
 
 const btn =
-  'rounded-lg border border-indigo-200 bg-white px-3 py-1.5 text-xs font-medium text-indigo-700 hover:bg-indigo-50 disabled:cursor-not-allowed disabled:opacity-50';
+  'rounded-lg border border-emerald-200 bg-white px-3 py-1.5 text-xs font-medium text-emerald-800 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-50';
 
 function summaryText(label: string, s: CrmBulkSummary): string {
   return `${label}: ${s.changed} changed, ${s.unchanged} unchanged.`;
@@ -86,16 +86,16 @@ export default function CrmBulkActionBar({
 
   return (
     <div
-      className="flex flex-wrap items-center gap-2 rounded-xl border border-indigo-200 bg-indigo-50/60 px-4 py-2.5"
+      className="flex flex-wrap items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50/60 px-4 py-2.5"
       data-testid="crm-bulk-bar"
       role="region"
       aria-label="Bulk actions"
     >
-      <span className="text-sm font-semibold text-indigo-900" data-testid="crm-bulk-count">
+      <span className="text-sm font-semibold text-emerald-950" data-testid="crm-bulk-count">
         {count} selected
       </span>
-      <span className="text-xs text-indigo-700/80">on this page only</span>
-      {busy && <Loader2 className="h-4 w-4 animate-spin text-indigo-600" aria-label="Working" />}
+      <span className="text-xs text-emerald-800/80">on this page only</span>
+      {busy && <Loader2 className="h-4 w-4 animate-spin text-emerald-700" aria-label="Working" />}
 
       <div className="flex flex-wrap items-center gap-2 sm:ml-auto">
         <button type="button" className={btn} disabled={disabled} title={readOnly ? READ_ONLY_TITLE : undefined} onClick={() => setPending({ kind: 'assign' })}>
@@ -240,7 +240,7 @@ function BulkModal({
             type="button"
             onClick={onConfirm}
             disabled={busy || confirmDisabled}
-            className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:opacity-60"
+            className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-60"
           >
             {busy && <Loader2 className="h-4 w-4 animate-spin" />}
             {confirmLabel}

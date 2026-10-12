@@ -370,7 +370,7 @@ export default function QRScannerModal({ accountId, onClose, onConnected, startS
                     <button
                       onClick={() => phoneDigits && requestPairingCode(phoneDigits)}
                       disabled={phoneBusy}
-                      className="flex items-center gap-1.5 text-xs font-medium text-indigo-600 hover:text-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
+                      className="flex items-center gap-1.5 text-xs font-medium text-emerald-700 hover:text-emerald-800 disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       <RefreshCw className="h-3.5 w-3.5" />
                       Get a new code
@@ -402,7 +402,7 @@ export default function QRScannerModal({ accountId, onClose, onConnected, startS
                     onChange={(e) => setPhoneInput(e.target.value)}
                     readOnly={!!expectedDigits}
                     placeholder="919876543210"
-                    className={`rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none ${expectedDigits ? 'bg-slate-50 text-slate-600' : ''}`}
+                    className={`rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none ${expectedDigits ? 'bg-slate-50 text-slate-600' : ''}`}
                   />
                   <p className="text-xs text-slate-400">
                     {expectedDigits
@@ -412,7 +412,7 @@ export default function QRScannerModal({ accountId, onClose, onConnected, startS
                   <button
                     type="submit"
                     disabled={phoneBusy || !(expectedDigits ?? phoneInput.replace(/\D/g, ''))}
-                    className="rounded-lg bg-indigo-600 px-3 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
+                    className="rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     Get pairing code
                   </button>
@@ -438,7 +438,7 @@ export default function QRScannerModal({ accountId, onClose, onConnected, startS
               </p>
               <button
                 onClick={handleRefresh}
-                className="flex items-center gap-1.5 text-xs font-medium text-indigo-600 hover:text-indigo-700"
+                className="flex items-center gap-1.5 text-xs font-medium text-emerald-700 hover:text-emerald-800"
               >
                 <RefreshCw className="h-3.5 w-3.5" />
                 Refresh QR

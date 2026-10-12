@@ -85,7 +85,7 @@ export default function CrmLeadDetailPage() {
       <div className="w-full space-y-6">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <Link to="/crm/leads" className="text-xs font-medium text-indigo-600 hover:underline">
+            <Link to="/crm/leads" className="text-xs font-medium text-emerald-700 hover:underline">
               All leads
             </Link>
             <h1 className="mt-1 text-xl font-semibold text-slate-900">
@@ -114,7 +114,7 @@ export default function CrmLeadDetailPage() {
         ) : loadError ? (
           <div className="space-y-3">
             <ErrorBanner message={loadError.status === 404 ? 'This lead could not be found. It may have been deleted.' : loadError.message} />
-            <Link to="/crm/leads" className="text-sm font-medium text-indigo-600 hover:underline">
+            <Link to="/crm/leads" className="text-sm font-medium text-emerald-700 hover:underline">
               Back to leads
             </Link>
           </div>
@@ -320,7 +320,7 @@ function ReassignContactModal({
                 type="button"
                 onClick={() => pick(c)}
                 disabled={saving !== null}
-                className="flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm hover:bg-indigo-50 disabled:opacity-60"
+                className="flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm hover:bg-emerald-50 disabled:opacity-60"
               >
                 <span>
                   <span className="font-medium text-slate-900">{c.name || 'Unnamed contact'}</span>

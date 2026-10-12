@@ -73,7 +73,7 @@ export default function NumberChangeRequestModal({ numberId, currentPhone, accou
               value={newPhone}
               onChange={(e) => setNewPhone(e.target.value)}
               placeholder="919876543210"
-              className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none"
+              className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none"
             />
             <span className="mt-1 block font-normal text-slate-400">Country code first, no + or spaces. Example: 91 for India.</span>
             {digits.length > 0 && digits === currentPhone && (
@@ -89,7 +89,7 @@ export default function NumberChangeRequestModal({ numberId, currentPhone, accou
               rows={2}
               maxLength={500}
               placeholder="For example: I typed one digit wrong."
-              className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none"
+              className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none"
             />
           </label>
 
@@ -110,7 +110,7 @@ export default function NumberChangeRequestModal({ numberId, currentPhone, accou
           <button
             type="submit"
             disabled={!valid || busy}
-            className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
+            className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {busy ? 'Sending…' : 'Send request'}
           </button>

@@ -35,7 +35,7 @@ import {
 import DismissibleAlert from '../../components/common/DismissibleAlert';
 
 const inputClass =
-  'mt-1.5 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100';
+  'mt-1.5 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100';
 
 type Tab = 'rules' | 'logs';
 
@@ -60,7 +60,7 @@ const MATCH_TYPE_LABELS: Record<ChatbotMatchType, string> = {
 
 const MATCH_TYPE_BADGE: Record<ChatbotMatchType, string> = {
   exact: 'bg-blue-50 text-blue-700 border-blue-200',
-  contains: 'bg-violet-50 text-violet-700 border-violet-200',
+  contains: 'bg-teal-50 text-teal-800 border-teal-200',
   starts_with: 'bg-cyan-50 text-cyan-700 border-cyan-200',
   regex: 'bg-amber-50 text-amber-700 border-amber-200',
   fallback: 'bg-slate-100 text-slate-600 border-slate-200',
@@ -425,7 +425,7 @@ function RuleFormModal({
                     <button
                       type="button"
                       onClick={() => update('buttons', [...form.buttons, { id: `opt${form.buttons.length + 1}`, title: '' }])}
-                      className="text-xs font-medium text-indigo-600 hover:text-indigo-700"
+                      className="text-xs font-medium text-emerald-700 hover:text-emerald-800"
                     >
                       + Add button
                     </button>
@@ -493,7 +493,7 @@ function RuleFormModal({
                           next[si] = { ...next[si], rows: [...next[si].rows, { id: `row${next[si].rows.length + 1}`, title: '', description: '' }] };
                           update('sections', next);
                         }}
-                        className="ml-3 text-xs font-medium text-indigo-600 hover:text-indigo-700"
+                        className="ml-3 text-xs font-medium text-emerald-700 hover:text-emerald-800"
                       >
                         + Add row
                       </button>
@@ -502,7 +502,7 @@ function RuleFormModal({
                   <button
                     type="button"
                     onClick={() => update('sections', [...form.sections, { title: '', rows: [{ id: 'row1', title: '', description: '' }] }])}
-                    className="text-xs font-medium text-indigo-600 hover:text-indigo-700"
+                    className="text-xs font-medium text-emerald-700 hover:text-emerald-800"
                   >
                     + Add section
                   </button>
@@ -512,7 +512,7 @@ function RuleFormModal({
           )}
 
           <label className="flex items-center gap-2 text-sm text-slate-700">
-            <input type="checkbox" checked={form.is_active} onChange={(e) => update('is_active', e.target.checked)} className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500" />
+            <input type="checkbox" checked={form.is_active} onChange={(e) => update('is_active', e.target.checked)} className="h-4 w-4 rounded border-slate-300 text-emerald-700 focus:ring-emerald-500" />
             Active
           </label>
 
@@ -530,7 +530,7 @@ function RuleFormModal({
             <button
               type="submit"
               disabled={isSaving}
-              className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:opacity-60"
+              className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-60"
             >
               {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
               {initial ? 'Save changes' : 'Create rule'}
@@ -629,7 +629,7 @@ function RulesTab() {
             onClick={() => setShowCreate(true)}
             disabled={isReadOnly()}
             title={isReadOnly() ? 'Action disabled: Subscription expired.' : undefined}
-            className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:opacity-60"
+            className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-60"
           >
             <Plus className="h-4 w-4" />
             New Rule
@@ -688,7 +688,7 @@ function RulesTab() {
                     </td>
                     <td className="px-6 py-3 text-right">
                       <div className="flex justify-end gap-3">
-                        <button onClick={() => setEditing(rule)} className="text-xs font-medium text-indigo-600 hover:text-indigo-700">
+                        <button onClick={() => setEditing(rule)} className="text-xs font-medium text-emerald-700 hover:text-emerald-800">
                           Edit
                         </button>
                         <button
@@ -936,7 +936,7 @@ function LogsTab() {
 function SelectClientPrompt() {
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-10 text-center shadow-sm">
-      <Users2 className="mx-auto h-8 w-8 text-indigo-400" />
+      <Users2 className="mx-auto h-8 w-8 text-emerald-500" />
       <p className="mt-3 text-sm font-medium text-slate-900">Select a client to manage their chatbot</p>
       <p className="mx-auto mt-1 max-w-sm text-sm text-slate-500">
         Chatbot rules and execution logs are per-client. Choose a client from the header dropdown above to
@@ -968,7 +968,7 @@ export default function ChatbotPage() {
             Back to dashboard
           </Link>
           <h1 className="mt-2 flex items-center gap-2 text-xl font-semibold text-slate-900">
-            <Bot className="h-5 w-5 text-indigo-600" />
+            <Bot className="h-5 w-5 text-emerald-700" />
             Chatbot Engine
           </h1>
           <p className="mt-1 text-sm text-slate-500">Keyword auto-responder rules and their execution history.</p>
@@ -978,7 +978,7 @@ export default function ChatbotPage() {
           <button
             onClick={() => setTab('rules')}
             className={`flex items-center gap-2 border-b-2 px-4 py-2 text-sm font-medium ${
-              tab === 'rules' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-500 hover:text-slate-700'
+              tab === 'rules' ? 'border-emerald-600 text-emerald-700' : 'border-transparent text-slate-500 hover:text-slate-700'
             }`}
           >
             <Bot className="h-4 w-4" />
@@ -987,7 +987,7 @@ export default function ChatbotPage() {
           <button
             onClick={() => setTab('logs')}
             className={`flex items-center gap-2 border-b-2 px-4 py-2 text-sm font-medium ${
-              tab === 'logs' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-500 hover:text-slate-700'
+              tab === 'logs' ? 'border-emerald-600 text-emerald-700' : 'border-transparent text-slate-500 hover:text-slate-700'
             }`}
           >
             <History className="h-4 w-4" />

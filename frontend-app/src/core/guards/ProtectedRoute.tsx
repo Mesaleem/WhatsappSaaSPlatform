@@ -79,12 +79,14 @@ export function ProtectedRoute({ children, permission, role, strictRole, module,
   if (isLoading) {
     return (
       <div className="flex h-screen w-full items-center justify-center bg-slate-50">
-        <div className="h-8 w-8 animate-spin rounded-full border-2 border-slate-300 border-t-indigo-600" />
+        <div className="h-8 w-8 animate-spin rounded-full border-2 border-slate-300 border-t-emerald-600" />
       </div>
     );
   }
 
   if (!isAuthenticated || !user) {
+    // A visitor opening the site root sees the public website, not the login form.
+    if (location.pathname === '/') return <Navigate to="/home" replace />;
     return <Navigate to="/login" state={{ from: location }} replace />;
   }
 

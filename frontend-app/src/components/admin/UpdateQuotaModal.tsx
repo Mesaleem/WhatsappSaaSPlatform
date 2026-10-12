@@ -6,7 +6,7 @@ import { extractErrorMessage } from '../../utils/apiError';
 import DismissibleAlert from '../common/DismissibleAlert';
 
 const inputClass =
-  'mt-1.5 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100';
+  'mt-1.5 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100';
 
 /**
  * 3-Tier Hierarchy & Agent-Client Scope Engine (Phase 4) — Agent Quota
@@ -107,7 +107,7 @@ export default function UpdateQuotaModal({
       <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-xl">
         <div className="flex items-center justify-between">
           <h3 className="flex items-center gap-2 text-base font-semibold text-slate-900">
-            <Gauge className="h-4 w-4 text-indigo-600" />
+            <Gauge className="h-4 w-4 text-emerald-700" />
             Edit Quota — {account.company_name}
           </h3>
           <button
@@ -198,7 +198,7 @@ export default function UpdateQuotaModal({
             <button
               onClick={() => void handleSubmit()}
               disabled={isSubmitting || !isValidNumber}
-              className="flex items-center justify-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
+              className="flex items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
             >
               {isSubmitting && <Loader2 className="h-4 w-4 animate-spin" />}
               Save Quota

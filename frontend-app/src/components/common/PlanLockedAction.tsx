@@ -120,7 +120,7 @@ export default function PlanLockedAction({ module, featureLabel, accountId }: Pl
               type="button"
               onClick={() => void request()}
               disabled={busy || (tiers.length > 0 && !tier)}
-              className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-60"
+              className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
             >
               {busy ? 'Sending…' : `Request ${featureLabel}`}
             </button>

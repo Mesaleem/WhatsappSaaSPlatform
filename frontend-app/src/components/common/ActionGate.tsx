@@ -49,7 +49,7 @@ export function GateNoticeModal({
       <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl" data-testid={testId}>
         <div className="flex items-start justify-between gap-3">
           <div className="flex items-start gap-2">
-            <Info className="mt-0.5 h-5 w-5 flex-shrink-0 text-indigo-600" />
+            <Info className="mt-0.5 h-5 w-5 flex-shrink-0 text-emerald-700" />
             <h2 id={`${testId}-title`} className="text-base font-semibold text-slate-900">
               {title}
             </h2>
@@ -64,12 +64,12 @@ export function GateNoticeModal({
             Close
           </button>
           {secondary && (
-            <button type="button" onClick={secondary.onClick} className="rounded-lg border border-indigo-200 px-4 py-2 text-sm font-medium text-indigo-700 hover:bg-indigo-50">
+            <button type="button" onClick={secondary.onClick} className="rounded-lg border border-emerald-200 px-4 py-2 text-sm font-medium text-emerald-800 hover:bg-emerald-50">
               {secondary.label}
             </button>
           )}
           {action && (
-            <Link to={action.to} onClick={onClose} className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700">
+            <Link to={action.to} onClick={onClose} className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700">
               {action.label}
             </Link>
           )}
@@ -108,7 +108,7 @@ export function ClientPickerModal({
       <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl" data-testid="client-picker">
         <div className="flex items-start justify-between gap-3">
           <div className="flex items-start gap-2">
-            <Building2 className="mt-0.5 h-5 w-5 flex-shrink-0 text-indigo-600" />
+            <Building2 className="mt-0.5 h-5 w-5 flex-shrink-0 text-emerald-700" />
             <h2 id="client-picker-title" className="text-base font-semibold text-slate-900">
               Choose a client first
             </h2>
@@ -142,7 +142,7 @@ export function ClientPickerModal({
             onClick={confirm}
             disabled={choice === ''}
             title={choice === '' ? 'Choose a client from the list first.' : undefined}
-            className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:opacity-60"
+            className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-60"
           >
             Continue
           </button>
@@ -160,7 +160,7 @@ export function SelectClientNotice({ message, purpose, onSelect }: { message: st
         <Building2 className="mt-0.5 h-4 w-4 flex-shrink-0" />
         {message}
       </span>
-      <button type="button" onClick={onSelect} className="rounded-lg border border-indigo-200 bg-white px-3 py-1.5 text-xs font-semibold text-indigo-700 hover:bg-indigo-50" data-testid="select-client-button">
+      <button type="button" onClick={onSelect} className="rounded-lg border border-emerald-200 bg-white px-3 py-1.5 text-xs font-semibold text-emerald-800 hover:bg-emerald-50" data-testid="select-client-button">
         Choose a client{purpose ? ` to ${purpose}` : ''}
       </button>
     </div>

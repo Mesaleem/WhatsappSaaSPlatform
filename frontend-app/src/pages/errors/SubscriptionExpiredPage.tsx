@@ -42,7 +42,7 @@ export default function SubscriptionExpiredPage() {
         <div className="mt-6 flex flex-col gap-2">
           <Link
             to="/"
-            className="w-full rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-indigo-700"
+            className="w-full rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-700"
           >
             Go to Dashboard
           </Link>

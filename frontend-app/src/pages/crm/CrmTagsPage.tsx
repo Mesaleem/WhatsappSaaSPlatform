@@ -145,7 +145,7 @@ export default function CrmTagsPage() {
                 type="submit"
                 disabled={readOnly || creating || newName.trim() === ''}
                 title={readOnly ? READ_ONLY_TITLE : undefined}
-                className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
+                className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {creating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
                 Add tag
@@ -184,10 +184,10 @@ export default function CrmTagsPage() {
                     tags.map((tag) => (
                       <tr key={tag.id} data-testid={`crm-tag-row-${tag.id}`}>
                         <td className="px-4 py-3">
-                          <span className="inline-flex rounded-md bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-700">{tag.name}</span>
+                          <span className="inline-flex rounded-md bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-800">{tag.name}</span>
                         </td>
                         <td className="px-4 py-3">
-                          <Link to={`/crm/leads?tags=${tag.id}`} className="text-indigo-600 hover:underline" data-testid={`crm-tag-count-${tag.id}`}>
+                          <Link to={`/crm/leads?tags=${tag.id}`} className="text-emerald-700 hover:underline" data-testid={`crm-tag-count-${tag.id}`}>
                             {tag.lead_count}
                           </Link>
                         </td>

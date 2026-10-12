@@ -122,7 +122,7 @@ function SuperAdminTestDeviceCard() {
     <Card className="mb-6">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-indigo-50 text-indigo-600">
+          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-emerald-50 text-emerald-700">
             <QrCode className="h-5 w-5" />
           </div>
           <div>
@@ -148,7 +148,7 @@ function SuperAdminTestDeviceCard() {
             type="button"
             onClick={() => setIsModalOpen(true)}
             disabled={isLoading || accountId === null}
-            className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:opacity-60"
+            className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-60"
           >
             <Radio className="h-4 w-4" />
             {status === 'connecting' ? 'Reconnect' : 'Scan to Connect'}
@@ -315,7 +315,7 @@ export default function AdminDeviceSettingsPage() {
                           <button
                             type="button"
                             onClick={() => setQrModalAccountId(device.account_id)}
-                            className="flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-indigo-700"
+                            className="flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-emerald-700"
                           >
                             <Radio className="h-3.5 w-3.5" />
                             {device.status === 'connecting' ? 'Reconnect' : 'Connect'}

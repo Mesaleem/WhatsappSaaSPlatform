@@ -283,7 +283,7 @@ function CreateApiKeyModal({
             <div className="flex justify-end">
               <button
                 onClick={onClose}
-                className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700"
+                className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700"
               >
                 Done
               </button>
@@ -394,7 +394,7 @@ function CreateApiKeyModal({
               <button
                 type="submit"
                 disabled={isSaving}
-                className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:opacity-60"
+                className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-60"
               >
                 {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <KeyRound className="h-4 w-4" />}
                 Generate Key
@@ -596,7 +596,7 @@ function ApiKeysTab() {
         {(scope === 'account' || isSuperAdmin()) && (
           <button
             onClick={() => setShowCreate(true)}
-            className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700"
+            className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700"
           >
             <Plus className="h-4 w-4" />
             Create API Key
@@ -612,7 +612,7 @@ function ApiKeysTab() {
             type="date"
             value={from}
             onChange={(e) => setFrom(e.target.value)}
-            className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 w-40"
+            className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100 w-40"
             aria-label="Created from"
           />
           <span className="text-sm text-slate-400">to</span>
@@ -620,7 +620,7 @@ function ApiKeysTab() {
             type="date"
             value={to}
             onChange={(e) => setTo(e.target.value)}
-            className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 w-40"
+            className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100 w-40"
             aria-label="Created to"
           />
         </div>
@@ -687,7 +687,7 @@ function ApiKeysTab() {
                           <button
                             onClick={() => handleRegenerateSecret(key)}
                             disabled={regeneratingSecretId === key.id}
-                            className="inline-flex items-center gap-1 text-xs font-medium text-indigo-600 hover:text-indigo-700 disabled:opacity-60"
+                            className="inline-flex items-center gap-1 text-xs font-medium text-emerald-700 hover:text-emerald-800 disabled:opacity-60"
                           >
                             {regeneratingSecretId === key.id ? (
                               <Loader2 className="h-3 w-3 animate-spin" />
@@ -784,7 +784,7 @@ function ApiKeysTab() {
               <div className="flex justify-end">
                 <button
                   onClick={() => setRevealedSecretFor(null)}
-                  className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700"
+                  className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700"
                 >
                   Done
                 </button>
@@ -916,7 +916,7 @@ function CreateWebhookModal({
             <div className="flex justify-end">
               <button
                 onClick={onClose}
-                className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700"
+                className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700"
               >
                 Done
               </button>
@@ -972,7 +972,7 @@ function CreateWebhookModal({
                       type="checkbox"
                       checked={events.includes(event)}
                       onChange={() => toggleEvent(event)}
-                      className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                      className="h-4 w-4 rounded border-slate-300 text-emerald-700 focus:ring-emerald-500"
                     />
                     {EVENT_LABELS[event]}
                     <code className="text-xs text-slate-400">{event}</code>
@@ -999,7 +999,7 @@ function CreateWebhookModal({
               <button
                 type="submit"
                 disabled={isSaving}
-                className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:opacity-60"
+                className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-60"
               >
                 {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <WebhookIcon className="h-4 w-4" />}
                 Register Webhook
@@ -1289,7 +1289,7 @@ function WebhooksTab() {
         {(scope === 'account' || isSuperAdmin()) && (
           <button
             onClick={() => setShowCreate(true)}
-            className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700"
+            className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700"
           >
             <Plus className="h-4 w-4" />
             Add Webhook
@@ -1378,7 +1378,7 @@ export default function DeveloperPage() {
           <button
             onClick={() => setTab('keys')}
             className={`flex items-center gap-2 border-b-2 px-4 py-2 text-sm font-medium ${
-              tab === 'keys' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-500 hover:text-slate-700'
+              tab === 'keys' ? 'border-emerald-600 text-emerald-700' : 'border-transparent text-slate-500 hover:text-slate-700'
             }`}
           >
             <KeyRound className="h-4 w-4" />
@@ -1387,7 +1387,7 @@ export default function DeveloperPage() {
           <button
             onClick={() => setTab('webhooks')}
             className={`flex items-center gap-2 border-b-2 px-4 py-2 text-sm font-medium ${
-              tab === 'webhooks' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-500 hover:text-slate-700'
+              tab === 'webhooks' ? 'border-emerald-600 text-emerald-700' : 'border-transparent text-slate-500 hover:text-slate-700'
             }`}
           >
             <WebhookIcon className="h-4 w-4" />

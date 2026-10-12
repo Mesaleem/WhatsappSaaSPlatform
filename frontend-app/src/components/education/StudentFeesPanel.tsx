@@ -83,7 +83,7 @@ export default function StudentFeesPanel({
             onClick={() => update({ modal: { kind: 'assign' } })}
             disabled={readOnly}
             title={readOnly ? READ_ONLY_TITLE : undefined}
-            className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
+            className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
           >
             <Plus className="h-4 w-4" />
             Assign fee
@@ -145,7 +145,7 @@ export default function StudentFeesPanel({
                             onClick={() => update({ modal: { kind: 'pay', fee: f } })}
                             disabled={readOnly}
                             title={readOnly ? READ_ONLY_TITLE : undefined}
-                            className="text-xs font-semibold text-indigo-600 hover:text-indigo-800 disabled:cursor-not-allowed disabled:opacity-50"
+                            className="text-xs font-semibold text-emerald-700 hover:text-emerald-900 disabled:cursor-not-allowed disabled:opacity-50"
                           >
                             Record payment
                           </button>
@@ -228,7 +228,7 @@ export default function StudentFeesPanel({
 
 function Total({ label, value, emphasis = false }: { label: string; value: string; emphasis?: boolean }) {
   return (
-    <div className={`rounded-lg border bg-white px-3 py-2 ${emphasis ? 'border-indigo-200' : 'border-slate-200'}`}>
+    <div className={`rounded-lg border bg-white px-3 py-2 ${emphasis ? 'border-emerald-200' : 'border-slate-200'}`}>
       <div className="text-xs text-slate-500">{label}</div>
       <div className="font-semibold text-slate-900">{value}</div>
     </div>

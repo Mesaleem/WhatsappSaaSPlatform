@@ -127,7 +127,7 @@ export default function MessageLogDetailModal({ logId, onClose }: { logId: numbe
                       <img src={log.media.url} alt={log.media.name ?? 'Attachment preview'} className="max-h-48 rounded-lg border border-slate-200" />
                     )}
                     {log.media.url && (
-                      <a href={log.media.url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-xs font-medium text-indigo-600 hover:underline">
+                      <a href={log.media.url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-xs font-medium text-emerald-700 hover:underline">
                         <ExternalLink className="h-3 w-3" /> Open attachment
                       </a>
                     )}

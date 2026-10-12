@@ -211,7 +211,7 @@ export default function AdsDashboardPage() {
                 {nothingYet && (
                   <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600" data-testid="ads-dashboard-empty">
                     No campaigns and no click-to-WhatsApp referrals yet.{' '}
-                    <Link to="/social/ads" className="font-semibold text-indigo-700 underline">
+                    <Link to="/social/ads" className="font-semibold text-emerald-800 underline">
                       Open the Meta Ads Launcher
                     </Link>
                   </div>

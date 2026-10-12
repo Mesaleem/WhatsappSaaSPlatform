@@ -463,7 +463,7 @@ export default function SocialAccountsPage() {
             )}
 
             {isConnecting && (
-              <div className="mb-4 flex items-center gap-2 rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3 text-sm text-indigo-800" data-testid="social-connecting">
+              <div className="mb-4 flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900" data-testid="social-connecting">
                 <Loader2 className="h-4 w-4 flex-shrink-0 animate-spin" />
                 Finish signing in in the connection window. Closing it cancels the connection.
               </div>

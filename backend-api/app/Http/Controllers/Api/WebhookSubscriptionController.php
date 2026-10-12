@@ -112,7 +112,7 @@ class WebhookSubscriptionController extends Controller
         abort_if(! $subscription, 404, 'Webhook subscription not found.');
 
         $result = WebhookSender::send($subscription, 'webhook.test', [
-            'message' => 'This is a test event from your WhatsApp SaaS Platform Developer Portal.',
+            'message' => 'This is a test event from your WapHub Developer Portal.',
             'sent_at' => now()->toIso8601String(),
         ]);
 

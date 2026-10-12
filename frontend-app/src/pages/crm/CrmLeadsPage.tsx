@@ -164,7 +164,7 @@ export default function CrmLeadsPage() {
             disabled={readOnly}
             title={addLeadBlockedReason}
             data-testid="crm-add-lead"
-            className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
+            className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
           >
             <Plus className="h-4 w-4" />
             Add lead
@@ -211,7 +211,7 @@ export default function CrmLeadsPage() {
                         }}
                         onChange={toggleAllVisible}
                         disabled={isLoading || visibleIds.length === 0}
-                        className="h-4 w-4 rounded border-slate-300 text-indigo-600"
+                        className="h-4 w-4 rounded border-slate-300 text-emerald-700"
                       />
                     </th>
                     <th className="px-4 py-3 text-left font-medium text-slate-600">Lead</th>
@@ -242,7 +242,7 @@ export default function CrmLeadsPage() {
                       // (status, assignee, tags); the name links to the lead.
                       <tr
                         key={lead.id}
-                        className={`align-top hover:bg-slate-50 ${selectedIds.includes(lead.id) ? 'bg-indigo-50/40' : ''}`}
+                        className={`align-top hover:bg-slate-50 ${selectedIds.includes(lead.id) ? 'bg-emerald-50/40' : ''}`}
                         data-testid={`crm-lead-row-${lead.id}`}
                       >
                         <td className="px-4 py-3">
@@ -251,13 +251,13 @@ export default function CrmLeadsPage() {
                             aria-label={`Select lead ${lead.contact?.name || lead.id}`}
                             checked={selectedIds.includes(lead.id)}
                             onChange={() => toggleOne(lead.id)}
-                            className="h-4 w-4 rounded border-slate-300 text-indigo-600"
+                            className="h-4 w-4 rounded border-slate-300 text-emerald-700"
                           />
                         </td>
                         <td className="min-w-[10rem] px-4 py-3">
                           <Link
                             to={`/crm/leads/${lead.id}`}
-                            className="block font-medium text-slate-900 hover:text-indigo-600"
+                            className="block font-medium text-slate-900 hover:text-emerald-700"
                           >
                             {lead.contact?.name || 'Unnamed contact'}
                           </Link>
@@ -265,7 +265,7 @@ export default function CrmLeadsPage() {
                           {lead.contact && (
                             <Link
                               to={`/crm/contacts/${lead.contact.id}`}
-                              className="mt-0.5 block text-xs text-indigo-600 hover:underline"
+                              className="mt-0.5 block text-xs text-emerald-700 hover:underline"
                             >
                               Open contact
                             </Link>

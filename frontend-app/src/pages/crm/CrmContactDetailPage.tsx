@@ -123,7 +123,7 @@ export default function CrmContactDetailPage() {
       <div className="w-full space-y-6">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <Link to="/crm/contacts" className="text-xs font-medium text-indigo-600 hover:underline">
+            <Link to="/crm/contacts" className="text-xs font-medium text-emerald-700 hover:underline">
               All contacts
             </Link>
             <h1 className="mt-1 text-xl font-semibold text-slate-900">{contact ? contact.name || 'Unnamed contact' : 'Contact'}</h1>
@@ -161,7 +161,7 @@ export default function CrmContactDetailPage() {
         ) : loadError ? (
           <div className="space-y-3">
             <ErrorBanner message={loadError.status === 404 ? 'This contact could not be found. It may have been deleted or merged.' : loadError.message} />
-            <Link to="/crm/contacts" className="text-sm font-medium text-indigo-600 hover:underline">
+            <Link to="/crm/contacts" className="text-sm font-medium text-emerald-700 hover:underline">
               Back to contacts
             </Link>
           </div>
@@ -230,7 +230,7 @@ export default function CrmContactDetailPage() {
                       leads.map((lead) => (
                         <tr key={lead.id} className="cursor-pointer hover:bg-slate-50" onClick={() => navigate(`/crm/leads/${lead.id}`)}>
                           <td className="px-4 py-3">
-                            <Link to={`/crm/leads/${lead.id}`} onClick={(e) => e.stopPropagation()} className="font-medium text-indigo-600 hover:underline">
+                            <Link to={`/crm/leads/${lead.id}`} onClick={(e) => e.stopPropagation()} className="font-medium text-emerald-700 hover:underline">
                               Lead #{lead.id}
                             </Link>
                           </td>
@@ -375,7 +375,7 @@ function MergeContactModal({
                 type="button"
                 onClick={() => setTarget(c)}
                 className={`flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm ${
-                  target?.id === c.id ? 'bg-indigo-50 ring-1 ring-indigo-200' : 'hover:bg-slate-50'
+                  target?.id === c.id ? 'bg-emerald-50 ring-1 ring-emerald-200' : 'hover:bg-slate-50'
                 }`}
               >
                 <span className="font-medium text-slate-900">{c.name || 'Unnamed contact'}</span>
@@ -408,7 +408,7 @@ function MergeContactModal({
             type="button"
             onClick={submit}
             disabled={!target || saving || (phoneDiffers && !confirmed)}
-            className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:opacity-60"
+            className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-60"
           >
             {saving && <Loader2 className="h-4 w-4 animate-spin" />}
             Merge

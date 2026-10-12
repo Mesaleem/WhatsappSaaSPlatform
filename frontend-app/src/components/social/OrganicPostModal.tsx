@@ -214,7 +214,7 @@ export default function OrganicPostModal({
                   {post.status === 'published' ? (
                     <CheckCircle2 className="mt-0.5 h-4 w-4 flex-shrink-0 text-emerald-600" />
                   ) : post.status === 'scheduled' ? (
-                    <CalendarClock className="mt-0.5 h-4 w-4 flex-shrink-0 text-indigo-600" />
+                    <CalendarClock className="mt-0.5 h-4 w-4 flex-shrink-0 text-emerald-700" />
                   ) : post.status === 'pending' || post.status === 'publishing' ? (
                     <Clock className="mt-0.5 h-4 w-4 flex-shrink-0 text-amber-600" />
                   ) : (
@@ -248,7 +248,7 @@ export default function OrganicPostModal({
                       className={`rounded-lg border px-3 py-1.5 text-xs font-semibold ${
                         selectedPlatforms.includes(platform)
                           ? 'border-transparent text-white'
-                          : 'border-slate-200 text-slate-600 hover:border-indigo-300'
+                          : 'border-slate-200 text-slate-600 hover:border-emerald-300'
                       }`}
                       style={selectedPlatforms.includes(platform) ? { background: activeGradient } : undefined}
                     >
@@ -316,7 +316,7 @@ export default function OrganicPostModal({
                     type="button"
                     onClick={() => fileInputRef.current?.click()}
                     disabled={isUploadingMedia}
-                    className="mt-1 flex w-full flex-col items-center justify-center gap-1.5 rounded-xl border-2 border-dashed border-slate-200 px-4 py-6 text-center hover:border-indigo-300 hover:bg-indigo-50/30 disabled:opacity-60"
+                    className="mt-1 flex w-full flex-col items-center justify-center gap-1.5 rounded-xl border-2 border-dashed border-slate-200 px-4 py-6 text-center hover:border-emerald-300 hover:bg-emerald-50/30 disabled:opacity-60"
                   >
                     {isUploadingMedia ? (
                       <>
@@ -349,7 +349,7 @@ export default function OrganicPostModal({
                         if (option === 'schedule' && !scheduledAt) setScheduledAt(toLocalInputValue(new Date(Date.now() + 60 * 60 * 1000)));
                       }}
                       className={`rounded-lg border px-3 py-1.5 text-xs font-semibold ${
-                        when === option ? 'border-transparent text-white' : 'border-slate-200 text-slate-600 hover:border-indigo-300'
+                        when === option ? 'border-transparent text-white' : 'border-slate-200 text-slate-600 hover:border-emerald-300'
                       }`}
                       style={when === option ? { background: activeGradient } : undefined}
                     >

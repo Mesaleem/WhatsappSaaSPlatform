@@ -66,7 +66,7 @@ export default function CrmContactsPage() {
               onClick={() => setCreating(true)}
               disabled={readOnly}
               title={readOnly ? READ_ONLY_TITLE : undefined}
-              className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
+              className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
             >
               <Plus className="h-4 w-4" />
               New contact
@@ -121,7 +121,7 @@ export default function CrmContactsPage() {
                           <Link
                             to={`/crm/contacts/${c.id}`}
                             onClick={(e) => e.stopPropagation()}
-                            className="font-medium text-slate-900 hover:text-indigo-600"
+                            className="font-medium text-slate-900 hover:text-emerald-700"
                           >
                             {c.name || 'Unnamed contact'}
                           </Link>

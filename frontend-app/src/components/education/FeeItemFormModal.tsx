@@ -106,7 +106,7 @@ export default function FeeItemFormModal({
           <button type="button" onClick={onCancel} disabled={saving} className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60">
             Cancel
           </button>
-          <button type="submit" disabled={saving || name.trim() === ''} className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:opacity-60">
+          <button type="submit" disabled={saving || name.trim() === ''} className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-60">
             {saving && <Loader2 className="h-4 w-4 animate-spin" />}
             {item ? 'Save changes' : 'Create'}
           </button>

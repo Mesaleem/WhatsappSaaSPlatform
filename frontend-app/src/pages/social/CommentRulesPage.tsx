@@ -152,7 +152,7 @@ function RuleFormModal({
               type="checkbox"
               checked={form.is_active}
               onChange={(e) => update({ is_active: e.target.checked })}
-              className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+              className="h-4 w-4 rounded border-slate-300 text-emerald-700 focus:ring-emerald-500"
             />
             Active
           </label>

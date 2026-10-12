@@ -68,13 +68,15 @@ export default function SocialConnectionWarningBanner() {
   if (!canManageSocial || hasMetaAssetConnected !== false) return null;
 
   return (
-    <div className="flex items-center gap-2 border-b border-amber-200 bg-amber-50 px-6 py-2 text-sm font-medium text-amber-800">
-      <AlertTriangle className="h-4 w-4 flex-shrink-0" />
-      No Meta Page or Ad Account is connected yet — Ad Launcher and Lead Sync stay locked until you connect one in{' '}
-      <Link to="/social/accounts" className="font-semibold underline">
-        Social Accounts
-      </Link>
-      .
+    <div className="flex flex-shrink-0 items-start gap-2 border-b border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800 sm:items-center sm:px-6 sm:text-sm">
+      <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0 sm:mt-0" />
+      <p className="min-w-0">
+        No Meta Page or Ad Account is connected yet — Ad Launcher and Lead Sync stay locked until you connect one in{' '}
+        <Link to="/social/accounts" className="font-semibold underline">
+          Social Accounts
+        </Link>
+        .
+      </p>
     </div>
   );
 }

@@ -216,7 +216,7 @@ export default function AddOnsPage() {
                                     onlineGateway,
                                   )
                                 }
-                                className="rounded-lg border border-indigo-600 px-3 py-1.5 text-xs font-semibold text-indigo-700 hover:bg-indigo-50 disabled:opacity-60"
+                                className="rounded-lg border border-emerald-600 px-3 py-1.5 text-xs font-semibold text-emerald-800 hover:bg-emerald-50 disabled:opacity-60"
                               >
                                 {payingId === row.invoice_id ? 'Starting…' : 'Pay online'}
                               </button>
@@ -225,7 +225,7 @@ export default function AddOnsPage() {
                               <button
                                 type="button"
                                 onClick={() => setRecording(row)}
-                                className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-700"
+                                className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700"
                               >
                                 Record payment
                               </button>

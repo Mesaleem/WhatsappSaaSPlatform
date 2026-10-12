@@ -98,7 +98,7 @@ export default function PendingInvoicesCard() {
                           type="button"
                           onClick={() => void payOnline({ id: row.id, account_id: row.account_id, plan_key: row.plan_key, plan_label: row.label }, onlineGateway)}
                           disabled={payingId === row.id}
-                          className="rounded-lg border border-indigo-600 px-3 py-1.5 text-xs font-semibold text-indigo-700 hover:bg-indigo-50 disabled:opacity-60"
+                          className="rounded-lg border border-emerald-600 px-3 py-1.5 text-xs font-semibold text-emerald-800 hover:bg-emerald-50 disabled:opacity-60"
                         >
                           {payingId === row.id ? 'Starting…' : 'Pay online'}
                         </button>
@@ -106,7 +106,7 @@ export default function PendingInvoicesCard() {
                       <button
                         type="button"
                         onClick={() => setRecording(row)}
-                        className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-700"
+                        className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700"
                       >
                         Record payment
                       </button>

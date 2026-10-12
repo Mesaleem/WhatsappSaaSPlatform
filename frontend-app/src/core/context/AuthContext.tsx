@@ -11,6 +11,7 @@ import axiosInstance, { AUTH_TOKEN_KEY, AUTH_EVENT_UNAUTHORIZED } from '../api/a
 import type {
   ApiErrorResponse,
   LoginCredentials,
+  LoginError,
   LoginResponse,
   MeResponse,
   User,
@@ -62,6 +63,9 @@ interface AuthContextValue {
   isReadOnly: () => boolean;
 }
 
+/** sessionStorage flag set when the server ended this session (read once by LoginPage). */
+export const SESSION_ENDED_KEY = 'auth_session_ended';
+
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -95,6 +99,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const onUnauthorized = () => {
+      // Tell the login page why: another device logged in, or the password was changed.
+      if (localStorage.getItem(AUTH_TOKEN_KEY)) {
+        try {
+          sessionStorage.setItem(SESSION_ENDED_KEY, '1');
+        } catch {
+          // storage unavailable: the login page simply shows no notice
+        }
+      }
       clearSession();
     };
     window.addEventListener(AUTH_EVENT_UNAUTHORIZED, onUnauthorized);
@@ -112,7 +124,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch (err) {
       const axiosErr = err as AxiosError<ApiErrorResponse>;
       const message = axiosErr.response?.data?.message ?? 'Unable to sign in. Please try again.';
-      throw new Error(message);
+      const error: LoginError = new Error(message);
+      error.code = axiosErr.response?.data?.error_code;
+      throw error;
     }
   }, []);
 

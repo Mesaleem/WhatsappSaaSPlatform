@@ -47,7 +47,7 @@ const USER_STATUS_OPTIONS = [
 ];
 
 const inputClass =
-  'mt-1.5 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100';
+  'mt-1.5 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100';
 
 
 function formatDate(value: string): string {
@@ -127,14 +127,14 @@ function RoleCheckboxList({
         <label
           key={role.id}
           className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-sm transition ${
-            selected.includes(role.name) ? 'border-indigo-300 bg-indigo-50/50 text-indigo-900' : 'border-slate-200 text-slate-700'
+            selected.includes(role.name) ? 'border-emerald-300 bg-emerald-50/50 text-emerald-950' : 'border-slate-200 text-slate-700'
           }`}
         >
           <input
             type="checkbox"
             checked={selected.includes(role.name)}
             onChange={() => toggle(role.name)}
-            className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+            className="h-4 w-4 rounded border-slate-300 text-emerald-700 focus:ring-emerald-500"
           />
           {roleLabel(role.name)}
         </label>
@@ -297,7 +297,7 @@ function InviteUserModal({
             <button
               type="submit"
               disabled={isSaving || roles.length === 0}
-              className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:opacity-60"
+              className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-60"
             >
               {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <UserPlus className="h-4 w-4" />}
               Add member
@@ -414,7 +414,7 @@ function EditUserModal({
             <button
               type="submit"
               disabled={isSaving || roles.length === 0}
-              className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:opacity-60"
+              className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-60"
             >
               {isSaving && <Loader2 className="h-4 w-4 animate-spin" />}
               Save changes
@@ -508,7 +508,7 @@ function ResetPasswordModal({
             <button
               type="submit"
               disabled={isSaving}
-              className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:opacity-60"
+              className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-60"
             >
               {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <KeyRound className="h-4 w-4" />}
               Set password
@@ -747,7 +747,7 @@ export default function UsersPage() {
                       ? 'No roles can be assigned from this account, so no member can be invited. Contact Super Admin.'
                       : undefined
               }
-              className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:opacity-60"
+              className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-60"
             >
               <Plus className="h-4 w-4" />
               Invite Member
@@ -781,7 +781,7 @@ export default function UsersPage() {
               type="date"
               value={from}
               onChange={(e) => setFrom(e.target.value)}
-              className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 w-40"
+              className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100 w-40"
               aria-label="Joined from"
             />
             <span className="text-sm text-slate-400">to</span>
@@ -789,7 +789,7 @@ export default function UsersPage() {
               type="date"
               value={to}
               onChange={(e) => setTo(e.target.value)}
-              className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 w-40"
+              className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100 w-40"
               aria-label="Joined to"
             />
           </div>
@@ -850,7 +850,7 @@ export default function UsersPage() {
                               <button
                                 onClick={() => setEditUser(u)}
                                 disabled={busyId === u.id}
-                                className="inline-flex items-center gap-1 text-xs font-medium text-indigo-600 hover:text-indigo-700 disabled:opacity-60"
+                                className="inline-flex items-center gap-1 text-xs font-medium text-emerald-700 hover:text-emerald-800 disabled:opacity-60"
                               >
                                 <Pencil className="h-3 w-3" />
                                 Edit
@@ -874,7 +874,7 @@ export default function UsersPage() {
                               <button
                                 onClick={() => navigate(`/team/permissions?user=${u.id}`)}
                                 disabled={busyId === u.id}
-                                className="inline-flex items-center gap-1 text-xs font-medium text-indigo-600 hover:text-indigo-700 disabled:opacity-60"
+                                className="inline-flex items-center gap-1 text-xs font-medium text-emerald-700 hover:text-emerald-800 disabled:opacity-60"
                               >
                                 <ShieldCheck className="h-3 w-3" />
                                 Permissions
@@ -884,7 +884,7 @@ export default function UsersPage() {
                               <button
                                 onClick={() => setResetPasswordUser(u)}
                                 disabled={busyId === u.id}
-                                className="inline-flex items-center gap-1 text-xs font-medium text-indigo-600 hover:text-indigo-700 disabled:opacity-60"
+                                className="inline-flex items-center gap-1 text-xs font-medium text-emerald-700 hover:text-emerald-800 disabled:opacity-60"
                               >
                                 <KeyRound className="h-3 w-3" />
                                 Reset Password
@@ -905,7 +905,7 @@ export default function UsersPage() {
                               <button
                                 onClick={() => void handleToggle(u)}
                                 disabled={busyId === u.id}
-                                className="text-xs font-medium text-indigo-600 hover:text-indigo-700 disabled:opacity-60"
+                                className="text-xs font-medium text-emerald-700 hover:text-emerald-800 disabled:opacity-60"
                               >
                                 {u.is_active ? 'Deactivate' : 'Activate'}
                               </button>

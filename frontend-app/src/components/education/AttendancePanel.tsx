@@ -204,7 +204,7 @@ export default function AttendancePanel({
                                 title={readOnly ? READ_ONLY_TITLE : undefined}
                                 onClick={() => mark(s.student_id, status)}
                                 className={`rounded-lg border px-3 py-1 text-xs font-medium disabled:cursor-not-allowed ${
-                                  current === status ? 'border-indigo-600 bg-indigo-600 text-white' : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50 disabled:opacity-60'
+                                  current === status ? 'border-emerald-600 bg-emerald-600 text-white' : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50 disabled:opacity-60'
                                 }`}
                               >
                                 {STATUS_LABELS[status]}
@@ -227,7 +227,7 @@ export default function AttendancePanel({
                 onClick={save}
                 disabled={!canSave}
                 title={readOnly ? READ_ONLY_TITLE : undefined}
-                className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
+                className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {saving && <Loader2 className="h-4 w-4 animate-spin" />}
                 Save attendance

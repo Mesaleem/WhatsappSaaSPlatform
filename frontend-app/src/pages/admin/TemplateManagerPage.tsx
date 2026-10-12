@@ -190,7 +190,7 @@ const STATUS_LABEL: Record<MessageTemplateStatus, string> = Object.fromEntries(
 
 const STATUS_BADGE: Record<MessageTemplateStatus, string> = {
   pending_agent_review: 'bg-sky-50 text-sky-700 ring-sky-600/20',
-  pending_admin_review: 'bg-violet-50 text-violet-700 ring-violet-600/20',
+  pending_admin_review: 'bg-teal-50 text-teal-800 ring-teal-600/20',
   pending_meta_approval: 'bg-fuchsia-50 text-fuchsia-700 ring-fuchsia-600/20',
   pending: 'bg-amber-50 text-amber-700 ring-amber-600/20',
   approved: 'bg-emerald-50 text-emerald-700 ring-emerald-600/20',
@@ -639,7 +639,7 @@ function TemplateModal({
               <button
                 type="button"
                 onClick={() => setShowAiPanel((v) => !v)}
-                className="inline-flex items-center gap-1 text-xs font-medium text-indigo-600 hover:text-indigo-700"
+                className="inline-flex items-center gap-1 text-xs font-medium text-emerald-700 hover:text-emerald-800"
               >
                 <Sparkles className="h-3.5 w-3.5" />
                 Generate with AI
@@ -647,7 +647,7 @@ function TemplateModal({
             </div>
 
             {showAiPanel && (
-              <div className="mt-2 space-y-2 rounded-lg border border-indigo-100 bg-indigo-50/50 p-3">
+              <div className="mt-2 space-y-2 rounded-lg border border-emerald-100 bg-emerald-50/50 p-3">
                 {accountId === '' && (
                   <p className="text-xs text-amber-700">Select an account above first — it pays the AI credit for this draft.</p>
                 )}
@@ -692,7 +692,7 @@ function TemplateModal({
                     type="button"
                     onClick={() => void handleGenerateDraft()}
                     disabled={isGeneratingDraft || accountId === '' || !aiPurpose.trim()}
-                    className="flex items-center gap-2 rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:opacity-60"
+                    className="flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-60"
                   >
                     {isGeneratingDraft ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
                     Generate Draft
@@ -720,7 +720,7 @@ function TemplateModal({
                   onClick={() => setHeaderType(opt.value)}
                   className={`rounded-lg border px-3 py-2 text-left text-sm ${
                     headerType === opt.value
-                      ? 'border-indigo-500 bg-indigo-50 text-indigo-700'
+                      ? 'border-emerald-500 bg-emerald-50 text-emerald-800'
                       : 'border-slate-300 text-slate-700 hover:bg-slate-50'
                   }`}
                 >
@@ -763,14 +763,14 @@ function TemplateModal({
           {variablesSchema.length > 0 && (
             <div className="space-y-2 rounded-lg border border-slate-200 bg-slate-50/60 p-3">
               <div className="flex items-center gap-1.5 text-sm font-medium text-slate-700">
-                <ListChecks className="h-4 w-4 text-indigo-600" />
+                <ListChecks className="h-4 w-4 text-emerald-700" />
                 Variable Configurator
               </div>
               <div className="space-y-3">
                 {variablesSchema.map((field) => (
                   <div key={field.key} className="rounded-lg border border-slate-200 bg-white p-3">
                     <div className="flex flex-wrap items-center gap-2">
-                      <span className="inline-flex items-center gap-1 rounded-full bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-700">
+                      <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-800">
                         <Sparkles className="h-3 w-3" />
                         {'{{' + field.key + '}}'}
                       </span>
@@ -807,7 +807,7 @@ function TemplateModal({
                             type="checkbox"
                             checked={field.required}
                             onChange={(e) => updateVariableField(field.key, { required: e.target.checked })}
-                            className="h-3.5 w-3.5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                            className="h-3.5 w-3.5 rounded border-slate-300 text-emerald-700 focus:ring-emerald-500"
                           />
                           Required
                         </label>
@@ -944,7 +944,7 @@ function TemplateModal({
             <button
               type="submit"
               disabled={isSaving}
-              className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:opacity-60"
+              className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-60"
             >
               {isSaving ? 'Saving…' : template ? 'Save Changes' : 'Create Template'}
             </button>
@@ -994,7 +994,7 @@ function ViewTemplateModal({ template, onClose }: { template: MessageTemplate; o
             <h4 className="text-sm font-medium text-slate-700">Variables</h4>
             <div className="mt-2 flex flex-wrap gap-1">
               {fields.map((f) => (
-                <span key={f.key} className="rounded-full bg-indigo-50 px-2 py-0.5 text-[11px] font-medium text-indigo-700">
+                <span key={f.key} className="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-800">
                   {f.label || f.key} ({f.type}
                   {f.required ? ', required' : ', optional'})
                 </span>
@@ -1172,7 +1172,7 @@ function TestTemplateModal({
             <button
               type="submit"
               disabled={isSending}
-              className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:opacity-60"
+              className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-60"
             >
               {isSending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
               {isSending ? 'Sending…' : 'Send Test'}
@@ -1353,7 +1353,7 @@ export default function TemplateManagerPage() {
         actions={
           <button
             onClick={() => setModalState({ open: true, template: null })}
-            className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700"
+            className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700"
           >
             <Plus className="h-4 w-4" />
             New Template
@@ -1421,7 +1421,7 @@ export default function TemplateManagerPage() {
                             title={`${f.label} (${f.type}${f.required ? ', required' : ', optional'})`}
                             className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium ${
                               f.required
-                                ? 'bg-indigo-50 text-indigo-700'
+                                ? 'bg-emerald-50 text-emerald-800'
                                 : 'bg-slate-100 text-slate-500'
                             }`}
                           >
@@ -1478,7 +1478,7 @@ export default function TemplateManagerPage() {
                       {viewerIsSuperAdmin && (
                         <button
                           onClick={() => setTestModalTemplate(t)}
-                          className="flex items-center gap-1 text-xs font-medium text-indigo-600 hover:text-indigo-700"
+                          className="flex items-center gap-1 text-xs font-medium text-emerald-700 hover:text-emerald-800"
                         >
                           <Send className="h-3.5 w-3.5" />
                           Send Template
@@ -1554,7 +1554,7 @@ export default function TemplateManagerPage() {
                       ) : (
                         <button
                           onClick={() => setModalState({ open: true, template: t })}
-                          className="flex items-center gap-1 text-xs font-medium text-indigo-600 hover:text-indigo-700"
+                          className="flex items-center gap-1 text-xs font-medium text-emerald-700 hover:text-emerald-800"
                         >
                           <Pencil className="h-3.5 w-3.5" />
                           Edit

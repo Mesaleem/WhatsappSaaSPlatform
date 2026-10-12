@@ -128,7 +128,7 @@ class SubscriptionExpiryReminderService
 
             Mail::mailer(self::MAILER_NAME)->html($html, function ($message) use ($owner, $mailSetting, $subject) {
                 $message->to($owner->email)
-                    ->from($mailSetting->from_address, $mailSetting->from_name ?: 'WhatsApp SaaS Platform')
+                    ->from($mailSetting->from_address, $mailSetting->from_name ?: 'WapHub')
                     ->subject($subject);
             });
         } catch (\Throwable $e) {

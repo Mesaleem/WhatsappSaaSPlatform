@@ -2,6 +2,7 @@ import axiosInstance from '../core/api/axiosInstance';
 import type {
   Account,
   AccountDetail,
+  ClientPlanOption,
   AccountEntitlementsResponse,
   AccountStatus,
   AccountType,
@@ -108,6 +109,13 @@ const accountService = {
 
   get(id: number) {
     return axiosInstance.get<AccountDetail>(`${BASE}/${id}`).then((res) => res.data);
+  },
+
+  /** Active plans for the Create Client form (Super Admin and Agents). */
+  planOptions() {
+    return axiosInstance
+      .get<{ data: ClientPlanOption[]; tax_rate: number }>(`${BASE}/plan-options`)
+      .then((res) => res.data);
   },
 
   create(payload: CreateAccountPayload) {

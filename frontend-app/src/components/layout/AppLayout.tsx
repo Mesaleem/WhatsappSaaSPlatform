@@ -34,6 +34,8 @@ import {
   UserSearch,
   Users,
   Zap,
+  X,
+  Globe,
 } from 'lucide-react';
 import { useAuth } from '../../core/context/AuthContext';
 import { useTenant } from '../../core/context/TenantContext';
@@ -41,6 +43,9 @@ import { useEffectiveHasModule } from '../../core/hooks/useEffectiveHasModule';
 import type { AccountModule } from '../../types/account';
 import { indigo, NAV_TINTS, activeGradient, type Tint } from '../../theme/signalIndigo';
 import Header from './Header';
+import LogoMark from '../common/LogoMark';
+import { ThemeProvider } from '../../core/theme/ThemeContext';
+import { usePageTitle } from '../../utils/usePageTitle';
 import { hasIndustryModule } from './industryNav';
 import { useIndustryModuleKeys } from './useIndustryModuleKeys';
 
@@ -290,6 +295,8 @@ const NAV_ITEMS: NavItem[] = [
   { label: 'Social Gateway Settings', to: '/admin/social-settings', icon: Settings, tint: NAV_TINTS.social, superAdminOnly: true },
   // Phase 8 Task 12 (continued) — platform AI provider/model settings, same tier as the two gateway-settings items above.
   { label: 'AI Gateway Settings', to: '/admin/ai-settings', icon: Bot, tint: NAV_TINTS.gateway, superAdminOnly: true },
+  // Public marketing website: page text, pricing intro, legal pages, contact-form inbox.
+  { label: 'Website Content', to: '/admin/website', icon: Globe, tint: NAV_TINTS.gateway, superAdminOnly: true },
   // Super Admin WhatsApp Device Integration — link/view/disconnect/reconnect any client's device from one screen.
   { label: 'Device Settings', to: '/admin/device-settings', icon: Smartphone, tint: NAV_TINTS.whatsapp, superAdminOnly: true },
   { label: 'API Access', to: '/admin/api-access', icon: Settings, tint: NAV_TINTS.gateway, superAdminOnly: true },
@@ -376,7 +383,17 @@ function resolvePageTitle(pathname: string, items: NavItem[]): string {
   return best?.label ?? 'Dashboard';
 }
 
+/** The logged-in app shell, with the user's chosen accent colour and light/dark mode. */
 export default function AppLayout() {
+  const { user } = useAuth();
+  return (
+    <ThemeProvider userId={user?.id}>
+      <AppShell />
+    </ThemeProvider>
+  );
+}
+
+function AppShell() {
   const { user, hasPermission, isSuperAdmin, hasRole, refreshUser } = useAuth();
   // Tenant-aware nav gating: a Super Admin/Agent acting as a selected
   // client sees that client's modules (e.g. an Agent's onboarded client
@@ -387,6 +404,16 @@ export default function AppLayout() {
   const hasModule = useEffectiveHasModule();
   const location = useLocation();
   const [isCollapsed, setIsCollapsed] = useState(false);
+  const [mobileOpen, setMobileOpen] = useState(false);
+
+  // The mobile drawer closes on every navigation and on Esc.
+  useEffect(() => setMobileOpen(false), [location.pathname]);
+  useEffect(() => {
+    if (!mobileOpen) return;
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setMobileOpen(false);
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [mobileOpen]);
 
   // [Bugfix, disclosed]: requiresAccount (e.g. "WhatsApp Setup") used only
   // the caller's OWN account_id, so it stayed hidden for a Super Admin no
@@ -450,26 +477,48 @@ export default function AppLayout() {
   }, [refreshUser]);
 
   const pageTitle = resolvePageTitle(location.pathname, visibleItems);
+  usePageTitle(pageTitle);
+
+  // Below the lg breakpoint the sidebar is a slide-in drawer, opened from the
+  // header's menu button and closed by a tap outside, Esc or any navigation.
+  // "Collapsed" (icons only) is a desktop-only state.
+  const collapsed = isCollapsed && !mobileOpen;
 
   return (
-    <div className="flex h-screen overflow-hidden" style={{ background: indigo.canvas }}>
+    <div className="flex h-[100dvh] overflow-hidden" style={{ background: indigo.canvas }}>
+      {mobileOpen && (
+        <div
+          className="fixed inset-0 z-40 bg-slate-950/50 backdrop-blur-[1px] lg:hidden"
+          onClick={() => setMobileOpen(false)}
+          aria-hidden="true"
+        />
+      )}
+
       {/* Sidebar */}
       <aside
-        className={`flex flex-shrink-0 flex-col bg-white transition-all duration-200 ${isCollapsed ? 'w-16' : 'w-64'}`}
+        id="app-sidebar"
+        className={`fixed inset-y-0 left-0 z-50 flex w-72 max-w-[85vw] flex-col bg-white shadow-2xl transition-transform duration-200 lg:static lg:z-auto lg:max-w-none lg:flex-shrink-0 lg:translate-x-0 lg:shadow-none lg:transition-all ${
+          mobileOpen ? 'translate-x-0' : '-translate-x-full'
+        } ${collapsed ? 'lg:w-16' : 'lg:w-64'}`}
         style={{ borderRight: `1px solid ${indigo.border}` }}
+        aria-label="Main navigation"
       >
         <div className="flex h-14 items-center gap-2.5 px-4" style={{ borderBottom: `1px solid ${indigo.border}` }}>
-          <div
-            className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg font-display text-sm font-bold text-white"
-            style={{ background: activeGradient }}
-          >
-            W
-          </div>
-          {!isCollapsed && (
+          <LogoMark className="h-7 w-7 flex-shrink-0" />
+          {!collapsed && (
             <span className="truncate font-display text-sm font-bold" style={{ color: indigo.ink }}>
-              WA SaaS Platform
+              WapHub
             </span>
           )}
+          <button
+            type="button"
+            onClick={() => setMobileOpen(false)}
+            className="ml-auto rounded-lg p-1.5 hover:bg-slate-100 lg:hidden"
+            style={{ color: indigo.muted }}
+            aria-label="Close menu"
+          >
+            <X className="h-5 w-5" />
+          </button>
         </div>
 
         <nav className="flex-1 space-y-1 overflow-y-auto px-2.5 py-3">
@@ -480,14 +529,14 @@ export default function AppLayout() {
               end={item.to === '/' || hasNestedSibling(item.to)}
               className={({ isActive }) =>
                 `flex items-center gap-3 rounded-xl px-2.5 py-2 text-sm font-medium transition ${
-                  isActive ? 'font-semibold text-white' : 'hover:bg-[#FAFAFF]'
+                  isActive ? 'font-semibold text-white' : 'hover:bg-slate-50'
                 }`
               }
               style={({ isActive }) => ({
                 background: isActive ? activeGradient : undefined,
                 color: isActive ? '#FFFFFF' : indigo.ink,
               })}
-              title={isCollapsed ? item.label : undefined}
+              title={collapsed ? item.label : undefined}
             >
               {({ isActive }) => (
                 <>
@@ -500,17 +549,17 @@ export default function AppLayout() {
                   >
                     <item.icon className="h-4 w-4" />
                   </span>
-                  {!isCollapsed && <span className="truncate">{item.label}</span>}
+                  {!collapsed && <span className="truncate">{item.label}</span>}
                 </>
               )}
             </NavLink>
           ))}
         </nav>
 
-        <div className="p-2" style={{ borderTop: `1px solid ${indigo.border}` }}>
+        <div className="hidden p-2 lg:block" style={{ borderTop: `1px solid ${indigo.border}` }}>
           <button
             onClick={() => setIsCollapsed((v) => !v)}
-            className="flex w-full items-center justify-center gap-2 rounded-lg px-3 py-2 text-xs font-medium hover:bg-[#FAFAFF]"
+            className="flex w-full items-center justify-center gap-2 rounded-lg px-3 py-2 text-xs font-medium hover:bg-slate-50"
             style={{ color: indigo.muted }}
           >
             {isCollapsed ? <ChevronsRight className="h-4 w-4" /> : <ChevronsLeft className="h-4 w-4" />}
@@ -521,7 +570,7 @@ export default function AppLayout() {
 
       {/* Main column */}
       <div className="flex min-w-0 flex-1 flex-col">
-        <Header pageTitle={pageTitle} />
+        <Header pageTitle={pageTitle} onOpenMenu={() => setMobileOpen(true)} menuOpen={mobileOpen} />
 
         <main className="flex-1 overflow-y-auto">
           <Outlet />

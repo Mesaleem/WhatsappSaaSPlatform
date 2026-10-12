@@ -60,7 +60,7 @@ export default function PromptModal({
       <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-xl">
         <div className="flex items-center justify-between">
           <h3 className="flex items-center gap-2 text-base font-semibold text-slate-900">
-            <MessageSquare className="h-4 w-4 text-indigo-500" />
+            <MessageSquare className="h-4 w-4 text-emerald-600" />
             {title}
           </h3>
           <button onClick={onCancel} disabled={isLoading} className="text-slate-400 hover:text-slate-600 disabled:opacity-50">
@@ -79,7 +79,7 @@ export default function PromptModal({
             onChange={(e) => setValue(e.target.value)}
             placeholder={placeholder}
             disabled={isLoading}
-            className={`w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 disabled:opacity-60 ${label ? 'mt-1.5' : 'mt-4'}`}
+            className={`w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100 disabled:opacity-60 ${label ? 'mt-1.5' : 'mt-4'}`}
           />
 
           <div className="mt-5 flex justify-end gap-2">
@@ -94,7 +94,7 @@ export default function PromptModal({
             <button
               type="submit"
               disabled={isLoading || (required && !value.trim())}
-              className="flex items-center justify-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:opacity-60"
+              className="flex items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-60"
             >
               {isLoading && <Loader2 className="h-4 w-4 animate-spin" />}
               {confirmLabel}

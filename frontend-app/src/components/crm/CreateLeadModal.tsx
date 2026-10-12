@@ -76,7 +76,7 @@ export default function CreateLeadModal({
           </button>
         </div>
         {targetLabel && (
-          <p className="mt-1 text-xs font-medium text-indigo-700" data-testid="crm-create-lead-target">
+          <p className="mt-1 text-xs font-medium text-emerald-800" data-testid="crm-create-lead-target">
             For client: {targetLabel}
           </p>
         )}
@@ -138,7 +138,7 @@ export default function CreateLeadModal({
           <button
             type="submit"
             disabled={saving || phone.trim() === ''}
-            className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:opacity-60"
+            className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-60"
           >
             {saving && <Loader2 className="h-4 w-4 animate-spin" />}
             Create lead

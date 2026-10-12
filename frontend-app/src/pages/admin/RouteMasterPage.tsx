@@ -203,7 +203,7 @@ export default function RouteMasterPage() {
               }
               disabled={categories.length === 0}
               title={categories.length === 0 ? 'Create a category first — every route belongs to one.' : undefined}
-              className="flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
+              className="flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
             >
               <Plus className="h-4 w-4" />
               New Route
@@ -222,7 +222,7 @@ export default function RouteMasterPage() {
       <>
           <Card>
             <h2 className="flex items-center gap-2 text-sm font-semibold text-slate-900">
-              <Layers className="h-4 w-4 text-indigo-600" />
+              <Layers className="h-4 w-4 text-emerald-700" />
               Categories
             </h2>
             <div className="mt-4 mb-3 flex flex-wrap items-center gap-3">
@@ -251,7 +251,7 @@ export default function RouteMasterPage() {
                     {pagedCategories.map((category) => (
                       <tr key={category.id} className="hover:bg-slate-50">
                         <td className="px-4 py-2.5">
-                          <button type="button" className="font-medium text-slate-900 hover:text-indigo-600" onClick={() => setCategoryForm(category)}>
+                          <button type="button" className="font-medium text-slate-900 hover:text-emerald-700" onClick={() => setCategoryForm(category)}>
                             {category.category_name}
                           </button>
                         </td>
@@ -299,7 +299,7 @@ export default function RouteMasterPage() {
 
           <Card>
             <h2 className="flex items-center gap-2 text-sm font-semibold text-slate-900">
-              <Route className="h-4 w-4 text-indigo-600" />
+              <Route className="h-4 w-4 text-emerald-700" />
               Route Items
             </h2>
             <div className="mt-4 mb-3 flex flex-wrap items-center gap-3">
@@ -330,7 +330,7 @@ export default function RouteMasterPage() {
                     {pagedRoutes.map((route) => (
                       <tr key={route.id} className="hover:bg-slate-50">
                         <td className="px-4 py-2.5">
-                          <button type="button" className="font-medium text-slate-900 hover:text-indigo-600" onClick={() => setRouteForm(route)}>
+                          <button type="button" className="font-medium text-slate-900 hover:text-emerald-700" onClick={() => setRouteForm(route)}>
                             {route.route_title}
                           </button>
                         </td>
@@ -385,7 +385,7 @@ function ToggleSwitch({ checked, onChange }: { checked: boolean; onChange: () =>
       role="switch"
       aria-checked={checked}
       onClick={onChange}
-      className={`relative inline-flex h-5 w-9 items-center rounded-full transition ${checked ? 'bg-indigo-600' : 'bg-slate-300'}`}
+      className={`relative inline-flex h-5 w-9 items-center rounded-full transition ${checked ? 'bg-emerald-600' : 'bg-slate-300'}`}
     >
       <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition ${checked ? 'translate-x-4.5' : 'translate-x-1'}`} />
     </button>
@@ -471,7 +471,7 @@ function CategoryFormModal({ category, onClose, onSaved }: { category: RouteCate
           <button
             type="submit"
             disabled={isSaving}
-            className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-70"
+            className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-70"
           >
             {isSaving && <Loader2 className="h-4 w-4 animate-spin" />}
             Save
@@ -570,7 +570,7 @@ function RouteFormModal({
           <span className="text-red-500" aria-hidden="true"> *</span><input className={inputClass} value={path} onChange={(event) => setPath(event.target.value)} placeholder="e.g. /settings/whatsapp" />
         </label>
         <label className="flex items-center gap-2 text-sm font-medium text-slate-700">
-          <input type="checkbox" checked={isAgentAssignable} onChange={(event) => setIsAgentAssignable(event.target.checked)} className="h-4 w-4 rounded border-slate-300 text-indigo-600" />
+          <input type="checkbox" checked={isAgentAssignable} onChange={(event) => setIsAgentAssignable(event.target.checked)} className="h-4 w-4 rounded border-slate-300 text-emerald-700" />
           Agent Assignable
         </label>
         <div className="flex items-center justify-end gap-3 border-t border-slate-200 pt-4">
@@ -580,7 +580,7 @@ function RouteFormModal({
           <button
             type="submit"
             disabled={isSaving}
-            className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-70"
+            className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-70"
           >
             {isSaving && <Loader2 className="h-4 w-4 animate-spin" />}
             Save

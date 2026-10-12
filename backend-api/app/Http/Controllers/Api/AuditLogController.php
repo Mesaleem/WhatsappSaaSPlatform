@@ -118,7 +118,7 @@ class AuditLogController extends Controller
             ->get();
 
         $lines = [
-            'WhatsApp SaaS Platform - Login Audit Summary Report',
+            'WapHub - Login Audit Summary Report',
             $account ? 'Account: '.$account->company_name.' (ID '.$account->id.')' : 'Account: All Clients (Platform-Wide)',
             ($filters['from'] ?? null) ? 'From: '.$filters['from'] : null,
             ($filters['to'] ?? null) ? 'To: '.$filters['to'] : null,

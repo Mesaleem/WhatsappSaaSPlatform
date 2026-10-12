@@ -11,3 +11,46 @@ body {
   font-family: 'Inter', system-ui, 'Segoe UI', Roboto, sans-serif;
   -webkit-font-smoothing: antialiased;
 }
+
+/* Website: thin horizontal scrollbar in the brand colours (emerald on a dark track). */
+.brand-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: #10b981 rgba(148, 163, 184, 0.15);
+}
+.brand-scroll::-webkit-scrollbar {
+  height: 6px;
+}
+.brand-scroll::-webkit-scrollbar-track {
+  background: rgba(148, 163, 184, 0.15);
+  border-radius: 9999px;
+}
+.brand-scroll::-webkit-scrollbar-thumb {
+  background: linear-gradient(90deg, #10b981, #0d9488);
+  border-radius: 9999px;
+}
+.brand-scroll::-webkit-scrollbar-thumb:hover {
+  background: #059669;
+}
+
+/* App + website share one type system: Inter for text, Plus Jakarta Sans for headings
+   (the website's display face), so dashboard titles match the marketing pages. */
+@layer base {
+  h1, h2, h3, h4 {
+    font-family: 'Plus Jakarta Sans', 'Inter', system-ui, sans-serif;
+    letter-spacing: -0.01em;
+  }
+}
+
+/* Dashboard dark mode (ThemeContext sets data-theme): text with no colour class must not stay black. */
+html[data-theme='dark'] body {
+  color: rgb(var(--slate-text-800));
+  background-color: rgb(var(--app-canvas));
+}
+
+/* Phones: page wrappers use p-6 (24px); 16px gives the content back its width. */
+@media (max-width: 639px) {
+  main > .p-6,
+  main > div > .p-6 {
+    padding: 1rem;
+  }
+}

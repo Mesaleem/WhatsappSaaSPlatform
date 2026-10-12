@@ -11,7 +11,7 @@ function extractMessage(err: unknown, fallback: string): string {
 }
 
 const inputClass =
-  'mt-1.5 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100';
+  'mt-1.5 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100';
 
 /**
  * Tiered Template Approval Workflow — "Request a Template" modal. A
@@ -72,7 +72,7 @@ export default function RequestTemplateModal({
       <div className="w-full max-w-lg rounded-xl bg-white p-6 shadow-xl">
         <div className="flex items-center justify-between">
           <h3 className="flex items-center gap-2 text-base font-semibold text-slate-900">
-            <FileText className="h-4 w-4 text-indigo-600" />
+            <FileText className="h-4 w-4 text-emerald-700" />
             Request a Template
           </h3>
           <button onClick={onClose} className="text-slate-400 hover:text-slate-600" disabled={isSubmitting}>
@@ -149,7 +149,7 @@ export default function RequestTemplateModal({
           <button
             onClick={() => void handleSubmit()}
             disabled={isSubmitting || !isValid}
-            className="flex items-center justify-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:opacity-60"
+            className="flex items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-60"
           >
             {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileText className="h-4 w-4" />}
             Submit Request

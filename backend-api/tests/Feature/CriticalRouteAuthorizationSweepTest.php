@@ -37,6 +37,14 @@ class CriticalRouteAuthorizationSweepTest extends TestCase
      */
     private const PUBLIC_ROUTES = [
         'POST api/auth/login' => 'throttle:login',
+        // Public marketing website (PublicSiteController / AuthController::register).
+        'POST api/auth/register' => 'throttle 10/hour + signup_enabled switch + emailed code',
+        'POST api/auth/register/send-code' => 'throttle 5/15min + disposable/MX email check',
+        'GET api/public/site' => 'read-only, Super-Admin-authored website copy',
+        'GET api/public/plans' => 'read-only, PlanRepository::toPublicArray() projection',
+        'POST api/public/contact' => 'throttle 5/10min + honeypot, write-only',
+        'POST api/auth/forgot-password' => 'throttle 5/15min, same answer for every email',
+        'POST api/auth/reset-password' => 'throttle 10/15min + hashed, expiring broker token',
         'POST api/internal/whatsapp-inbound' => 'internal.secret',
         'POST api/internal/whatsapp-status' => 'internal.secret',
         'GET api/internal/whatsapp-numbers/{id}' => 'internal.secret',

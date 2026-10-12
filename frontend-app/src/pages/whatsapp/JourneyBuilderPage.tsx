@@ -571,10 +571,10 @@ function FlowsListView({
                     </td>
                     <td className="px-4 py-3 text-right">
                       <div className="flex justify-end gap-3">
-                        <button onClick={() => onEdit(flow)} className="text-xs font-medium text-indigo-600 hover:text-indigo-700">
+                        <button onClick={() => onEdit(flow)} className="text-xs font-medium text-emerald-700 hover:text-emerald-800">
                           Edit
                         </button>
-                        <button onClick={() => onTest(flow)} className="text-xs font-medium text-indigo-600 hover:text-indigo-700">
+                        <button onClick={() => onTest(flow)} className="text-xs font-medium text-emerald-700 hover:text-emerald-800">
                           Test
                         </button>
                         <button
@@ -1296,7 +1296,7 @@ function JourneyCanvasEditor({
             type="text"
             value={name}
             onChange={(e) => setName(e.target.value)}
-            className="rounded-lg border border-transparent bg-transparent px-2 py-1 font-display text-base font-bold hover:border-slate-200 focus:border-indigo-300 focus:outline-none"
+            className="rounded-lg border border-transparent bg-transparent px-2 py-1 font-display text-base font-bold hover:border-slate-200 focus:border-emerald-300 focus:outline-none"
             style={{ color: indigo.ink }}
           />
         </div>
@@ -1344,7 +1344,7 @@ function JourneyCanvasEditor({
             </button>
           )}
           <label className="flex items-center gap-1.5 text-xs font-medium" style={{ color: indigo.muted }}>
-            <input type="checkbox" checked={isActive} onChange={(e) => setIsActive(e.target.checked)} className="h-4 w-4 rounded border-slate-300 text-indigo-600" />
+            <input type="checkbox" checked={isActive} onChange={(e) => setIsActive(e.target.checked)} className="h-4 w-4 rounded border-slate-300 text-emerald-700" />
             Active
           </label>
           {/* P5-7 — a draft may hold nodes the runtime cannot execute yet; it is never what new sessions run. */}
@@ -1841,7 +1841,7 @@ function StartNodeFields({
                         onChannelIdsChange(channelIds.filter((id) => id !== channel.id));
                       }
                     }}
-                    className="h-3.5 w-3.5 rounded border-slate-300 text-indigo-600"
+                    className="h-3.5 w-3.5 rounded border-slate-300 text-emerald-700"
                   />
                   {channel.phone_number}
                   {channel.is_default ? ' (default)' : ''}
@@ -2228,7 +2228,7 @@ function EdgeEditorPanel({
               type="checkbox"
               checked={!!edge.is_default}
               onChange={(e) => onChange({ is_default: e.target.checked, condition: e.target.checked ? undefined : edge.condition })}
-              className="h-4 w-4 rounded border-slate-300 text-indigo-600"
+              className="h-4 w-4 rounded border-slate-300 text-emerald-700"
             />
             This is the "else" (default) branch
           </label>

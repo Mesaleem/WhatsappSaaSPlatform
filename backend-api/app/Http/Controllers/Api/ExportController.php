@@ -129,7 +129,7 @@ class ExportController extends Controller
         $to = isset($filters['to']) ? Carbon::parse($filters['to'])->toDateString() : now()->toDateString();
 
         $lines = [
-            'WhatsApp SaaS Platform - Payment Alerts Summary Report',
+            'WapHub - Payment Alerts Summary Report',
             $account ? 'Account: '.$account->company_name.' (ID '.$account->id.')' : 'Account: All Clients (Platform-Wide)',
             'Period: '.$from.' to '.$to,
             ($filters['status'] ?? null) ? 'Status filter: '.$filters['status'] : null,

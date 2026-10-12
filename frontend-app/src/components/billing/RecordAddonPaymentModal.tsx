@@ -122,7 +122,7 @@ export default function RecordAddonPaymentModal({
     }
   };
 
-  const inputClass = 'w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none';
+  const inputClass = 'w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none';
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4">
@@ -192,7 +192,7 @@ export default function RecordAddonPaymentModal({
           <button type="button" onClick={onClose} className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
             Cancel
           </button>
-          <button type="submit" disabled={submitting} className="rounded-lg bg-indigo-600 px-3 py-2 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-60">
+          <button type="submit" disabled={submitting} className="rounded-lg bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-60">
             {submitting ? 'Recording…' : 'Record payment'}
           </button>
         </div>

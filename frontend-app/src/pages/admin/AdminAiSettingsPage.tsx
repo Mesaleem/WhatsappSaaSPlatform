@@ -7,7 +7,7 @@ import { extractErrorMessage } from '../../utils/apiError';
 import DismissibleAlert from '../../components/common/DismissibleAlert';
 
 const inputClass =
-  'mt-1.5 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100';
+  'mt-1.5 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100';
 
 const PROVIDER_LABEL: Record<AiProvider, string> = {
   openai: 'OpenAI',
@@ -44,7 +44,7 @@ function MaskedSecretField({
           <button
             type="button"
             onClick={() => setIsEditing(true)}
-            className="text-xs font-medium text-indigo-600 hover:text-indigo-700"
+            className="text-xs font-medium text-emerald-700 hover:text-emerald-800"
           >
             Set New Value
           </button>
@@ -167,7 +167,7 @@ function ProviderCard({ settings, onSaved }: ProviderCardProps) {
         <select
           value={isEnabled}
           onChange={(e) => setIsEnabled(e.target.value as '' | 'true' | 'false')}
-          className="rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs font-medium text-slate-700 shadow-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+          className="rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs font-medium text-slate-700 shadow-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
         >
           <option value="">Use .env default</option>
           <option value="true">Force enabled</option>
@@ -257,7 +257,7 @@ function ProviderCard({ settings, onSaved }: ProviderCardProps) {
           type="button"
           onClick={() => void handleSave()}
           disabled={isSaving}
-          className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:opacity-60"
+          className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-60"
         >
           {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
           Save {PROVIDER_LABEL[settings.provider]} Settings
@@ -311,7 +311,7 @@ export default function AdminAiSettingsPage() {
             Back to dashboard
           </Link>
           <h1 className="mt-2 flex items-center gap-2 text-xl font-semibold text-slate-900">
-            <Bot className="h-5 w-5 text-indigo-600" />
+            <Bot className="h-5 w-5 text-emerald-700" />
             AI Gateway Settings
           </h1>
           <p className="mt-1 text-sm text-slate-500">

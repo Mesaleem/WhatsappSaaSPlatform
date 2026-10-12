@@ -68,7 +68,7 @@ export default function CrmLeadFilterBar({
           aria-label="Filter by assignee"
           value={assigneeValue}
           onChange={(e) => onChange({ assigned_user_id: e.target.value || undefined })}
-          className="rounded-lg border border-slate-300 bg-white py-2 pl-3 pr-8 text-sm text-slate-700 shadow-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+          className="rounded-lg border border-slate-300 bg-white py-2 pl-3 pr-8 text-sm text-slate-700 shadow-sm outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
         >
           <option value="">All assignees</option>
           <option value="none">Unassigned</option>
@@ -92,13 +92,13 @@ export default function CrmLeadFilterBar({
         <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500" data-testid="crm-tag-filter-chips">
           <span>{tagIds.length > 1 ? 'Has all of:' : 'Has tag:'}</span>
           {tagIds.map((id) => (
-            <span key={id} className="inline-flex items-center gap-1 rounded-md bg-indigo-50 px-2 py-0.5 font-medium text-indigo-700">
+            <span key={id} className="inline-flex items-center gap-1 rounded-md bg-emerald-50 px-2 py-0.5 font-medium text-emerald-800">
               {tagName(id)}
               <button
                 type="button"
                 aria-label={`Remove tag filter ${tagName(id)}`}
                 onClick={() => onChange({ tag_ids: tagIds.filter((t) => t !== id) })}
-                className="text-indigo-400 hover:text-indigo-700"
+                className="text-emerald-500 hover:text-emerald-800"
               >
                 <X className="h-3 w-3" />
               </button>

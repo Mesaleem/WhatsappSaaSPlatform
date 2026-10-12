@@ -624,7 +624,7 @@ function LaunchWizardModal({
           {step === 2 && (
             <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
               <div className="space-y-4">
-                <div className="rounded-xl border border-indigo-100 bg-indigo-50/50 p-4">
+                <div className="rounded-xl border border-emerald-100 bg-emerald-50/50 p-4">
                   <div className="flex items-center gap-2 text-sm font-semibold" style={{ color: indigo.ink }}>
                     <Sparkles className="h-4 w-4" style={{ color: indigo.accentSolid }} />
                     Generate with AI
@@ -724,7 +724,7 @@ function LaunchWizardModal({
                           key={i}
                           type="button"
                           onClick={() => applyAiVariant(variant)}
-                          className="block w-full rounded-lg border border-slate-200 bg-white p-3 text-left text-xs hover:border-indigo-300 hover:bg-indigo-50/40"
+                          className="block w-full rounded-lg border border-slate-200 bg-white p-3 text-left text-xs hover:border-emerald-300 hover:bg-emerald-50/40"
                         >
                           <p className="font-semibold text-slate-900">{variant.hook}</p>
                           <p className="mt-1 text-slate-600">{variant.caption}</p>
@@ -779,7 +779,7 @@ function LaunchWizardModal({
                       type="button"
                       onClick={() => fileInputRef.current?.click()}
                       disabled={isUploadingMedia}
-                      className="mt-1 flex w-full flex-col items-center justify-center gap-1.5 rounded-xl border-2 border-dashed border-slate-200 px-4 py-6 text-center hover:border-indigo-300 hover:bg-indigo-50/30 disabled:opacity-60"
+                      className="mt-1 flex w-full flex-col items-center justify-center gap-1.5 rounded-xl border-2 border-dashed border-slate-200 px-4 py-6 text-center hover:border-emerald-300 hover:bg-emerald-50/30 disabled:opacity-60"
                     >
                       {isUploadingMedia ? (
                         <>
@@ -929,7 +929,7 @@ function CplThresholdEditor({ campaign, onSaved }: { campaign: AdCampaign; onSav
         step="0.01"
         value={value}
         onChange={(e) => setValue(e.target.value)}
-        className="w-20 rounded-lg border border-slate-300 px-2 py-1 text-xs text-slate-900 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+        className="w-20 rounded-lg border border-slate-300 px-2 py-1 text-xs text-slate-900 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
         placeholder="none"
       />
       {dirty && (

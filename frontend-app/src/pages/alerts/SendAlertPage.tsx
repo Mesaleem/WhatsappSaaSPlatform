@@ -41,7 +41,7 @@ function renderTemplatePreview(body: string, variables: Record<string, string>):
 }
 
 const inputClass =
-  'mt-1.5 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100';
+  'mt-1.5 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100';
 
 /**
  * Bulk Individual Recipients — Send Alert widening. Splits the
@@ -899,14 +899,14 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
           <button
             type="button"
             onClick={() => setShowRequestTemplate(true)}
-            className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700"
+            className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700"
           >
             Request a Template
           </button>
           <button
             type="button"
             onClick={() => setShowMyTemplates(true)}
-            className="text-sm font-medium text-indigo-600 hover:text-indigo-700"
+            className="text-sm font-medium text-emerald-700 hover:text-emerald-800"
           >
             View My Templates
           </button>
@@ -939,7 +939,7 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
             }}
             className={`flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-sm font-medium transition ${
               recipientType === 'individual' && !isBulk
-                ? 'border-indigo-600 bg-indigo-50 text-indigo-700'
+                ? 'border-emerald-600 bg-emerald-50 text-emerald-800'
                 : 'border-slate-300 text-slate-600 hover:bg-slate-50'
             }`}
           >
@@ -954,7 +954,7 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
             }}
             className={`flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-sm font-medium transition ${
               recipientType === 'group'
-                ? 'border-indigo-600 bg-indigo-50 text-indigo-700'
+                ? 'border-emerald-600 bg-emerald-50 text-emerald-800'
                 : 'border-slate-300 text-slate-600 hover:bg-slate-50'
             }`}
           >
@@ -968,7 +968,7 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
               setIsBulk(true);
             }}
             className={`flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-sm font-medium transition ${
-              isBulk ? 'border-indigo-600 bg-indigo-50 text-indigo-700' : 'border-slate-300 text-slate-600 hover:bg-slate-50'
+              isBulk ? 'border-emerald-600 bg-emerald-50 text-emerald-800' : 'border-slate-300 text-slate-600 hover:bg-slate-50'
             }`}
           >
             <Upload className="h-3.5 w-3.5" />
@@ -991,7 +991,7 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
               id="send-from-number"
               value={senderNumberId ?? ''}
               onChange={(e) => setSenderNumberId(e.target.value ? Number(e.target.value) : null)}
-              className="mt-1.5 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+              className="mt-1.5 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
             >
               {senderNumbers.map((n) => (
                 <option key={n.id} value={n.id}>
@@ -1017,14 +1017,14 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
               <button
                 type="button"
                 onClick={() => setShowMyTemplates(true)}
-                className="text-xs font-medium text-indigo-600 hover:text-indigo-700"
+                className="text-xs font-medium text-emerald-700 hover:text-emerald-800"
               >
                 My Templates
               </button>
               <button
                 type="button"
                 onClick={() => setShowRequestTemplate(true)}
-                className="text-xs font-medium text-indigo-600 hover:text-indigo-700"
+                className="text-xs font-medium text-emerald-700 hover:text-emerald-800"
               >
                 + Request a Template
               </button>
@@ -1055,7 +1055,7 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
                   </div>
                 )}
                 {!hasGroupMessagingPermission && (
-                  <div className="flex items-center gap-2 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs font-medium text-indigo-700">
+                  <div className="flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-800">
                     <Sparkles className="h-3.5 w-3.5 flex-shrink-0" />
                     Upgrade to reduce cooldown to 4 hours &amp; unlock Native WhatsApp Group Messaging.
                   </div>
@@ -1142,7 +1142,7 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
             ) : groups.length === 0 ? (
               <p className="mt-1.5 text-sm text-slate-500">
                 No contact groups yet. Create one in{' '}
-                <Link to="/contact-groups" className="font-medium text-indigo-600 hover:text-indigo-700">
+                <Link to="/contact-groups" className="font-medium text-emerald-700 hover:text-emerald-800">
                   Contact Groups
                 </Link>
                 .
@@ -1150,7 +1150,7 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
             ) : groupsOnSender.length === 0 ? (
               <p className="mt-1.5 text-sm text-slate-500">
                 No contact groups are on {senderNumbers.find((n) => n.id === senderNumberId)?.phone_number ?? 'this number'} yet.{' '}
-                <Link to="/contact-groups" className="font-medium text-indigo-600 hover:text-indigo-700">
+                <Link to="/contact-groups" className="font-medium text-emerald-700 hover:text-emerald-800">
                   Create a group for this number
                 </Link>
                 .
@@ -1167,7 +1167,7 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
                           e.target.checked ? [...prev, group.id] : prev.filter((gid) => gid !== group.id),
                         )
                       }
-                      className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                      className="h-4 w-4 rounded border-slate-300 text-emerald-700 focus:ring-emerald-500"
                     />
                     <span className="text-slate-700">{group.name}</span>
                     <span className="text-xs text-slate-400">
@@ -1292,7 +1292,7 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
           </div>
         )}
         {bulkQueued && (
-          <div className="flex items-center gap-1.5 rounded-lg bg-indigo-50 px-3 py-1.5 text-xs font-medium text-indigo-700 ring-1 ring-inset ring-indigo-600/20">
+          <div className="flex items-center gap-1.5 rounded-lg bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-800 ring-1 ring-inset ring-emerald-600/20">
             <ShieldCheck className="h-3.5 w-3.5 flex-shrink-0" />
             Bulk messages queued with anti-spam delay protection.
           </div>
@@ -1323,7 +1323,7 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
                     ? `Bulk dispatch is on cooldown. Try again in ${formatCooldownRemaining(cooldownRemainingSeconds ?? 0)}.`
                     : undefined
           }
-          className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:opacity-60"
+          className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-60"
         >
           {isSending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
           {isSending
@@ -1338,7 +1338,7 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
 
       <div className="space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-4">
         <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
-          <Code2 className="h-4 w-4 text-indigo-600" />
+          <Code2 className="h-4 w-4 text-emerald-700" />
           Developer API Documentation
         </div>
         {!noTemplate && !selectedTemplate ? (
@@ -1400,7 +1400,7 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
                 <button
                   type="button"
                   onClick={() => void handleCopyPayload()}
-                  className="flex items-center gap-1 text-xs font-medium text-indigo-600 hover:text-indigo-700"
+                  className="flex items-center gap-1 text-xs font-medium text-emerald-700 hover:text-emerald-800"
                 >
                   <Copy className="h-3 w-3" />
                   {copied ? 'Copied!' : 'Copy'}

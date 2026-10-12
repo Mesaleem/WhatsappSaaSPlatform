@@ -130,7 +130,7 @@ export default function ExpiringSoonModal({ onClose }: { onClose: () => void }) 
                         <button
                           onClick={() => void openRenew(row.account_id)}
                           disabled={loadingRenewId === row.account_id}
-                          className="inline-flex items-center gap-1.5 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-xs font-semibold text-indigo-700 hover:bg-indigo-100 disabled:opacity-60"
+                          className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-800 hover:bg-emerald-100 disabled:opacity-60"
                         >
                           {loadingRenewId === row.account_id && <Loader2 className="h-3 w-3 animate-spin" />}
                           Renew / Extend

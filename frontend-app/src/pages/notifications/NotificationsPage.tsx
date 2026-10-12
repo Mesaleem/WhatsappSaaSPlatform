@@ -88,7 +88,7 @@ export default function NotificationsPage() {
             onClick={() => setTab(t.key)}
             className={`-mb-px border-b-2 px-4 py-2.5 text-sm font-medium transition ${
               tab === t.key
-                ? 'border-indigo-600 text-indigo-600'
+                ? 'border-emerald-600 text-emerald-700'
                 : 'border-transparent text-slate-500 hover:text-slate-700'
             }`}
           >
@@ -339,7 +339,7 @@ function ComposeTab({
         <button
           onClick={() => void handleSend()}
           disabled={!canSend || isSending}
-          className="flex w-full items-center justify-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:opacity-50"
+          className="flex w-full items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-50"
         >
           {isSending && <Loader2 className="h-4 w-4 animate-spin" />}
           {isSending ? 'Sending…' : 'Send Broadcast'}
@@ -425,7 +425,7 @@ function TemplatesTab() {
         </div>
         <button
           onClick={() => setEditing('new')}
-          className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700"
+          className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700"
         >
           <Plus className="h-4 w-4" />
           New Template
@@ -598,7 +598,7 @@ function TemplateModal({
               <button
                 onClick={() => void handleSubmit()}
                 disabled={isSaving || !name.trim() || !subject.trim()}
-                className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:opacity-50"
+                className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-50"
               >
                 {isSaving && <Loader2 className="h-4 w-4 animate-spin" />}
                 {isSaving ? 'Saving…' : 'Save Template'}
@@ -698,7 +698,7 @@ function HistoryTab() {
             type="date"
             value={from}
             onChange={(e) => setFrom(e.target.value)}
-            className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 w-40"
+            className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100 w-40"
             aria-label="From date"
           />
           <span className="text-sm text-slate-400">to</span>
@@ -706,7 +706,7 @@ function HistoryTab() {
             type="date"
             value={to}
             onChange={(e) => setTo(e.target.value)}
-            className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 w-40"
+            className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100 w-40"
             aria-label="To date"
           />
         </div>
@@ -850,7 +850,7 @@ function MailLogsTab() {
             type="date"
             value={from}
             onChange={(e) => setFrom(e.target.value)}
-            className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 w-40"
+            className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100 w-40"
             aria-label="From date"
           />
           <span className="text-sm text-slate-400">to</span>
@@ -858,7 +858,7 @@ function MailLogsTab() {
             type="date"
             value={to}
             onChange={(e) => setTo(e.target.value)}
-            className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 w-40"
+            className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100 w-40"
             aria-label="To date"
           />
         </div>

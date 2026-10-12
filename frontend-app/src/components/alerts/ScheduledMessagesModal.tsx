@@ -24,7 +24,7 @@ const STATUS_LABEL: Record<ScheduledMessageRow['status'], string> = {
 };
 
 const STATUS_BADGE: Record<ScheduledMessageRow['status'], string> = {
-  pending: 'bg-indigo-50 text-indigo-700 ring-indigo-600/20',
+  pending: 'bg-emerald-50 text-emerald-800 ring-emerald-600/20',
   sent: 'bg-emerald-50 text-emerald-700 ring-emerald-600/20',
   failed: 'bg-red-50 text-red-700 ring-red-600/20',
   cancelled: 'bg-slate-100 text-slate-500 ring-slate-500/20',
@@ -82,7 +82,7 @@ export default function ScheduledMessagesModal({ onClose }: { onClose: () => voi
       <div className="flex max-h-[85vh] w-full max-w-3xl flex-col rounded-xl bg-white p-6 shadow-xl">
         <div className="flex items-center justify-between">
           <h3 className="flex items-center gap-2 text-base font-semibold text-slate-900">
-            <CalendarClock className="h-4 w-4 text-indigo-600" />
+            <CalendarClock className="h-4 w-4 text-emerald-700" />
             Scheduled Messages
           </h3>
           <button onClick={onClose} className="text-slate-400 hover:text-slate-600">

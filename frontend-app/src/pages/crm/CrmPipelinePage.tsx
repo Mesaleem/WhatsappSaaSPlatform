@@ -147,7 +147,7 @@ export default function CrmPipelinePage() {
                                 data-testid={`crm-card-${lead.id}`}
                               >
                                 <div>
-                                  <Link to={`/crm/leads/${lead.id}`} className="text-sm font-medium text-slate-900 hover:text-indigo-600">
+                                  <Link to={`/crm/leads/${lead.id}`} className="text-sm font-medium text-slate-900 hover:text-emerald-700">
                                     {lead.contact?.name || 'Unnamed contact'}
                                   </Link>
                                   <p className="text-xs text-slate-500">{lead.contact?.phone_number ?? '—'}</p>

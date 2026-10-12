@@ -1,6 +1,6 @@
 import { useMemo, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
-import { AlertCircle, Loader2, RefreshCw } from 'lucide-react';
+import { AlertCircle, BarChart3, Bookmark, Clock, Eye, FileText, Heart, Loader2, MessageCircle, MousePointerClick, PlayCircle, RefreshCw, Share2, ThumbsUp, Users, type LucideIcon } from 'lucide-react';
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { useAuth } from '../../core/context/AuthContext';
 import { useTenant } from '../../core/context/TenantContext';
@@ -11,7 +11,7 @@ import { useCrmQuery } from '../../components/crm/crmHooks';
 import socialAnalyticsService from '../../services/socialAnalyticsService';
 import organicPostService from '../../services/organicPostService';
 import { extractErrorMessage } from '../../utils/apiError';
-import { indigo } from '../../theme/signalIndigo';
+import { NAV_TINTS, cardOutline, cardShadow, indigo, type Tint } from '../../theme/signalIndigo';
 import { formatScheduledAt, ORGANIC_PLATFORM_LABELS } from '../../types/organic';
 import type { OrganicPlatform } from '../../types/organic';
 import type {
@@ -72,20 +72,45 @@ function MetricValue({ metric, format }: { metric: { value: number | null; statu
   return <span className="text-sm font-normal text-slate-400">{STATUS_TEXT[metric.status === 'available' ? 'unavailable' : metric.status]}</span>;
 }
 
+/** Icon + tint for a metric card, from its label — the same stat-card look as the Dashboard. */
+function metricVisual(label: string): { icon: LucideIcon; tint: Tint } {
+  const l = label.toLowerCase();
+  if (l.includes('published')) return { icon: FileText, tint: NAV_TINTS.dashboard };
+  if (l.includes('reach')) return { icon: Users, tint: NAV_TINTS.team };
+  if (l.includes('impression')) return { icon: Eye, tint: NAV_TINTS.send };
+  if (l.includes('engagement')) return { icon: Heart, tint: NAV_TINTS.developer };
+  if (l.includes('video')) return { icon: PlayCircle, tint: NAV_TINTS.analytics };
+  if (l.includes('watch')) return { icon: Clock, tint: NAV_TINTS.chatbot };
+  if (l.includes('reaction') || l.includes('like')) return { icon: ThumbsUp, tint: NAV_TINTS.social };
+  if (l.includes('comment')) return { icon: MessageCircle, tint: NAV_TINTS.whatsapp };
+  if (l.includes('share')) return { icon: Share2, tint: NAV_TINTS.send };
+  if (l.includes('save')) return { icon: Bookmark, tint: NAV_TINTS.chatbot };
+  if (l.includes('click')) return { icon: MousePointerClick, tint: NAV_TINTS.billing };
+  return { icon: BarChart3, tint: NAV_TINTS.dashboard };
+}
+
 function Card({ label, testId, children, sub }: { label: string; testId: string; children: ReactNode; sub?: string }) {
+  const { icon: Icon, tint } = metricVisual(label);
   return (
-    <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm" data-testid={testId}>
-      <p className="text-xs font-medium uppercase tracking-wide" style={{ color: indigo.muted }}>
-        {label}
-      </p>
-      <p className="mt-1.5 text-xl font-semibold" style={{ color: indigo.ink }}>
-        {children}
-      </p>
-      {sub && (
-        <p className="mt-1 text-xs" style={{ color: indigo.muted }}>
-          {sub}
-        </p>
-      )}
+    <div className="rounded-2xl border bg-white p-5" style={{ borderColor: cardOutline, boxShadow: cardShadow }} data-testid={testId}>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-[11px] font-semibold uppercase tracking-wide" style={{ color: indigo.muted }}>
+            {label}
+          </p>
+          <p className="mt-2 font-mono text-2xl font-semibold" style={{ color: indigo.ink }}>
+            {children}
+          </p>
+          {sub && (
+            <p className="mt-1 text-xs" style={{ color: indigo.muted }}>
+              {sub}
+            </p>
+          )}
+        </div>
+        <div aria-hidden="true" className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl" style={{ background: tint.bg, color: tint.fg }}>
+          <Icon className="h-4 w-4" />
+        </div>
+      </div>
     </div>
   );
 }
@@ -250,7 +275,7 @@ export default function SocialAnalyticsPage() {
                   <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600" data-testid="analytics-no-connections">
                     No Facebook Page or Instagram account is connected.{' '}
                     {canManageSocialAccounts ? (
-                      <Link to="/social/accounts" className="font-semibold text-indigo-700 underline">
+                      <Link to="/social/accounts" className="font-semibold text-emerald-800 underline">
                         Connect one in Social Accounts
                       </Link>
                     ) : (
@@ -361,7 +386,7 @@ export default function SocialAnalyticsPage() {
                       ))}
                     </select>
                   </div>
-                  <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm" data-testid="analytics-trend">
+                  <div className="rounded-2xl border border-[rgb(var(--slate-text-800))] bg-white p-5 shadow-[0_4px_14px_rgb(var(--brand-600)/0.07)]" data-testid="analytics-trend">
                     <p className="mb-2 text-xs text-slate-500">
                       {data.trend.interval === 'week' ? 'Weekly' : 'Daily'} — {trendMetric === 'published' ? 'posts published in each period' : 'lifetime results of the posts published in each period'}; gaps mean no post in that period reported the metric.
                     </p>
@@ -372,7 +397,7 @@ export default function SocialAnalyticsPage() {
                           <XAxis dataKey="period" tick={{ fontSize: 11 }} tickFormatter={(p: string) => p.slice(5)} />
                           <YAxis allowDecimals={false} tick={{ fontSize: 11 }} />
                           <Tooltip />
-                          <Line type="monotone" dataKey={trendMetric} name={TREND_METRICS.find((m) => m.key === trendMetric)?.label} stroke="#4f46e5" strokeWidth={2} dot={false} connectNulls={false} />
+                          <Line type="monotone" dataKey={trendMetric} name={TREND_METRICS.find((m) => m.key === trendMetric)?.label} stroke="#059669" strokeWidth={2} dot={false} connectNulls={false} />
                         </LineChart>
                       </ResponsiveContainer>
                     </div>

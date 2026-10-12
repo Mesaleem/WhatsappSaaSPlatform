@@ -10,10 +10,14 @@ use App\Models\AgentCommissionRule;
 use App\Models\Capability;
 use App\Models\ContactGroup;
 use App\Models\Invoice;
+use App\Models\ManualPayment;
 use App\Models\Plan;
 use App\Models\Subscription;
 use App\Models\User;
 use App\Services\AccountService;
+use App\Services\Billing\ManualPaymentService;
+use App\Services\WhatsApp\WhatsAppNumberException;
+use Illuminate\Http\Exceptions\HttpResponseException;
 use App\Services\Access\AccessControlService;
 use App\Services\Access\EntitlementAuditLogger;
 use App\Services\Access\ProviderCapabilityService;
@@ -424,6 +428,32 @@ class AccountController extends Controller
             $rules['agent_id'] = ['sometimes', 'nullable', 'integer', Rule::exists('accounts', 'id')->where('account_type', 'agent')];
         }
 
+        // Plan-based provisioning (2026-10-12). With plan_key the client gets
+        // that plan exactly as if it had bought it: a plan invoice is issued and
+        // recorded as an offline payment (ManualPaymentService), which creates the
+        // subscription from the plan's terms and switches on the plan's features
+        // (entitlements) and any agent commission. The manual subscription fields
+        // are then not used. Only a Super Admin may still provision "Custom"
+        // terms without a plan; an Agent always picks a plan.
+        $planMode = $request->filled('plan_key');
+        if ($agentScopeId !== null && ! $planMode) {
+            return response()->json([
+                'message' => 'Choose a plan for your client.',
+                'errors' => ['plan_key' => ['Choose a plan for your client.']],
+            ], 422);
+        }
+        if ($planMode) {
+            foreach (['engine_type', 'billing_model', 'rate_per_message', 'total_allocated_messages', 'price_paid', 'payment_mode', 'expires_at'] as $field) {
+                unset($rules[$field]);
+            }
+            $rules['starts_at'] = ['nullable', 'date'];
+            $rules['plan_key'] = ['required', 'string', Rule::exists('plans', 'slug')->where('is_active', true)];
+            // What the client actually paid, including GST; defaults to the plan's total.
+            $rules['plan_total'] = ['nullable', 'numeric', 'min:0'];
+            $rules['payment_method'] = ['required', Rule::in(ManualPayment::METHODS)];
+            $rules['transaction_id'] = ['nullable', 'string', 'max:100', Rule::unique('manual_payments', 'transaction_id')];
+        }
+
         $data = $request->validate($rules);
 
         // Who is allowed to set account_type/agent_id, and what an Agent
@@ -481,7 +511,7 @@ class AccountController extends Controller
             $data['allowed_modules'] ?? null,
         );
 
-        $account = DB::transaction(function () use ($data) {
+        $account = DB::transaction(function () use ($data, $planMode, $request) {
             $account = Account::create([
                 'company_name' => $data['company_name'],
                 'primary_phone' => $data['primary_phone'] ?? null,
@@ -531,6 +561,12 @@ class AccountController extends Controller
                 'is_default' => true,
             ]);
 
+            if ($planMode) {
+                $this->provisionPlan($account, $data, $request->user());
+
+                return $account;
+            }
+
             Subscription::create([
                 'account_id' => $account->id,
                 'engine_type' => $data['engine_type'],
@@ -575,6 +611,115 @@ class AccountController extends Controller
             $account->load(['currentSubscription', 'owner:id,name,email,account_id', 'agent:id,company_name,account_type']),
             201
         );
+    }
+
+    /**
+     * Menu modules each plan capability opens (for the Create Client form's
+     * pre-ticked checklist). Core Common modules are always on; the paid
+     * Custom Contact Groups add-on and Super-Admin-only Device Settings are
+     * never switched on by a plan.
+     */
+    private const CAPABILITY_MODULES = [
+        'whatsapp_send' => ['whatsapp_setup', 'send_alert', 'chatbot', 'templates', 'message_logs'],
+        'journey_automation' => ['chatbot'],
+        'social' => ['social_accounts', 'social_inbox', 'comment_automation', 'reports'],
+        'ads' => ['meta_ads', 'lead_crm'],
+        'crm' => ['lead_crm'],
+        'external_api' => ['developer_api'],
+    ];
+
+    private const BASE_MODULES = ['dashboard', 'analytics', 'billing', 'team_management', 'notifications'];
+
+    /**
+     * GET /api/admin/accounts/plan-options — active plans for the Create
+     * Client form: price incl. GST, terms, capability labels and the menu
+     * modules the plan should switch on. Super Admin and Agents.
+     */
+    public function planOptions(): JsonResponse
+    {
+        $tax = PaymentGatewayController::TAX_RATE;
+
+        $plans = Plan::query()->where('is_active', true)->with('capabilities:id,slug,label')->orderBy('price')->get()
+            ->map(function (Plan $plan) use ($tax) {
+                $slugs = $plan->capabilities->pluck('slug')->all();
+                $modules = self::BASE_MODULES;
+                foreach ($slugs as $slug) {
+                    $modules = array_merge($modules, self::CAPABILITY_MODULES[$slug] ?? []);
+                }
+                $price = (float) $plan->price;
+                $taxAmount = round($price * $tax, 2);
+
+                return [
+                    'key' => $plan->slug,
+                    'label' => $plan->label,
+                    'description' => $plan->description,
+                    'engine_type' => $plan->engine_type,
+                    'billing_model' => $plan->billing_model,
+                    'total_allocated_messages' => $plan->total_allocated_messages,
+                    'duration_days' => (int) $plan->duration_days,
+                    'price' => round($price, 2),
+                    'tax_amount' => $taxAmount,
+                    'total_amount' => round($price + $taxAmount, 2),
+                    'capabilities' => $plan->capabilities->map(fn ($c) => ['slug' => $c->slug, 'label' => $c->label])->values(),
+                    'modules' => array_values(array_unique($modules)),
+                ];
+            })->values();
+
+        return response()->json(['data' => $plans, 'tax_rate' => $tax]);
+    }
+
+    /**
+     * Give a just-created client its plan: a plan invoice with the plan's terms
+     * captured, paid offline through ManualPaymentService — the same crediting
+     * as a real payment (subscription, entitlements, AI credits, agent
+     * commission). Runs inside store()'s transaction, so a failure leaves no
+     * half-created client behind.
+     */
+    private function provisionPlan(Account $account, array $data, User $actor): void
+    {
+        $plan = Plan::where('slug', $data['plan_key'])->where('is_active', true)->firstOrFail();
+        $taxRate = PaymentGatewayController::TAX_RATE;
+
+        $total = isset($data['plan_total']) && $data['plan_total'] !== null
+            ? round((float) $data['plan_total'], 2)
+            : round((float) $plan->price + round((float) $plan->price * $taxRate, 2), 2);
+        $amount = round($total / (1 + $taxRate), 2);
+
+        $invoice = new Invoice([
+            'account_id' => $account->id,
+            'invoice_number' => sprintf('INV-%d-%s-%s', $account->id, now()->format('Ymd'), strtoupper(bin2hex(random_bytes(3)))),
+            'plan_key' => $plan->slug,
+            'plan_label' => $plan->label,
+            'amount' => $amount,
+            'tax_amount' => round($total - $amount, 2),
+            'total_amount' => $total,
+            'currency' => 'INR',
+            'payment_gateway' => 'manual',
+            'status' => 'pending',
+        ]);
+        $invoice->capturePlanTerms($plan)->save();
+
+        $paidOn = now()->toDateString();
+        $termStart = ! empty($data['starts_at']) ? \Carbon\Carbon::parse($data['starts_at'])->toDateString() : $paidOn;
+        // A term starting in the future still records today's payment; ManualPaymentService
+        // allows the start to move up to 30 days either way.
+        try {
+            app(ManualPaymentService::class)->record($invoice, $actor, [
+                'amount' => $total,
+                'method' => $data['payment_method'],
+                'transaction_id' => ($data['transaction_id'] ?? null) ?: 'NEW-CLIENT-'.$account->id.'-'.now()->format('YmdHis'),
+                'paid_on' => $paidOn,
+                'term_starts_on' => $termStart,
+                'note' => 'Plan given when the client was created.',
+            ]);
+        } catch (WhatsAppNumberException $e) {
+            // Thrown inside store()'s transaction, so the half-made client is rolled back too.
+            throw new HttpResponseException(response()->json([
+                'message' => $e->getMessage(),
+                'error_code' => $e->errorCode,
+                'errors' => ['plan_key' => [$e->getMessage()]],
+            ], $e->status));
+        }
     }
 
     /**

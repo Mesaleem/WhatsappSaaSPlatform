@@ -41,7 +41,7 @@ const SOURCE_LABELS: Record<string, string> = {
 
 const SOURCE_CLASSES: Record<string, string> = {
   plan: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
-  manual_grant: 'bg-indigo-50 text-indigo-700 ring-indigo-200',
+  manual_grant: 'bg-emerald-50 text-emerald-800 ring-emerald-200',
   agent_delegated: 'bg-sky-50 text-sky-700 ring-sky-200',
 };
 
@@ -182,7 +182,7 @@ export default function AccountEntitlementsModal({
         <div className="flex items-start justify-between border-b border-slate-200 px-5 py-4">
           <div>
             <h2 className="flex items-center gap-2 font-display text-base font-bold text-slate-900">
-              <KeyRound className="h-4 w-4 text-indigo-600" />
+              <KeyRound className="h-4 w-4 text-emerald-700" />
               Capabilities — {account.company_name}
             </h2>
             <p className="mt-0.5 text-xs text-slate-500">

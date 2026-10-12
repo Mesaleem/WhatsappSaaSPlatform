@@ -263,6 +263,28 @@ class TenantIsolationAndRbacTest extends TestCase
         ], $overrides);
     }
 
+    /**
+     * An Agent always gives its client a plan (AccountController::store(), 2026-10-12),
+     * so agent-side creation payloads carry one instead of custom subscription terms.
+     */
+    private function agentPlanPayload(array $overrides = []): array
+    {
+        \App\Models\Plan::firstOrCreate(['slug' => 'agent-test-plan'], [
+            'label' => 'Agent Test Plan', 'price' => 499, 'duration_days' => 30, 'engine_type' => 'qr',
+            'billing_model' => 'flat_quota', 'total_allocated_messages' => 500, 'is_active' => true,
+        ]);
+
+        return array_merge([
+            'company_name' => 'Test Co '.uniqid(),
+            'admin_name' => 'Test Admin',
+            'admin_email' => 'admin-'.uniqid().'@example.com',
+            'admin_password' => 'password123',
+            'plan_key' => 'agent-test-plan',
+            'payment_method' => 'cash',
+            'module_assignment' => 'whatsapp_messaging',
+        ], $overrides);
+    }
+
     // 1. Agent creates client successfully.
     public function test_agent_creates_a_client_successfully(): void
     {
@@ -271,7 +293,7 @@ class TenantIsolationAndRbacTest extends TestCase
 
         $response = $this->actingAs($agentUser)->postJson(
             '/api/admin/accounts',
-            $this->validAccountCreationPayload()
+            $this->agentPlanPayload()
         );
 
         $response->assertCreated();
@@ -295,7 +317,7 @@ class TenantIsolationAndRbacTest extends TestCase
 
         $response = $this->actingAs($agentUser)->postJson(
             '/api/admin/accounts',
-            $this->validAccountCreationPayload(['account_type' => 'agent'])
+            $this->agentPlanPayload(['account_type' => 'agent'])
         );
 
         $response->assertCreated();
@@ -317,7 +339,7 @@ class TenantIsolationAndRbacTest extends TestCase
 
         $response = $this->actingAs($agentUserA)->postJson(
             '/api/admin/accounts',
-            $this->validAccountCreationPayload(['agent_id' => $agentAccountB->id])
+            $this->agentPlanPayload(['agent_id' => $agentAccountB->id])
         );
 
         $response->assertCreated();

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AxiosError } from 'axios';
-import { Loader2, RefreshCw, Users, XCircle } from 'lucide-react';
+import { CalendarDays, IndianRupee, Loader2, MessageSquare, RefreshCw, Send, TrendingUp, Users, XCircle, type LucideIcon } from 'lucide-react';
 import {
   Area,
   AreaChart,
@@ -28,6 +28,7 @@ import type { AnalyticsChartsResponse, AnalyticsSummary, ChartRange, DateRange }
 import type { EngineType } from '../../types/subscription';
 import type { MessageDispatchLog, MessageDispatchLogFilters, MessageDispatchSource, MessageDispatchStatus } from '../../types/messageLog';
 import DismissibleAlert from '../../components/common/DismissibleAlert';
+import { NAV_TINTS, cardOutline, cardShadow, indigo, type Tint } from '../../theme/signalIndigo';
 
 // Analytics/Dashboard Log Source Discrepancy Fix: same MessageDispatchStatus-
 // keyed status vocabulary MessageLogsPage.tsx and DashboardPage.tsx's
@@ -52,8 +53,8 @@ const STATUS_BADGE: Record<MessageDispatchStatus, string> = {
 
 /** Mirrors MessageLogsPage.tsx's SOURCE_BADGE exactly — same labels/colors, so a source badge reads identically on both pages. */
 const SOURCE_BADGE: Record<MessageDispatchSource, { label: string; className: string }> = {
-  web_ui: { label: 'Web', className: 'bg-indigo-50 text-indigo-700 ring-indigo-600/20' },
-  web_template: { label: 'Template', className: 'bg-violet-50 text-violet-700 ring-violet-600/20' },
+  web_ui: { label: 'Web', className: 'bg-emerald-50 text-emerald-800 ring-emerald-600/20' },
+  web_template: { label: 'Template', className: 'bg-teal-50 text-teal-800 ring-teal-600/20' },
   api: { label: 'API', className: 'bg-amber-50 text-amber-700 ring-amber-600/20' },
   chatbot: { label: 'Chatbot', className: 'bg-cyan-50 text-cyan-700 ring-cyan-600/20' },
   journey: { label: 'Journey', className: 'bg-fuchsia-50 text-fuchsia-700 ring-fuchsia-600/20' },  social_inbox: { label: 'Social Inbox', className: 'bg-emerald-50 text-emerald-700 ring-emerald-600/20' },
@@ -71,7 +72,7 @@ const ENGINE_LABEL: Record<EngineType, string> = {
 };
 
 const inputClass =
-  'rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100';
+  'rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100';
 
 function todayIso(): string {
   return new Date().toISOString().slice(0, 10);
@@ -132,7 +133,7 @@ export default function AnalyticsPage() {
         {canViewLogs ? (
           <LogsSection resolvedRange={resolvedRange} />
         ) : (
-          <div className="rounded-xl border border-slate-200 bg-white p-6 text-sm text-slate-600 shadow-sm">
+          <div className="rounded-2xl border border-[rgb(var(--slate-text-800))] bg-white p-6 text-sm text-slate-600 shadow-[0_4px_14px_rgb(var(--brand-600)/0.07)]">
             Message logs and exports require the "view-logs" permission. Ask an account Admin to grant it if you
             need row-level detail or exports.
           </div>
@@ -166,7 +167,7 @@ function RangePicker({
           onClick={() => setRange(r)}
           className={`rounded-lg border px-3 py-1.5 text-sm font-medium transition ${
             range === r
-              ? 'border-indigo-600 bg-indigo-600 text-white'
+              ? 'border-emerald-600 bg-emerald-600 text-white'
               : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'
           }`}
         >
@@ -184,13 +185,114 @@ function RangePicker({
   );
 }
 
+const DANGER_TINT: Tint = { bg: '#DC262624', fg: '#DC2626' };
+
+/** Icon + tint for a KPI, picked from its label so every card matches the Dashboard's stat cards. */
+function kpiVisual(label: string): { icon: LucideIcon; tint: Tint } {
+  const l = label.toLowerCase();
+  if (l.includes('fail')) return { icon: XCircle, tint: DANGER_TINT };
+  if (l.includes('rate')) return { icon: TrendingUp, tint: NAV_TINTS.billing };
+  if (l.includes('cost') || l.includes('spend') || l.includes('revenue')) return { icon: IndianRupee, tint: NAV_TINTS.chatbot };
+  if (l.includes('group')) return { icon: Users, tint: NAV_TINTS.team };
+  if (l.includes('today')) return { icon: CalendarDays, tint: NAV_TINTS.analytics };
+  if (l.includes('sent')) return { icon: Send, tint: NAV_TINTS.send };
+  return { icon: MessageSquare, tint: NAV_TINTS.dashboard };
+}
+
 function KpiCard({ label, value, sub }: { label: string; value: string; sub?: string }) {
+  const { icon: Icon, tint } = kpiVisual(label);
   return (
-    <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-      <p className="text-xs font-medium uppercase tracking-wide text-slate-500">{label}</p>
-      <p className="mt-2 text-2xl font-semibold text-slate-900">{value}</p>
-      {sub && <p className="mt-1 text-xs text-slate-500">{sub}</p>}
+    <div className="rounded-2xl border bg-white p-5" style={{ borderColor: cardOutline, boxShadow: cardShadow }}>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-[11px] font-semibold uppercase tracking-wide" style={{ color: indigo.muted }}>{label}</p>
+          <p className="mt-2 font-mono text-2xl font-semibold" style={{ color: indigo.ink }}>{value}</p>
+          {sub && <p className="mt-1 text-xs" style={{ color: indigo.muted }}>{sub}</p>}
+        </div>
+        <div aria-hidden="true" className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl" style={{ background: tint.bg, color: tint.fg }}>
+          <Icon className="h-4 w-4" />
+        </div>
+      </div>
     </div>
+  );
+}
+
+/**
+ * Message statistics as one table — rows Individual / Group / Total, columns
+ * Sent / Failed / Total / Success — with a Selected period ↔ Today switch,
+ * in place of the former 19 cards that repeated the same numbers.
+ */
+function MessageStatsTable({ summary, isLoading, showGroups }: { summary: AnalyticsSummary | null; isLoading: boolean; showGroups: boolean }) {
+  const [view, setView] = useState<'period' | 'today'>('period');
+  const today = summary?.today_breakdown;
+  const breakdown = summary?.recipient_breakdown;
+
+  const rows: { label: string; sent: number; failed: number; strong?: boolean }[] =
+    view === 'period'
+      ? [
+          { label: 'Individual', sent: breakdown?.individual?.sent ?? 0, failed: breakdown?.individual?.failed ?? 0 },
+          ...(showGroups ? [{ label: 'Group', sent: breakdown?.group?.sent ?? 0, failed: breakdown?.group?.failed ?? 0 }] : []),
+          { label: 'Total', sent: summary?.total_sent ?? 0, failed: summary?.total_failed ?? 0, strong: true },
+        ]
+      : [
+          { label: 'Individual', sent: today?.today_individual_sent ?? 0, failed: today?.today_individual_failed ?? 0 },
+          ...(showGroups ? [{ label: 'Group', sent: today?.today_group_sent ?? 0, failed: today?.today_group_failed ?? 0 }] : []),
+          { label: 'Total', sent: summary?.total_sent_today ?? 0, failed: summary?.total_failed_today ?? 0, strong: true },
+        ];
+
+  const pct = (sent: number, failed: number) => (sent + failed > 0 ? `${((sent / (sent + failed)) * 100).toFixed(1)}%` : '—');
+  const n = (v: number) => (isLoading ? '…' : v.toLocaleString('en-IN'));
+
+  return (
+    <section className="rounded-2xl border bg-white" style={{ borderColor: cardOutline, boxShadow: cardShadow }} data-testid="message-stats">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-5 py-4">
+        <div>
+          <p className="text-sm font-semibold" style={{ color: indigo.ink }}>Message statistics</p>
+          <p className="mt-0.5 text-xs" style={{ color: indigo.muted }}>
+            {view === 'period' ? 'For the selected period' : 'Since midnight, server time'}
+            {showGroups && !isLoading ? ` · ${(summary?.active_contact_groups ?? 0).toLocaleString('en-IN')} contact groups` : ''}
+          </p>
+        </div>
+        <div className="inline-flex rounded-lg bg-slate-100 p-1 text-xs font-semibold" role="tablist" aria-label="Statistics period">
+          {(['period', 'today'] as const).map((v) => (
+            <button
+              key={v}
+              type="button"
+              role="tab"
+              aria-selected={view === v}
+              onClick={() => setView(v)}
+              className={`rounded-md px-3 py-1.5 transition ${view === v ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}
+            >
+              {v === 'period' ? 'Selected period' : 'Today'}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="min-w-full text-sm">
+          <thead>
+            <tr className="text-left text-[11px] font-semibold uppercase tracking-wide" style={{ color: indigo.muted }}>
+              <th className="px-5 py-3">Messages</th>
+              <th className="px-5 py-3 text-right">Sent</th>
+              <th className="px-5 py-3 text-right">Failed</th>
+              <th className="px-5 py-3 text-right">Total</th>
+              <th className="px-5 py-3 text-right">Success</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {rows.map((r) => (
+              <tr key={r.label} className={r.strong ? 'bg-slate-50 font-semibold' : ''}>
+                <td className="px-5 py-3" style={{ color: indigo.ink }}>{r.label}</td>
+                <td className="px-5 py-3 text-right font-mono text-emerald-700">{n(r.sent)}</td>
+                <td className={`px-5 py-3 text-right font-mono ${r.failed > 0 ? 'text-red-600' : ''}`} style={r.failed > 0 ? undefined : { color: indigo.muted }}>{n(r.failed)}</td>
+                <td className="px-5 py-3 text-right font-mono" style={{ color: indigo.ink }}>{n(r.sent + r.failed)}</td>
+                <td className="px-5 py-3 text-right font-mono" style={{ color: indigo.ink }}>{isLoading ? '…' : pct(r.sent, r.failed)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
   );
 }
 
@@ -268,14 +370,14 @@ function SummarySection({ resolvedRange }: { resolvedRange: DateRange }) {
       </div>
 
       {!isLoading && summary?.scope === 'global' ? (
-        <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="rounded-2xl border border-[rgb(var(--slate-text-800))] bg-white p-5 shadow-[0_4px_14px_rgb(var(--brand-600)/0.07)]">
           <p className="text-sm font-medium text-slate-900">Quota Health</p>
           <p className="mt-1.5 text-xs text-slate-500">
             Quota is per-client — select a client above to see its usage against plan.
           </p>
         </div>
       ) : (
-        <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="rounded-2xl border border-[rgb(var(--slate-text-800))] bg-white p-5 shadow-[0_4px_14px_rgb(var(--brand-600)/0.07)]">
           <div className="flex items-center justify-between">
             <p className="text-sm font-medium text-slate-900">Quota Health</p>
             {!isLoading && quota && (
@@ -349,178 +451,7 @@ function SummarySection({ resolvedRange }: { resolvedRange: DateRange }) {
         is hidden outright, matching this file's existing convention
         rather than inventing a new one.
       */}
-      <div className="space-y-5">
-        <p className="text-sm font-semibold text-slate-900">Message Statistics</p>
-
-        <div>
-          <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
-            Overall &middot; Selected Period
-          </p>
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            <KpiCard
-              label="Overall Sent"
-              value={isLoading ? '…' : String(summary?.total_sent ?? 0)}
-              sub="Individual + Group, selected period"
-            />
-            <KpiCard
-              label="Overall Failed"
-              value={isLoading ? '…' : String(summary?.total_failed ?? 0)}
-              sub="Individual + Group, selected period"
-            />
-            <KpiCard
-              label="Overall Total"
-              value={isLoading ? '…' : String(summary?.total_alerts_attempted ?? 0)}
-              sub="Sent + Failed, selected period"
-            />
-          </div>
-        </div>
-
-        <div>
-          <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
-            Overall &middot; Today
-          </p>
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            <KpiCard
-              label="Today's Total Sent"
-              value={isLoading ? '…' : String(summary?.total_sent_today ?? 0)}
-              sub="Since midnight, server time"
-            />
-            <KpiCard
-              label="Today's Total Failed"
-              value={isLoading ? '…' : String(summary?.total_failed_today ?? 0)}
-              sub="Since midnight, server time"
-            />
-            <KpiCard
-              label="Today's Total Messages"
-              value={isLoading ? '…' : String((summary?.total_sent_today ?? 0) + (summary?.total_failed_today ?? 0))}
-              sub="Today's Sent + Failed"
-            />
-          </div>
-        </div>
-
-        <div>
-          <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
-            Individual Messages
-          </p>
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            <KpiCard
-              label="Individual Sent"
-              value={isLoading ? '…' : String(summary?.recipient_breakdown?.individual?.sent ?? 0)}
-              sub="Selected period"
-            />
-            <KpiCard
-              label="Individual Failed"
-              value={isLoading ? '…' : String(summary?.recipient_breakdown?.individual?.failed ?? 0)}
-              sub="Selected period"
-            />
-            <KpiCard
-              label="Individual Total"
-              value={
-                isLoading
-                  ? '…'
-                  : String(
-                      (summary?.recipient_breakdown?.individual?.sent ?? 0) +
-                        (summary?.recipient_breakdown?.individual?.failed ?? 0),
-                    )
-              }
-              sub="Sent + Failed, selected period"
-            />
-          </div>
-          <div className="mt-3 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            <KpiCard
-              label="Today's Individual Sent"
-              value={isLoading ? '…' : String(summary?.today_breakdown?.today_individual_sent ?? 0)}
-              sub="Since midnight, server time"
-            />
-            <KpiCard
-              label="Today's Individual Failed"
-              value={isLoading ? '…' : String(summary?.today_breakdown?.today_individual_failed ?? 0)}
-              sub="Since midnight, server time"
-            />
-            <KpiCard
-              label="Today's Individual Total"
-              value={
-                isLoading
-                  ? '…'
-                  : String(
-                      (summary?.today_breakdown?.today_individual_sent ?? 0) +
-                        (summary?.today_breakdown?.today_individual_failed ?? 0),
-                    )
-              }
-              sub="Today's Sent + Failed"
-            />
-          </div>
-        </div>
-
-        {hasModule('contact_groups') && (
-          <div>
-            <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
-              Group Messages
-            </p>
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              <KpiCard
-                label="Group Sent"
-                value={isLoading ? '…' : String(summary?.recipient_breakdown?.group?.sent ?? 0)}
-                sub="Selected period"
-              />
-              <KpiCard
-                label="Group Failed"
-                value={isLoading ? '…' : String(summary?.recipient_breakdown?.group?.failed ?? 0)}
-                sub="Selected period"
-              />
-              <KpiCard
-                label="Group Total"
-                value={
-                  isLoading
-                    ? '…'
-                    : String(
-                        (summary?.recipient_breakdown?.group?.sent ?? 0) +
-                          (summary?.recipient_breakdown?.group?.failed ?? 0),
-                      )
-                }
-                sub="Sent + Failed, selected period"
-              />
-            </div>
-            <div className="mt-3 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              <KpiCard
-                label="Today's Group Sent"
-                value={isLoading ? '…' : String(summary?.today_breakdown?.today_group_sent ?? 0)}
-                sub="Since midnight, server time"
-              />
-              <KpiCard
-                label="Today's Group Failed"
-                value={isLoading ? '…' : String(summary?.today_breakdown?.today_group_failed ?? 0)}
-                sub="Since midnight, server time"
-              />
-              <KpiCard
-                label="Today's Group Total"
-                value={
-                  isLoading
-                    ? '…'
-                    : String(
-                        (summary?.today_breakdown?.today_group_sent ?? 0) +
-                          (summary?.today_breakdown?.today_group_failed ?? 0),
-                      )
-                }
-                sub="Today's Sent + Failed"
-              />
-            </div>
-          </div>
-        )}
-
-        {hasModule('contact_groups') && (
-          <div>
-            <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">Groups</p>
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              <KpiCard
-                label="Total Groups Added"
-                value={isLoading ? '…' : String(summary?.active_contact_groups ?? 0)}
-                sub="Current count, not tied to the selected period"
-              />
-            </div>
-          </div>
-        )}
-      </div>
+      <MessageStatsTable summary={summary} isLoading={isLoading} showGroups={hasModule('contact_groups')} />
     </div>
   );
 }
@@ -597,7 +528,7 @@ function ChartsSection({ range, resolvedRange }: { range: ChartRange; resolvedRa
 
   return (
     <div className="grid gap-4 lg:grid-cols-3">
-      <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm lg:col-span-2">
+      <div className="rounded-2xl border border-[rgb(var(--slate-text-800))] bg-white p-5 shadow-[0_4px_14px_rgb(var(--brand-600)/0.07)] lg:col-span-2">
         <p className="text-sm font-medium text-slate-900">Daily Message Volume</p>
         <div className="mt-4 h-72">
           {isLoading ? (
@@ -617,7 +548,7 @@ function ChartsSection({ range, resolvedRange }: { range: ChartRange; resolvedRa
                   <Legend />
                   <Line type="monotone" dataKey="Individual Sent" stroke="#10b981" strokeWidth={2.5} dot={false} />
                   <Line type="monotone" dataKey="Individual Failed" stroke="#ef4444" strokeWidth={2} dot={false} />
-                  <Line type="monotone" dataKey="Group Sent" stroke="#7C3AED" strokeWidth={2.5} strokeDasharray="6 4" dot={false} />
+                  <Line type="monotone" dataKey="Group Sent" stroke="#0D9488" strokeWidth={2.5} strokeDasharray="6 4" dot={false} />
                   <Line type="monotone" dataKey="Group Failed" stroke="#F97316" strokeWidth={2} strokeDasharray="6 4" dot={false} />
                 </ComposedChart>
               ) : (
@@ -646,7 +577,7 @@ function ChartsSection({ range, resolvedRange }: { range: ChartRange; resolvedRa
         </div>
       </div>
 
-      <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+      <div className="rounded-2xl border border-[rgb(var(--slate-text-800))] bg-white p-5 shadow-[0_4px_14px_rgb(var(--brand-600)/0.07)]">
         <p className="text-sm font-medium text-slate-900">Engine Usage</p>
         <div className="mt-4 h-72">
           {isLoading ? (
@@ -831,7 +762,7 @@ function LogsSection({ resolvedRange }: { resolvedRange: DateRange }) {
                   <td className="px-4 py-2.5">
                     {log.recipient_type === 'group' ? (
                       <div className="flex items-center gap-1.5">
-                        <span className="inline-flex items-center gap-1 rounded-full bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-700 ring-1 ring-inset ring-indigo-600/20">
+                        <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-800 ring-1 ring-inset ring-emerald-600/20">
                           <Users className="h-3 w-3" />
                           Group
                         </span>

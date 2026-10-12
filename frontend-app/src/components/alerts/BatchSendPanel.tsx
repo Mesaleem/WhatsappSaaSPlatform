@@ -39,7 +39,7 @@ const STATUS_LABEL: Record<MessageBatchStatus, string> = {
 
 const STATUS_CLASS: Record<MessageBatchStatus, string> = {
   scheduled: 'bg-sky-50 text-sky-700 ring-sky-200',
-  running: 'bg-indigo-50 text-indigo-700 ring-indigo-200',
+  running: 'bg-emerald-50 text-emerald-800 ring-emerald-200',
   paused: 'bg-amber-50 text-amber-800 ring-amber-200',
   stopped: 'bg-slate-100 text-slate-600 ring-slate-300',
   completed: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
@@ -246,7 +246,7 @@ export default function BatchSendPanel({ senders, disabled = false }: BatchSendP
         )}
 
         <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-100">
-          <div className="h-full rounded-full bg-indigo-500" style={{ width: `${percent}%` }} />
+          <div className="h-full rounded-full bg-emerald-500" style={{ width: `${percent}%` }} />
         </div>
         <p className="mt-1 text-[11px] text-slate-600">
           {batch.total} numbers · {batch.sent_count} sent · {batch.pending_count} left
@@ -276,7 +276,7 @@ export default function BatchSendPanel({ senders, disabled = false }: BatchSendP
               type="button"
               onClick={() => void act(batch, 'resume')}
               disabled={busy}
-              className="flex items-center gap-1 rounded-md border border-indigo-300 px-2.5 py-1 text-xs font-medium text-indigo-700 hover:bg-indigo-50 disabled:opacity-60"
+              className="flex items-center gap-1 rounded-md border border-emerald-300 px-2.5 py-1 text-xs font-medium text-emerald-800 hover:bg-emerald-50 disabled:opacity-60"
             >
               <Play className="h-3.5 w-3.5" /> Resume
             </button>
@@ -307,7 +307,7 @@ export default function BatchSendPanel({ senders, disabled = false }: BatchSendP
               automatically so WhatsApp does not see a burst.
             </p>
           </div>
-          <button type="button" onClick={openHistory} className="flex-shrink-0 text-xs font-medium text-indigo-600 hover:text-indigo-700">
+          <button type="button" onClick={openHistory} className="flex-shrink-0 text-xs font-medium text-emerald-700 hover:text-emerald-800">
             History
           </button>
         </div>
@@ -343,7 +343,7 @@ export default function BatchSendPanel({ senders, disabled = false }: BatchSendP
               disabled={controlsDisabled}
               onChange={(e) => setMediaUrl(e.target.value)}
               placeholder="https://example.com/invoice.pdf"
-              className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+              className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
             />
           </label>
         </div>
@@ -358,7 +358,7 @@ export default function BatchSendPanel({ senders, disabled = false }: BatchSendP
               disabled={controlsDisabled}
               onChange={(e) => setMessageText(e.target.value)}
               placeholder="Type the message to send…"
-              className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+              className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
             />
           </label>
         )}
@@ -373,7 +373,7 @@ export default function BatchSendPanel({ senders, disabled = false }: BatchSendP
                   value={variables[field.key] ?? ''}
                   disabled={controlsDisabled}
                   onChange={(e) => setVariables((v) => ({ ...v, [field.key]: e.target.value }))}
-                  className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+                  className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
                 />
               </label>
             ))}
@@ -404,7 +404,7 @@ export default function BatchSendPanel({ senders, disabled = false }: BatchSendP
                   }
                 />
                 <span className="font-mono text-xs">{sender.phone_number}</span>
-                {sender.is_default && <span className="text-[10px] font-semibold text-indigo-700">default</span>}
+                {sender.is_default && <span className="text-[10px] font-semibold text-emerald-800">default</span>}
               </label>
             ))}
           </div>
@@ -435,7 +435,7 @@ export default function BatchSendPanel({ senders, disabled = false }: BatchSendP
               accept=".xlsx,.csv,.txt"
               disabled={controlsDisabled}
               onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-              className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 file:mr-3 file:rounded-md file:border-0 file:bg-indigo-50 file:px-3 file:py-1 file:text-indigo-700"
+              className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 file:mr-3 file:rounded-md file:border-0 file:bg-emerald-50 file:px-3 file:py-1 file:text-emerald-800"
             />
           </label>
 
@@ -448,7 +448,7 @@ export default function BatchSendPanel({ senders, disabled = false }: BatchSendP
               disabled={controlsDisabled}
               onChange={(e) => setTitle(e.target.value)}
               placeholder="Defaults to the file name"
-              className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+              className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
             />
           </label>
         </div>
@@ -479,7 +479,7 @@ export default function BatchSendPanel({ senders, disabled = false }: BatchSendP
             type="button"
             onClick={() => void create()}
             disabled={controlsDisabled}
-            className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:opacity-60"
+            className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-60"
           >
             {creating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
             {creating ? 'Reading file…' : scheduledIso ? 'Schedule batch' : 'Start batch now'}

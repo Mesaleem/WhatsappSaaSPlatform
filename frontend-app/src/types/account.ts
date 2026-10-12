@@ -274,14 +274,25 @@ export interface CreateAccountPayload {
   admin_phone?: string;
   admin_password: string;
 
-  engine_type: EngineType;
-  billing_model: BillingModel;
+  /**
+   * Custom terms (Super Admin only). Omitted when plan_key is sent: the plan
+   * then decides engine, billing model, quota and term.
+   */
+  engine_type?: EngineType;
+  billing_model?: BillingModel;
   rate_per_message?: number;
   total_allocated_messages?: number;
-  price_paid: number;
-  payment_mode: PaymentMode;
-  starts_at: string;
-  expires_at: string;
+  price_paid?: number;
+  payment_mode?: PaymentMode;
+  starts_at?: string;
+  expires_at?: string;
+
+  /** Plan-based provisioning: the client gets this plan as a paid, offline-recorded invoice. */
+  plan_key?: string;
+  /** What the client paid, including GST. Defaults to the plan's total. */
+  plan_total?: number;
+  payment_method?: ManualPaymentMethod;
+  transaction_id?: string;
 
   /** Client Module Accessibility Checklist. Omit/null = every module enabled. */
   allowed_modules?: AccountModule[] | null;
@@ -289,6 +300,33 @@ export interface CreateAccountPayload {
   /** Super Admin Client Provisioning refactor — Section 1. */
   max_users_limit?: number | null;
   module_assignment: ModuleAssignment;
+}
+
+export const MANUAL_PAYMENT_METHODS = ['cash', 'upi', 'bank_transfer', 'cheque', 'other'] as const;
+export type ManualPaymentMethod = (typeof MANUAL_PAYMENT_METHODS)[number];
+export const MANUAL_PAYMENT_METHOD_LABELS: Record<ManualPaymentMethod, string> = {
+  cash: 'Cash',
+  upi: 'UPI',
+  bank_transfer: 'Bank transfer',
+  cheque: 'Cheque',
+  other: 'Other',
+};
+
+/** GET /api/admin/accounts/plan-options — a plan offered in the Create Client form. */
+export interface ClientPlanOption {
+  key: string;
+  label: string;
+  description: string | null;
+  engine_type: EngineType;
+  billing_model: BillingModel;
+  total_allocated_messages: number | null;
+  duration_days: number;
+  price: number;
+  tax_amount: number;
+  total_amount: number;
+  capabilities: { slug: string; label: string }[];
+  /** Menu modules the plan switches on (pre-ticked in the checklist). */
+  modules: AccountModule[];
 }
 
 /** PUT /api/admin/accounts/{id} — account-level fields only. */

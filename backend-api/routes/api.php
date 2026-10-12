@@ -5,6 +5,10 @@ use App\Http\Controllers\Api\RouteMasterController;
 use App\Http\Controllers\Api\ActivityLogController;
 use App\Http\Controllers\Api\AdminUserController;
 use App\Http\Controllers\Api\AuthController;
+use App\Http\Controllers\Api\DashboardOverviewController;
+use App\Http\Controllers\Api\PasswordResetController;
+use App\Http\Controllers\Api\PublicSiteController;
+use App\Http\Controllers\Api\SiteContentController;
 use App\Http\Controllers\Api\RoleController;
 use App\Http\Controllers\Api\WhatsAppController;
 use App\Http\Controllers\Api\MetaConfigController;
@@ -90,6 +94,17 @@ use App\Http\Controllers\Api\ContactGroupController;
 use Illuminate\Support\Facades\Route;
 
 Route::post('/auth/login', [AuthController::class, 'login'])->middleware('throttle:login');
+
+// Public marketing website (no auth): content, plans, contact form, self-service signup.
+Route::post('/auth/register/send-code', [AuthController::class, 'sendSignupCode'])->middleware('throttle:5,15');
+Route::post('/auth/register', [AuthController::class, 'register'])->middleware('throttle:10,60');
+Route::post('/auth/forgot-password', [PasswordResetController::class, 'sendLink'])->middleware('throttle:5,15');
+Route::post('/auth/reset-password', [PasswordResetController::class, 'reset'])->middleware('throttle:10,15');
+Route::prefix('public')->group(function () {
+    Route::get('/site', [PublicSiteController::class, 'site'])->middleware('throttle:120,1');
+    Route::get('/plans', [PublicSiteController::class, 'plans'])->middleware('throttle:120,1');
+    Route::post('/contact', [PublicSiteController::class, 'contact'])->middleware('throttle:5,10');
+});
 
 // Social/Ads Launcher Overhaul — Step 2. Publicly fetchable ad-creative
 // media (images/videos a tenant uploaded) — see SocialMediaController::
@@ -378,6 +393,15 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::middleware(['role:super_admin|agent'])->get('/admin/module-offers', [ModuleAddonController::class, 'offers']);
     Route::middleware(['role:super_admin'])->put('/admin/module-offers/{module}', [ModuleAddonController::class, 'updateOffer']);
     Route::middleware(['role:super_admin'])->put('/admin/module-offers/{module}/tiers', [ModuleAddonController::class, 'updateTiers']);
+
+    // Website Content (public marketing site sections + contact-form inbox).
+    Route::middleware(['role:super_admin'])->group(function () {
+        Route::get('/admin/site-content', [SiteContentController::class, 'index']);
+        Route::put('/admin/site-content/{key}', [SiteContentController::class, 'update']);
+        Route::delete('/admin/site-content/{key}', [SiteContentController::class, 'reset']);
+        Route::get('/admin/contact-messages', [SiteContentController::class, 'messages']);
+        Route::patch('/admin/contact-messages/{id}', [SiteContentController::class, 'updateMessage'])->whereNumber('id');
+    });
     Route::middleware(['role:super_admin|agent'])->prefix('admin/module-addons')->group(function () {
         Route::get('/pending', [ModuleAddonController::class, 'pending']);
         Route::get('/history', [ModuleAddonController::class, 'history']);
@@ -1252,6 +1276,9 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::post('/{id}/recreate', [ContactGroupController::class, 'recreate'])->middleware('capability.guard:whatsapp_groups');
         });
 
+        // Role- and plan-aware Dashboard widgets in one request (aggregates only).
+        Route::get('/dashboard/overview', [DashboardOverviewController::class, 'show']);
+
         // Module 7: analytics KPIs/charts — same sensitivity tier as
         // ordinary WhatsApp usage (aggregate numbers only, no customer PII).
         Route::middleware('permission:view-analytics')->prefix('analytics')->group(function () {
@@ -1346,6 +1373,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::middleware('permission:manage-accounts')->prefix('admin')->group(function () {
         Route::get('/accounts', [AccountController::class, 'index']);
         Route::post('/accounts', [AccountController::class, 'store']);
+        // Plans for the Create Client form (registered before '/accounts/{id}').
+        Route::get('/accounts/plan-options', [AccountController::class, 'planOptions']);
         // Super Admin Dashboard Enhancement — "Expiring in 7 Days" metric
         // card + modal. MUST be registered before the '/accounts/{id}'
         // route immediately below it — otherwise Laravel would match

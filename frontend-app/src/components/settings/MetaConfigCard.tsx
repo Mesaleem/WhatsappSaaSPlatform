@@ -18,7 +18,7 @@ import { describeApiError } from '../../utils/apiError';
 import DismissibleAlert from '../common/DismissibleAlert';
 
 const inputClass =
-  'mt-1.5 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100';
+  'mt-1.5 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100';
 
 /**
  * Phase 4 Task 2 — inline per-field validation message, fed either by this
@@ -292,7 +292,7 @@ export default function MetaConfigCard() {
             <button
               type="button"
               onClick={() => void handleCopyWebhookUrl()}
-              className="inline-flex items-center gap-1 text-xs font-medium text-indigo-600 hover:text-indigo-700"
+              className="inline-flex items-center gap-1 text-xs font-medium text-emerald-700 hover:text-emerald-800"
             >
               <Copy className="h-3 w-3" />
               {copied ? 'Copied' : 'Copy'}
@@ -438,7 +438,7 @@ export default function MetaConfigCard() {
             type="submit"
             disabled={isSaving || isTesting || isReadOnly()}
             title={isReadOnly() ? 'Action disabled: Subscription expired.' : undefined}
-            className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:opacity-60"
+            className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-60"
           >
             {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <KeyRound className="h-4 w-4" />}
             {config?.configured ? 'Update Credentials' : 'Save Credentials'}

@@ -110,7 +110,7 @@ export default function ClientBillingSummaryTable() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="flex items-center gap-2 text-sm font-semibold text-slate-900">
-            <Users2 className="h-4 w-4 text-indigo-600" />
+            <Users2 className="h-4 w-4 text-emerald-700" />
             Client Billing Summary
           </h2>
           <p className="mt-1 text-sm text-slate-500">
@@ -134,7 +134,7 @@ export default function ClientBillingSummaryTable() {
               type="date"
               value={from}
               onChange={(e) => setFrom(e.target.value)}
-              className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 w-40"
+              className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100 w-40"
               aria-label="From date"
             />
             <span className="text-sm text-slate-400">to</span>
@@ -142,7 +142,7 @@ export default function ClientBillingSummaryTable() {
               type="date"
               value={to}
               onChange={(e) => setTo(e.target.value)}
-              className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 w-40"
+              className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100 w-40"
               aria-label="To date"
             />
           </div>
@@ -209,7 +209,7 @@ export default function ClientBillingSummaryTable() {
                         <div className="mt-1.5 w-40">
                           <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
                             <div
-                              className={`h-1.5 rounded-full ${quotaPercent >= 90 ? 'bg-red-500' : quotaPercent >= 70 ? 'bg-amber-500' : 'bg-indigo-600'}`}
+                              className={`h-1.5 rounded-full ${quotaPercent >= 90 ? 'bg-red-500' : quotaPercent >= 70 ? 'bg-amber-500' : 'bg-emerald-600'}`}
                               style={{ width: `${quotaPercent}%` }}
                             />
                           </div>

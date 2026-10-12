@@ -92,7 +92,7 @@ export function JourneyNodeShell({
         hasErrors
           ? 'border-red-400 ring-1 ring-red-200'
           : selected
-            ? 'border-indigo-500 ring-2 ring-indigo-200'
+            ? 'border-emerald-500 ring-2 ring-emerald-200'
             : 'border-slate-200'
       }`}
     >
@@ -137,7 +137,7 @@ export function JourneyNodeShell({
             data-source-handle={handle.id}
             title={`Connect from ${handle.label}`}
             onMouseDown={() => onStartConnect?.(id, handle.id)}
-            className="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400 hover:text-indigo-600"
+            className="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400 hover:text-emerald-700"
           >
             {handles.length > 1 && <span>{handle.label}</span>}
             <span className="h-2.5 w-2.5 rounded-full border-2 border-white bg-slate-400" />

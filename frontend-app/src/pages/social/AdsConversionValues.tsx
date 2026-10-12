@@ -142,7 +142,7 @@ export default function AdsConversionValues({
                     {canEdit && row.crm_lead_id !== null && (
                       editing === row.id ? (
                         <span className="flex justify-end gap-2">
-                          <button type="button" disabled={busy} onClick={() => save(row, false)} className="rounded-md bg-indigo-600 px-3 py-1 text-xs font-semibold text-white disabled:opacity-50">
+                          <button type="button" disabled={busy} onClick={() => save(row, false)} className="rounded-md bg-emerald-600 px-3 py-1 text-xs font-semibold text-white disabled:opacity-50">
                             Save
                           </button>
                           {row.conversion_value !== null && (

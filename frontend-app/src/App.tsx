@@ -1,64 +1,97 @@
+import { lazy, Suspense } from 'react';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { AuthProvider } from './core/context/AuthContext';
 import { TenantProvider } from './core/context/TenantContext';
 import { ProtectedRoute } from './core/guards/ProtectedRoute';
 import AppLayout from './components/layout/AppLayout';
-import LoginPage from './pages/auth/LoginPage';
-import DashboardPage from './pages/DashboardPage';
-import AccountsPage from './pages/admin/AccountsPage';
-import TemplateManagerPage from './pages/admin/TemplateManagerPage';
-import RouteMasterPage from './pages/admin/RouteMasterPage';
-import PlanManagementPage from './pages/admin/PlanManagementPage';
-import ActivityLogsPage from './pages/admin/ActivityLogsPage';
-import WhatsAppSetupPage from './pages/settings/WhatsAppSetupPage';
-import SendAlertPage from './pages/alerts/SendAlertPage';
-import AnalyticsPage from './pages/analytics/AnalyticsPage';
-import MessageLogsPage from './pages/analytics/MessageLogsPage';
-import BillingPage from './pages/billing/BillingPage';
-import AddOnsPage from './pages/billing/AddOnsPage';
-import GatewaySettingsPage from './pages/admin/GatewaySettingsPage';
-import QuotaRequestsPage from './pages/admin/QuotaRequestsPage';
-import ApiAccessPage from './pages/admin/ApiAccessPage';
-import AdminDeviceSettingsPage from './pages/admin/AdminDeviceSettingsPage';
-import DeveloperPage from './pages/developer/DeveloperPage';
-import ChatbotPage from './pages/chatbot/ChatbotPage';
-import JourneyBuilderPage from './pages/whatsapp/JourneyBuilderPage';
-import ContactGroupsPage from './pages/whatsapp/ContactGroupsPage';
-import UsersPage from './pages/users/UsersPage';
-import TeamPermissionsPage from './pages/team/TeamPermissionsPage';
-import AuditLogsPage from './pages/audit/AuditLogsPage';
-import NotificationsPage from './pages/notifications/NotificationsPage';
-import SocialAccountsPage from './pages/social/SocialAccountsPage';
-import MetaAdsPage from './pages/social/MetaAdsPage';
-import AdsDashboardPage from './pages/social/AdsDashboardPage';
-import AdminSocialSettingsPage from './pages/admin/AdminSocialSettingsPage';
-import AdminAiSettingsPage from './pages/admin/AdminAiSettingsPage';
-import SocialInboxPage from './pages/social/SocialInboxPage';
-import CommentRulesPage from './pages/social/CommentRulesPage';
-import LeadsPage from './pages/social/LeadsPage';
-import SocialReportsPage from './pages/social/SocialReportsPage';
-import SocialAnalyticsPage from './pages/social/SocialAnalyticsPage';
-import CrmLeadsPage from './pages/crm/CrmLeadsPage';
-import CrmLeadDetailPage from './pages/crm/CrmLeadDetailPage';
-import CrmPipelinePage from './pages/crm/CrmPipelinePage';
-import CrmContactsPage from './pages/crm/CrmContactsPage';
-import CrmContactDetailPage from './pages/crm/CrmContactDetailPage';
-import CrmTagsPage from './pages/crm/CrmTagsPage';
-import CrmAnalyticsPage from './pages/crm/CrmAnalyticsPage';
-import EducationPage from './pages/education/EducationPage';
 import { IndustryModuleRoute } from './core/guards/IndustryModuleRoute';
-import SubscriptionExpiredPage from './pages/errors/SubscriptionExpiredPage';
-import UnauthorizedPage from './pages/errors/UnauthorizedPage';
+import WebsiteLayout from './website/WebsiteLayout';
+import { SiteContentProvider } from './website/SiteContentContext';
+
+// Every page is its own chunk: a visitor downloads only the code of the page it opens
+// (the public website no longer pulls in the whole dashboard). See RouteFallback below.
+const LoginPage = lazy(() => import('./pages/auth/LoginPage'));
+const ForgotPasswordPage = lazy(() => import('./pages/auth/ForgotPasswordPage'));
+const ResetPasswordPage = lazy(() => import('./pages/auth/ResetPasswordPage'));
+const DashboardPage = lazy(() => import('./pages/DashboardPage'));
+const AccountsPage = lazy(() => import('./pages/admin/AccountsPage'));
+const TemplateManagerPage = lazy(() => import('./pages/admin/TemplateManagerPage'));
+const RouteMasterPage = lazy(() => import('./pages/admin/RouteMasterPage'));
+const PlanManagementPage = lazy(() => import('./pages/admin/PlanManagementPage'));
+const ActivityLogsPage = lazy(() => import('./pages/admin/ActivityLogsPage'));
+const WhatsAppSetupPage = lazy(() => import('./pages/settings/WhatsAppSetupPage'));
+const SendAlertPage = lazy(() => import('./pages/alerts/SendAlertPage'));
+const AnalyticsPage = lazy(() => import('./pages/analytics/AnalyticsPage'));
+const MessageLogsPage = lazy(() => import('./pages/analytics/MessageLogsPage'));
+const BillingPage = lazy(() => import('./pages/billing/BillingPage'));
+const AddOnsPage = lazy(() => import('./pages/billing/AddOnsPage'));
+const GatewaySettingsPage = lazy(() => import('./pages/admin/GatewaySettingsPage'));
+const QuotaRequestsPage = lazy(() => import('./pages/admin/QuotaRequestsPage'));
+const ApiAccessPage = lazy(() => import('./pages/admin/ApiAccessPage'));
+const AdminDeviceSettingsPage = lazy(() => import('./pages/admin/AdminDeviceSettingsPage'));
+const DeveloperPage = lazy(() => import('./pages/developer/DeveloperPage'));
+const ChatbotPage = lazy(() => import('./pages/chatbot/ChatbotPage'));
+const JourneyBuilderPage = lazy(() => import('./pages/whatsapp/JourneyBuilderPage'));
+const ContactGroupsPage = lazy(() => import('./pages/whatsapp/ContactGroupsPage'));
+const UsersPage = lazy(() => import('./pages/users/UsersPage'));
+const TeamPermissionsPage = lazy(() => import('./pages/team/TeamPermissionsPage'));
+const AuditLogsPage = lazy(() => import('./pages/audit/AuditLogsPage'));
+const NotificationsPage = lazy(() => import('./pages/notifications/NotificationsPage'));
+const SocialAccountsPage = lazy(() => import('./pages/social/SocialAccountsPage'));
+const MetaAdsPage = lazy(() => import('./pages/social/MetaAdsPage'));
+const AdsDashboardPage = lazy(() => import('./pages/social/AdsDashboardPage'));
+const AdminSocialSettingsPage = lazy(() => import('./pages/admin/AdminSocialSettingsPage'));
+const AdminAiSettingsPage = lazy(() => import('./pages/admin/AdminAiSettingsPage'));
+const SocialInboxPage = lazy(() => import('./pages/social/SocialInboxPage'));
+const CommentRulesPage = lazy(() => import('./pages/social/CommentRulesPage'));
+const LeadsPage = lazy(() => import('./pages/social/LeadsPage'));
+const SocialReportsPage = lazy(() => import('./pages/social/SocialReportsPage'));
+const SocialAnalyticsPage = lazy(() => import('./pages/social/SocialAnalyticsPage'));
+const CrmLeadsPage = lazy(() => import('./pages/crm/CrmLeadsPage'));
+const CrmLeadDetailPage = lazy(() => import('./pages/crm/CrmLeadDetailPage'));
+const CrmPipelinePage = lazy(() => import('./pages/crm/CrmPipelinePage'));
+const CrmContactsPage = lazy(() => import('./pages/crm/CrmContactsPage'));
+const CrmContactDetailPage = lazy(() => import('./pages/crm/CrmContactDetailPage'));
+const CrmTagsPage = lazy(() => import('./pages/crm/CrmTagsPage'));
+const CrmAnalyticsPage = lazy(() => import('./pages/crm/CrmAnalyticsPage'));
+const EducationPage = lazy(() => import('./pages/education/EducationPage'));
+const SubscriptionExpiredPage = lazy(() => import('./pages/errors/SubscriptionExpiredPage'));
+const UnauthorizedPage = lazy(() => import('./pages/errors/UnauthorizedPage'));
+const WebsiteContentPage = lazy(() => import('./pages/admin/WebsiteContentPage'));
+const HomePage = lazy(() => import('./website/pages/HomePage'));
+const FeaturesPage = lazy(() => import('./website/pages/FeaturesPage'));
+const PricingPage = lazy(() => import('./website/pages/PricingPage'));
+const AboutPage = lazy(() => import('./website/pages/AboutPage'));
+const ContactPage = lazy(() => import('./website/pages/ContactPage'));
+const LegalPage = lazy(() => import('./website/pages/LegalPage'));
+const SignupPage = lazy(() => import('./website/pages/SignupPage'));
 
 export default function App() {
   return (
     <BrowserRouter>
       <AuthProvider>
         <TenantProvider>
+        <Suspense fallback={<RouteFallback />}>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
+          <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+          <Route path="/reset-password" element={<ResetPasswordPage />} />
           <Route path="/subscription-expired" element={<SubscriptionExpiredPage />} />
           <Route path="/unauthorized" element={<UnauthorizedPage />} />
+
+          {/* Public marketing website. Guests who open "/" are sent to /home by ProtectedRoute. */}
+          <Route element={<WebsiteLayout />}>
+            <Route path="/home" element={<HomePage />} />
+            <Route path="/features" element={<FeaturesPage />} />
+            <Route path="/pricing" element={<PricingPage />} />
+            <Route path="/about" element={<AboutPage />} />
+            <Route path="/contact" element={<ContactPage />} />
+            <Route path="/privacy" element={<LegalPage page="privacy" />} />
+            <Route path="/terms" element={<LegalPage page="terms" />} />
+            <Route path="/data-deletion" element={<LegalPage page="data_deletion" />} />
+          </Route>
+          {/* Full-screen split layout like /login, still fed by the website content. */}
+          <Route path="/signup" element={<SiteContentProvider><SignupPage /></SiteContentProvider>} />
 
           {/*
             UI overhaul — persistent App Shell. This is a path-less "layout
@@ -403,6 +436,14 @@ export default function App() {
                 </ProtectedRoute>
               }
             />
+            <Route
+              path="/admin/website"
+              element={
+                <ProtectedRoute strictRole="super_admin">
+                  <WebsiteContentPage />
+                </ProtectedRoute>
+              }
+            />
             {/* Social Media Marketing & Meta Ads Automation Expansion (Phase 4). */}
             <Route
               path="/social/inbox"
@@ -527,8 +568,18 @@ export default function App() {
 
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
+        </Suspense>
         </TenantProvider>
       </AuthProvider>
     </BrowserRouter>
+  );
+}
+
+/** Shown for the moment a page's code chunk is downloading. */
+function RouteFallback() {
+  return (
+    <div className="flex min-h-[50vh] w-full items-center justify-center" role="status" aria-label="Loading">
+      <div className="h-8 w-8 animate-spin rounded-full border-2 border-slate-200 border-t-emerald-600" />
+    </div>
   );
 }

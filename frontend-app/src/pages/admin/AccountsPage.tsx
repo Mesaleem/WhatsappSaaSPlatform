@@ -260,7 +260,7 @@ export default function AccountsPage() {
           </button>
           <button
             onClick={openCreate}
-            className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700"
+            className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700"
           >
             <Plus className="h-4 w-4" />
             New Client
@@ -280,7 +280,7 @@ export default function AccountsPage() {
           <select
             value={agentFilter}
             onChange={(e) => setAgentFilter(e.target.value ? Number(e.target.value) : '')}
-            className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+            className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
             aria-label="Filter by Agent"
           >
             <option value="">All Agents</option>
@@ -296,7 +296,7 @@ export default function AccountsPage() {
             type="date"
             value={from}
             onChange={(e) => setFrom(e.target.value)}
-            className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 w-40"
+            className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100 w-40"
             aria-label="Provisioned from"
           />
           <span className="text-sm text-slate-400">to</span>
@@ -304,7 +304,7 @@ export default function AccountsPage() {
             type="date"
             value={to}
             onChange={(e) => setTo(e.target.value)}
-            className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 w-40"
+            className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100 w-40"
             aria-label="Provisioned to"
           />
         </div>
@@ -452,7 +452,7 @@ export default function AccountsPage() {
                           <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
                             <div
                               className={`h-full rounded-full ${
-                                pct >= 100 ? 'bg-red-500' : pct >= 80 ? 'bg-amber-500' : 'bg-indigo-500'
+                                pct >= 100 ? 'bg-red-500' : pct >= 80 ? 'bg-amber-500' : 'bg-emerald-500'
                               }`}
                               style={{ width: `${pct}%` }}
                             />

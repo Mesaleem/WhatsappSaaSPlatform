@@ -192,8 +192,8 @@ export default function SocialReportsPage() {
                     <AreaChart data={chartData}>
                       <defs>
                         <linearGradient id="reportSpend" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="5%" stopColor="#4F46E5" stopOpacity={0.35} />
-                          <stop offset="95%" stopColor="#4F46E5" stopOpacity={0} />
+                          <stop offset="5%" stopColor="#059669" stopOpacity={0.35} />
+                          <stop offset="95%" stopColor="#059669" stopOpacity={0} />
                         </linearGradient>
                         <linearGradient id="reportLeads" x1="0" y1="0" x2="0" y2="1">
                           <stop offset="5%" stopColor="#10b981" stopOpacity={0.3} />
@@ -204,7 +204,7 @@ export default function SocialReportsPage() {
                       <XAxis dataKey="date" tick={{ fontSize: 12, fill: '#64748b' }} axisLine={false} tickLine={false} />
                       <YAxis allowDecimals={false} tick={{ fontSize: 12, fill: '#64748b' }} axisLine={false} tickLine={false} />
                       <Tooltip />
-                      <Area type="monotone" dataKey="Spend" stroke="#4F46E5" strokeWidth={2.5} fill="url(#reportSpend)" dot={false} />
+                      <Area type="monotone" dataKey="Spend" stroke="#059669" strokeWidth={2.5} fill="url(#reportSpend)" dot={false} />
                       <Area type="monotone" dataKey="Leads" stroke="#10b981" strokeWidth={2} fill="url(#reportLeads)" dot={false} />
                     </AreaChart>
                   </ResponsiveContainer>

@@ -16,7 +16,7 @@ export function IndustryModuleRoute({ moduleKey, children }: { moduleKey: string
   if (isLoading) {
     return (
       <div className="flex h-64 w-full items-center justify-center" role="status" aria-label="Loading">
-        <div className="h-8 w-8 animate-spin rounded-full border-2 border-slate-300 border-t-indigo-600" />
+        <div className="h-8 w-8 animate-spin rounded-full border-2 border-slate-300 border-t-emerald-600" />
       </div>
     );
   }

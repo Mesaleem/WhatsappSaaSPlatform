@@ -14,7 +14,7 @@ import type { OrganicPost, OrganicPostStatus } from '../../types/organic';
 import DismissibleAlert from '../common/DismissibleAlert';
 
 const STATUS_STYLES: Record<OrganicPostStatus, string> = {
-  scheduled: 'bg-indigo-50 text-indigo-700',
+  scheduled: 'bg-emerald-50 text-emerald-800',
   publishing: 'bg-amber-50 text-amber-700',
   pending: 'bg-amber-50 text-amber-700',
   published: 'bg-emerald-50 text-emerald-700',
@@ -255,7 +255,7 @@ export default function OrganicPostsPanel({
                         type="button"
                         onClick={() => act(post, 'retry')}
                         disabled={busyId === post.id}
-                        className="ml-2 inline-flex items-center gap-1 rounded-lg border border-indigo-200 px-2.5 py-1 text-xs font-semibold text-indigo-700 hover:bg-indigo-50 disabled:opacity-60"
+                        className="ml-2 inline-flex items-center gap-1 rounded-lg border border-emerald-200 px-2.5 py-1 text-xs font-semibold text-emerald-800 hover:bg-emerald-50 disabled:opacity-60"
                       >
                         <RotateCcw className="h-3.5 w-3.5" />
                         {confirmRetryId === post.id ? 'Retry anyway' : 'Retry'}

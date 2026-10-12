@@ -26,7 +26,7 @@ const STATUS_LABEL: Record<MessageTemplateStatus, string> = {
 
 const STATUS_BADGE: Record<MessageTemplateStatus, string> = {
   pending_agent_review: 'bg-sky-50 text-sky-700 ring-sky-600/20',
-  pending_admin_review: 'bg-violet-50 text-violet-700 ring-violet-600/20',
+  pending_admin_review: 'bg-teal-50 text-teal-800 ring-teal-600/20',
   pending_meta_approval: 'bg-fuchsia-50 text-fuchsia-700 ring-fuchsia-600/20',
   pending: 'bg-amber-50 text-amber-700 ring-amber-600/20',
   approved: 'bg-emerald-50 text-emerald-700 ring-emerald-600/20',
@@ -76,7 +76,7 @@ export default function MyTemplatesModal({ onClose }: { onClose: () => void }) {
       <div className="flex max-h-[85vh] w-full max-w-2xl flex-col rounded-xl bg-white p-6 shadow-xl">
         <div className="flex items-center justify-between">
           <h3 className="flex items-center gap-2 text-base font-semibold text-slate-900">
-            <FileText className="h-4 w-4 text-indigo-600" />
+            <FileText className="h-4 w-4 text-emerald-700" />
             My Templates
           </h3>
           <button onClick={onClose} className="text-slate-400 hover:text-slate-600">
@@ -144,7 +144,7 @@ export default function MyTemplatesModal({ onClose }: { onClose: () => void }) {
                           )}
                         </button>
                       )}
-                      {t.account_name && <p className="mt-0.5 text-xs font-medium text-indigo-600">{t.account_name}</p>}
+                      {t.account_name && <p className="mt-0.5 text-xs font-medium text-emerald-700">{t.account_name}</p>}
                       {t.industry_type && <p className="mt-0.5 text-xs text-slate-500">{t.industry_type}</p>}
                     </div>
                     <span

@@ -65,7 +65,12 @@ export interface User {
 export interface LoginCredentials {
   email: string;
   password: string;
+  /** Sign every other device out and log in here (after a 409 ACTIVE_SESSION). */
+  force?: boolean;
 }
+
+/** Error thrown by AuthContext.login(): the server message plus its error_code, when any. */
+export type LoginError = Error & { code?: string };
 
 export interface LoginResponse {
   user: User;

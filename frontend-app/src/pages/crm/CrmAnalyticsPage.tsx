@@ -81,7 +81,7 @@ function Breakdown({ title, rows, total, testId }: { title: string; rows: { key:
                 </span>
               </div>
               <div className="mt-1 h-1.5 rounded-full bg-slate-100">
-                <div className="h-1.5 rounded-full bg-indigo-500" style={{ width: `${percent(row.count, total)}%` }} />
+                <div className="h-1.5 rounded-full bg-emerald-500" style={{ width: `${percent(row.count, total)}%` }} />
               </div>
             </li>
           ))}
@@ -109,11 +109,11 @@ function Trend({ data }: { data: CrmAnalytics }) {
             role="listitem"
             title={`${bucket.period}: ${bucket.total} leads, ${bucket.converted} converted`}
             aria-label={`${bucket.period}: ${bucket.total} leads, ${bucket.converted} converted`}
-            className="flex min-w-[6px] flex-1 flex-col justify-end rounded-t bg-indigo-200"
+            className="flex min-w-[6px] flex-1 flex-col justify-end rounded-t bg-emerald-200"
             style={{ height: `${(bucket.total / max) * 100}%` }}
           >
             <div
-              className="rounded-t bg-indigo-600"
+              className="rounded-t bg-emerald-600"
               style={{ height: bucket.total === 0 ? 0 : `${(bucket.converted / bucket.total) * 100}%` }}
             />
           </div>

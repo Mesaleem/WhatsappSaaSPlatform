@@ -35,7 +35,7 @@ const ROLE_OPTIONS: { value: string; label: string }[] = [
 ];
 
 const filterInputClass =
-  'rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100';
+  'rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100';
 
 const STATUS_BADGE: Record<LoginAuditStatus, string> = {
   success: 'bg-emerald-50 text-emerald-700 ring-emerald-600/20',

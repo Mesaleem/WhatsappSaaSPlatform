@@ -74,15 +74,15 @@ export default function AdLocationPicker({
       {value.length > 0 && (
         <div className="mt-1 flex flex-wrap gap-2" data-testid="ad-locations-selected">
           {value.map((location) => (
-            <span key={`${location.type}:${location.key}`} className="inline-flex items-center gap-1 rounded-full bg-indigo-50 px-2.5 py-1 text-xs font-medium text-indigo-800">
+            <span key={`${location.type}:${location.key}`} className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-900">
               <MapPin className="h-3 w-3" />
               {describe(location)}
-              <span className="text-indigo-500">· {TYPE_LABEL[location.type]}</span>
+              <span className="text-emerald-600">· {TYPE_LABEL[location.type]}</span>
               <button
                 type="button"
                 aria-label={`Remove ${location.name}`}
                 onClick={() => onChange(value.filter((v) => !(v.key === location.key && v.type === location.type)))}
-                className="ml-0.5 rounded-full p-0.5 hover:bg-indigo-100"
+                className="ml-0.5 rounded-full p-0.5 hover:bg-emerald-100"
               >
                 <X className="h-3 w-3" />
               </button>
@@ -107,7 +107,7 @@ export default function AdLocationPicker({
         <ul className="mt-1 max-h-56 overflow-auto rounded-lg border border-slate-200 bg-white shadow-sm" data-testid="ad-location-results">
           {results.map((location) => (
             <li key={`${location.type}:${location.key}`}>
-              <button type="button" onClick={() => add(location)} className="flex w-full items-center justify-between px-3 py-2 text-left text-sm hover:bg-indigo-50">
+              <button type="button" onClick={() => add(location)} className="flex w-full items-center justify-between px-3 py-2 text-left text-sm hover:bg-emerald-50">
                 <span className="text-slate-800">{describe(location)}</span>
                 <span className="text-xs text-slate-500">{TYPE_LABEL[location.type]}</span>
               </button>

@@ -218,7 +218,7 @@ export default function ManageApiConnectionsModal({ onClose, onChanged }: { onCl
                     )}
                   </div>
                   <div className="flex items-center gap-2">
-                    <button type="button" onClick={() => startEdit(c)} className="text-slate-400 hover:text-indigo-600" aria-label={`Edit ${c.name}`}>
+                    <button type="button" onClick={() => startEdit(c)} className="text-slate-400 hover:text-emerald-700" aria-label={`Edit ${c.name}`}>
                       <Pencil className="h-3.5 w-3.5" />
                     </button>
                     <button type="button" onClick={() => void remove(c)} className="text-slate-400 hover:text-red-600" aria-label={`Delete ${c.name}`}>

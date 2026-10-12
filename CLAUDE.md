@@ -72,6 +72,28 @@ wrapper/heading/spacing conventions exactly, rather than inventing a
 new one. If a page's design has to diverge (rare), say so explicitly
 rather than doing it silently.
 
+## Brand colours and type — one theme for the app and the website
+
+Since 2026-10-12 the app (dashboard, admin pages, modals) uses the public
+website's brand: **emerald** for primary actions/links/focus rings
+(`bg-emerald-600 hover:bg-emerald-700`, `text-emerald-700`,
+`focus:ring-emerald-100`), **teal** as the second accent, slate for text and
+borders, Inter for text and Plus Jakarta Sans for headings (set globally for
+`h1`–`h4` in `index.css`; `font-display` elsewhere). Sidebar/dashboard tokens
+live in `src/theme/signalIndigo.ts` (the export keeps its old name; the values
+are the brand). **Do not introduce `indigo-*` / `violet-*` classes in new
+work.** Exceptions: journey node category colours in `src/journey/nodeRegistry.tsx`
+and the per-area icon tints in `NAV_TINTS` are semantic and stay varied. For
+small text on white use emerald 700+ (600 is too light for body-size text).
+
+**Theming (accent + dark mode).** `emerald-*` is the *themeable brand scale*,
+and `slate-*` / `bg-white` are themeable too: `tailwind.config.js` maps them to
+CSS variables, and `core/theme/ThemeContext.tsx` (header Palette button) sets
+`data-accent` / `data-theme` on `<html>` while the app shell is mounted (the
+website never gets them). So: use `emerald-*` for brand colour, `slate-*` for
+text/borders and `bg-white` for surfaces, and dark mode + accents work for free.
+Avoid raw hex / `black` / `gray-*` for UI chrome — they will not follow the theme.
+
 ## Sidebar active-state — nested routes
 
 `frontend-app/src/components/layout/AppLayout.tsx`'s `NavLink`s use

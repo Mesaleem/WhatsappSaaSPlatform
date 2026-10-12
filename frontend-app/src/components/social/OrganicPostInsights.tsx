@@ -82,7 +82,7 @@ export default function OrganicPostInsights({
           type="button"
           onClick={refresh}
           disabled={isRefreshing}
-          className="inline-flex items-center gap-1 rounded-lg border border-indigo-200 px-2.5 py-1 text-xs font-semibold text-indigo-700 hover:bg-indigo-50 disabled:opacity-60"
+          className="inline-flex items-center gap-1 rounded-lg border border-emerald-200 px-2.5 py-1 text-xs font-semibold text-emerald-800 hover:bg-emerald-50 disabled:opacity-60"
         >
           {isRefreshing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
           {insights.fetched_at ? 'Refresh insights' : 'Fetch insights'}

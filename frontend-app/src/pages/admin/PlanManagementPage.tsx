@@ -194,7 +194,7 @@ function CapabilityPicker({
               checked={checked}
               onChange={() => onToggle(option.slug)}
               data-testid={`capability-checkbox-${option.slug}`}
-              className="mt-0.5 h-4 w-4 rounded border-slate-300 text-indigo-600"
+              className="mt-0.5 h-4 w-4 rounded border-slate-300 text-emerald-700"
             />
             <span className="min-w-0 flex-1">
               <span className="text-xs font-medium text-slate-800">{option.label}</span>
@@ -572,7 +572,7 @@ function PlanFormModal({
                 data-testid="plan-active"
                 checked={form.is_active}
                 onChange={(e) => set('is_active', e.target.checked)}
-                className="h-4 w-4 rounded border-slate-300 text-indigo-600"
+                className="h-4 w-4 rounded border-slate-300 text-emerald-700"
               />
               Available for purchase
             </label>

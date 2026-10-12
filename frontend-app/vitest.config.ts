@@ -20,5 +20,8 @@ export default defineConfig({
     globals: true,
     setupFiles: ['./src/test/setup.ts'],
     include: ['src/**/*.test.{ts,tsx}'],
+    // Form tests type into many fields with userEvent; on a busy machine the 5 s
+    // default made them time out without any real failure.
+    testTimeout: 15000,
   },
 });

@@ -154,7 +154,7 @@ export default function ActivityLogsPage() {
             setAgentId(e.target.value ? Number(e.target.value) : '');
             setPage(1);
           }}
-          className="rounded-lg border border-slate-300 bg-white py-2 pl-3 pr-8 text-sm text-slate-700 shadow-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+          className="rounded-lg border border-slate-300 bg-white py-2 pl-3 pr-8 text-sm text-slate-700 shadow-sm outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
         >
           <option value="">All Agents</option>
           {agents.map((agent) => (
@@ -171,7 +171,7 @@ export default function ActivityLogsPage() {
             setAccountId(e.target.value ? Number(e.target.value) : '');
             setPage(1);
           }}
-          className="rounded-lg border border-slate-300 bg-white py-2 pl-3 pr-8 text-sm text-slate-700 shadow-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 disabled:cursor-not-allowed disabled:opacity-60"
+          className="rounded-lg border border-slate-300 bg-white py-2 pl-3 pr-8 text-sm text-slate-700 shadow-sm outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100 disabled:cursor-not-allowed disabled:opacity-60"
         >
           <option value="">{agentId ? 'All Sub-Clients' : 'Select an Agent first'}</option>
           {subClients.map((client) => (
@@ -187,7 +187,7 @@ export default function ActivityLogsPage() {
             setModuleName(e.target.value);
             setPage(1);
           }}
-          className="rounded-lg border border-slate-300 bg-white py-2 pl-3 pr-8 text-sm text-slate-700 shadow-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+          className="rounded-lg border border-slate-300 bg-white py-2 pl-3 pr-8 text-sm text-slate-700 shadow-sm outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
         >
           <option value="">All Modules</option>
           {modules.map((module) => (
@@ -214,7 +214,7 @@ export default function ActivityLogsPage() {
             setFrom(e.target.value);
             setPage(1);
           }}
-          className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+          className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
         />
         <span className="text-sm text-slate-400">to</span>
         <input
@@ -224,7 +224,7 @@ export default function ActivityLogsPage() {
             setTo(e.target.value);
             setPage(1);
           }}
-          className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+          className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
         />
 
         <ClearFiltersButton active={filtersActive} onClear={clearFilters} />

@@ -75,14 +75,14 @@ export default function RichTextEditor({
           <button
             type="button"
             onClick={() => onModeChange('rich_text')}
-            className={`px-2.5 py-1 ${mode === 'rich_text' ? 'bg-indigo-600 text-white' : 'bg-white text-slate-600 hover:bg-slate-50'}`}
+            className={`px-2.5 py-1 ${mode === 'rich_text' ? 'bg-emerald-600 text-white' : 'bg-white text-slate-600 hover:bg-slate-50'}`}
           >
             Rich Text
           </button>
           <button
             type="button"
             onClick={() => onModeChange('raw_html')}
-            className={`px-2.5 py-1 ${mode === 'raw_html' ? 'bg-indigo-600 text-white' : 'bg-white text-slate-600 hover:bg-slate-50'}`}
+            className={`px-2.5 py-1 ${mode === 'raw_html' ? 'bg-emerald-600 text-white' : 'bg-white text-slate-600 hover:bg-slate-50'}`}
           >
             Raw HTML
           </button>

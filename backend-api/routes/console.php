@@ -228,3 +228,10 @@ Schedule::command('messages:dispatch-scheduled')
     ->everyMinute()
     ->onOneServer()
     ->withoutOverlapping();
+
+// Signup email checks -- refresh the community list of temporary-mail domains once a week
+// (App\Rules\DeliverableEmail). A failed download keeps the current list.
+Schedule::command('security:refresh-disposable-domains')
+    ->weekly()
+    ->onOneServer()
+    ->withoutOverlapping(30);

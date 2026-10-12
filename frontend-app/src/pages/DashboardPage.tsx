@@ -37,6 +37,10 @@ import {
   Wifi,
   XCircle,
   Zap,
+  Layers,
+  Globe,
+  UserSearch,
+  Workflow,
 } from 'lucide-react';
 import { useAuth } from '../core/context/AuthContext';
 import { useTenant } from '../core/context/TenantContext';
@@ -45,7 +49,7 @@ import analyticsService from '../services/analyticsService';
 import reportsService from '../services/reportsService';
 import messageLogsService from '../services/messageLogsService';
 import QuotaTopUpModal from '../components/billing/QuotaTopUpModal';
-import { indigo, NAV_TINTS, cardShadow, type Tint } from '../theme/signalIndigo';
+import { indigo, NAV_TINTS, cardOutline, cardShadow, type Tint } from '../theme/signalIndigo';
 import type { ApiErrorResponse } from '../types/auth';
 import type { Account, ModuleAssignment } from '../types/account';
 import type { AnalyticsChartsResponse, AnalyticsSummary, GlobalAnalyticsSummary } from '../types/analytics';
@@ -53,6 +57,14 @@ import type { MessageDispatchLog, MessageDispatchSource, MessageDispatchStatus }
 import type { SocialReportSummary } from '../types/reports';
 import type { EngineType, Subscription } from '../types/subscription';
 import ExpiringSoonModal from '../components/admin/ExpiringSoonModal';
+import {
+  AgentBusinessOverview,
+  PlanFeatureWidgets,
+  PlatformAttention,
+  PlatformPlansAndTopClients,
+  UpgradeHint,
+  useDashboardOverview,
+} from '../components/dashboard/OverviewWidgets';
 import DismissibleAlert from '../components/common/DismissibleAlert';
 
 const ENGINE_LABEL: Record<EngineType, string> = { qr: 'QR (Baileys)', meta: 'Meta Cloud API' };
@@ -113,7 +125,7 @@ function StatCard({
       type={onClick ? 'button' : undefined}
       onClick={onClick}
       className={`w-full rounded-2xl border bg-white p-5 text-left transition ${onClick ? 'hover:-translate-y-0.5 cursor-pointer' : ''}`}
-      style={{ borderColor: indigo.border, boxShadow: cardShadow }}
+      style={{ borderColor: cardOutline, boxShadow: cardShadow }}
     >
       <div className="flex items-start justify-between">
         <div>
@@ -212,7 +224,7 @@ function DailyPulseChart() {
   const combinedData = (charts?.daily ?? []).map((d) => ({ date: d.date.slice(5), Sent: d.sent, Failed: d.failed }));
 
   return (
-    <div className="rounded-2xl border bg-white p-5" style={{ borderColor: indigo.border, boxShadow: cardShadow }}>
+    <div className="rounded-2xl border bg-white p-5" style={{ borderColor: cardOutline, boxShadow: cardShadow }}>
       <p className="font-display text-sm font-bold" style={{ color: indigo.ink }}>
         Message Pulse — Last 7 Days
       </p>
@@ -228,9 +240,9 @@ function DailyPulseChart() {
               <XAxis dataKey="date" tick={{ fontSize: 11, fill: '#94a3b8' }} axisLine={false} tickLine={false} />
               <YAxis allowDecimals={false} tick={{ fontSize: 11, fill: '#94a3b8' }} axisLine={false} tickLine={false} width={28} />
               <Tooltip />
-              <Line type="monotone" dataKey="Individual Sent" stroke="#4F46E5" strokeWidth={2.5} dot={false} />
+              <Line type="monotone" dataKey="Individual Sent" stroke="#059669" strokeWidth={2.5} dot={false} />
               <Line type="monotone" dataKey="Individual Failed" stroke="#ef4444" strokeWidth={2} dot={false} />
-              <Line type="monotone" dataKey="Group Sent" stroke="#7C3AED" strokeWidth={2.5} strokeDasharray="6 4" dot={false} />
+              <Line type="monotone" dataKey="Group Sent" stroke="#0D9488" strokeWidth={2.5} strokeDasharray="6 4" dot={false} />
               <Line type="monotone" dataKey="Group Failed" stroke="#F97316" strokeWidth={2} strokeDasharray="6 4" dot={false} />
             </ComposedChart>
           </ResponsiveContainer>
@@ -239,8 +251,8 @@ function DailyPulseChart() {
             <AreaChart data={combinedData}>
               <defs>
                 <linearGradient id="pulseSent" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#4F46E5" stopOpacity={0.35} />
-                  <stop offset="95%" stopColor="#4F46E5" stopOpacity={0} />
+                  <stop offset="5%" stopColor="#059669" stopOpacity={0.35} />
+                  <stop offset="95%" stopColor="#059669" stopOpacity={0} />
                 </linearGradient>
                 <linearGradient id="pulseFailed" x1="0" y1="0" x2="0" y2="1">
                   <stop offset="5%" stopColor="#ef4444" stopOpacity={0.3} />
@@ -251,7 +263,7 @@ function DailyPulseChart() {
               <XAxis dataKey="date" tick={{ fontSize: 11, fill: '#94a3b8' }} axisLine={false} tickLine={false} />
               <YAxis allowDecimals={false} tick={{ fontSize: 11, fill: '#94a3b8' }} axisLine={false} tickLine={false} width={28} />
               <Tooltip />
-              <Area type="monotone" dataKey="Sent" stroke="#4F46E5" strokeWidth={2.5} fill="url(#pulseSent)" dot={false} />
+              <Area type="monotone" dataKey="Sent" stroke="#059669" strokeWidth={2.5} fill="url(#pulseSent)" dot={false} />
               <Area type="monotone" dataKey="Failed" stroke="#ef4444" strokeWidth={2} fill="url(#pulseFailed)" dot={false} />
             </AreaChart>
           </ResponsiveContainer>
@@ -260,13 +272,13 @@ function DailyPulseChart() {
       {canShowRecipientSeries && (
         <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs" style={{ color: indigo.muted }}>
           <span className="flex items-center gap-1.5">
-            <span className="h-0.5 w-4 rounded-full" style={{ background: '#4F46E5' }} /> Individual Sent
+            <span className="h-0.5 w-4 rounded-full" style={{ background: '#059669' }} /> Individual Sent
           </span>
           <span className="flex items-center gap-1.5">
             <span className="h-0.5 w-4 rounded-full" style={{ background: '#ef4444' }} /> Individual Failed
           </span>
           <span className="flex items-center gap-1.5">
-            <span className="h-0.5 w-4 rounded-full border-t-2 border-dashed" style={{ borderColor: '#7C3AED' }} /> Group Sent
+            <span className="h-0.5 w-4 rounded-full border-t-2 border-dashed" style={{ borderColor: '#0D9488' }} /> Group Sent
           </span>
           <span className="flex items-center gap-1.5">
             <span className="h-0.5 w-4 rounded-full border-t-2 border-dashed" style={{ borderColor: '#F97316' }} /> Group Failed
@@ -314,7 +326,7 @@ function RevenuePulseChart() {
   }));
 
   return (
-    <div className="rounded-2xl border bg-white p-5" style={{ borderColor: indigo.border, boxShadow: cardShadow }}>
+    <div className="rounded-2xl border bg-white p-5" style={{ borderColor: cardOutline, boxShadow: cardShadow }}>
       <p className="font-display text-sm font-bold" style={{ color: indigo.ink }}>
         Revenue &amp; Traffic — Last 30 Days
       </p>
@@ -332,8 +344,8 @@ function RevenuePulseChart() {
                   <stop offset="95%" stopColor="#0E9F6E" stopOpacity={0} />
                 </linearGradient>
                 <linearGradient id="pulseTraffic" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#4F46E5" stopOpacity={0.25} />
-                  <stop offset="95%" stopColor="#4F46E5" stopOpacity={0} />
+                  <stop offset="5%" stopColor="#059669" stopOpacity={0.25} />
+                  <stop offset="95%" stopColor="#059669" stopOpacity={0} />
                 </linearGradient>
               </defs>
               <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
@@ -352,21 +364,21 @@ function RevenuePulseChart() {
                 yAxisId="traffic"
                 orientation="right"
                 allowDecimals={false}
-                tick={{ fontSize: 11, fill: '#4F46E5' }}
+                tick={{ fontSize: 11, fill: '#059669' }}
                 axisLine={false}
                 tickLine={false}
                 width={32}
               />
               <Tooltip formatter={(value, name) => (name === 'Revenue' ? formatINR(Number(value)) : value)} />
               <Area yAxisId="revenue" type="monotone" dataKey="Revenue" stroke="#0E9F6E" strokeWidth={2.5} fill="url(#pulseRevenue)" dot={false} />
-              <Area yAxisId="traffic" type="monotone" dataKey="Traffic" stroke="#4F46E5" strokeWidth={2} fill="url(#pulseTraffic)" dot={false} />
+              <Area yAxisId="traffic" type="monotone" dataKey="Traffic" stroke="#059669" strokeWidth={2} fill="url(#pulseTraffic)" dot={false} />
             </AreaChart>
           </ResponsiveContainer>
         )}
       </div>
       <div className="mt-2 flex items-center gap-4 text-xs" style={{ color: indigo.muted }}>
         <span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full" style={{ background: '#0E9F6E' }} /> Revenue (₹)</span>
-        <span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full" style={{ background: '#4F46E5' }} /> Message Traffic</span>
+        <span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full" style={{ background: '#059669' }} /> Message Traffic</span>
       </div>
     </div>
   );
@@ -377,7 +389,7 @@ function QuickAction({ to, label, icon: Icon, tint }: { to: string; label: strin
     <Link
       to={to}
       className="flex items-center justify-between rounded-2xl border bg-white p-4 transition hover:-translate-y-0.5"
-      style={{ borderColor: indigo.border, boxShadow: cardShadow }}
+      style={{ borderColor: cardOutline, boxShadow: cardShadow }}
     >
       <span className="flex items-center gap-3">
         <span className="flex h-9 w-9 items-center justify-center rounded-xl" style={{ background: tint.bg, color: tint.fg }}>
@@ -451,7 +463,7 @@ function SubscriptionHealthCard({
       <Link
         to="/billing"
         className="block rounded-2xl border bg-white p-5 transition hover:-translate-y-0.5"
-        style={{ borderColor: indigo.border, boxShadow: cardShadow }}
+        style={{ borderColor: cardOutline, boxShadow: cardShadow }}
       >
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
@@ -771,6 +783,14 @@ function TenantDashboard({ impersonatedAccountName }: { impersonatedAccountName?
   // requiresModule matches its destination route's module" convention
   // this codebase already uses everywhere else.
   const showSocial = moduleAssignment !== 'whatsapp_messaging' && canViewSocialAnalytics && hasModule('reports');
+  // Plan-aware (2026-10-12): Ad spend/CPL cards only when the plan includes Ads;
+  // CRM/Journey shortcuts only when the plan includes them. Until the overview
+  // arrives, fall back to the signed-in user's own capability map.
+  const overview = useDashboardOverview();
+  const tenantOverview = overview.data?.tenant;
+  const caps = tenantOverview?.capabilities ?? user?.capabilities ?? {};
+  const planHas = (slug: string) => Boolean(caps[slug]);
+  const showAds = showSocial && planHas('ads');
 
   const subscription = user?.account?.current_subscription ?? null;
 
@@ -869,7 +889,11 @@ function TenantDashboard({ impersonatedAccountName }: { impersonatedAccountName?
             impersonated Super-Admin view (impersonatedAccountName is
             only ever set for Super Admin — see DashboardPage's own
             selection logic below). */}
+        {overview.data?.agent && <AgentBusinessOverview agent={overview.data.agent} />}
         {user?.account?.account_type === 'agent' && <AgentSubClientsOverview />}
+
+        {tenantOverview && <PlanFeatureWidgets tenant={tenantOverview} />}
+        {tenantOverview && canManageBilling && !impersonatedAccountName && <UpgradeHint tenant={tenantOverview} />}
 
         {summaryError && (
           <DismissibleAlert className="flex items-center gap-2 rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
@@ -986,7 +1010,7 @@ function TenantDashboard({ impersonatedAccountName }: { impersonatedAccountName?
         )}
 
         {/* Dynamic Permission & Module-Based Dashboard — Social Media Only / Both. */}
-        {showSocial && <SocialAdsSummaryCards />}
+        {showAds && <SocialAdsSummaryCards />}
 
         <SubscriptionHealthCard subscription={subscription} quotaPercentUsed={quota?.quota_percent_used ?? null} quotaLabel={quotaSub ?? quotaLabel} />
 
@@ -1002,11 +1026,13 @@ function TenantDashboard({ impersonatedAccountName }: { impersonatedAccountName?
             {canManageBilling && <QuickAction to="/billing" label="Upgrade / Renew Plan" icon={CreditCard} tint={NAV_TINTS.billing} />}
             {showWhatsApp && canManageChatbot && <QuickAction to="/chatbot" label="Manage Chatbot" icon={Bot} tint={NAV_TINTS.chatbot} />}
             {showSocial && <QuickAction to="/social/reports" label="View Social Reports" icon={Megaphone} tint={NAV_TINTS.chatbot} />}
+            {planHas('crm') && hasPermission('manage-crm') && <QuickAction to="/crm/leads" label="Open CRM Leads" icon={UserSearch} tint={NAV_TINTS.social} />}
+            {planHas('journey_automation') && canManageChatbot && <QuickAction to="/chatbot/journeys" label="Build a Journey" icon={Workflow} tint={NAV_TINTS.chatbot} />}
           </div>
         </div>
 
         {showWhatsApp && (
-        <div className="overflow-hidden rounded-2xl border bg-white" style={{ borderColor: indigo.border, boxShadow: cardShadow }}>
+        <div className="overflow-hidden rounded-2xl border bg-white" style={{ borderColor: cardOutline, boxShadow: cardShadow }}>
           <div className="flex items-center justify-between px-5 py-3.5" style={{ borderBottom: `1px solid ${indigo.border}` }}>
             <div>
               {/*
@@ -1119,6 +1145,7 @@ function SuperAdminDashboard() {
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [showExpiringModal, setShowExpiringModal] = useState(false);
+  const overview = useDashboardOverview();
 
   const loadSummary = useCallback(async () => {
     setIsLoading(true);
@@ -1184,6 +1211,8 @@ function SuperAdminDashboard() {
             {error}
           </DismissibleAlert>
         )}
+
+        {overview.data?.platform && <PlatformAttention platform={overview.data.platform} onOpenExpiring={() => setShowExpiringModal(true)} />}
 
         <div>
           <h3 className="mb-3 font-display text-sm font-bold" style={{ color: indigo.ink }}>
@@ -1306,6 +1335,8 @@ function SuperAdminDashboard() {
           scope) — see the fetch above for why this is a separate call
           from `summary`.
         */}
+        {overview.data?.platform && <PlatformPlansAndTopClients platform={overview.data.platform} />}
+
         {hasModule('contact_groups') && (
           <div>
             <h3 className="mb-3 font-display text-sm font-bold" style={{ color: indigo.ink }}>
@@ -1357,8 +1388,10 @@ function SuperAdminDashboard() {
           <h3 className="mb-3 font-display text-sm font-bold" style={{ color: indigo.ink }}>
             Quick Actions
           </h3>
-          <div className="grid gap-3 sm:grid-cols-2">
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
             <QuickAction to="/admin/accounts" label="Manage Clients" icon={Building2} tint={NAV_TINTS.accounts} />
+            <QuickAction to="/admin/plans" label="Plans & Pricing" icon={Layers} tint={NAV_TINTS.billing} />
+            <QuickAction to="/admin/website" label="Website Content" icon={Globe} tint={NAV_TINTS.send} />
             <QuickAction to="/admin/billing/gateway-settings" label="Gateway Settings" icon={Settings} tint={NAV_TINTS.gateway} />
           </div>
         </div>

@@ -113,7 +113,7 @@ function CategoryBox({
     <div className="mt-4 rounded-lg border border-slate-200 p-3">
       <div className="flex items-center justify-between gap-3">
         <span className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-slate-700">
-          <Icon className="h-3.5 w-3.5 text-indigo-600" />
+          <Icon className="h-3.5 w-3.5 text-emerald-700" />
           {category.category_name}
         </span>
         <label className="flex items-center gap-1.5 text-[11px] font-medium normal-case tracking-normal text-slate-500">
@@ -123,7 +123,7 @@ function CategoryBox({
             indeterminate={someEnabled}
             disabled={bulkBusy}
             onChange={() => onToggleSuite(relevantRoutes, !allEnabled)}
-            className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 disabled:opacity-60"
+            className="h-4 w-4 rounded border-slate-300 text-emerald-700 focus:ring-emerald-500 disabled:opacity-60"
           />
         </label>
       </div>
@@ -137,7 +137,7 @@ function CategoryBox({
               key={route.id}
               title={locked ? 'Not enabled on your own agent plan.' : undefined}
               className={`flex items-center justify-between gap-3 rounded-lg border px-3 py-2 text-sm transition ${
-                enabled ? 'border-indigo-200 bg-indigo-50/50' : 'border-slate-200'
+                enabled ? 'border-emerald-200 bg-emerald-50/50' : 'border-slate-200'
               } ${locked ? 'opacity-50' : ''}`}
             >
               <span className={enabled ? 'text-slate-900' : 'text-slate-500'}>{route.route_title}</span>
@@ -148,7 +148,7 @@ function CategoryBox({
                   checked={enabled}
                   disabled={busy || locked}
                   onChange={() => onToggleModule(route.permission_key)}
-                  className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 disabled:opacity-60 disabled:cursor-not-allowed"
+                  className="h-4 w-4 rounded border-slate-300 text-emerald-700 focus:ring-emerald-500 disabled:opacity-60 disabled:cursor-not-allowed"
                 />
               </span>
             </label>

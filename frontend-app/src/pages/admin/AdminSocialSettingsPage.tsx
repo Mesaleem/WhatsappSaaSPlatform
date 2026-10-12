@@ -16,7 +16,7 @@ import { extractErrorMessage } from '../../utils/apiError';
 import DismissibleAlert from '../../components/common/DismissibleAlert';
 
 const inputClass =
-  'mt-1.5 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100';
+  'mt-1.5 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100';
 
 const PROVIDER_LABEL: Record<SocialProvider, string> = {
   meta: 'Meta (Facebook & Instagram)',
@@ -54,7 +54,7 @@ function MaskedSecretField({
           <button
             type="button"
             onClick={() => setIsEditing(true)}
-            className="text-xs font-medium text-indigo-600 hover:text-indigo-700"
+            className="text-xs font-medium text-emerald-700 hover:text-emerald-800"
           >
             Set New Value
           </button>
@@ -200,7 +200,7 @@ function ProviderCard({ config, onSaved }: ProviderCardProps) {
             type="checkbox"
             checked={isActive}
             onChange={(e) => setIsActive(e.target.checked)}
-            className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+            className="h-4 w-4 rounded border-slate-300 text-emerald-700 focus:ring-emerald-500"
           />
           Enabled
         </label>
@@ -213,7 +213,7 @@ function ProviderCard({ config, onSaved }: ProviderCardProps) {
         <button
           type="button"
           onClick={() => void handleCopyWebhookUrl()}
-          className="inline-flex items-center gap-1 font-medium text-indigo-600 hover:text-indigo-700"
+          className="inline-flex items-center gap-1 font-medium text-emerald-700 hover:text-emerald-800"
         >
           <Copy className="h-3 w-3" />
           {copied ? 'Copied' : 'Copy'}
@@ -251,7 +251,7 @@ function ProviderCard({ config, onSaved }: ProviderCardProps) {
               type="button"
               onClick={() => void handleRegenerateWebhookToken()}
               disabled={isRegenerating}
-              className="inline-flex items-center gap-1 text-xs font-medium text-indigo-600 hover:text-indigo-700 disabled:opacity-60"
+              className="inline-flex items-center gap-1 text-xs font-medium text-emerald-700 hover:text-emerald-800 disabled:opacity-60"
             >
               {isRegenerating ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
               Regenerate
@@ -284,7 +284,7 @@ function ProviderCard({ config, onSaved }: ProviderCardProps) {
                   onChange={(e) =>
                     setScopeGroups((prev) => (e.target.checked ? [...prev, group.key] : prev.filter((k) => k !== group.key)))
                   }
-                  className="mt-0.5 h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                  className="mt-0.5 h-4 w-4 rounded border-slate-300 text-emerald-700 focus:ring-emerald-500"
                 />
                 <span>
                   {group.label}
@@ -314,7 +314,7 @@ function ProviderCard({ config, onSaved }: ProviderCardProps) {
           type="button"
           onClick={() => void handleSave()}
           disabled={isSaving}
-          className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:opacity-60"
+          className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-60"
         >
           {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <KeyRound className="h-4 w-4" />}
           Save {PROVIDER_LABEL[config.provider]} Settings
@@ -366,7 +366,7 @@ export default function AdminSocialSettingsPage() {
             Back to dashboard
           </Link>
           <h1 className="mt-2 flex items-center gap-2 text-xl font-semibold text-slate-900">
-            <ShieldCheck className="h-5 w-5 text-indigo-600" />
+            <ShieldCheck className="h-5 w-5 text-emerald-700" />
             Social Gateway Settings
           </h1>
           <p className="mt-1 text-sm text-slate-500">

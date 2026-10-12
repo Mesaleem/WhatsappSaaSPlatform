@@ -197,7 +197,7 @@ export default function QuotaRequestsPage() {
                       <button
                         onClick={() => void handleApprove(request)}
                         disabled={approvingId === request.id}
-                        className="inline-flex items-center gap-1 rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:opacity-60"
+                        className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-60"
                       >
                         {approvingId === request.id ? (
                           <Loader2 className="h-3 w-3 animate-spin" />

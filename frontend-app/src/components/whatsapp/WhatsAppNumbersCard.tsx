@@ -274,7 +274,7 @@ export default function WhatsAppNumbersCard({ accountId, onConnected, reloadKey 
                       type="button"
                       disabled={purchasing || payingId === invoice.id}
                       onClick={() => payForInvoice(invoice)}
-                      className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-60"
+                      className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
                     >
                       {payingId === invoice.id ? 'Starting…' : 'Pay now'}
                     </button>
@@ -301,7 +301,7 @@ export default function WhatsAppNumbersCard({ accountId, onConnected, reloadKey 
                 value={purchaseText}
                 onChange={(e) => setPurchaseText(e.target.value)}
                 placeholder={'917236062374\n918888888888'}
-                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none"
+                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none"
               />
               <p className="text-xs text-slate-400">
                 One per line, with country code and no + or spaces. Each number needs its own WhatsApp account.
@@ -315,7 +315,7 @@ export default function WhatsAppNumbersCard({ accountId, onConnected, reloadKey 
                   type="button"
                   disabled={purchasing || numbers.length === 0}
                   onClick={() => void submitPurchase()}
-                  className="rounded-lg bg-indigo-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-60"
+                  className="rounded-lg bg-emerald-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
                 >
                   {purchasing ? 'Creating invoice…' : 'Create invoice'}
                 </button>
@@ -373,7 +373,7 @@ export default function WhatsAppNumbersCard({ accountId, onConnected, reloadKey 
                     value={editValue}
                     onChange={(e) => setEditValue(e.target.value)}
                     placeholder="919876543210"
-                    className="mt-1 w-full max-w-xs rounded-lg border border-slate-300 px-3 py-1.5 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none"
+                    className="mt-1 w-full max-w-xs rounded-lg border border-slate-300 px-3 py-1.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none"
                   />
                   <p className="mt-1 text-xs text-slate-400">Country code first, no + or spaces. Then connect to scan and verify it.</p>
                   {editError && <p className="mt-1 text-xs text-red-600">{editError}</p>}
@@ -383,7 +383,7 @@ export default function WhatsAppNumbersCard({ accountId, onConnected, reloadKey 
                     type="button"
                     disabled={editBusy || editValue.replace(/\D/g, '').length === 0}
                     onClick={() => void saveEdit(row.id)}
-                    className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-60"
+                    className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
                   >
                     {editBusy ? 'Saving…' : 'Save'}
                   </button>
@@ -406,7 +406,7 @@ export default function WhatsAppNumbersCard({ accountId, onConnected, reloadKey 
                 <p className="flex items-center gap-2 text-sm font-medium text-slate-900">
                   {row.has_pending_number ? <span className="text-slate-400">No number yet</span> : `+${row.phone_number}`}
                   {row.is_default && (
-                    <span className="flex items-center gap-1 rounded-full bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-700">
+                    <span className="flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-800">
                       <Star className="h-3 w-3" />
                       Default
                     </span>
@@ -424,7 +424,7 @@ export default function WhatsAppNumbersCard({ accountId, onConnected, reloadKey 
                     type="button"
                     disabled={busy}
                     onClick={() => setConnectingId(row.id)}
-                    className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-60"
+                    className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
                   >
                     Connect
                   </button>

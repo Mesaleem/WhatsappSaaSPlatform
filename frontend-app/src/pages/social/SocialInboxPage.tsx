@@ -223,7 +223,7 @@ export default function SocialInboxPage() {
                       type="button"
                       onClick={() => setSelectedThreadId(thread.id)}
                       className={`flex w-full items-start gap-2.5 border-b px-4 py-3 text-left hover:bg-slate-50 ${
-                        thread.id === selectedThreadId ? 'bg-indigo-50/60' : ''
+                        thread.id === selectedThreadId ? 'bg-emerald-50/60' : ''
                       }`}
                       style={{ borderColor: indigo.border }}
                     >
@@ -233,7 +233,7 @@ export default function SocialInboxPage() {
                           <p className="truncate text-sm font-medium" style={{ color: indigo.ink }}>
                             {thread.participant_name}
                           </p>
-                          {thread.unread && <span className="h-2 w-2 flex-shrink-0 rounded-full bg-indigo-500" />}
+                          {thread.unread && <span className="h-2 w-2 flex-shrink-0 rounded-full bg-emerald-500" />}
                         </div>
                         <p className="truncate text-xs" style={{ color: indigo.muted }}>
                           {thread.snippet}
@@ -310,7 +310,7 @@ export default function SocialInboxPage() {
                         }}
                         rows={2}
                         placeholder="Type a reply…"
-                        className="flex-1 resize-none rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+                        className="flex-1 resize-none rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
                       />
                       <button
                         type="button"

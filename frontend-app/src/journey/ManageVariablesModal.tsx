@@ -320,7 +320,7 @@ export default function ManageVariablesModal({
                     </td>
                     <td className="px-3 py-2">
                       <div className="flex items-center justify-end gap-2">
-                        <button type="button" onClick={() => startEdit(v)} className="text-slate-400 hover:text-indigo-600" aria-label={`Edit ${v.name}`}>
+                        <button type="button" onClick={() => startEdit(v)} className="text-slate-400 hover:text-emerald-700" aria-label={`Edit ${v.name}`}>
                           <Pencil className="h-3.5 w-3.5" />
                         </button>
                         <button type="button" onClick={() => removeVariable(v.id)} className="text-slate-400 hover:text-red-600" aria-label={`Delete ${v.name}`}>

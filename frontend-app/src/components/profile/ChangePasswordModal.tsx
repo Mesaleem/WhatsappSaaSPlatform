@@ -6,7 +6,7 @@ import DismissibleAlert from '../common/DismissibleAlert';
 import { extractErrorMessage } from '../../utils/apiError';
 
 const inputClass =
-  'mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100';
+  'mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100';
 
 /** The server's field error for a key (Laravel's `errors` shape), if any. */
 function fieldError(err: unknown, field: string): string | null {
@@ -116,7 +116,7 @@ export default function ChangePasswordModal({ onClose }: { onClose: () => void }
             <button
               type="submit"
               disabled={busy}
-              className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-60"
+              className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
             >
               {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Lock className="h-4 w-4" />}
               Change password

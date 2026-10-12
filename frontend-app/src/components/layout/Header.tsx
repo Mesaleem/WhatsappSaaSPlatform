@@ -1,11 +1,13 @@
 import { useState } from 'react';
-import { Building2, Zap } from 'lucide-react';
+import { Building2, Menu, Zap } from 'lucide-react';
 import { useAuth } from '../../core/context/AuthContext';
 import { useTenant } from '../../core/context/TenantContext';
 import { indigo, activeGradient } from '../../theme/signalIndigo';
 import QuotaTopUpModal from '../billing/QuotaTopUpModal';
 import AvatarMenu from './AvatarMenu';
 import NotificationBell from './NotificationBell';
+import ThemePicker from './ThemePicker';
+import { useOptionalTheme } from '../../core/theme/ThemeContext';
 import ExpiryWarningBanner from './ExpiryWarningBanner';
 import ExpiryHeaderChip from './ExpiryHeaderChip';
 import SocialConnectionWarningBanner from './SocialConnectionWarningBanner';
@@ -105,20 +107,20 @@ function QuotaBadge() {
  * server-side for an Agent caller, so this UI never has to duplicate
  * that check — it just lists whatever `accounts` the context resolved.
  */
-function ClientSwitcher() {
+function ClientSwitcher({ fullWidth = false }: { fullWidth?: boolean }) {
   const { isSuperAdmin } = useAuth();
   const { accounts, isLoadingAccounts, selectedAccountId, selectAccount } = useTenant();
   const emptyOptionLabel = isSuperAdmin() ? 'All Clients (Global View)' : 'My Agent Account';
 
   return (
-    <div className="hidden items-center gap-2 sm:flex">
+    <div className={fullWidth ? 'flex w-full items-center gap-2' : 'hidden items-center gap-2 sm:flex'}>
       <Building2 className="h-4 w-4 flex-shrink-0" style={{ color: indigo.muted }} />
       <select
         value={selectedAccountId ?? ''}
         onChange={(e) => selectAccount(e.target.value === '' ? null : Number(e.target.value))}
         disabled={isLoadingAccounts}
         aria-label="Select client"
-        className="max-w-[220px] truncate rounded-lg border bg-white py-1.5 pl-2.5 pr-7 text-xs font-semibold outline-none disabled:opacity-60"
+        className={`${fullWidth ? 'min-w-0 flex-1' : 'max-w-[220px]'} truncate rounded-lg border bg-white py-1.5 pl-2.5 pr-7 text-xs font-semibold outline-none disabled:opacity-60`}
         style={{ borderColor: indigo.border, color: indigo.ink }}
       >
         <option value="">{emptyOptionLabel}</option>
@@ -132,30 +134,58 @@ function ClientSwitcher() {
   );
 }
 
-export default function Header({ pageTitle }: { pageTitle: string }) {
+export default function Header({
+  pageTitle,
+  onOpenMenu,
+  menuOpen = false,
+}: {
+  pageTitle: string;
+  /** Opens the sidebar drawer on small screens (AppLayout). */
+  onOpenMenu?: () => void;
+  menuOpen?: boolean;
+}) {
   const { canSwitchClients } = useTenant();
+  const theme = useOptionalTheme();
 
   return (
     <>
       <header
-        className="flex h-14 flex-shrink-0 items-center justify-between bg-white px-6"
+        className="flex h-14 flex-shrink-0 items-center justify-between gap-2 bg-white px-3 sm:px-6"
         style={{ borderBottom: `1px solid ${indigo.border}` }}
       >
-      <div className="flex items-center gap-3">
-        <h1 className="font-display text-base font-bold" style={{ color: indigo.ink }}>
+      <div className="flex min-w-0 items-center gap-2 sm:gap-3">
+        {onOpenMenu && (
+          <button
+            type="button"
+            onClick={onOpenMenu}
+            className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg text-slate-600 hover:bg-slate-100 lg:hidden"
+            aria-label="Open menu"
+            aria-controls="app-sidebar"
+            aria-expanded={menuOpen}
+          >
+            <Menu className="h-5 w-5" />
+          </button>
+        )}
+        <h1 className="truncate font-display text-base font-bold" style={{ color: indigo.ink }}>
           {pageTitle}
         </h1>
       </div>
 
-      <div className="flex items-center gap-4">
+      <div className="flex flex-shrink-0 items-center gap-1.5 sm:gap-4">
         {canSwitchClients && <ClientSwitcher />}
         <ExpiryHeaderChip />
         <QuotaBadge />
+        {theme && <ThemePicker />}
         <NotificationBell />
         <AvatarMenu />
       </div>
 
       </header>
+      {canSwitchClients && (
+        <div className="flex-shrink-0 border-b bg-white px-3 py-2 sm:hidden" style={{ borderColor: indigo.border }}>
+          <ClientSwitcher fullWidth />
+        </div>
+      )}
       <ExpiryWarningBanner />
       <SocialConnectionWarningBanner />
     </>

@@ -184,7 +184,7 @@ export default function ContactGroupsPage() {
               {hasModule('contact_groups') && (
                 <button
                   onClick={() => setShowCreate(true)}
-                  className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700"
+                  className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700"
                 >
                   <Plus className="h-4 w-4" />
                   Create Group
@@ -220,7 +220,7 @@ export default function ContactGroupsPage() {
           <button
             type="button"
             onClick={() => setChoosingGroups(true)}
-            className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-700"
+            className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700"
           >
             Choose groups
           </button>
@@ -301,7 +301,7 @@ export default function ContactGroupsPage() {
                         <button
                           onClick={() => setManagingGroup(group)}
                           title="Manage members"
-                          className="rounded-lg p-1.5 text-slate-400 hover:bg-indigo-50 hover:text-indigo-600"
+                          className="rounded-lg p-1.5 text-slate-400 hover:bg-emerald-50 hover:text-emerald-700"
                         >
                           <Users className="h-4 w-4" />
                         </button>
@@ -412,7 +412,7 @@ function GroupTypeBadge({ type }: { type: ContactGroupType }) {
     );
   }
   return (
-    <span className="inline-flex items-center rounded-full bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-700 ring-1 ring-inset ring-indigo-600/20">
+    <span className="inline-flex items-center rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-800 ring-1 ring-inset ring-emerald-600/20">
       Internal Segment
     </span>
   );
@@ -653,7 +653,7 @@ function CreateGroupModal({ onClose, onCreated }: { onClose: () => void; onCreat
                 onClick={() => setGroupType('internal_segment')}
                 className={`rounded-lg border px-3 py-2 text-left text-sm ${
                   groupType === 'internal_segment'
-                    ? 'border-indigo-500 bg-indigo-50 text-indigo-700'
+                    ? 'border-emerald-500 bg-emerald-50 text-emerald-800'
                     : 'border-slate-300 text-slate-700 hover:bg-slate-50'
                 }`}
               >
@@ -665,7 +665,7 @@ function CreateGroupModal({ onClose, onCreated }: { onClose: () => void; onCreat
                 onClick={() => setGroupType('native_wa_group')}
                 className={`rounded-lg border px-3 py-2 text-left text-sm ${
                   groupType === 'native_wa_group'
-                    ? 'border-indigo-500 bg-indigo-50 text-indigo-700'
+                    ? 'border-emerald-500 bg-emerald-50 text-emerald-800'
                     : 'border-slate-300 text-slate-700 hover:bg-slate-50'
                 }`}
               >
@@ -736,7 +736,7 @@ function CreateGroupModal({ onClose, onCreated }: { onClose: () => void; onCreat
                   onClick={() => setNativeSource('new')}
                   className={`rounded-lg border px-3 py-2 text-left text-sm ${
                     nativeSource === 'new'
-                      ? 'border-indigo-500 bg-indigo-50 text-indigo-700'
+                      ? 'border-emerald-500 bg-emerald-50 text-emerald-800'
                       : 'border-slate-300 text-slate-700 hover:bg-slate-50'
                   }`}
                 >
@@ -756,7 +756,7 @@ function CreateGroupModal({ onClose, onCreated }: { onClose: () => void; onCreat
                   }}
                   className={`rounded-lg border px-3 py-2 text-left text-sm ${
                     nativeSource === 'existing'
-                      ? 'border-indigo-500 bg-indigo-50 text-indigo-700'
+                      ? 'border-emerald-500 bg-emerald-50 text-emerald-800'
                       : 'border-slate-300 text-slate-700 hover:bg-slate-50'
                   }`}
                 >
@@ -789,7 +789,7 @@ function CreateGroupModal({ onClose, onCreated }: { onClose: () => void; onCreat
                       type="button"
                       onClick={() => void loadAvailableGroups()}
                       disabled={isLoadingAvailable}
-                      className="flex items-center gap-1 text-xs font-medium text-indigo-600 hover:text-indigo-700 disabled:opacity-50"
+                      className="flex items-center gap-1 text-xs font-medium text-emerald-700 hover:text-emerald-800 disabled:opacity-50"
                     >
                       <RefreshCw className={`h-3 w-3 ${isLoadingAvailable ? 'animate-spin' : ''}`} />
                       Refresh
@@ -819,7 +819,7 @@ function CreateGroupModal({ onClose, onCreated }: { onClose: () => void; onCreat
                           key={g.jid}
                           onClick={() => setSelectedJid(g.jid)}
                           className={`flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm ${
-                            selectedJid === g.jid ? 'bg-indigo-50 text-indigo-700' : 'text-slate-700 hover:bg-slate-50'
+                            selectedJid === g.jid ? 'bg-emerald-50 text-emerald-800' : 'text-slate-700 hover:bg-slate-50'
                           }`}
                         >
                           <span className="font-medium">{g.subject}</span>
@@ -846,7 +846,7 @@ function CreateGroupModal({ onClose, onCreated }: { onClose: () => void; onCreat
             <button
               type="submit"
               disabled={isSaving || (isExistingMode && (isLoadingAvailable || availableGroups.length === 0))}
-              className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:opacity-60"
+              className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-60"
             >
               {isSaving && <Loader2 className="h-4 w-4 animate-spin" />}
               {isExistingMode ? 'Import Group' : 'Create Group'}
@@ -980,7 +980,7 @@ function ImportContactsModal({
             <button
               type="submit"
               disabled={isSaving}
-              className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:opacity-60"
+              className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-60"
             >
               {isSaving && <Loader2 className="h-4 w-4 animate-spin" />}
               Import
@@ -1111,7 +1111,7 @@ function ManageMembersModal({
                 type="button"
                 onClick={() => void handleAdd()}
                 disabled={isAdding}
-                className="flex items-center gap-2 rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:opacity-60"
+                className="flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-60"
               >
                 {isAdding && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
                 Add

@@ -80,7 +80,7 @@ export default function ModuleAddonQueueCard({ onChanged }: { onChanged?: () => 
                     type="button"
                     disabled={busyId === row.id}
                     onClick={() => void run(row.id, () => moduleAddonService.approve(row.id), 'Could not approve this request.')}
-                    className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-60"
+                    className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
                   >
                     Approve
                   </button>
@@ -98,7 +98,7 @@ export default function ModuleAddonQueueCard({ onChanged }: { onChanged?: () => 
                 <button
                   type="button"
                   onClick={() => setPaying(row)}
-                  className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-700"
+                  className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700"
                 >
                   Record payment
                 </button>

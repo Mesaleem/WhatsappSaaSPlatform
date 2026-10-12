@@ -22,6 +22,29 @@ return [
     ],
 
     /*
+    | Account safety (2026-10-12).
+    |
+    | max_devices      devices one user may be logged in on at once (0 = no limit). One login more is refused
+    |                  with 409 ACTIVE_SESSION until the user chooses "log out from all devices and log in here"
+    |                  (login with force=true), which signs every other device out.
+    | login_alerts     email the user (time, IP, browser + reset-password link) when such a login signed every
+    |                  other device out. Normal logins within the limit send no email.
+    | signup.check_mx  website signups must use an email domain that receives mail (MX/A record). Off in tests.
+    | signup.code_*    the emailed 6-digit signup code: minutes valid and wrong tries allowed.
+    | Disposable / temporary-mail domains are refused at signup: config/disposable_email_domains.php.
+    */
+    'account' => [
+        'max_devices' => max(0, (int) env('AUTH_MAX_DEVICES', 2)),
+        'login_alerts' => filter_var(env('AUTH_LOGIN_ALERTS', true), FILTER_VALIDATE_BOOLEAN),
+    ],
+
+    'signup' => [
+        'check_mx' => filter_var(env('SIGNUP_CHECK_MX', true), FILTER_VALIDATE_BOOLEAN),
+        'code_minutes' => max(1, (int) env('SIGNUP_CODE_MINUTES', 10)),
+        'code_max_attempts' => max(1, (int) env('SIGNUP_CODE_MAX_ATTEMPTS', 5)),
+    ],
+
+    /*
     | Runtime SSRF protection (App\Support\Security\OutboundUrlGuard) for URLs a tenant controls and that our
     | servers (or the QR engine, on our network) fetch: webhook endpoints, media_url, social media downloads.
     |

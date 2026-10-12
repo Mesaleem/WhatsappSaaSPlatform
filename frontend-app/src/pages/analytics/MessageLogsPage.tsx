@@ -49,8 +49,8 @@ const RECIPIENT_TYPE_OPTIONS: { value: MessageDispatchRecipientType; label: stri
 ];
 
 const SOURCE_BADGE: Record<MessageDispatchSource, { label: string; className: string }> = {
-  web_ui: { label: 'Web', className: 'bg-indigo-50 text-indigo-700 ring-indigo-600/20' },
-  web_template: { label: 'Template', className: 'bg-violet-50 text-violet-700 ring-violet-600/20' },
+  web_ui: { label: 'Web', className: 'bg-emerald-50 text-emerald-800 ring-emerald-600/20' },
+  web_template: { label: 'Template', className: 'bg-teal-50 text-teal-800 ring-teal-600/20' },
   api: { label: 'API', className: 'bg-amber-50 text-amber-700 ring-amber-600/20' },
   chatbot: { label: 'Chatbot', className: 'bg-cyan-50 text-cyan-700 ring-cyan-600/20' },
   journey: { label: 'Journey', className: 'bg-fuchsia-50 text-fuchsia-700 ring-fuchsia-600/20' },  social_inbox: { label: 'Social Inbox', className: 'bg-emerald-50 text-emerald-700 ring-emerald-600/20' },
@@ -64,7 +64,7 @@ const STATUS_BADGE: Record<MessageDispatchStatus, string> = {
 };
 
 const filterInputClass =
-  'rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100';
+  'rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100';
 
 function formatDateTime(value: string | null): string {
   if (!value) return '—';
@@ -272,7 +272,7 @@ export default function MessageLogsPage() {
                   <td className="px-4 py-3">
                     {log.recipient_type === 'group' ? (
                       <div className="flex items-center gap-1.5">
-                        <span className="inline-flex items-center gap-1 rounded-full bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-700 ring-1 ring-inset ring-indigo-600/20">
+                        <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-800 ring-1 ring-inset ring-emerald-600/20">
                           <Users className="h-3 w-3" />
                           Group
                         </span>
@@ -325,7 +325,7 @@ export default function MessageLogsPage() {
                           onClick={() => void handleResend(log.id)}
                           disabled={resendingId === log.id}
                           aria-label={`Resend message ${log.id}`}
-                          className="inline-flex items-center gap-1 rounded-lg border border-indigo-300 bg-indigo-50 px-2.5 py-1 text-xs font-medium text-indigo-700 hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-50"
+                          className="inline-flex items-center gap-1 rounded-lg border border-emerald-300 bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-800 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
                         >
                           <Send className="h-3.5 w-3.5" />
                           {resendingId === log.id ? 'Resending…' : 'Resend'}

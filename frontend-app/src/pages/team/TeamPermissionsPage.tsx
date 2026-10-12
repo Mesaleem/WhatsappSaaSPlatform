@@ -16,7 +16,7 @@ import {
 import DismissibleAlert from '../../components/common/DismissibleAlert';
 
 const inputClass =
-  'mt-1.5 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100';
+  'mt-1.5 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100';
 
 /**
  * Client Admin Granular Permission Matrix (/team/permissions).
@@ -78,7 +78,7 @@ function PermissionGroup({
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
       <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
-        <Icon className="h-4 w-4 text-indigo-600" />
+        <Icon className="h-4 w-4 text-emerald-700" />
         {title}
       </div>
       <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
@@ -90,7 +90,7 @@ function PermissionGroup({
             <label
               key={permission}
               className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-sm transition ${
-                isEffective ? 'border-indigo-200 bg-indigo-50/50 text-indigo-900' : 'border-slate-200 text-slate-700'
+                isEffective ? 'border-emerald-200 bg-emerald-50/50 text-emerald-950' : 'border-slate-200 text-slate-700'
               } ${inheritedOnly ? 'opacity-70' : ''}`}
               title={inheritedOnly ? 'Granted via this user’s role — change their role to revoke it.' : undefined}
             >
@@ -99,11 +99,11 @@ function PermissionGroup({
                 checked={isEffective}
                 disabled={inheritedOnly}
                 onChange={() => onToggle(permission)}
-                className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 disabled:opacity-60"
+                className="h-4 w-4 rounded border-slate-300 text-emerald-700 focus:ring-emerald-500 disabled:opacity-60"
               />
               <span>
                 {MATRIX_PERMISSION_LABELS[permission]}
-                {inheritedOnly && <span className="ml-1 text-[10px] uppercase tracking-wide text-indigo-400">(via role)</span>}
+                {inheritedOnly && <span className="ml-1 text-[10px] uppercase tracking-wide text-emerald-500">(via role)</span>}
               </span>
             </label>
           );
@@ -227,7 +227,7 @@ export default function TeamPermissionsPage() {
       <div className="w-full max-w-3xl space-y-6">
         <div>
           <h2 className="flex items-center gap-2 text-lg font-semibold text-slate-900">
-            <ShieldCheck className="h-5 w-5 text-indigo-600" />
+            <ShieldCheck className="h-5 w-5 text-emerald-700" />
             Granular Permission Matrix
           </h2>
           <p className="mt-1 text-sm text-slate-500">
@@ -261,7 +261,7 @@ export default function TeamPermissionsPage() {
         </div>
 
         {!isLoadingUsers && nonAdminUsers.length === 0 && (
-          <div className="flex items-center gap-2 rounded-lg border border-indigo-200 bg-indigo-50 px-4 py-3 text-sm text-indigo-800">
+          <div className="flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
             <AlertCircle className="h-4 w-4 flex-shrink-0" />
             All team members in this account are Admins with full access.
           </div>
@@ -316,7 +316,7 @@ export default function TeamPermissionsPage() {
                 <button
                   onClick={() => void handleSave()}
                   disabled={isSaving}
-                  className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:opacity-60"
+                  className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-60"
                 >
                   {isSaving && <Loader2 className="h-4 w-4 animate-spin" />}
                   Save Permissions

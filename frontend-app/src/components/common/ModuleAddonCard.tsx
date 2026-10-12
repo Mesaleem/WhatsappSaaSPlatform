@@ -83,7 +83,7 @@ export default function ModuleAddonCard({ module, accountId, enabled, unitLabel 
   };
 
   return (
-    <div className="mb-4 rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3">
+    <div className="mb-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="text-sm text-slate-700">
           <p className="font-medium text-slate-900">{offer.label} is a paid add-on</p>
@@ -98,12 +98,12 @@ export default function ModuleAddonCard({ module, accountId, enabled, unitLabel 
             </p>
           )}
           {open && (
-            <p className="mt-1 text-xs font-medium text-indigo-700">
+            <p className="mt-1 text-xs font-medium text-emerald-800">
               Already requested on {formatDate(open.created_at)}. {open.status === 'requested' ? 'Waiting for approval.' : 'Approved, waiting for payment.'}
             </p>
           )}
           {!open && latest && (
-            <p className="mt-1 text-xs font-medium text-indigo-700">
+            <p className="mt-1 text-xs font-medium text-emerald-800">
               Last request {formatDate(latest.created_at)}: {STATUS_TEXT[latest.status]}
               {latest.decided_at ? ` (decided ${formatDate(latest.decided_at)})` : ''}
             </p>
@@ -112,7 +112,7 @@ export default function ModuleAddonCard({ module, accountId, enabled, unitLabel 
             <p className="mt-1 text-xs text-slate-600">Your invoice is on the Billing page, where you can pay it.</p>
           )}
           {rows.length > 0 && (
-            <Link to="/add-ons" className="mt-1 inline-block text-xs font-medium text-indigo-700 underline">
+            <Link to="/add-ons" className="mt-1 inline-block text-xs font-medium text-emerald-800 underline">
               View add-on history
             </Link>
           )}
@@ -145,7 +145,7 @@ export default function ModuleAddonCard({ module, accountId, enabled, unitLabel 
               onClick={() => void request()}
               disabled={busy || !!open || !tier}
               title={open ? 'A request for this add-on is already open.' : 'Ask your Super Admin or agent for this add-on.'}
-              className="rounded-lg bg-indigo-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+              className="rounded-lg bg-emerald-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-slate-300"
             >
               {open ? 'Requested' : 'Request add-on'}
             </button>
@@ -156,7 +156,7 @@ export default function ModuleAddonCard({ module, accountId, enabled, unitLabel 
             onClick={() => void request()}
             disabled={busy || !!open}
             title={open ? 'A request for this add-on is already open.' : 'Ask your Super Admin or agent for this add-on.'}
-            className="rounded-lg bg-indigo-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+            className="rounded-lg bg-emerald-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-slate-300"
           >
             {open ? 'Requested' : 'Request add-on'}
           </button>

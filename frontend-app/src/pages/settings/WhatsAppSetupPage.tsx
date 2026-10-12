@@ -95,7 +95,7 @@ export default function WhatsAppSetupPage() {
         <div className="mt-6 rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-indigo-50 text-indigo-600">
+              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-emerald-50 text-emerald-700">
                 <MessageCircle className="h-5 w-5" />
               </div>
               <div>
@@ -149,7 +149,7 @@ export default function WhatsAppSetupPage() {
                 ) : (
                   <button
                     onClick={() => setIsModalOpen(true)}
-                    className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700"
+                    className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700"
                   >
                     <Radio className="h-4 w-4" />
                     Connect WhatsApp

@@ -98,7 +98,7 @@ export default function KeepGroupsModal({ groups, limit, onClose, onSaved }: Kee
             type="button"
             onClick={() => void save()}
             disabled={!valid || busy}
-            className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
+            className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {busy ? 'Saving…' : 'Save my choice'}
           </button>

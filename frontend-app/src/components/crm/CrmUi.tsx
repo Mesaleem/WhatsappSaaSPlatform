@@ -59,7 +59,7 @@ export function TagChips({
       {tags.map((tag) => (
         <span
           key={tag.id}
-          className="inline-flex items-center gap-1 rounded-md bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-700"
+          className="inline-flex items-center gap-1 rounded-md bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-800"
           data-testid="crm-tag-chip"
         >
           {tag.name}
@@ -72,7 +72,7 @@ export function TagChips({
               }}
               disabled={disabled || busyTagId === tag.id}
               aria-label={`Remove tag ${tag.name}`}
-              className="rounded text-indigo-400 hover:text-indigo-700 disabled:opacity-40"
+              className="rounded text-emerald-500 hover:text-emerald-800 disabled:opacity-40"
             >
               {busyTagId === tag.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <X className="h-3 w-3" />}
             </button>
@@ -96,7 +96,7 @@ export function NoClientSelected({ what }: { what: string }) {
       <button
         type="button"
         onClick={() => openPicker(`view their ${what}`)}
-        className="rounded-lg border border-indigo-200 bg-white px-3 py-1.5 text-xs font-semibold text-indigo-700 hover:bg-indigo-50"
+        className="rounded-lg border border-emerald-200 bg-white px-3 py-1.5 text-xs font-semibold text-emerald-800 hover:bg-emerald-50"
         data-testid="crm-select-client"
       >
         Choose a client
@@ -144,7 +144,7 @@ export function Spinner() {
 }
 
 const selectClass =
-  'rounded-lg border border-slate-300 bg-white py-1.5 pl-2 pr-7 text-sm text-slate-700 shadow-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 disabled:cursor-not-allowed disabled:opacity-50';
+  'rounded-lg border border-slate-300 bg-white py-1.5 pl-2 pr-7 text-sm text-slate-700 shadow-sm outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100 disabled:cursor-not-allowed disabled:opacity-50';
 
 /**
  * Status change through the dedicated PATCH /crm/leads/{id}/status. Offers
@@ -353,7 +353,7 @@ export function TagPicker({
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search tags…"
             aria-label="Search tags"
-            className="w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm outline-none focus:border-indigo-500"
+            className="w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm outline-none focus:border-emerald-500"
           />
           <div className="mt-2 max-h-56 overflow-y-auto">
             {loading ? (
@@ -374,7 +374,7 @@ export function TagPicker({
                     setOpen(false);
                     setSearch('');
                   }}
-                  className="flex w-full items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left text-sm text-slate-700 hover:bg-indigo-50"
+                  className="flex w-full items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left text-sm text-slate-700 hover:bg-emerald-50"
                 >
                   <span className="flex items-center gap-1.5 truncate">
                     <Tag className="h-3.5 w-3.5 text-slate-400" />

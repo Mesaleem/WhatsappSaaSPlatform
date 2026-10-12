@@ -74,7 +74,7 @@ export default function StudentsPanel({
             onClick={() => setEditing('new')}
             disabled={readOnly}
             title={readOnly ? READ_ONLY_TITLE : undefined}
-            className="ml-auto flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
+            className="ml-auto flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
           >
             <Plus className="h-4 w-4" />
             New student
@@ -124,7 +124,7 @@ export default function StudentsPanel({
                         onClick={() => setEditing(s)}
                         disabled={readOnly}
                         title={readOnly ? READ_ONLY_TITLE : undefined}
-                        className="text-xs font-semibold text-indigo-600 hover:text-indigo-800 disabled:cursor-not-allowed disabled:opacity-50"
+                        className="text-xs font-semibold text-emerald-700 hover:text-emerald-900 disabled:cursor-not-allowed disabled:opacity-50"
                       >
                         Edit
                       </button>

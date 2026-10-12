@@ -49,7 +49,7 @@ function CredentialReveal({ credential, header, onDone }: { credential: string; 
           </button>
         </div>
         <div className="flex justify-end">
-          <button onClick={onDone} className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700">
+          <button onClick={onDone} className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700">
             Done
           </button>
         </div>
@@ -129,7 +129,7 @@ function RequestChangeModal({ apiKey, onClose, onDone }: { apiKey: ApiKey; onClo
         {error && <p role="alert" className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
         <div className="flex justify-end gap-3">
           <button type="button" onClick={onClose} className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">Cancel</button>
-          <button type="submit" disabled={saving} className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-60">
+          <button type="submit" disabled={saving} className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-60">
             {saving && <Loader2 className="h-4 w-4 animate-spin" />}Submit request
           </button>
         </div>
@@ -173,7 +173,7 @@ function RegisterServerModal({ apiKey, onClose, onRegistered }: { apiKey: ApiKey
         {error && <p role="alert" className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
         <div className="flex justify-end gap-3">
           <button type="button" onClick={onClose} className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">Cancel</button>
-          <button type="submit" disabled={saving} className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-60">
+          <button type="submit" disabled={saving} className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-60">
             {saving && <Loader2 className="h-4 w-4 animate-spin" />}Register server
           </button>
         </div>
@@ -238,7 +238,7 @@ export default function ApiAccessPanel({ apiKey, onChanged }: { apiKey: ApiKey; 
 
       <div className="mt-3 flex flex-wrap items-center gap-3 text-sm">
         {sb.status === 'unbound' && (
-          <button onClick={() => setModal('register')} className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-700">
+          <button onClick={() => setModal('register')} className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700">
             Register authorized server
           </button>
         )}

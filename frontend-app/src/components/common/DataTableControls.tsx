@@ -44,7 +44,7 @@ export function SearchInput({
         value={draft}
         onChange={(e) => handleChange(e.target.value)}
         placeholder={placeholder}
-        className="w-full rounded-lg border border-slate-300 py-2 pl-9 pr-3 text-sm text-slate-900 shadow-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 sm:w-64"
+        className="w-full rounded-lg border border-slate-300 py-2 pl-9 pr-3 text-sm text-slate-900 shadow-sm outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100 sm:w-64"
       />
     </div>
   );
@@ -95,7 +95,7 @@ export function StatusFilterSelect({
     <select
       value={value}
       onChange={(e) => onChange(e.target.value)}
-      className="rounded-lg border border-slate-300 bg-white py-2 pl-3 pr-8 text-sm text-slate-700 shadow-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+      className="rounded-lg border border-slate-300 bg-white py-2 pl-3 pr-8 text-sm text-slate-700 shadow-sm outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
     >
       <option value="">{allLabel}</option>
       {options.map((opt) => (
@@ -158,7 +158,7 @@ export function Pagination({
             <select
               value={perPage}
               onChange={(e) => onPerPageChange(Number(e.target.value))}
-              className="rounded-md border border-slate-300 bg-white py-1 pl-2 pr-6 text-xs text-slate-700 outline-none focus:border-indigo-500"
+              className="rounded-md border border-slate-300 bg-white py-1 pl-2 pr-6 text-xs text-slate-700 outline-none focus:border-emerald-500"
             >
               {perPageOptions.map((n) => (
                 <option key={n} value={n}>
@@ -189,7 +189,7 @@ export function Pagination({
                   key={p}
                   onClick={() => onPageChange(p)}
                   className={`min-w-[28px] rounded-md px-2 py-1 text-xs font-medium ${
-                    p === page ? 'bg-indigo-600 text-white' : 'text-slate-600 hover:bg-slate-100'
+                    p === page ? 'bg-emerald-600 text-white' : 'text-slate-600 hover:bg-slate-100'
                   }`}
                 >
                   {p}

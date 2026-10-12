@@ -131,7 +131,7 @@ class NotificationBroadcastController extends Controller
             if ($mailSetting && $mailSetting->isConfigured()) {
                 Config::set('mail.mailers.'.self::BROADCAST_MAILER_NAME, $mailSetting->toMailerConfig());
                 $fromAddress = $mailSetting->from_address;
-                $fromName = $mailSetting->from_name ?: 'WhatsApp SaaS Platform';
+                $fromName = $mailSetting->from_name ?: 'WapHub';
 
                 foreach ($this->emailTargets($recipients) as $target) {
                     try {

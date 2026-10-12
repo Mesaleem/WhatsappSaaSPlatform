@@ -21,6 +21,8 @@ import { useAuth } from '../../core/context/AuthContext';
 import {
   ACCOUNT_MODULES,
   CORE_COMMON_MODULES,
+  MANUAL_PAYMENT_METHODS,
+  MANUAL_PAYMENT_METHOD_LABELS,
   MODULE_ASSIGNMENTS,
   MODULE_ASSIGNMENT_LABELS,
   SOCIAL_SUITE_MODULES,
@@ -29,7 +31,9 @@ import {
   type AccountModule,
   type AccountStatus,
   type AccountType,
+  type ClientPlanOption,
   type CreateAccountPayload,
+  type ManualPaymentMethod,
   type ModuleAssignment,
   type UpdateAccountPayload,
 } from '../../types/account';
@@ -45,7 +49,7 @@ interface CreateAccountModalProps {
 }
 
 const inputClass =
-  'mt-1.5 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100';
+  'mt-1.5 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100';
 
 function toDateInputValue(iso: string | null | undefined): string {
   return iso ? iso.slice(0, 10) : '';
@@ -182,6 +186,53 @@ export default function CreateAccountModal({ account, onClose, onSaved }: Create
   const [modulesError, setModulesError] = useState<string | null>(null);
   const [modulesSaved, setModulesSaved] = useState(false);
 
+  // Plan-based provisioning (Create only). Picking a plan gives the client that
+  // plan as a paid, offline-recorded invoice: terms, features and menu modules
+  // come from the plan. "Custom" (Super Admin only) keeps the manual terms below.
+  const [planOptions, setPlanOptions] = useState<ClientPlanOption[] | null>(null);
+  const [planKey, setPlanKey] = useState<string>('');
+  const [planTotal, setPlanTotal] = useState('');
+  const [payMethod, setPayMethod] = useState<ManualPaymentMethod>('cash');
+  const [txnId, setTxnId] = useState('');
+  const [plansError, setPlansError] = useState<string | null>(null);
+  const planMode = !isEditMode && planKey !== 'custom';
+  const selectedPlan = planOptions?.find((p) => p.key === planKey) ?? null;
+
+  const applyPlan = (key: string, options: ClientPlanOption[] | null = planOptions) => {
+    setPlanKey(key);
+    const plan = options?.find((p) => p.key === key);
+    if (plan) {
+      setPlanTotal(String(plan.total_amount));
+      setAllowedModules([...plan.modules]);
+    }
+  };
+
+  useEffect(() => {
+    if (isEditMode) return;
+    accountService
+      .planOptions()
+      .then((res) => {
+        setPlanOptions(res.data);
+        if (res.data.length > 0) applyPlan(res.data[0].key, res.data);
+        else setPlanKey(superAdmin ? 'custom' : '');
+      })
+      .catch((err) => {
+        setPlansError(extractErrorMessage(err, 'Could not load plans.'));
+        setPlanOptions([]);
+        if (superAdmin) setPlanKey('custom');
+      });
+    // Loaded once when the Create form opens.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isEditMode]);
+
+  /** The plan term's end date for the summary, from the chosen start date. */
+  const planEndsOn = (() => {
+    if (!selectedPlan || !startsAt) return null;
+    const d = new Date(startsAt);
+    d.setDate(d.getDate() + selectedPlan.duration_days);
+    return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+  })();
+
   useEffect(() => {
     // Existing-Account Conversion widened this to edit mode too — the
     // "Parent Agent" dropdown now also renders there (a Client being
@@ -215,6 +266,12 @@ export default function CreateAccountModal({ account, onClose, onSaved }: Create
       if (!adminName.trim()) return 'Admin name is required.';
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(adminEmail)) return 'Enter a valid admin email.';
       if (adminPassword.length < 8) return 'Admin password must be at least 8 characters.';
+    }
+    if (planMode) {
+      if (!selectedPlan) return 'Choose a plan for this client.';
+      if (planTotal === '' || Number(planTotal) < 0) return 'Enter the amount paid (including GST).';
+      if (!startsAt) return 'Choose when the plan starts.';
+      return null;
     }
     if (billingModel === 'per_message' && (!ratePerMessage || Number(ratePerMessage) <= 0)) {
       return 'Enter a per-message rate greater than 0.';
@@ -305,14 +362,24 @@ export default function CreateAccountModal({ account, onClose, onSaved }: Create
           admin_email: adminEmail.trim(),
           admin_phone: adminPhone.trim() || undefined,
           admin_password: adminPassword,
-          engine_type: engineType,
-          billing_model: billingModel,
-          rate_per_message: billingModel === 'per_message' ? Number(ratePerMessage) : undefined,
-          total_allocated_messages: billingModel === 'unlimited' ? undefined : Number(totalAllocated),
-          price_paid: Number(pricePaid),
-          payment_mode: paymentMode,
-          starts_at: startsAt,
-          expires_at: expiresAt,
+          ...(planMode && selectedPlan
+            ? {
+                plan_key: selectedPlan.key,
+                plan_total: Number(planTotal),
+                payment_method: payMethod,
+                transaction_id: txnId.trim() || undefined,
+                starts_at: startsAt,
+              }
+            : {
+                engine_type: engineType,
+                billing_model: billingModel,
+                rate_per_message: billingModel === 'per_message' ? Number(ratePerMessage) : undefined,
+                total_allocated_messages: billingModel === 'unlimited' ? undefined : Number(totalAllocated),
+                price_paid: Number(pricePaid),
+                payment_mode: paymentMode,
+                starts_at: startsAt,
+                expires_at: expiresAt,
+              }),
         };
         await accountService.create(payload);
       }
@@ -432,7 +499,7 @@ export default function CreateAccountModal({ account, onClose, onSaved }: Create
   const isFullEnterprisePlanActive = isPresetActive(MANAGED_CHECKLIST_MODULES);
 
   const PRESET_BUTTON_ACTIVE_CLASS =
-    'rounded-lg border border-indigo-300 bg-indigo-50 px-3 py-1.5 text-xs font-semibold text-indigo-700 transition hover:bg-indigo-100 disabled:opacity-60';
+    'rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-800 transition hover:bg-emerald-100 disabled:opacity-60';
   const PRESET_BUTTON_INACTIVE_CLASS =
     'rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-60';
 
@@ -466,7 +533,7 @@ export default function CreateAccountModal({ account, onClose, onSaved }: Create
           {/* Section 1 — Client Organization Details (Account model; no password field lives here — see AccountController::store()'s docblock and this refactor's audit report). */}
           <section>
             <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
-              <Building2 className="h-4 w-4 text-indigo-600" />
+              <Building2 className="h-4 w-4 text-emerald-700" />
               Client Organization Details
             </div>
             <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -606,7 +673,7 @@ export default function CreateAccountModal({ account, onClose, onSaved }: Create
           {!isEditMode ? (
             <section>
               <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
-                <UserPlus className="h-4 w-4 text-indigo-600" />
+                <UserPlus className="h-4 w-4 text-emerald-700" />
                 Primary Client Admin Credentials
               </div>
               <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -680,7 +747,7 @@ export default function CreateAccountModal({ account, onClose, onSaved }: Create
           {isEditMode && account && (
             <section>
               <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
-                <ImageIcon className="h-4 w-4 text-indigo-600" />
+                <ImageIcon className="h-4 w-4 text-emerald-700" />
                 White-Label Branding
               </div>
               <p className="mt-1 text-xs text-slate-500">
@@ -711,10 +778,107 @@ export default function CreateAccountModal({ account, onClose, onSaved }: Create
           {/* Section 3 — Subscription & Engine Config */}
           <section>
             <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
-              <IndianRupee className="h-4 w-4 text-indigo-600" />
+              <IndianRupee className="h-4 w-4 text-emerald-700" />
               Subscription &amp; Engine Config
             </div>
 
+            {!isEditMode && (
+              <div className="mt-4 space-y-4">
+                <Field
+                  label="Plan"
+                  required
+                  hint={
+                    superAdmin
+                      ? 'The client gets this plan exactly as if it had paid for it: invoice, features and term. Choose Custom for special terms.'
+                      : 'Your client gets this plan exactly as if it had paid for it: invoice, features and term.'
+                  }
+                >
+                  <select
+                    value={planKey}
+                    onChange={(e) => applyPlan(e.target.value)}
+                    className={inputClass}
+                    disabled={planOptions === null}
+                    aria-label="Plan"
+                  >
+                    {planOptions === null && <option value="">Loading plans…</option>}
+                    {planOptions?.length === 0 && !superAdmin && <option value="">No plans available</option>}
+                    {planOptions?.map((p) => (
+                      <option key={p.key} value={p.key}>
+                        {p.label} — ₹{p.total_amount.toLocaleString('en-IN')} incl. GST / {p.duration_days} days
+                      </option>
+                    ))}
+                    {superAdmin && <option value="custom">Custom (manual terms, no plan)</option>}
+                  </select>
+                </Field>
+                {plansError && <p className="text-xs text-red-600">{plansError}</p>}
+
+                {planMode && selectedPlan && (
+                  <>
+                    <div className="rounded-xl border border-emerald-200 bg-emerald-50/60 p-4" data-testid="plan-summary">
+                      <div className="flex flex-wrap items-center gap-2 text-sm">
+                        <span className="font-semibold text-slate-900">{selectedPlan.label}</span>
+                        <span className="rounded-full bg-white px-2 py-0.5 text-xs font-medium text-emerald-800 ring-1 ring-emerald-200">
+                          {selectedPlan.engine_type === 'meta' ? 'Meta Cloud API' : 'QR (Baileys)'}
+                        </span>
+                        <span className="rounded-full bg-white px-2 py-0.5 text-xs font-medium text-slate-700 ring-1 ring-slate-200">
+                          {selectedPlan.billing_model === 'unlimited'
+                            ? 'Unlimited messages'
+                            : `${(selectedPlan.total_allocated_messages ?? 0).toLocaleString('en-IN')} messages`}
+                        </span>
+                        <span className="rounded-full bg-white px-2 py-0.5 text-xs font-medium text-slate-700 ring-1 ring-slate-200">
+                          {selectedPlan.duration_days} days
+                        </span>
+                      </div>
+                      {selectedPlan.capabilities.length > 0 && (
+                        <p className="mt-2 text-xs text-slate-600">
+                          <span className="font-semibold">Features:</span> {selectedPlan.capabilities.map((c) => c.label).join(', ')}
+                        </p>
+                      )}
+                      <p className="mt-1 text-xs text-slate-500">
+                        Plan price ₹{selectedPlan.price.toLocaleString('en-IN')} + GST ₹{selectedPlan.tax_amount.toLocaleString('en-IN')} = ₹
+                        {selectedPlan.total_amount.toLocaleString('en-IN')}
+                        {planEndsOn ? ` · runs until ${planEndsOn}` : ''}
+                      </p>
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                      <Field label="Amount paid (incl. GST)" required hint="Pre-filled from the plan. Change it for a discount.">
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          value={planTotal}
+                          onChange={(e) => setPlanTotal(e.target.value)}
+                          className={inputClass}
+                          aria-label="Amount paid (incl. GST)"
+                        />
+                      </Field>
+                      <Field label="Payment method" required>
+                        <select
+                          value={payMethod}
+                          onChange={(e) => setPayMethod(e.target.value as ManualPaymentMethod)}
+                          className={inputClass}
+                          aria-label="Payment method"
+                        >
+                          {MANUAL_PAYMENT_METHODS.map((m) => (
+                            <option key={m} value={m}>{MANUAL_PAYMENT_METHOD_LABELS[m]}</option>
+                          ))}
+                        </select>
+                      </Field>
+                      <Field label="Receipt / transaction ID" hint="Optional — one is generated when left blank.">
+                        <input value={txnId} onChange={(e) => setTxnId(e.target.value)} className={inputClass} placeholder="UPI ref, cheque no., receipt no." aria-label="Receipt / transaction ID" />
+                      </Field>
+                      <Field label="Plan starts on" required hint="Up to 30 days before or after today.">
+                        <input type="date" value={startsAt} onChange={(e) => setStartsAt(e.target.value)} className={inputClass} aria-label="Plan starts on" />
+                      </Field>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+
+            {(isEditMode || planKey === 'custom') && (
+            <>
             <div className="mt-4">
               <label className="block text-sm font-medium text-slate-700">Engine</label>
               <div className="mt-1.5 grid grid-cols-2 gap-3">
@@ -825,6 +989,8 @@ export default function CreateAccountModal({ account, onClose, onSaved }: Create
                 <input type="date" value={expiresAt} onChange={(e) => setExpiresAt(e.target.value)} className={inputClass} />
               </Field>
             </div>
+            </>
+            )}
           </section>
 
           {/* Section 4 — "Module & Feature Access": Core Common baseline +
@@ -834,7 +1000,7 @@ export default function CreateAccountModal({ account, onClose, onSaved }: Create
               above for how the two modes differ. */}
           <section>
             <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
-              <ShieldCheck className="h-4 w-4 text-indigo-600" />
+              <ShieldCheck className="h-4 w-4 text-emerald-700" />
               Module &amp; Feature Access
             </div>
             <p className="mt-1 text-xs text-slate-500">
@@ -942,7 +1108,7 @@ export default function CreateAccountModal({ account, onClose, onSaved }: Create
             <button
               type="submit"
               disabled={isSubmitting}
-              className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-70"
+              className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-70"
             >
               {isSubmitting && <Loader2 className="h-4 w-4 animate-spin" />}
               {isEditMode ? 'Save Changes' : 'Create Client'}
@@ -994,12 +1160,12 @@ function EngineOption({
       type="button"
       onClick={onClick}
       className={`flex items-start gap-3 rounded-lg border px-3 py-2.5 text-left transition ${
-        active ? 'border-indigo-500 bg-indigo-50 ring-1 ring-indigo-500' : 'border-slate-300 hover:bg-slate-50'
+        active ? 'border-emerald-500 bg-emerald-50 ring-1 ring-emerald-500' : 'border-slate-300 hover:bg-slate-50'
       }`}
     >
-      <span className={`mt-0.5 ${active ? 'text-indigo-600' : 'text-slate-400'}`}>{icon}</span>
+      <span className={`mt-0.5 ${active ? 'text-emerald-700' : 'text-slate-400'}`}>{icon}</span>
       <span>
-        <span className={`block text-sm font-medium ${active ? 'text-indigo-900' : 'text-slate-900'}`}>{label}</span>
+        <span className={`block text-sm font-medium ${active ? 'text-emerald-950' : 'text-slate-900'}`}>{label}</span>
         <span className="block text-xs text-slate-500">{description}</span>
       </span>
     </button>

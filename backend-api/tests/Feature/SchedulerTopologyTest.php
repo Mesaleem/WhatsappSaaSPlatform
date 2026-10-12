@@ -34,6 +34,7 @@ class SchedulerTopologyTest extends TestCase
         'subscriptions:send-expiry-reminders',
         'batches:dispatch-due',
         'messages:dispatch-scheduled',
+        'security:refresh-disposable-domains',
     ];
 
     /** @return list<Event> */

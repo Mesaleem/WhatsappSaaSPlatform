@@ -100,7 +100,7 @@ export default function TemplateSearchSelect({
           placeholder="Select a template…"
           onClick={openPanel}
           onChange={(e) => setQuery(e.target.value)}
-          className={`mt-1.5 w-full rounded-lg border border-slate-300 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 disabled:bg-slate-50 disabled:text-slate-400 ${
+          className={`mt-1.5 w-full rounded-lg border border-slate-300 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100 disabled:bg-slate-50 disabled:text-slate-400 ${
             open ? 'pl-9 pr-3' : 'cursor-pointer px-3 pr-9'
           }`}
         />
@@ -115,7 +115,7 @@ export default function TemplateSearchSelect({
             type="button"
             onMouseDown={(e) => e.preventDefault()}
             onClick={() => pick(onSelectNoTemplate)}
-            className={`block w-full px-3 py-2 text-left text-sm hover:bg-slate-50 ${noTemplate ? 'bg-indigo-50 text-indigo-700' : 'text-slate-700'}`}
+            className={`block w-full px-3 py-2 text-left text-sm hover:bg-slate-50 ${noTemplate ? 'bg-emerald-50 text-emerald-800' : 'text-slate-700'}`}
           >
             No template (write your own message)
           </button>
@@ -131,13 +131,13 @@ export default function TemplateSearchSelect({
               onMouseDown={(e) => e.preventDefault()}
               onClick={() => pick(() => onSelect(t.id))}
               className={`flex w-full items-start gap-2 px-3 py-2 text-left text-sm hover:bg-slate-50 ${
-                t.id === value && !noTemplate ? 'bg-indigo-50 text-indigo-700' : 'text-slate-700'
+                t.id === value && !noTemplate ? 'bg-emerald-50 text-emerald-800' : 'text-slate-700'
               }`}
             >
               <FileText className="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-slate-400" />
               <span>
                 <span className="font-medium">{t.title}</span>
-                {t.account_name && <span className="ml-1.5 text-xs font-medium text-indigo-600">{t.account_name}</span>}
+                {t.account_name && <span className="ml-1.5 text-xs font-medium text-emerald-700">{t.account_name}</span>}
                 {t.industry_type && <span className="ml-1.5 text-xs text-slate-400">({t.industry_type})</span>}
               </span>
             </button>

@@ -189,13 +189,13 @@ export default function ApiKeyModal({ onClose, locked = false, subscriptionActiv
                   disabled={ipBusy || !serverIp.can_edit}
                   placeholder="203.0.113.10"
                   aria-label="Server IP address"
-                  className="flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 disabled:bg-slate-50"
+                  className="flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100 disabled:bg-slate-50"
                 />
                 <button
                   type="button"
                   onClick={() => void saveIp()}
                   disabled={ipBusy || !serverIp.can_edit || ipInput.trim() === '' || (ipRegistered !== null && !ipChanged)}
-                  className="flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-2 text-sm font-semibold text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {ipBusy && <Loader2 className="h-4 w-4 animate-spin" />}
                   {ipRegistered ? 'Save new IP' : 'Save IP'}
@@ -206,11 +206,11 @@ export default function ApiKeyModal({ onClose, locked = false, subscriptionActiv
                 💡 Note for Shared Hosting: Enter your server's Outbound/cURL IP (not the domain's A-record IP). You can find this by fetching https://api.ipify.org from your server.
               </p>
 
-              <button type="button" onClick={() => setHostHelpOpen((v) => !v)} className="flex items-center gap-1 text-xs font-medium text-indigo-700 hover:underline">
+              <button type="button" onClick={() => setHostHelpOpen((v) => !v)} className="flex items-center gap-1 text-xs font-medium text-emerald-800 hover:underline">
                 <HelpCircle className="h-3.5 w-3.5" /> Host IP Changed?
               </button>
               {hostHelpOpen && (
-                <div className="space-y-1.5 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs text-indigo-900">
+                <div className="space-y-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-950">
                   <p className="font-semibold">Did your shared hosting provider move your site to a new IP?</p>
                   <ol className="list-decimal space-y-1 pl-4">
                     <li>On your server, run <code>curl https://api.ipify.org</code> to get its current outbound IP.</li>
@@ -228,7 +228,7 @@ export default function ApiKeyModal({ onClose, locked = false, subscriptionActiv
                     Your 1-time lifetime free IP update has been used. To change your registered server IP, please recharge your
                     current plan (₹{Math.round(serverIp.recharge_price)}).
                   </p>
-                  <Link to="/billing" className="mt-2 inline-block font-semibold text-indigo-700 hover:underline">
+                  <Link to="/billing" className="mt-2 inline-block font-semibold text-emerald-800 hover:underline">
                     Recharge plan
                   </Link>
                 </div>
@@ -257,7 +257,7 @@ export default function ApiKeyModal({ onClose, locked = false, subscriptionActiv
                   onClick={() => setConfirmingNew(true)}
                   disabled={!subscriptionActive || !ipRegistered}
                   title={!ipRegistered ? 'Save your server IP first' : subscriptionActive ? 'Generate a key' : 'Renew your plan to generate a key'}
-                  className="flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-2 text-sm font-semibold text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <KeyRound className="h-4 w-4" /> Generate key
                 </button>
@@ -315,7 +315,7 @@ export default function ApiKeyModal({ onClose, locked = false, subscriptionActiv
                     onClick={() => setConfirmingNew(true)}
                     disabled={busy || !subscriptionActive || !ipRegistered}
                     title={subscriptionActive ? 'Generate a new key' : 'Renew your plan to generate a new key'}
-                    className="flex items-center gap-1.5 text-xs font-medium text-indigo-700 hover:underline disabled:cursor-not-allowed disabled:opacity-50"
+                    className="flex items-center gap-1.5 text-xs font-medium text-emerald-800 hover:underline disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
                     Generate a new key
@@ -334,7 +334,7 @@ export default function ApiKeyModal({ onClose, locked = false, subscriptionActiv
               <p className="text-xs text-slate-500">
                 The endpoint, headers and a sample payload are in the Developer API Documentation on the Send Notification page.
               </p>
-              <Link to="/alerts/send" className="inline-block text-xs font-semibold text-indigo-700 hover:underline">
+              <Link to="/alerts/send" className="inline-block text-xs font-semibold text-emerald-800 hover:underline">
                 Open Developer API documentation
               </Link>
             </section>

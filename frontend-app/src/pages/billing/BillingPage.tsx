@@ -257,14 +257,14 @@ export default function BillingPage() {
           key: order.key_id,
           amount: order.amount,
           currency: order.currency,
-          name: 'WhatsApp SaaS Platform',
+          name: 'WapHub',
           description: `${order.plan.label} plan`,
           order_id: order.order_id,
           handler: (response) => {
             void handleRazorpaySuccess(order.invoice_id, response);
           },
           modal: { ondismiss: () => setCheckoutPlanKey(null) },
-          theme: { color: '#4f46e5' },
+          theme: { color: '#059669' },
         });
         rzp.open();
       } else {
@@ -334,7 +334,7 @@ export default function BillingPage() {
           <p className="mt-1 text-sm text-slate-500">
             Your user is not linked to any account. Contact your Super Admin.
           </p>
-          <Link to="/" className="mt-4 inline-block text-sm font-medium text-indigo-600 hover:text-indigo-700">
+          <Link to="/" className="mt-4 inline-block text-sm font-medium text-emerald-700 hover:text-emerald-800">
             Back to dashboard
           </Link>
         </div>
@@ -401,7 +401,7 @@ export default function BillingPage() {
         {/* Current plan status */}
         <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
           <h2 className="flex items-center gap-2 text-sm font-semibold text-slate-900">
-            <Package className="h-4 w-4 text-indigo-600" />
+            <Package className="h-4 w-4 text-emerald-700" />
             Current Plan Status
           </h2>
           {subscription ? (
@@ -436,7 +436,7 @@ export default function BillingPage() {
                   </div>
                   <div className="mt-1 h-2 w-full overflow-hidden rounded-full bg-slate-100">
                     <div
-                      className={`h-2 rounded-full ${quotaPercent >= 90 ? 'bg-red-500' : quotaPercent >= 70 ? 'bg-amber-500' : 'bg-indigo-600'}`}
+                      className={`h-2 rounded-full ${quotaPercent >= 90 ? 'bg-red-500' : quotaPercent >= 70 ? 'bg-amber-500' : 'bg-emerald-600'}`}
                       style={{ width: `${quotaPercent}%` }}
                     />
                   </div>
@@ -461,7 +461,7 @@ export default function BillingPage() {
                 <div className="col-span-2 sm:col-span-4">
                   <button
                     onClick={() => setIsQuotaModalOpen(true)}
-                    className="flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-indigo-700"
+                    className="flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-emerald-700"
                   >
                     <Zap className="h-3.5 w-3.5" />
                     {isPerMessage ? 'Add Funds' : 'Request Extra Quota'}
@@ -500,7 +500,7 @@ export default function BillingPage() {
                     onClick={() => setSelectedGateway(gw)}
                     className={`rounded-full border px-3 py-1 text-xs font-medium capitalize ${
                       selectedGateway === gw
-                        ? 'border-indigo-600 bg-indigo-50 text-indigo-700'
+                        ? 'border-emerald-600 bg-emerald-50 text-emerald-800'
                         : 'border-slate-300 text-slate-600 hover:bg-slate-50'
                     }`}
                   >
@@ -534,7 +534,7 @@ export default function BillingPage() {
               {plansData?.plans.map((plan) => (
                 <div key={plan.key} className="flex flex-col rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
                   <div className="flex items-center gap-2">
-                    <Zap className="h-4 w-4 text-indigo-600" />
+                    <Zap className="h-4 w-4 text-emerald-700" />
                     <h3 className="text-base font-semibold text-slate-900">{plan.label}</h3>
                   </div>
                   <p className="mt-1 text-sm text-slate-500">{plan.description}</p>
@@ -551,7 +551,7 @@ export default function BillingPage() {
                     <button
                       onClick={() => void handleUpgrade(plan)}
                       disabled={!selectedGateway || checkoutPlanKey === plan.key}
-                      className="mt-5 flex items-center justify-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:opacity-60"
+                      className="mt-5 flex items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-60"
                     >
                       {checkoutPlanKey === plan.key ? (
                         <Loader2 className="h-4 w-4 animate-spin" />
@@ -564,7 +564,7 @@ export default function BillingPage() {
                     <button
                       onClick={() => void handleManualRequest(plan)}
                       disabled={checkoutPlanKey === plan.key}
-                      className="mt-5 flex items-center justify-center gap-2 rounded-lg border border-indigo-600 bg-white px-4 py-2 text-sm font-semibold text-indigo-700 shadow-sm hover:bg-indigo-50 disabled:opacity-60"
+                      className="mt-5 flex items-center justify-center gap-2 rounded-lg border border-emerald-600 bg-white px-4 py-2 text-sm font-semibold text-emerald-800 shadow-sm hover:bg-emerald-50 disabled:opacity-60"
                     >
                       {checkoutPlanKey === plan.key ? <Loader2 className="h-4 w-4 animate-spin" /> : <CreditCard className="h-4 w-4" />}
                       Request invoice
@@ -623,7 +623,7 @@ export default function BillingPage() {
                                   ? 'Pay this invoice online.'
                                   : 'Online payment is not available yet: no payment gateway has been configured.'
                               }
-                              className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+                              className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-slate-300"
                             >
                               {payingInvoiceId === invoice.id ? 'Starting…' : 'Pay Invoice'}
                             </button>
@@ -645,7 +645,7 @@ export default function BillingPage() {
                                 ? 'Download the invoice PDF.'
                                 : 'Download the invoice PDF. Online payment is not available yet: no payment gateway is configured.'
                             }
-                            className="inline-flex items-center gap-1 text-xs font-medium text-indigo-600 hover:text-indigo-700 disabled:opacity-60"
+                            className="inline-flex items-center gap-1 text-xs font-medium text-emerald-700 hover:text-emerald-800 disabled:opacity-60"
                           >
                             {downloadingId === invoice.id ? (
                               <Loader2 className="h-3 w-3 animate-spin" />
