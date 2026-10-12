@@ -53,7 +53,7 @@ class WhatsAppStatusController extends Controller
                 // admin, admin, agent). An ADD-ON slot is always added with a real,
                 // pre-verified number (WhatsAppNumberService::add()), so it never has
                 // a pending placeholder and this still refuses a different number.
-                if ($slot->hasPendingPlaceholderNumber()) {
+                if ($slot->acceptsAnyNumber()) {
                     // [Owner instruction, disclosed]: "duplicate na ho" -- the same real
                     // WhatsApp number must not end up on two slots. phone_number is
                     // globally UNIQUE (see the whatsapp_numbers migration), so adopting

@@ -37,6 +37,7 @@ use Tests\TestCase;
 class JourneyVersioningTest extends TestCase
 {
     use RefreshDatabase;
+    use \Tests\Concerns\SendsJourneyChannel;
 
     private const BASE = '/api/whatsapp/flows';
 
@@ -449,7 +450,7 @@ class JourneyVersioningTest extends TestCase
         AccountEntitlement::create(['account_id' => $account->id, 'capability_id' => $codeId, 'source' => 'manual_grant', 'granted_by_account_id' => null]);
         $flow = $this->createFlow($admin, $this->askGraph('v1'));
         $withCode = $this->askGraph('code');
-        $withCode['nodes'][] = ['id' => 'x', 'type' => 'code', 'data' => ['language' => 'javascript', 'code' => 'x']];
+        $withCode['nodes'][] = ['id' => 'x', 'type' => 'code', 'data' => ['language' => 'javascript', 'code' => 'output = 1;']];
         $this->edit($admin, $flow, $withCode, ['publish' => false]);
         $v2 = WhatsAppFlowVersion::where('flow_id', $flow->id)->where('version', 2)->value('id');
 

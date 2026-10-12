@@ -335,9 +335,11 @@ class AiAgentRegistryTest extends TestCase
         $withCrm = $this->create($this->user($account), ['tools' => [CrmCaptureCurrentLeadTool::NAME]]);
         $author = $this->user($account, 'user');
         $author->givePermissionTo(['manage-chatbot']);
+        $number = WhatsAppNumber::create(['account_id' => $account->id, 'phone_number' => '91902'.str_pad((string) $account->id, 6, '0', STR_PAD_LEFT), 'status' => WhatsAppNumber::STATUS_LINKED]);
 
         $response = $this->actingAs($author->fresh())->postJson('/api/whatsapp/flows', [
             'name' => 'J', 'trigger_type' => 'keyword', 'trigger_value' => 'go',
+            'whatsapp_number_ids' => [$number->id],
             'graph_data' => ['nodes' => [
                 ['id' => 't', 'type' => 'trigger', 'data' => []],
                 ['id' => 'a', 'type' => 'agent', 'data' => ['registeredAgentId' => (string) $withCrm, 'outputVariable' => 'reply']],

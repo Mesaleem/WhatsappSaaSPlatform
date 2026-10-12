@@ -281,7 +281,7 @@ class WhatsAppController extends Controller
             ], 409);
         }
 
-        if ($typed !== null && ! $slot->hasPendingPlaceholderNumber() && $typed !== $slot->phone_number) {
+        if ($typed !== null && ! $slot->acceptsAnyNumber() && $typed !== $slot->phone_number) {
             return response()->json([
                 'message' => 'This number is not the one added to this WhatsApp slot.',
                 'error_code' => 'number_mismatch',
@@ -292,7 +292,7 @@ class WhatsAppController extends Controller
         // qr-engine-service only enforces a number match when expected_phone is sent
         // at all (see sessionManager.js's `if (expectedPhone)`) -- omitted here for a
         // placeholder slot so ANY real WhatsApp account can connect to it.
-        if (! $slot->hasPendingPlaceholderNumber()) {
+        if (! $slot->acceptsAnyNumber()) {
             $extra['expected_phone'] = $slot->phone_number;
         }
         if ($typed !== null) {

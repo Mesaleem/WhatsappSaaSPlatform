@@ -510,7 +510,7 @@ class PlanLifecycleReconciliationTest extends TestCase
             // limit (Phase1FoundationSeeder deliberately leaves it
             // unset) - same as every other bundle-touching PUT in this
             // suite.
-            ->putJson(self::PLANS.'/business', ['capabilities' => $keep, 'capability_limits' => ['api_installations' => 5]])
+            ->putJson(self::PLANS.'/business', ['capabilities' => [...$keep, 'api_installations'], 'capability_limits' => ['api_installations' => 5]])
             ->assertStatus(200)
             ->assertJsonPath('data.bundle_changed', true)
             ->assertJsonPath('data.removed', ['ads']);
@@ -528,9 +528,9 @@ class PlanLifecycleReconciliationTest extends TestCase
         $bundle = Plan::where('slug', 'starter')->firstOrFail()->capabilities->pluck('slug')->all();
 
         $this->actingAs($this->superAdmin())
-            ->putJson(self::PLANS.'/starter', ['capabilities' => [...$bundle, 'ai'], 'capability_limits' => ['api_installations' => 5]])
+            ->putJson(self::PLANS.'/starter', ['capabilities' => [...$bundle, 'ai', 'api_installations'], 'capability_limits' => ['api_installations' => 5]])
             ->assertStatus(200)
-            ->assertJsonPath('data.added', ['ai']);
+            ->assertJsonPath('data.added', ['ai', 'api_installations']);
 
         $this->assertContains('ai', $this->heldBy($account->fresh()));
     }

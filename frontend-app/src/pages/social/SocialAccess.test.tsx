@@ -18,6 +18,13 @@ import type { OrganicPost } from '../../types/organic';
  * Super Admin switches client, so no previous client's posts remain.
  */
 
+// AppLayout/ProtectedRoute read module visibility through useEffectiveHasModule
+// (tenant-aware); route it to this test's mocked hasModule so the test keeps
+// controlling visibility the way it did before that hook existed.
+vi.mock('../../core/hooks/useEffectiveHasModule', async () => {
+  const { useAuth } = await import('../../core/context/AuthContext');
+  return { useEffectiveHasModule: () => useAuth().hasModule };
+});
 vi.mock('../../components/layout/Header', () => ({ default: () => null }));
 vi.mock('../../services/socialService', () => ({
   default: { listAccounts: () => Promise.resolve([]), listProviders: vi.fn(), checkConnection: vi.fn(), getOAuthRedirectUrl: vi.fn(), bindAccounts: vi.fn(), disconnect: vi.fn() },

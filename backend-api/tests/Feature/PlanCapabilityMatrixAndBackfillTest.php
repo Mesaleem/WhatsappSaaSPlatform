@@ -29,6 +29,7 @@ use Tests\TestCase;
 class PlanCapabilityMatrixAndBackfillTest extends TestCase
 {
     use RefreshDatabase;
+    use \Tests\Concerns\SendsJourneyChannel;
 
     /** The approved matrix. `include` only — `exclude` and `manual` are absent by definition. */
     private const CONFIRMED_MATRIX = [
@@ -422,7 +423,7 @@ class PlanCapabilityMatrixAndBackfillTest extends TestCase
 
         $this->actingAs($user)->postJson(
             self::JOURNEYS,
-            $this->journeyPayload([$this->node('n1', 'code', ['language' => 'javascript', 'code' => 'x'])])
+            $this->journeyPayload([$this->node('n1', 'code', ['language' => 'javascript', 'code' => 'output = 1;'])])
         )->assertStatus(201);
     }
 
@@ -442,7 +443,7 @@ class PlanCapabilityMatrixAndBackfillTest extends TestCase
         // Without journey_automation the route gate answers first (Phase 7 Task 1.5)…
         $this->actingAs($user)->postJson(
             self::JOURNEYS,
-            $this->journeyPayload([$this->node('n1', 'code', ['language' => 'javascript', 'code' => 'x'])])
+            $this->journeyPayload([$this->node('n1', 'code', ['language' => 'javascript', 'code' => 'output = 1;'])])
         )->assertStatus(403)->assertJsonPath('error_code', 'CAPABILITY_NOT_ENTITLED');
 
         // …and with it (manual grant), the per-node check still locks the excluded node.
@@ -451,7 +452,7 @@ class PlanCapabilityMatrixAndBackfillTest extends TestCase
             ->assertStatus(200);
         $this->actingAs($user)->postJson(
             self::JOURNEYS,
-            $this->journeyPayload([$this->node('n1', 'code', ['language' => 'javascript', 'code' => 'x'])])
+            $this->journeyPayload([$this->node('n1', 'code', ['language' => 'javascript', 'code' => 'output = 1;'])])
         )->assertStatus(403)->assertJsonPath('error_code', 'JOURNEY_NODE_NOT_ENTITLED');
         $this->assertDatabaseCount('whatsapp_flows', 0);
     }
@@ -513,7 +514,7 @@ class PlanCapabilityMatrixAndBackfillTest extends TestCase
 
         $this->actingAs($user)->postJson(
             self::JOURNEYS,
-            $this->journeyPayload([$this->node('n1', 'code', ['language' => 'javascript', 'code' => 'x'])])
+            $this->journeyPayload([$this->node('n1', 'code', ['language' => 'javascript', 'code' => 'output = 1;'])])
         )->assertStatus(403);
     }
 
@@ -796,7 +797,7 @@ class PlanCapabilityMatrixAndBackfillTest extends TestCase
 
         $this->actingAs($outsider)->postJson(
             self::JOURNEYS,
-            $this->journeyPayload([$this->node('n1', 'code', ['language' => 'javascript', 'code' => 'x'])])
+            $this->journeyPayload([$this->node('n1', 'code', ['language' => 'javascript', 'code' => 'output = 1;'])])
         )->assertStatus(403);
     }
 
@@ -814,7 +815,7 @@ class PlanCapabilityMatrixAndBackfillTest extends TestCase
             ['account_id' => 999999],
         ] as $spoof) {
             $payload = array_merge(
-                $this->journeyPayload([$this->node('n1', 'code', ['language' => 'javascript', 'code' => 'x'])]),
+                $this->journeyPayload([$this->node('n1', 'code', ['language' => 'javascript', 'code' => 'output = 1;'])]),
                 $spoof,
             );
 

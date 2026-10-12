@@ -33,6 +33,7 @@ use Tests\TestCase;
 class JourneyApiNodeSecretCoverageTest extends TestCase
 {
     use RefreshDatabase;
+    use \Tests\Concerns\SendsJourneyChannel;
 
     private const FLOWS = '/api/whatsapp/flows';
 

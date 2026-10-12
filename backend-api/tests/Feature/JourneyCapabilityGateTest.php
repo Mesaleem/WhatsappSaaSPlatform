@@ -36,6 +36,7 @@ use Tests\TestCase;
 class JourneyCapabilityGateTest extends TestCase
 {
     use RefreshDatabase;
+    use \Tests\Concerns\SendsJourneyChannel;
 
     private const BASE = '/api/whatsapp/flows';
 

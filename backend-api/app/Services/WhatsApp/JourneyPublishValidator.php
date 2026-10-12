@@ -74,7 +74,17 @@ final class JourneyPublishValidator
             // Branching nodes: the rules the engine would refuse at run time.
             $data = is_array($node['data'] ?? null) ? $node['data'] : [];
 
-            if ($type === 'conditional') {
+            // Multi-group (IF / ELSE IF / ELSE) mode keeps its rules under
+            // `groups`, not `conditions` -- same switch as save-time validation
+            // and WhatsAppJourneyEngine::resolveConditionalTarget(). Checking
+            // only `conditions` refused every multi-group journey at publish.
+            if ($type === 'conditional' && ! empty($data['groups'])) {
+                $problems = JourneyConditionEvaluator::conditionGroupsErrors($data['groups'], requireRules: true);
+
+                if ($problems !== []) {
+                    $errors["graph_data.nodes.{$i}.data.groups"] = $problems;
+                }
+            } elseif ($type === 'conditional') {
                 $problems = JourneyConditionEvaluator::conditionListErrors($data['conditions'] ?? [], $data['match'] ?? null, requireRules: true);
 
                 if ($problems !== []) {

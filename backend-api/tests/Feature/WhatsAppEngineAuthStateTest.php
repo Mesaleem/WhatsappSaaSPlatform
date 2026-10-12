@@ -320,13 +320,11 @@ class WhatsAppEngineAuthStateTest extends TestCase
     }
 
     /**
-     * Once the platform device's slot has adopted a real number (see
-     * test_the_platform_devices_connected_number_is_adopted_not_refused_as_a_mismatch()),
-     * it behaves like any other pre-typed slot: a DIFFERENT typed number is refused
-     * before any engine call, same as test_a_typed_number_that_is_not_the_slot_number_
-     * is_refused_before_any_engine_call() for an ordinary tenant.
+     * Owner rule: the included (free) slot accepts ANY number every time, by QR or
+     * pairing code -- even after it already adopted one. The platform device's slot
+     * is an included slot, so a different typed number goes through, unbound.
      */
-    public function test_a_typed_number_that_differs_from_the_platform_devices_adopted_number_is_refused(): void
+    public function test_the_platform_device_accepts_a_different_number_after_it_adopted_one(): void
     {
         Http::fake(['*/api/qr/start-session' => Http::response(['status' => 'connecting'], 202)]);
         $this->actingAs($this->superAdmin())->postJson('/api/admin/whatsapp/self-device/start-session')->assertOk();
@@ -343,8 +341,20 @@ class WhatsAppEngineAuthStateTest extends TestCase
 
         $this->actingAs($this->superAdmin())
             ->postJson('/api/admin/whatsapp/self-device/start-session', ['phone_number' => '917236062374'])
-            ->assertUnprocessable()
-            ->assertJsonPath('error_code', 'number_mismatch');
+            ->assertOk();
+
+        Http::assertSent(fn ($request) => str_contains($request->url(), '/api/qr/start-session')
+            && ($request['phone_number'] ?? null) === '917236062374'
+            && ! array_key_exists('expected_phone', $request->data()));
+
+        // And the new number is adopted when it connects.
+        $this->internal()->postJson('/api/internal/whatsapp-status', [
+            'account_id' => $platform->id,
+            'session_id' => $slot->id,
+            'status' => 'connected',
+            'phone_number' => '917236062374',
+        ])->assertOk();
+        $this->assertSame('917236062374', $slot->fresh()->phone_number);
     }
 
     /**
@@ -440,6 +450,20 @@ class WhatsAppEngineAuthStateTest extends TestCase
         return [$account, $user, $slot];
     }
 
+    /**
+     * A paid add-on slot (not included), next to the account's included slot.
+     *
+     * @return array{0: Account, 1: User, 2: WhatsAppNumber}
+     */
+    private function tenantWithAddonSlot(string $phone = '919876543210', string $role = 'admin'): array
+    {
+        [$account, $user] = $this->tenantWithSlot('919811111111');
+        $user->syncRoles([$role]);
+        $addon = $this->slotFor($account, $phone, false);
+
+        return [$account, $user, $addon];
+    }
+
     public function test_start_session_forwards_the_default_slot_and_a_normalised_number(): void
     {
         [$account, $user, $slot] = $this->tenantWithSlot('919876543210');
@@ -449,11 +473,47 @@ class WhatsAppEngineAuthStateTest extends TestCase
             ->postJson('/api/whatsapp/start-session', ['phone_number' => '+91 98765-43210'])
             ->assertOk();
 
+        // The included slot is never bound to a number, so no expected_phone.
         Http::assertSent(fn ($request) => str_contains($request->url(), '/api/qr/start-session')
             && $request['session_id'] === $slot->id
-            && $request['expected_phone'] === '919876543210'
+            && ! array_key_exists('expected_phone', $request->data())
             && $request['phone_number'] === '919876543210'
             && $request['account_id'] === $account->id);
+    }
+
+    /**
+     * Owner rule, for every role that owns an account: the included number accepts a
+     * different number than the one it last held, by pairing code (here) or QR.
+     */
+    #[\PHPUnit\Framework\Attributes\DataProvider('accountRoles')]
+    public function test_the_included_slot_accepts_a_different_number_for_every_role(string $role): void
+    {
+        [$account, $user, $slot] = $this->tenantWithSlot('919876543210');
+        $user->syncRoles([$role]);
+        if ($role === 'agent') {
+            $account->forceFill(['account_type' => 'agent'])->save();
+        }
+        Http::fake(['*/api/qr/start-session' => Http::response(['status' => 'connecting'], 202)]);
+
+        $this->actingAs($user->fresh())
+            ->postJson('/api/whatsapp/start-session', ['phone_number' => '917236062374'])
+            ->assertOk();
+
+        $this->internal()->postJson('/api/internal/whatsapp-status', [
+            'account_id' => $account->id,
+            'session_id' => $slot->id,
+            'status' => 'connected',
+            'phone_number' => '917236062374',
+        ])->assertOk();
+
+        $this->assertSame('917236062374', $slot->fresh()->phone_number);
+        $this->assertSame(WhatsAppNumber::STATUS_LINKED, $slot->fresh()->status);
+    }
+
+    /** @return array<string, array{0: string}> */
+    public static function accountRoles(): array
+    {
+        return ['admin' => ['admin'], 'agent' => ['agent']];
     }
 
     public function test_start_session_without_a_number_keeps_the_qr_flow_on_the_default_slot(): void
@@ -468,13 +528,14 @@ class WhatsAppEngineAuthStateTest extends TestCase
             && ! array_key_exists('phone_number', $request->data()));
     }
 
+    /** A paid add-on stays bound to its own number (the included slot does not). */
     public function test_a_typed_number_that_is_not_the_slot_number_is_refused_before_any_engine_call(): void
     {
-        [, $user] = $this->tenantWithSlot('919876543210');
+        [, $user, $addon] = $this->tenantWithAddonSlot('919876543210');
         Http::fake();
 
         $this->actingAs($user)
-            ->postJson('/api/whatsapp/start-session', ['phone_number' => '917236062374'])
+            ->postJson("/api/whatsapp/start-session?number_id={$addon->id}", ['phone_number' => '917236062374'])
             ->assertUnprocessable()
             ->assertJsonPath('error_code', 'number_mismatch');
 
@@ -686,10 +747,10 @@ class WhatsAppEngineAuthStateTest extends TestCase
         ])->assertUnprocessable();
     }
 
+    /** A paid add-on that links to a different number is refused (the included slot adopts instead). */
     public function test_a_slot_that_links_to_a_different_number_is_refused_and_stays_unlinked(): void
     {
-        [$account] = $this->tenantWithSlot('919876543210');
-        $slot = WhatsAppNumber::where('account_id', $account->id)->firstOrFail();
+        [$account, , $slot] = $this->tenantWithAddonSlot('919876543210');
 
         $this->internal()->postJson('/api/internal/whatsapp-status', [
             'account_id' => $account->id,

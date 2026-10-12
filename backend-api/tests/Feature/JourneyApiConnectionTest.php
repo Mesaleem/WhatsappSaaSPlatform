@@ -42,6 +42,7 @@ class JourneyApiConnectionTest extends TestCase
     private function account(): Account
     {
         $account = Account::factory()->create();
+        \App\Models\Subscription::factory()->for($account)->create();
 
         // The route group is gated behind capability.guard:journey_automation
         // (routes/api.php) on top of module.guard:chatbot — a plain
@@ -50,7 +51,11 @@ class JourneyApiConnectionTest extends TestCase
         // refused 403 CAPABILITY_NOT_ENTITLED before ever reaching
         // JourneyApiConnectionController without this. Same grant()
         // pattern JourneyNodeEntitlementTest/JourneyClassifierTest use.
-        $this->grant($account, 'journey_automation');
+        // Every node capability too (same as the other Journey suites): this
+        // suite tests channels / API connections, not node entitlements.
+        foreach (\App\Models\Capability::pluck('slug') as $slug) {
+            $this->grant($account, $slug);
+        }
 
         return $account;
     }

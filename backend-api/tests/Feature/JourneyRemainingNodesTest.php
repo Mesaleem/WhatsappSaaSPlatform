@@ -228,9 +228,10 @@ class JourneyRemainingNodesTest extends TestCase
     /** Every palette node that still has no safe execution path. */
     public static function unimplemented(): array
     {
-        $implemented = ['text', 'image', 'video', 'document', 'audio', 'delay', 'conditional', 'prompt', 'agent', 'rag']; // prompt/agent: Phase 8 Task 7; rag: Task 10
+        // Derived from the catalog the engine/publish check use, not a hand list
+        // (a hand list here went stale as template/product/flow/code/list got runtimes).
         $cases = [];
-        foreach (array_diff(WhatsAppFlow::PALETTE_NODE_TYPES, $implemented) as $type) {
+        foreach (array_diff(WhatsAppFlow::PALETTE_NODE_TYPES, \App\Support\JourneyNodeCatalog::RUNTIME_EXECUTABLE_TYPES) as $type) {
             $cases[$type] = [$type];
         }
 
@@ -246,12 +247,20 @@ class JourneyRemainingNodesTest extends TestCase
         $this->inbound($account, 'go');
 
         $this->assertSame(['A'], $this->sent($account));
-        $this->assertEnded($this->flowSession($account), WhatsAppFlowSession::STATUS_EXPIRED, 'x', "type '{$type}'");
+
+        // The engine checks a node's config before whether it can run it, so a
+        // type that has a config contract (classifier, journey) but no runtime
+        // stops as invalid_configuration on empty data rather than expiring.
+        // Either way the run ends at this node and nothing after it runs.
+        $configError = JourneyActionConfig::error($type, []);
+        $configError === null
+            ? $this->assertEnded($this->flowSession($account), WhatsAppFlowSession::STATUS_EXPIRED, 'x', "type '{$type}'")
+            : $this->assertEnded($this->flowSession($account), WhatsAppFlowSession::STATUS_FAILED, 'x', $configError);
     }
 
-    public function test_exactly_seventeen_palette_types_remain_unimplemented(): void
+    public function test_exactly_eleven_palette_types_remain_unimplemented(): void
     {
-        $this->assertCount(17, self::unimplemented());
+        $this->assertCount(11, self::unimplemented());
     }
 
     // ==================================================================

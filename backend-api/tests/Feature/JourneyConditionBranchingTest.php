@@ -353,7 +353,8 @@ class JourneyConditionBranchingTest extends TestCase
         foreach (array_keys($groups) as $i) {
             $label = 'g'.$i;
             $nodes[] = $this->msg($label, 'G'.($i + 1));
-            $edges[] = $this->e('c', $label, ['sourceHandle' => "group_{$i}"]);
+            // Handles are 1-based (JourneyActionConfig::CONDITIONAL_GROUP_HANDLES).
+            $edges[] = $this->e('c', $label, ['sourceHandle' => 'group_'.($i + 1)]);
         }
         if ($withElse) {
             $nodes[] = $this->msg('e', 'ELSE');

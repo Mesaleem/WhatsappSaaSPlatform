@@ -43,6 +43,7 @@ use Tests\TestCase;
 class JourneyPhase7ReleaseReadinessTest extends TestCase
 {
     use RefreshDatabase;
+    use \Tests\Concerns\SendsJourneyChannel;
 
     private const PHONE = '919812345678';
 

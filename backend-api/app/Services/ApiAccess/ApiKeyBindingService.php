@@ -552,7 +552,7 @@ class ApiKeyBindingService
      */
     private function createLiveBindingEnforced(ApiKey $key, array $d, ?User $actor, ?ApiKeyBinding $replacing, string $replacingReason = 'replaced'): ApiKeyBinding
     {
-        return DB::transaction(function () use ($key, $d, $actor, $replacing, $replacingReason) {
+        return $this->auditingCooldownDenial($key, $actor, fn () => DB::transaction(function () use ($key, $d, $actor, $replacing, $replacingReason) {
             $account = Account::query()->where('id', $key->account_id)->lockForUpdate()->first();
             if (! $account) {
                 throw new InvalidArgumentException('The account for this API key no longer exists.');
@@ -578,10 +578,7 @@ class ApiKeyBindingService
                 // EV_ACCESS_DISABLED_ATTEMPT, …): a caller retrying
                 // against an active cooldown must not flood the audit
                 // log with one row per attempt.
-                $this->record(self::EV_COOLDOWN_DENIED, $lockedKey, null, null, [
-                    'cooldown_until' => $lockedKey->cooldown_until->toIso8601String(),
-                ], dedupe: true, actor: $actor);
-
+                // Recorded by auditingCooldownDenial() after the rollback.
                 throw ApiKeyCooldownActiveException::active($lockedKey, $lockedKey->cooldown_until);
             }
 
@@ -632,7 +629,26 @@ class ApiKeyBindingService
             }
 
             return $binding;
-        });
+        }));
+    }
+
+    /**
+     * Records EV_COOLDOWN_DENIED after $run's transaction has rolled back.
+     * Written inside it, the rollback triggered by the denial's own exception
+     * also erased the audit row, while the dedupe cache slot stayed set and
+     * suppressed the next attempts' rows too.
+     */
+    private function auditingCooldownDenial(ApiKey $key, ?User $actor, \Closure $run): mixed
+    {
+        try {
+            return $run();
+        } catch (ApiKeyCooldownActiveException $e) {
+            $this->record(self::EV_COOLDOWN_DENIED, $key, null, null, [
+                'cooldown_until' => \Illuminate\Support\Carbon::instance($e->cooldownUntil)->toIso8601String(),
+            ], dedupe: true, actor: $actor);
+
+            throw $e;
+        }
     }
 
     // ---- provisioning ------------------------------------------------------------------------------------------
@@ -796,7 +812,7 @@ class ApiKeyBindingService
             throw new InvalidArgumentException('A reason is required.');
         }
 
-        return DB::transaction(function () use ($key, $actor, $policy, $ips, $reason, $input) {
+        return $this->auditingCooldownDenial($key, $actor, fn () => DB::transaction(function () use ($key, $actor, $policy, $ips, $reason, $input) {
             Account::query()->where('id', $key->account_id)->lockForUpdate()->first();
             $lockedKey = ApiKey::query()->where('id', $key->id)->lockForUpdate()->first();
             if (! $lockedKey) {
@@ -808,11 +824,7 @@ class ApiKeyBindingService
             // writing cooldown_until, so this can never decide on a
             // value one of those is mid-way through changing.
             if ($lockedKey->isInCooldown()) {
-                // Phase 4 Task 11
-                $this->record(self::EV_COOLDOWN_DENIED, $lockedKey, null, null, [
-                    'cooldown_until' => $lockedKey->cooldown_until->toIso8601String(),
-                ], dedupe: true, actor: $actor);
-
+                // Phase 4 Task 11 -- recorded by auditingCooldownDenial() after the rollback.
                 throw ApiKeyCooldownActiveException::active($lockedKey, $lockedKey->cooldown_until);
             }
 
@@ -846,7 +858,7 @@ class ApiKeyBindingService
             $this->record(self::EV_CHANGE_REQUESTED, $lockedKey, $binding, null, ['request_id' => $request->id, 'requested_ip' => $ips[0]], actor: $actor);
 
             return $request;
-        });
+        }));
     }
 
     // ---- Super Admin ------------------------------------------------------------------------------------------------

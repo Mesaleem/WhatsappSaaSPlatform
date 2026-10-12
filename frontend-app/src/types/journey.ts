@@ -187,13 +187,12 @@ export interface WhatsAppFlow {
   /**
    * Task 21 — Channel-binding gate (Connexxa parity). Present on
    * index()/show()/store()/update() responses (eager-loaded
-   * `id, phone_number` only). Eloquent's relationsToArray() keeps this key
-   * exactly as the relation was loaded ('whatsappNumbers', not
-   * snake-cased) — see WhatsAppFlow::whatsappNumbers() and the
-   * whatsapp_flow_numbers migration's scope-note docblock: this is a
-   * creation/update-time binding only, not yet an inbound-routing filter.
+   * `id, phone_number` only). Eloquent snake-cases relation keys when
+   * serialising, so the whatsappNumbers() relation arrives as
+   * `whatsapp_numbers`. This is a creation/update-time binding only, not
+   * yet an inbound-routing filter (see the whatsapp_flow_numbers migration).
    */
-  whatsappNumbers?: { id: number; phone_number: string }[];
+  whatsapp_numbers?: { id: number; phone_number: string }[];
 }
 
 export interface SaveFlowPayload {

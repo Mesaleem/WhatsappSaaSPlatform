@@ -6,6 +6,7 @@ import JourneyBuilderPage from './JourneyBuilderPage';
 import journeyService from '../../services/journeyService';
 import knowledgeBases from '../../services/knowledgeBaseService';
 import aiAgents from '../../services/aiAgentService';
+import senderNumbers from '../../services/senderNumberService';
 import {
   JOURNEY_PALETTE_NODES,
   JOURNEY_PALETTE_NODE_TYPES,
@@ -56,6 +57,9 @@ vi.mock('../../services/journeyService', () => ({
 vi.mock('../../services/knowledgeBaseService', () => ({ default: { list: vi.fn() } }));
 // Phase 8 Task 11 — the agent node's registered-agent selector.
 vi.mock('../../services/aiAgentService', () => ({ default: { list: vi.fn() } }));
+// Task 21 — a journey can't be saved without a channel; the page auto-picks
+// the account's default number from this list.
+vi.mock('../../services/senderNumberService', () => ({ default: { list: vi.fn() } }));
 
 vi.mock('../../core/context/TenantContext', () => ({
   useTenant: () => ({ selectedAccountId: 1, selectedAccount: null }),
@@ -153,6 +157,8 @@ async function openNewEditor(user: ReturnType<typeof userEvent.setup>) {
   render(<JourneyBuilderPage />);
   await screen.findByText('New Journey');
   await user.click(screen.getByText('New Journey'));
+  // The node palette is a collapsible panel, closed by default.
+  await user.click(await screen.findByTestId('palette-toggle'));
   await screen.findByTestId('palette-node-text');
 }
 
@@ -162,6 +168,7 @@ async function openExistingEditor(user: ReturnType<typeof userEvent.setup>, flow
   render(<JourneyBuilderPage />);
   await screen.findByText('Edit');
   await user.click(screen.getByText('Edit'));
+  await user.click(await screen.findByTestId('palette-toggle'));
   await screen.findByTestId('palette-node-text');
 }
 
@@ -203,17 +210,18 @@ beforeEach(() => {
   journeys.update.mockResolvedValue(legacyFlow);
   (knowledgeBases.list as Mock).mockResolvedValue([{ id: 7, name: 'Store policies', embedding_dimensions: 256 }]);
   (aiAgents.list as Mock).mockResolvedValue([{ id: 12, name: 'Sales agent', is_enabled: true, version: 2, tools: [] }]);
+  (senderNumbers.list as Mock).mockResolvedValue([{ id: 1, phone_number: '919876543210', is_default: true }]);
 });
 
 // ====================================================================
 // 1. Palette
 // ====================================================================
 describe('palette', () => {
-  it('renders every one of the 27 palette node types', async () => {
+  it('renders every one of the 29 palette node types', async () => {
     const user = userEvent.setup();
     await openNewEditor(user);
 
-    expect(JOURNEY_PALETTE_NODE_TYPES).toHaveLength(27);
+    expect(JOURNEY_PALETTE_NODE_TYPES).toHaveLength(29);
 
     for (const type of JOURNEY_PALETTE_NODE_TYPES) {
       expect(screen.getByTestId(`palette-node-${type}`), `${type} missing from palette`).toBeTruthy();
@@ -415,7 +423,7 @@ describe('existing journeys', () => {
     await selectCanvasNode(user, 'question');
 
     // The bespoke question panel, not the schema-driven form.
-    expect(screen.getByText('Save Answer As Variable')).toBeTruthy();
+    expect(screen.getByText(/Save Answer As/)).toBeTruthy();
     expect(screen.queryByTestId('node-config-question')).toBeNull();
   });
 
@@ -488,19 +496,22 @@ describe('security', () => {
     const form = await screen.findByTestId('node-config-code');
     const editor = within(form).getByTestId('node-field-code').querySelector('textarea')!;
 
-    // If this were ever evaluated, the assignment below would land on
-    // globalThis and the assertion after it would fail.
-    await user.type(editor, 'globalThis.__journey_code_ran = true;');
+    // A valid script for the closed code-node language (JourneyCodeSandbox).
+    // Evaluated as real JavaScript, this sloppy-mode assignment would create
+    // a global `output`, and the assertion after it would fail.
+    await user.type(editor, 'output = 1;');
+    // The code node also requires the variable its output is saved into.
+    await user.type(within(form).getByTestId('node-field-outputVariable').querySelector('input')!, 'result');
     await user.click(draftButton());
 
     await waitFor(() => expect(journeys.create).toHaveBeenCalled());
 
-    expect((globalThis as Record<string, unknown>).__journey_code_ran).toBeUndefined();
+    expect((globalThis as Record<string, unknown>).output).toBeUndefined();
     expect(form.querySelector('script')).toBeNull();
 
     const node = savedPayload(journeys.create).graph_data.nodes.find((n) => n.type === 'code')!;
 
-    expect(node.data.code).toBe('globalThis.__journey_code_ran = true;');
+    expect(node.data.code).toBe('output = 1;');
   });
 
   it('never writes journey configuration to browser storage', async () => {
@@ -640,9 +651,13 @@ describe('runtime truth and secret handling', () => {
       .map((el) => (el as HTMLElement).dataset.testid!.replace('palette-node-', ''))
       .sort();
 
-    // Phase 8 Task 7: prompt + agent run (metered AI); Task 10: rag.
-    expect(executable).toEqual(['agent', 'audio', 'conditional', 'delay', 'document', 'image', 'prompt', 'rag', 'text', 'video']);
-    expect(draftOnly).toHaveLength(17);
+    // Phase 8 Task 7: prompt + agent run (metered AI); Task 10: rag. Later:
+    // template, catalog, product, flow, list, reply_button and code got runtimes.
+    expect(executable).toEqual([
+      'agent', 'audio', 'catalog', 'code', 'conditional', 'delay', 'document', 'flow', 'image',
+      'list', 'product', 'prompt', 'rag', 'reply_button', 'template', 'text', 'video',
+    ]);
+    expect(draftOnly).toHaveLength(12);
     expect(draftOnly).toContain('api');
   });
 

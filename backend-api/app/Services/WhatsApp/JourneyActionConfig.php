@@ -656,7 +656,8 @@ final class JourneyActionConfig
     {
         $templateId = $data['templateId'] ?? null;
 
-        if (! self::present($templateId, $draft)) {
+        // An integer id is valid (see the check below); present() only knows strings.
+        if (! is_int($templateId) && ! self::present($templateId, $draft)) {
             return 'A Template node needs a template selected.';
         }
 

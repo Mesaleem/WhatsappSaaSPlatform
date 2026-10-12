@@ -36,6 +36,7 @@ use Tests\TestCase;
 class JourneyNodePaletteTest extends TestCase
 {
     use RefreshDatabase;
+    use \Tests\Concerns\SendsJourneyChannel;
 
     private const ENDPOINT = '/api/whatsapp/flows';
 
@@ -513,8 +514,10 @@ class JourneyNodePaletteTest extends TestCase
     // 7. Security — nothing here executes, nothing stores a secret
     // ==================================================================
     /**
-     * The code node stores source, and storing source is all it does.
-     * Nothing in the request path may evaluate it — there is no eval(),
+     * Code node source is never evaluated as real script. Since the closed
+     * JourneyCodeSandbox grammar was added, a script outside it (here: a real
+     * JavaScript call) is refused at save time, so it is never even stored;
+     * and nothing in the request path can eval() — no eval(),
      * no create_function(), no shell escape anywhere in the Journey
      * controller, model or engine.
      */
@@ -524,14 +527,11 @@ class JourneyNodePaletteTest extends TestCase
 
         $code = 'process.exit(1); // would be catastrophic if ever run';
 
-        $response = $this->actingAs($t['user'])->postJson(self::ENDPOINT, $this->payload([
+        $this->actingAs($t['user'])->postJson(self::ENDPOINT, $this->payload([
             $this->node('n_code', 'code', ['language' => 'javascript', 'code' => $code]),
-        ]));
+        ]))->assertUnprocessable()->assertJsonValidationErrors('graph_data.nodes.1.data');
 
-        $response->assertStatus(201);
-
-        $stored = collect(WhatsAppFlow::findOrFail($response->json('data.id'))->graph_data['nodes'])->firstWhere('id', 'n_code');
-        $this->assertSame($code, $stored['data']['code']);
+        $this->assertSame(0, WhatsAppFlow::query()->where('account_id', $t['account']->id)->count());
 
         foreach ([
             app_path('Http/Controllers/Api/WhatsAppFlowController.php'),

@@ -505,7 +505,9 @@ export default function WhatsAppNumbersCard({ accountId, onConnected, reloadKey 
         <QRScannerModal
           accountId={accountId}
           numberId={connectingRow.id}
-          expectedPhone={connectingRow.has_pending_number ? null : connectingRow.phone_number}
+          // Only a paid add-on is bound to its number; the plan's included
+          // number accepts whatever number connects (server rule: acceptsAnyNumber).
+          expectedPhone={connectingRow.is_included || connectingRow.has_pending_number ? null : connectingRow.phone_number}
           onClose={() => setConnectingId(null)}
           onConnected={() => {
             setConnectingId(null);

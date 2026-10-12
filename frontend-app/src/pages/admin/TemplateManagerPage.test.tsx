@@ -117,7 +117,7 @@ function bodyInput(): HTMLElement {
 }
 
 function metaNameInput(): HTMLElement {
-  return screen.getByLabelText('Meta template name');
+  return screen.getByLabelText(/^Meta template name/);
 }
 
 /** Opens "New Template" and fills the minimum a Meta template needs. */
@@ -126,7 +126,7 @@ async function openNewMetaTemplate(body = 'Hello {{name}}.'): Promise<ReturnType
   await user.click(screen.getByRole('button', { name: /New Template/i }));
   setValue(titleInput(), 'Order Update');
   setValue(bodyInput(), body);
-  setValue(screen.getByLabelText('Language'), 'en_US');
+  setValue(screen.getByLabelText(/^Language/), 'en_US');
   setValue(metaNameInput(), 'order_update');
   return user;
 }

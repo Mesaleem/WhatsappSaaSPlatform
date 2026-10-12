@@ -6,6 +6,8 @@ import MessageLogsPage from './MessageLogsPage';
 import messageLogsService from '../../services/messageLogsService';
 import type { MessageDispatchLog, MessageDispatchLogDetail } from '../../types/messageLog';
 
+// The API-key banner (useAuth) is unrelated to the log view under test.
+vi.mock('../../components/profile/ApiKeySetupBanner', () => ({ default: () => null }));
 vi.mock('../../services/messageLogsService', () => ({ default: { list: vi.fn(), show: vi.fn() } }));
 const svc = vi.mocked(messageLogsService);
 

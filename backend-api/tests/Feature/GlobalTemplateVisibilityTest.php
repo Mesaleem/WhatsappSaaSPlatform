@@ -88,7 +88,9 @@ class GlobalTemplateVisibilityTest extends TestCase
         $res = $this->as($sa, 'POST', '/api/message-templates', ['title' => 'Welcome Customer', 'template_body' => 'Hi {{name}}'])->assertCreated();
 
         $this->assertNull($res->json('data.account_id'));
-        $this->assertSame('pending', $res->json('data.status'), 'creation/approval rules are unchanged');
+        // Super Admin's own templates are approved on creation
+        // (TemplateService::resolveCreationStatus(), an owner-requested change).
+        $this->assertSame('approved', $res->json('data.status'));
         $this->assertSame($before + 1, MessageTemplate::count(), 'exactly one row, never one per tenant');
         $this->assertSame(1, MessageTemplate::where('title', 'Welcome Customer')->count());
     }

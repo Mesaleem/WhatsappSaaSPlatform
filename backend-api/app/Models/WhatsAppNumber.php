@@ -79,4 +79,14 @@ class WhatsAppNumber extends Model
     {
         return ! preg_match('/^[1-9][0-9]{7,14}$/', (string) $this->phone_number);
     }
+
+    /**
+     * The plan's included (free) slot links to whatever number connects, every
+     * time -- by QR or by pairing code -- and adopts it (owner rule). Only a paid
+     * add-on slot stays bound to the number it was bought for.
+     */
+    public function acceptsAnyNumber(): bool
+    {
+        return $this->is_included || $this->hasPendingPlaceholderNumber();
+    }
 }

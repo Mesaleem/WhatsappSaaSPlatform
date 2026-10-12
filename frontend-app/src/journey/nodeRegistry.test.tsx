@@ -38,8 +38,9 @@ import {
 const EXPECTED = {
   message: ['prompt', 'text', 'image', 'video', 'document', 'audio', 'sticker'],
   interactive: ['list', 'external_url', 'reply_button', 'location', 'location_request', 'address_request'],
-  advanced: ['flow', 'api', 'payment', 'template', 'conditional', 'catalog', 'product', 'agent', 'rag', 'human_intervention'],
-  utility: ['code', 'email', 'journey', 'delay'],
+  // Phase 8 Task 16 added 'classifier'; the canvas-only 'end' node joined utility.
+  advanced: ['flow', 'api', 'payment', 'template', 'conditional', 'catalog', 'product', 'agent', 'rag', 'human_intervention', 'classifier'],
+  utility: ['code', 'email', 'journey', 'end', 'delay'],
 } as const;
 
 const ALL_27 = [...EXPECTED.message, ...EXPECTED.interactive, ...EXPECTED.advanced, ...EXPECTED.utility];
@@ -49,9 +50,9 @@ const LEGACY = ['trigger', 'message', 'question', 'condition', 'save_lead'];
 // ====================================================================
 // 1. Registration
 // ====================================================================
-describe('registry: all 27 node types', () => {
-  it('registers exactly 27 palette nodes', () => {
-    expect(JOURNEY_PALETTE_NODES).toHaveLength(27);
+describe('registry: every palette node type', () => {
+  it('registers exactly 29 palette nodes', () => {
+    expect(JOURNEY_PALETTE_NODES).toHaveLength(29);
     expect(JOURNEY_PALETTE_NODE_TYPES).toEqual(ALL_27);
   });
 
@@ -96,8 +97,8 @@ describe('registry: all 27 node types', () => {
     }
   });
 
-  it('exposes 32 types in total for the backend allow-list', () => {
-    expect(ALL_JOURNEY_NODE_TYPES).toHaveLength(32);
+  it('exposes 34 types in total (29 palette + 5 legacy)', () => {
+    expect(ALL_JOURNEY_NODE_TYPES).toHaveLength(34);
   });
 });
 
@@ -165,6 +166,10 @@ describe('registry: configuration contracts', () => {
       const requiredKeys = new Set(
         definition.configSchema.filter((field) => field.required).map((field) => field.key),
       );
+      // A sub-journey node's journeyId is required in static mode only (its
+      // schema can't mark it required, since dynamic mode doesn't use it), so
+      // a freshly dropped one asking to pick a journey is "fill this in" too.
+      if (definition.type === 'journey') requiredKeys.add('journeyId');
       const nonRequired = Object.entries(errors).filter(([key]) => !requiredKeys.has(key));
 
       expect(nonRequired, `${definition.type} default config: ${JSON.stringify(nonRequired)}`).toEqual([]);
@@ -427,10 +432,10 @@ describe('conditional node branches', () => {
     expect(handles.map((h) => h.label)).toEqual(['TRUE', 'FALSE']);
   });
 
-  it('is the only palette node with more than one outgoing branch', () => {
+  it('conditional and classifier are the only palette nodes with more than one outgoing branch', () => {
     const branching = JOURNEY_PALETTE_NODES.filter((d) => journeySourceHandles(d, {}).length > 1).map((d) => d.type);
 
-    expect(branching).toEqual(['conditional']);
+    expect(branching).toEqual(['conditional', 'classifier']);
   });
 
   it('requires at least one condition', () => {
@@ -648,7 +653,7 @@ describe('runtime-executable node types', () => {
       expect(isRuntimeExecutableNodeType(legacy)).toBe(true);
     }
     // Phase 8 Task 7: prompt + agent run (metered AI); Task 10: rag.
-    expect(ALL_JOURNEY_NODE_TYPES.filter((t) => !isRuntimeExecutableNodeType(t))).toHaveLength(17);
+    expect(ALL_JOURNEY_NODE_TYPES.filter((t) => !isRuntimeExecutableNodeType(t))).toHaveLength(12);
     expect(isRuntimeExecutableNodeType('prompt')).toBe(true);
     expect(isRuntimeExecutableNodeType('agent')).toBe(true);
     expect(isRuntimeExecutableNodeType('rag')).toBe(true);

@@ -24,11 +24,14 @@ class TemplateRenderer
      */
     public static function render(string $html, array $vars): string
     {
-        $replacements = [];
-        foreach ($vars as $key => $value) {
-            $replacements['{{'.$key.'}}'] = (string) $value;
-        }
-
-        return strtr($html, $replacements);
+        // `{{ name }}` (with spaces) is a variable too: MessageTemplate's field
+        // detection and the frontend previews both accept it, so an exact-match
+        // replace sent "Hi {{ name }}" while the preview showed "Hi Asha".
+        // One pass, so a value that itself contains {{...}} is never re-expanded.
+        return (string) preg_replace_callback(
+            '/\{\{\s*([^{}]*?)\s*\}\}/',
+            static fn (array $m): string => array_key_exists($m[1], $vars) ? (string) $vars[$m[1]] : $m[0],
+            $html,
+        );
     }
 }

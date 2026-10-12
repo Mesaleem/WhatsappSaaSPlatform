@@ -292,8 +292,10 @@ class JourneyInteractiveOptionTest extends TestCase
         $account = $this->account();
         $a = $this->msg('a', 'A');
 
-        // No rows at all (published, not a draft).
-        $this->saveAs($account, [$this->listNode([]), $a], [$this->e('n', 'a', ['sourceHandle' => 'row_1'])])
+        // No rows at all (published, not a draft). No outgoing edge: with zero
+        // rows there is no option to connect, and an edge here would be refused
+        // first for its own (impossible) handle.
+        $this->saveAs($account, [$this->listNode([])], [])
             ->assertStatus(422)->assertJsonValidationErrors('graph_data.nodes.1.data');
 
         // More rows than LIST_ROW_HANDLES allows (11 > 10), spread across sections.
@@ -301,8 +303,8 @@ class JourneyInteractiveOptionTest extends TestCase
         $this->saveAs($account, [$this->listNode([['title' => 'S', 'rows' => $tooManyRows]]), $a], [$this->e('n', 'a', ['sourceHandle' => 'row_1'])])
             ->assertStatus(422)->assertJsonValidationErrors('graph_data.nodes.1.data');
 
-        // No buttons at all.
-        $this->saveAs($account, [$this->buttonNode([]), $a], [$this->e('n', 'a', ['sourceHandle' => 'button_1'])])
+        // No buttons at all (no outgoing edge, for the same reason as no rows above).
+        $this->saveAs($account, [$this->buttonNode([])], [])
             ->assertStatus(422)->assertJsonValidationErrors('graph_data.nodes.1.data');
 
         // More buttons than WhatsApp allows.

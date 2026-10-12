@@ -42,6 +42,7 @@ use Tests\TestCase;
 class AccountEntitlementVisibilityTest extends TestCase
 {
     use RefreshDatabase;
+    use \Tests\Concerns\SendsJourneyChannel;
 
     private const ENTITLEMENTS = '/api/admin/accounts/%d/entitlements';
 
@@ -438,7 +439,7 @@ class AccountEntitlementVisibilityTest extends TestCase
 
             $this->actingAs($user)->postJson(
                 self::JOURNEYS,
-                $this->journeyPayload([$this->node('n1', 'code', ['language' => 'javascript', 'code' => 'x'])])
+                $this->journeyPayload([$this->node('n1', 'code', ['language' => 'javascript', 'code' => 'output = 1;'])])
             )->assertStatus(201);
         }
     }
@@ -473,7 +474,7 @@ class AccountEntitlementVisibilityTest extends TestCase
 
         $this->actingAs($outsider)->postJson(
             self::JOURNEYS,
-            $this->journeyPayload([$this->node('n1', 'code', ['language' => 'javascript', 'code' => 'x'])])
+            $this->journeyPayload([$this->node('n1', 'code', ['language' => 'javascript', 'code' => 'output = 1;'])])
         )->assertStatus(403)->assertJsonPath('error_code', 'JOURNEY_NODE_NOT_ENTITLED');
 
         $this->assertDatabaseHas('account_entitlements', [

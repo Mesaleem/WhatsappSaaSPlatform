@@ -47,11 +47,16 @@ class JourneyChannelGateTest extends TestCase
     private function account(): Account
     {
         $account = Account::factory()->create();
+        \App\Models\Subscription::factory()->for($account)->create();
 
         // Same reasoning as JourneyApiConnectionTest::account() — the
         // journey routes sit behind capability.guard:journey_automation on
         // top of module.guard:chatbot.
-        $this->grant($account, 'journey_automation');
+        // Every node capability too (same as the other Journey suites): this
+        // suite tests channels / API connections, not node entitlements.
+        foreach (\App\Models\Capability::pluck('slug') as $slug) {
+            $this->grant($account, $slug);
+        }
 
         return $account;
     }
@@ -89,8 +94,13 @@ class JourneyChannelGateTest extends TestCase
             'trigger_value' => 'hello',
             'whatsapp_number_ids' => $whatsappNumberIds,
             'graph_data' => [
-                'nodes' => [['id' => 't', 'type' => 'trigger', 'data' => []]],
-                'edges' => [],
+                // graph_data.edges is `required|array`, and Laravel treats an
+                // empty array as absent -- so the trigger is wired to one node.
+                'nodes' => [
+                    ['id' => 't', 'type' => 'trigger', 'data' => []],
+                    ['id' => 'a', 'type' => 'text', 'data' => ['text' => 'Hi']],
+                ],
+                'edges' => [['id' => 'e1', 'source' => 't', 'target' => 'a']],
             ],
             'publish' => false,
         ];
@@ -169,10 +179,10 @@ class JourneyChannelGateTest extends TestCase
 
         $flow = WhatsAppFlow::find($response->json('data.id'));
         $this->assertSame([$number->id], $flow->whatsappNumbers()->pluck('whatsapp_numbers.id')->all());
-        // Eloquent's relationsToArray() keeps the relation key exactly as
-        // loaded ('whatsappNumbers', not snake_cased) — see
-        // WhatsAppFlowController::store()'s ->load('whatsappNumbers').
-        $this->assertSame([$number->id], $response->json('data.whatsappNumbers.*.id'));
+        // Eloquent snake-cases relation keys on serialisation, so the
+        // whatsappNumbers() relation is returned as `whatsapp_numbers`
+        // (what JourneyBuilderPage.tsx reads).
+        $this->assertSame([$number->id], $response->json('data.whatsapp_numbers.*.id'));
     }
 
     public function test_creation_succeeds_with_two_owned_channels_at_the_cap(): void
@@ -256,10 +266,10 @@ class JourneyChannelGateTest extends TestCase
 
         $this->actingAs($user)->getJson("/api/whatsapp/flows?account_id={$account->id}")
             ->assertOk()
-            ->assertJsonPath('data.0.whatsappNumbers.0.id', $number->id);
+            ->assertJsonPath('data.0.whatsapp_numbers.0.id', $number->id);
 
         $this->actingAs($user)->getJson("/api/whatsapp/flows/{$id}?account_id={$account->id}")
             ->assertOk()
-            ->assertJsonPath('data.whatsappNumbers.0.id', $number->id);
+            ->assertJsonPath('data.whatsapp_numbers.0.id', $number->id);
     }
 }

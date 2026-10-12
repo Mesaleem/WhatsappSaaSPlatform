@@ -40,6 +40,7 @@ use Tests\TestCase;
 class JourneyNodeEntitlementTest extends TestCase
 {
     use RefreshDatabase;
+    use \Tests\Concerns\SendsJourneyChannel;
 
     private const ENDPOINT = '/api/whatsapp/flows';
 
@@ -388,8 +389,8 @@ class JourneyNodeEntitlementTest extends TestCase
         $response = $this->actingAs($user)->postJson(self::ENDPOINT, $this->payload([
             $this->node('n1', 'text', ['text' => 'hi']),                                  // allowed (plan)
             $this->node('n2', 'api', ['method' => 'GET', 'url' => 'https://x.test']),     // allowed (granted)
-            $this->node('n3', 'code', ['language' => 'javascript', 'code' => 'x']),       // denied
-            $this->node('n4', 'code', ['language' => 'javascript', 'code' => 'y']),       // same type
+            $this->node('n3', 'code', ['language' => 'javascript', 'code' => 'output = 1;']),       // denied
+            $this->node('n4', 'code', ['language' => 'javascript', 'code' => 'output = 1;']),       // same type
             $this->node('n5', 'email', ['to' => 'a@b.test', 'subject' => 's', 'body' => 'b']), // denied
         ]));
 
@@ -603,7 +604,7 @@ class JourneyNodeEntitlementTest extends TestCase
         // because structural validity is checked first.
         $this->actingAs($user)->postJson(self::ENDPOINT, $this->payload([
             $this->node('n1', 'quantum_teleport'),
-            $this->node('n2', 'code', ['language' => 'javascript', 'code' => 'x']),
+            $this->node('n2', 'code', ['language' => 'javascript', 'code' => 'output = 1;']),
         ]))->assertStatus(422);
     }
 

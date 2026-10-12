@@ -9,6 +9,16 @@ import AppLayout from './AppLayout';
  * relative order of the items a user can already see, and that no entry is duplicated.
  */
 
+// AppLayout/ProtectedRoute read module visibility through useEffectiveHasModule
+// (tenant-aware); route it to this test's mocked hasModule so the test keeps
+// controlling visibility the way it did before that hook existed.
+vi.mock('../../core/context/TenantContext', () => ({
+  useTenant: () => ({ selectedAccountId: null, selectedAccount: null, accounts: [], isLoadingAccounts: false, canSwitchClients: false, selectAccount: vi.fn() }),
+}));
+vi.mock('../../core/hooks/useEffectiveHasModule', async () => {
+  const { useAuth } = await import('../../core/context/AuthContext');
+  return { useEffectiveHasModule: () => useAuth().hasModule };
+});
 vi.mock('./Header', () => ({ default: () => null }));
 
 const auth = { superAdmin: false, agent: false };

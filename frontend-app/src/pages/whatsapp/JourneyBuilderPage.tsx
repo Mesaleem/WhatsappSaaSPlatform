@@ -719,7 +719,7 @@ function JourneyCanvasEditor({
   // on its Create Journey dialog; this mirrors that, using the same
   // linked-numbers list the alerts "Send from" picker already uses
   // (senderNumberService — see its docblock).
-  const [channelIds, setChannelIds] = useState<number[]>(initialFlow?.whatsappNumbers?.map((n) => n.id) ?? []);
+  const [channelIds, setChannelIds] = useState<number[]>(initialFlow?.whatsapp_numbers?.map((n) => n.id) ?? []);
   const [availableChannels, setAvailableChannels] = useState<SenderNumber[]>([]);
   useEffect(() => {
     senderNumberService

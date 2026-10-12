@@ -40,7 +40,11 @@ class JourneyCodeNodeTest extends TestCase
         parent::setUp();
         $this->seed(RolePermissionSeeder::class);
         $this->seed(Phase1FoundationSeeder::class);
-        Http::fake(['*' => Http::response(['success' => true, 'message_id' => 'QR_OK'], 200)]);
+        // 'business' is the Meta-engine plan, so sends go to the Graph API.
+        Http::fake([
+            'graph.facebook.com/*' => Http::response(['messages' => [['id' => 'wamid.'.uniqid()]]], 200),
+            '*' => Http::response(['success' => true, 'message_id' => 'QR_OK'], 200),
+        ]);
     }
 
     // ================================================================== fixtures
@@ -57,7 +61,14 @@ class JourneyCodeNodeTest extends TestCase
             'gateway_order_id' => 'order_'.uniqid(), 'status' => 'pending',
         ]);
         app(InvoiceCreditService::class)->markPaidAndCreditQuota($invoice->id, 'pay_'.uniqid());
-        WhatsAppSession::create(['account_id' => $account->id, 'status' => 'connected']);
+        // Meta credentials, as in JourneyRuntimeSafetyTest: without them the
+        // Meta driver refuses every send ("no Meta credentials saved yet").
+        WhatsAppSession::create([
+            'account_id' => $account->id, 'status' => 'connected',
+            'meta_phone_number_id' => '1098'.random_int(100000000, 999999999),
+            'meta_waba_id' => '123456789012345',
+            'meta_access_token' => 'EAAG_p57_token_0123456789',
+        ]);
 
         return $account->fresh();
     }
@@ -82,7 +93,9 @@ class JourneyCodeNodeTest extends TestCase
 
     private function msg(string $id, string $text): array
     {
-        return ['id' => $id, 'type' => 'message', 'data' => ['text' => $text]];
+        // 'text', not the legacy 'message' node: only 'text' fills {{variables}}
+        // (renderText), which is how a code node's output reaches the user.
+        return ['id' => $id, 'type' => 'text', 'data' => ['text' => $text]];
     }
 
     private function codeNode(string $code, string $outputVariable = 'result'): array

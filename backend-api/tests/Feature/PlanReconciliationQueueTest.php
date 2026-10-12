@@ -76,7 +76,9 @@ class PlanReconciliationQueueTest extends TestCase
     /** @return array<int, string> the business bundle without 'ads' */
     private function bundleWithoutAds(): array
     {
-        return Plan::where('slug', 'business')->firstOrFail()->capabilities->pluck('slug')->reject(fn ($s) => $s === 'ads')->values()->all();
+        // + api_installations: a plan with external_api must carry it (with a
+        // limit) on any bundle edit -- see Phase1FoundationSeeder's note.
+        return Plan::where('slug', 'business')->firstOrFail()->capabilities->pluck('slug')->reject(fn ($s) => $s === 'ads')->push('api_installations')->values()->all();
     }
 
     private function pending(?string $queue = null): int

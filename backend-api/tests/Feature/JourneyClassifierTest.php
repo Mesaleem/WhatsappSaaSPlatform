@@ -39,6 +39,7 @@ use Tests\TestCase;
 class JourneyClassifierTest extends TestCase
 {
     use RefreshDatabase;
+    use \Tests\Concerns\SendsJourneyChannel;
 
     private const ENDPOINT = '/api/whatsapp/flows';
 

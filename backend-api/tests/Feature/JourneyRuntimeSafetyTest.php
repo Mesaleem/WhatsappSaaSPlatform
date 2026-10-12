@@ -42,6 +42,7 @@ use Tests\TestCase;
 class JourneyRuntimeSafetyTest extends TestCase
 {
     use RefreshDatabase;
+    use \Tests\Concerns\SendsJourneyChannel;
 
     private const PHONE = '919812345678';
 
@@ -318,7 +319,8 @@ class JourneyRuntimeSafetyTest extends TestCase
     {
         $client = $this->account();
 
-        $this->actingAs($this->superAdmin())->postJson(self::FLOWS."?account_id={$client->id}", $this->payload([['id' => 'x', 'type' => 'code', 'data' => ['language' => 'javascript', 'code' => 'x']]]))
+        // An api node: still has no runtime (code nodes do now), same example as test 2.
+        $this->actingAs($this->superAdmin())->postJson(self::FLOWS."?account_id={$client->id}", $this->payload([['id' => 'x', 'type' => 'api', 'data' => ['method' => 'GET', 'url' => 'https://api.test/v1']]]))
             ->assertStatus(422)->assertJsonPath('error_code', 'JOURNEY_NOT_PUBLISHABLE');
 
         // Management itself is unchanged: an executable journey still saves for the client.
@@ -733,7 +735,9 @@ class JourneyRuntimeSafetyTest extends TestCase
         $this->assertSame(['Before', 'Have a look'], $this->sent($account));
         $this->assertSame(WhatsAppFlowSession::STATUS_COMPLETED, $this->flowSession($account)->status);
 
-        $call = collect($this->calls)->firstWhere(fn ($c) => str_contains($c['url'], 'graph.facebook.com'));
+        // On a Meta account the 'Before' text is a Graph API call too, so take
+        // the last one (the product message), not the first.
+        $call = collect($this->calls)->last(fn ($c) => str_contains($c['url'], 'graph.facebook.com'));
         $this->assertSame('interactive', $call['type'] ?? null);
         $this->assertSame('product', $call['interactive']['type'] ?? null);
         $this->assertSame('cat_1', $call['interactive']['action']['catalog_id'] ?? null);
@@ -787,7 +791,13 @@ class JourneyRuntimeSafetyTest extends TestCase
 
     public function test_23c_a_catalog_or_product_node_is_denied_without_the_commerce_capability(): void
     {
-        $account = $this->account('business'); // no 'commerce' grant
+        $account = $this->account('business');
+        // The business plan bundles 'commerce' (Phase1FoundationSeeder), so
+        // revoke it to test the gate.
+        AccountEntitlement::query()
+            ->where('account_id', $account->id)
+            ->where('capability_id', Capability::where('slug', 'commerce')->value('id'))
+            ->update(['revoked_at' => now()]);
 
         $this->flow($account, [
             ['id' => 'p', 'type' => 'product', 'data' => ['catalogId' => 'cat_1', 'productId' => 'sku_1']],
