@@ -52,6 +52,10 @@ class SocialGatewayController extends Controller
             // in the same request — an explicit value always wins over
             // "generate me one".
             'regenerate_webhook_verify_token' => ['sometimes', 'boolean'],
+            // Optional permission groups (Meta only for now) -- see
+            // MetaOAuthProvider::OPTIONAL_SCOPE_GROUPS.
+            'scope_groups' => ['sometimes', 'nullable', 'array'],
+            'scope_groups.*' => ['string', \Illuminate\Validation\Rule::in(array_keys($this->scopeGroupsFor($provider)))],
         ]);
 
         $config = SocialProviderConfig::firstOrNew(['provider' => $provider]);
@@ -85,6 +89,33 @@ class SocialGatewayController extends Controller
             'redirect_uri' => $config->redirect_uri,
             'webhook_verify_token_set' => (bool) $config->webhook_verify_token,
             'webhook_url' => url("/api/social/webhook/{$config->provider}"),
+            'scope_groups' => array_values(is_array($config->scope_groups) ? $config->scope_groups : []),
+            'available_scope_groups' => collect($this->scopeGroupsFor($config->provider))
+                ->map(fn (array $group, string $key) => ['key' => $key] + $group)
+                ->values()
+                ->all(),
         ];
+    }
+
+    /**
+     * Optional permission groups a provider supports, keyed by group.
+     *
+     * @return array<string, array{label: string, permissions: list<string>}>
+     */
+    private function scopeGroupsFor(string $provider): array
+    {
+        if ($provider !== 'meta') {
+            return [];
+        }
+
+        $groups = [];
+        foreach (\App\Services\SocialAuth\MetaOAuthProvider::OPTIONAL_SCOPE_GROUPS as $key => $permissions) {
+            $groups[$key] = [
+                'label' => \App\Services\SocialAuth\MetaOAuthProvider::OPTIONAL_SCOPE_GROUP_LABELS[$key] ?? $key,
+                'permissions' => $permissions,
+            ];
+        }
+
+        return $groups;
     }
 }

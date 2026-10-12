@@ -78,6 +78,17 @@ class MetaOAuthProvider implements SocialOAuthProviderInterface
         }
 
         $cancelled = $error === 'access_denied' || ($query['error_reason'] ?? null) === 'user_denied';
+        $description = (string) ($query['error_description'] ?? '');
+
+        // A permission switched on in Social Gateway Settings that the Meta app
+        // itself doesn't have yet: say exactly that, instead of "try again".
+        if (! $cancelled && stripos($description, 'invalid scope') !== false) {
+            return [
+                'cancelled' => false,
+                'message' => 'Meta rejected a permission this platform asked for ('.mb_substr($description, 0, 200).'). '
+                    .'A Super Admin should add it to the Meta app, or switch it off in Social Gateway Settings.',
+            ];
+        }
 
         return [
             'cancelled' => $cancelled,
@@ -120,25 +131,43 @@ class MetaOAuthProvider implements SocialOAuthProviderInterface
      * META_OAUTH_MESSAGING_SCOPES) after adding the use case in the Meta Developer Dashboard.
      * A tenant connected before a group was enabled must reconnect to grant it.
      */
-    private const OPTIONAL_SCOPE_GROUPS = [
+    public const OPTIONAL_SCOPE_GROUPS = [
         // Instagram Business account profile/media through the linked Page.
         'instagram_scopes' => ['instagram_basic'],
         // Phase 4 — Unified Social Inbox (Messenger / Instagram DMs) and private replies to comments.
         'messaging_scopes' => ['pages_messaging', 'instagram_manage_messages'],
+        // Publishing Facebook Page posts and Instagram posts/reels (organic posts).
+        'publishing_scopes' => ['pages_manage_posts', 'instagram_basic', 'instagram_content_publish'],
+        // Lead Ads: read lead form submissions and subscribe a Page to its leadgen webhook.
+        'leads_scopes' => ['leads_retrieval', 'pages_manage_metadata'],
     ];
 
-    /** @return list<string> the scopes sent to Meta on connect */
-    public function scopes(): array
+    /** Super Admin-facing labels for OPTIONAL_SCOPE_GROUPS (Social Gateway Settings). */
+    public const OPTIONAL_SCOPE_GROUP_LABELS = [
+        'instagram_scopes' => 'Instagram account access',
+        'messaging_scopes' => 'Messenger & Instagram messages (Social Inbox)',
+        'publishing_scopes' => 'Publish posts & reels (Facebook Page + Instagram)',
+        'leads_scopes' => 'Lead Ads (lead forms)',
+    ];
+
+    /**
+     * A group is on when the Super Admin switched it on in Social Gateway
+     * Settings (scope_groups on the provider config) or its .env flag is set.
+     *
+     * @return list<string> the scopes sent to Meta on connect
+     */
+    public function scopes(?SocialProviderConfig $config = null): array
     {
         $scopes = self::CORE_SCOPES;
+        $enabled = is_array($config?->scope_groups) ? $config->scope_groups : [];
 
         foreach (self::OPTIONAL_SCOPE_GROUPS as $flag => $group) {
-            if ((bool) config("social.meta_oauth.{$flag}", false)) {
+            if (in_array($flag, $enabled, true) || (bool) config("social.meta_oauth.{$flag}", false)) {
                 array_push($scopes, ...$group);
             }
         }
 
-        return $scopes;
+        return array_values(array_unique($scopes));
     }
 
     public function buildAuthorizationUrl(SocialProviderConfig $config, string $state): string
@@ -147,7 +176,7 @@ class MetaOAuthProvider implements SocialOAuthProviderInterface
             'client_id' => $config->client_id,
             'redirect_uri' => $config->redirect_uri,
             'state' => $state,
-            'scope' => implode(',', $this->scopes()),
+            'scope' => implode(',', $this->scopes($config)),
             'response_type' => 'code',
         ]);
 

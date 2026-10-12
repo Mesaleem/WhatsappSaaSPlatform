@@ -68,6 +68,7 @@ class SocialProviderConfig extends Model
         'redirect_uri',
         'webhook_verify_token',
         'is_active',
+        'scope_groups',
     ];
 
     protected $hidden = [
@@ -80,6 +81,7 @@ class SocialProviderConfig extends Model
     {
         return [
             'is_active' => 'boolean',
+            'scope_groups' => 'array',
             // Same Crypt::encryptString/decryptString transparent cast used
             // for PaymentGatewaySetting's key/secret columns.
             'client_id' => \App\Casts\EncryptedOrNull::class,

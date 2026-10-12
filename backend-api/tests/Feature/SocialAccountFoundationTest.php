@@ -494,6 +494,53 @@ class SocialAccountFoundationTest extends TestCase
         $this->assertSame($all, array_values(array_unique($all)));
     }
 
+    public function test_a_super_admin_switches_publishing_and_lead_permissions_on_from_social_gateway_settings(): void
+    {
+        $superAdmin = $this->user(null, 'super_admin');
+        $admin = $this->user($this->tenant());
+
+        // Off by default: none of the new permissions are requested.
+        $default = $this->authorizationQuery($admin)['scope'];
+        foreach (['pages_manage_posts', 'instagram_content_publish', 'leads_retrieval', 'pages_manage_metadata'] as $scope) {
+            $this->assertStringNotContainsString($scope, $default);
+        }
+
+        $this->actingAs($superAdmin)->postJson('/api/admin/social/provider-configs/meta', [
+            'scope_groups' => ['publishing_scopes', 'leads_scopes'],
+        ])->assertOk()
+            ->assertJsonPath('data.scope_groups', ['publishing_scopes', 'leads_scopes'])
+            ->assertJsonPath('data.available_scope_groups.2.key', 'publishing_scopes');
+
+        $scopes = explode(',', $this->authorizationQuery($admin)['scope']);
+        foreach (['pages_manage_posts', 'instagram_basic', 'instagram_content_publish', 'leads_retrieval', 'pages_manage_metadata'] as $scope) {
+            $this->assertContains($scope, $scopes);
+        }
+        $this->assertSame($scopes, array_values(array_unique($scopes)), 'instagram_basic is requested once even if two groups need it');
+
+        // Switching them off again stops requesting them.
+        $this->actingAs($superAdmin)->postJson('/api/admin/social/provider-configs/meta', ['scope_groups' => []])->assertOk();
+        $this->assertStringNotContainsString('pages_manage_posts', $this->authorizationQuery($admin)['scope']);
+    }
+
+    public function test_an_unknown_permission_group_is_refused(): void
+    {
+        $this->actingAs($this->user(null, 'super_admin'))->postJson('/api/admin/social/provider-configs/meta', [
+            'scope_groups' => ['everything'],
+        ])->assertStatus(422)->assertJsonValidationErrors('scope_groups.0');
+    }
+
+    public function test_an_invalid_scopes_error_from_meta_says_what_to_fix(): void
+    {
+        $error = (new \App\Services\SocialAuth\MetaOAuthProvider())->callbackError([
+            'error' => 'invalid_request',
+            'error_description' => 'Invalid Scopes: pages_manage_posts',
+        ]);
+
+        $this->assertFalse($error['cancelled']);
+        $this->assertStringContainsString('pages_manage_posts', $error['message']);
+        $this->assertStringContainsString('Social Gateway Settings', $error['message']);
+    }
+
     public function test_the_callback_still_verifies_state_and_exchanges_the_code_with_the_default_scopes(): void
     {
         $admin = $this->user($this->tenant());

@@ -111,6 +111,8 @@ function ProviderCard({ config, onSaved }: ProviderCardProps) {
   const [clientId, setClientId] = useState('');
   const [clientSecret, setClientSecret] = useState('');
   const [webhookToken, setWebhookToken] = useState('');
+  const [scopeGroups, setScopeGroups] = useState<string[]>(config.scope_groups ?? []);
+  const availableScopeGroups = config.available_scope_groups ?? [];
 
   const [isSaving, setIsSaving] = useState(false);
   const [isRegenerating, setIsRegenerating] = useState(false);
@@ -139,6 +141,7 @@ function ProviderCard({ config, onSaved }: ProviderCardProps) {
         ...(clientId.trim() ? { client_id: clientId.trim() } : {}),
         ...(clientSecret.trim() ? { client_secret: clientSecret.trim() } : {}),
         ...(webhookToken.trim() ? { webhook_verify_token: webhookToken.trim() } : {}),
+        ...(availableScopeGroups.length > 0 ? { scope_groups: scopeGroups } : {}),
         ...extra,
       });
       onSaved(result.data);
@@ -263,6 +266,35 @@ function ProviderCard({ config, onSaved }: ProviderCardProps) {
           />
         </div>
       </div>
+
+      {availableScopeGroups.length > 0 && (
+        <fieldset className="mt-4 rounded-lg border border-slate-200 p-4" data-testid={`scope-groups-${config.provider}`}>
+          <legend className="px-1 text-xs font-medium text-slate-700">Extra permissions asked when a client connects</legend>
+          <p className="text-xs text-slate-500">
+            Turn one on only after its permissions are added to your {PROVIDER_LABEL[config.provider]} app (and approved in App
+            Review for clients outside your app's roles). Otherwise Meta refuses the whole connection. Clients who already
+            connected must reconnect to grant a newly enabled permission.
+          </p>
+          <div className="mt-3 space-y-2">
+            {availableScopeGroups.map((group) => (
+              <label key={group.key} className="flex items-start gap-2 text-sm text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={scopeGroups.includes(group.key)}
+                  onChange={(e) =>
+                    setScopeGroups((prev) => (e.target.checked ? [...prev, group.key] : prev.filter((k) => k !== group.key)))
+                  }
+                  className="mt-0.5 h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                />
+                <span>
+                  {group.label}
+                  <span className="block font-mono text-[11px] text-slate-400">{group.permissions.join(', ')}</span>
+                </span>
+              </label>
+            ))}
+          </div>
+        </fieldset>
+      )}
 
       {error && (
         <DismissibleAlert className="mt-4 flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">

@@ -146,6 +146,9 @@ export interface SocialProviderConfigRow {
   redirect_uri: string | null;
   webhook_verify_token_set: boolean;
   webhook_url: string;
+  /** Optional permission groups switched on (Meta only today). */
+  scope_groups: string[];
+  available_scope_groups: { key: string; label: string; permissions: string[] }[];
 }
 
 /** POST /api/admin/social/provider-configs/{provider} — partial update; omitted fields are left untouched. */
@@ -155,4 +158,5 @@ export interface UpdateSocialProviderConfigPayload {
   redirect_uri?: string | null;
   is_active?: boolean;
   regenerate_webhook_verify_token?: boolean;
+  scope_groups?: string[];
 }
