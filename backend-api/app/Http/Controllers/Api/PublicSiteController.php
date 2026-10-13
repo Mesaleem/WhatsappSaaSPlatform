@@ -62,7 +62,49 @@ class PublicSiteController extends Controller
 
         ContactMessage::create($data + ['ip' => $request->ip()]);
 
+        $this->captureCrmLead($data, $request);
+
         return response()->json(['message' => 'Message received.'], 201);
+    }
+
+    /**
+     * CRM Sales Phase 1 — a website enquiry with a phone number also becomes a lead in
+     * the Super Admin's own CRM (the Platform account; this is WapHub's own website),
+     * source `website`. Best effort: the visitor's message is already saved, so a CRM
+     * problem is logged and never fails the form.
+     *
+     * @param array<string, mixed> $data
+     */
+    private function captureCrmLead(array $data, Request $request): void
+    {
+        if (blank($data['phone'] ?? null)) {
+            return;
+        }
+
+        try {
+            $platform = app(\App\Services\Crm\PlatformCrmAccount::class)->find();
+            if (! $platform) {
+                return;
+            }
+
+            app(\App\Services\Crm\CrmLeadService::class)->create($platform, [
+                'phone_number' => (string) $data['phone'],
+                'name' => $data['name'],
+                'email' => $data['email'],
+                'source' => \App\Models\CrmLead::SOURCE_WEBSITE,
+                'company_name' => $data['company'] ?? null,
+                'requirement' => $data['message'],
+                'attribution' => array_filter([
+                    'channel' => 'website_contact_form',
+                    'topic' => $data['topic'] ?? null,
+                    'referrer' => mb_substr((string) $request->headers->get('referer', ''), 0, 255) ?: null,
+                ]),
+            ]);
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::warning('PublicSiteController: the website enquiry was saved but could not be added to the CRM.', [
+                'exception' => class_basename($e),
+            ]);
+        }
     }
 
     /**

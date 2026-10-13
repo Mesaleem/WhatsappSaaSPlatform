@@ -618,9 +618,11 @@ class CreditConsumptionTest extends TestCase
             ->values()
             ->all();
 
-        // Only the Task 1 Super Admin operations mutate credits over HTTP.
+        // Only the Task 1 Super Admin operations mutate credits over HTTP (plus the Super
+        // Admin's free-daily-credits SETTING, which moves no balance).
         $this->assertEqualsCanonicalizing([
             'api/admin/accounts/{id}/credits/grant', 'api/admin/accounts/{id}/credits/adjust', 'api/admin/accounts/{id}/credits/refund',
+            'api/admin/ai/free-daily-credits',
         ], $spendingRoutes);
 
         $account = $this->funded(100);

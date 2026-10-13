@@ -326,6 +326,61 @@ class CrmLeadController extends Controller
     }
 
     /**
+     * POST /api/crm/leads/{id}/convert — CRM Sales Phase 1. Converts the lead into a
+     * customer: an existing or new company (crm_company_id, or company{name, gstin,
+     * ...}, deduped by GSTIN then name) and, when create_deal is true, a deal (deal{name,
+     * value, stage_id, expected_close_date, owner_user_id}). Idempotent: converting
+     * again returns the same records and never makes a second deal. See
+     * CrmLeadService::convert().
+     */
+    public function convert(Request $request, int $id): JsonResponse
+    {
+        $account = $this->requireAccount($request);
+        $data = $request->validate([
+            'crm_company_id' => ['nullable', 'integer'],
+            'company' => ['nullable', 'array'],
+            'company.name' => ['required_with:company', 'string', 'max:191'],
+            'company.gstin' => ['nullable', 'string', 'regex:/^[0-9]{2}[A-Za-z0-9]{13}$/'],
+            'company.industry' => ['nullable', 'string', 'max:100'],
+            'company.website' => ['nullable', 'string', 'max:255'],
+            'company.city' => ['nullable', 'string', 'max:100'],
+            'company.state' => ['nullable', 'string', 'max:100'],
+            'create_deal' => ['sometimes', 'boolean'],
+            'deal' => ['nullable', 'array'],
+            'deal.name' => ['nullable', 'string', 'max:191'],
+            'deal.value' => ['nullable', 'numeric', 'min:0', 'max:999999999999', 'decimal:0,2'],
+            'deal.stage_id' => ['nullable', 'integer'],
+            'deal.expected_close_date' => ['nullable', 'date'],
+            'deal.owner_user_id' => ['nullable', 'integer'],
+        ]);
+
+        $result = $this->leads->convert($this->findOrFail($account->id, $id), $data, $request->user()?->id);
+
+        return response()->json([
+            'message' => 'Lead converted.',
+            'data' => $this->presentCrmLead($result['lead']->load($this->crmLeadRelations())),
+        ]);
+    }
+
+    /**
+     * POST /api/crm/leads/{id}/re-engage — CRM Sales Phase 1. A converted lead is final;
+     * when the customer comes back this creates a NEW lead for the same contact, linked
+     * to the converted one. 422 for a lead that is not converted.
+     */
+    public function reEngage(Request $request, int $id): JsonResponse
+    {
+        $account = $this->requireAccount($request);
+        $data = $request->validate(['requirement' => ['nullable', 'string', 'max:5000']]);
+
+        $lead = $this->leads->reEngage($this->findOrFail($account->id, $id), $data, $request->user()?->id);
+
+        return response()->json([
+            'message' => 'New lead created for the returning customer.',
+            'data' => $this->presentCrmLead($lead->load($this->crmLeadRelations())),
+        ], 201);
+    }
+
+    /**
      * POST /api/crm/leads/{id}/tags/{tag} — Task 7, attach one tag.
      *
      * IDEMPOTENT: attaching a tag the lead already carries is a 200 no-op

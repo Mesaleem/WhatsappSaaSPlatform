@@ -7,6 +7,7 @@ import ConfirmModal from '../../components/common/ConfirmModal';
 import { ClearFiltersButton, Pagination, SearchInput, StatusFilterSelect } from '../../components/common/DataTableControls';
 import { TableSkeletonRows } from '../../components/common/Skeleton';
 import ContactFormModal from '../../components/crm/ContactFormModal';
+import ContactConsentCard from '../../components/crm/sales/ContactConsentCard';
 import {
   EmptyState,
   ErrorBanner,
@@ -187,6 +188,16 @@ export default function CrmContactDetailPage() {
                 </div>
               </dl>
             </Card>
+
+            <ContactConsentCard
+              key={contact.updated_at ?? contact.id}
+              contact={contact}
+              readOnly={readOnly}
+              onSaved={(updated, message) => {
+                contactQuery.setData(() => updated);
+                show(message);
+              }}
+            />
 
             <div className="space-y-3">
               <h2 className="text-sm font-semibold text-slate-900">Leads</h2>

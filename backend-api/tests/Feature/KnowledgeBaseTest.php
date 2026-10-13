@@ -736,7 +736,8 @@ class KnowledgeBaseTest extends TestCase
         $starter = $this->tenant(100, 'starter');
 
         $this->actingAs($superAdmin)->postJson(self::API, ['name' => 'x'])->assertStatus(422)->assertJsonPath('error_code', 'AI_TARGET_ACCOUNT_REQUIRED');
-        $this->actingAs($superAdmin)->postJson(self::API.'?account_id='.$starter->id, ['name' => 'x'])->assertForbidden()->assertJsonPath('error_code', 'AI_CAPABILITY_UNAVAILABLE');
+        // Owner rule (2026-10-13): the Super Admin has AI without limits, also on a plan without AI.
+        $this->actingAs($superAdmin)->postJson(self::API.'?account_id='.$starter->id, ['name' => 'x'])->assertCreated();
         $id = $this->actingAs($superAdmin)->postJson(self::API.'?account_id='.$client->id, ['name' => 'For client'])->assertCreated()->json('data.id');
         $this->assertSame($client->id, KnowledgeBase::find($id)->account_id, 'owned by the selected client');
 

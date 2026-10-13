@@ -104,6 +104,11 @@ Route::prefix('public')->group(function () {
     Route::get('/site', [PublicSiteController::class, 'site'])->middleware('throttle:120,1');
     Route::get('/plans', [PublicSiteController::class, 'plans'])->middleware('throttle:120,1');
     Route::post('/contact', [PublicSiteController::class, 'contact'])->middleware('throttle:5,10');
+    // CRM Sales Phases 3–4 — a customer opens / pays a document from its unguessable link (no login).
+    Route::get('/crm-documents/{token}', [\App\Http\Controllers\Api\CrmPublicDocumentController::class, 'show'])->middleware('throttle:60,1');
+    Route::get('/crm-documents/{token}/pdf', [\App\Http\Controllers\Api\CrmPublicDocumentController::class, 'pdf'])->middleware('throttle:60,1');
+    Route::post('/crm-documents/{token}/pay', [\App\Http\Controllers\Api\CrmPublicDocumentController::class, 'pay'])->middleware('throttle:10,1');
+    Route::post('/crm-documents/{token}/confirm', [\App\Http\Controllers\Api\CrmPublicDocumentController::class, 'confirm'])->middleware('throttle:20,1');
 });
 
 // Social/Ads Launcher Overhaul — Step 2. Publicly fetchable ad-creative
@@ -145,6 +150,9 @@ Route::middleware('internal.secret')->prefix('internal/whatsapp-auth')->group(fu
 // Production Polish — see AppServiceProvider's 'meta-webhook' limiter
 // docblock for the verified root cause (this app's 'api' middleware
 // group has NO throttle at all without this).
+// CRM Sales Phase 3 — the tenant's own gateway webhook (signature verified with the tenant's secret).
+Route::post('/webhooks/crm-payments/{webhookToken}', [\App\Http\Controllers\Api\CrmPublicDocumentController::class, 'webhook'])->middleware('throttle:120,1');
+
 Route::middleware('throttle:meta-webhook')->group(function () {
     Route::get('/webhooks/meta', [MetaWebhookController::class, 'verify']);
     Route::post('/webhooks/meta', [MetaWebhookController::class, 'handle']);
@@ -944,6 +952,9 @@ Route::middleware('auth:sanctum')->group(function () {
                      * through CrmLeadService's single status step.
                      */
                     Route::patch('/{id}/status', [CrmLeadController::class, 'status'])->whereNumber('id');
+                    // CRM Sales Phase 1 — Convert Lead (idempotent) and Re-engage (a converted lead is final).
+                    Route::post('/{id}/convert', [CrmLeadController::class, 'convert'])->whereNumber('id');
+                    Route::post('/{id}/re-engage', [CrmLeadController::class, 'reEngage'])->whereNumber('id');
 
                     /*
                      * Phase 6 CRM Task 9 — bulk operations over up to
@@ -986,6 +997,91 @@ Route::middleware('auth:sanctum')->group(function () {
                  * details. See CrmAssigneeController.
                  */
                 Route::get('assignees', [CrmAssigneeController::class, 'index']);
+
+                /*
+                 * CRM Sales Phase 1 — companies, deal pipeline stages, deals and activities.
+                 * Same gates as every route in this group (crm.target, lead_crm module,
+                 * manage-crm, crm capability); tenant-scoped lookups, identical 404s.
+                 */
+                Route::prefix('companies')->group(function () {
+                    Route::get('/', [\App\Http\Controllers\Api\CrmCompanyController::class, 'index']);
+                    Route::post('/', [\App\Http\Controllers\Api\CrmCompanyController::class, 'store']);
+                    Route::get('/{id}', [\App\Http\Controllers\Api\CrmCompanyController::class, 'show'])->whereNumber('id');
+                    Route::match(['put', 'patch'], '/{id}', [\App\Http\Controllers\Api\CrmCompanyController::class, 'update'])->whereNumber('id');
+                    Route::delete('/{id}', [\App\Http\Controllers\Api\CrmCompanyController::class, 'destroy'])->whereNumber('id');
+                });
+                Route::prefix('stages')->group(function () {
+                    Route::get('/', [\App\Http\Controllers\Api\CrmPipelineStageController::class, 'index']);
+                    Route::post('/', [\App\Http\Controllers\Api\CrmPipelineStageController::class, 'store']);
+                    Route::post('/reorder', [\App\Http\Controllers\Api\CrmPipelineStageController::class, 'reorder']);
+                    Route::match(['put', 'patch'], '/{id}', [\App\Http\Controllers\Api\CrmPipelineStageController::class, 'update'])->whereNumber('id');
+                    Route::delete('/{id}', [\App\Http\Controllers\Api\CrmPipelineStageController::class, 'destroy'])->whereNumber('id');
+                });
+                Route::prefix('deals')->group(function () {
+                    Route::get('/', [\App\Http\Controllers\Api\CrmDealController::class, 'index']);
+                    Route::get('/board', [\App\Http\Controllers\Api\CrmDealController::class, 'board']);
+                    Route::post('/', [\App\Http\Controllers\Api\CrmDealController::class, 'store']);
+                    Route::get('/{id}', [\App\Http\Controllers\Api\CrmDealController::class, 'show'])->whereNumber('id');
+                    Route::match(['put', 'patch'], '/{id}', [\App\Http\Controllers\Api\CrmDealController::class, 'update'])->whereNumber('id');
+                    Route::patch('/{id}/stage', [\App\Http\Controllers\Api\CrmDealController::class, 'stage'])->whereNumber('id');
+                    Route::delete('/{id}', [\App\Http\Controllers\Api\CrmDealController::class, 'destroy'])->whereNumber('id');
+                });
+                /*
+                 * CRM Sales Phases 2–6 — products, sales documents, payments, reminders,
+                 * settings and the sales report. The CRM gates of this group, plus
+                 * manage-crm-documents (catalogue, documents, sending, seller profile) or
+                 * manage-crm-payments (payments, gateway, reminders).
+                 */
+                Route::middleware('permission:manage-crm-documents')->group(function () {
+                    Route::get('products', [\App\Http\Controllers\Api\CrmProductController::class, 'index']);
+                    Route::post('products', [\App\Http\Controllers\Api\CrmProductController::class, 'store']);
+                    Route::match(['put', 'patch'], 'products/{id}', [\App\Http\Controllers\Api\CrmProductController::class, 'update'])->whereNumber('id');
+                    Route::delete('products/{id}', [\App\Http\Controllers\Api\CrmProductController::class, 'destroy'])->whereNumber('id');
+
+                    Route::get('documents', [\App\Http\Controllers\Api\CrmDocumentController::class, 'index']);
+                    Route::post('documents', [\App\Http\Controllers\Api\CrmDocumentController::class, 'store']);
+                    Route::get('documents/{id}', [\App\Http\Controllers\Api\CrmDocumentController::class, 'show'])->whereNumber('id');
+                    Route::match(['put', 'patch'], 'documents/{id}', [\App\Http\Controllers\Api\CrmDocumentController::class, 'update'])->whereNumber('id');
+                    Route::delete('documents/{id}', [\App\Http\Controllers\Api\CrmDocumentController::class, 'destroy'])->whereNumber('id');
+                    Route::post('documents/{id}/issue', [\App\Http\Controllers\Api\CrmDocumentController::class, 'issue'])->whereNumber('id');
+                    Route::post('documents/{id}/status', [\App\Http\Controllers\Api\CrmDocumentController::class, 'status'])->whereNumber('id');
+                    Route::post('documents/{id}/convert', [\App\Http\Controllers\Api\CrmDocumentController::class, 'convert'])->whereNumber('id');
+                    Route::post('documents/{id}/credit-note', [\App\Http\Controllers\Api\CrmDocumentController::class, 'creditNote'])->whereNumber('id');
+                    Route::get('documents/{id}/pdf', [\App\Http\Controllers\Api\CrmDocumentController::class, 'pdf'])->whereNumber('id');
+                    Route::post('documents/{id}/send', [\App\Http\Controllers\Api\CrmDocumentController::class, 'send'])->whereNumber('id');
+                    Route::get('documents/{id}/reminders', [\App\Http\Controllers\Api\CrmDocumentController::class, 'reminders'])->whereNumber('id');
+                    Route::post('documents/{id}/attachment', [\App\Http\Controllers\Api\CrmDocumentController::class, 'uploadAttachment'])->whereNumber('id');
+                    Route::get('documents/{id}/attachment', [\App\Http\Controllers\Api\CrmDocumentController::class, 'downloadAttachment'])->whereNumber('id');
+
+                    Route::get('settings/profile', [\App\Http\Controllers\Api\CrmSalesSettingsController::class, 'profile']);
+                    Route::put('settings/profile', [\App\Http\Controllers\Api\CrmSalesSettingsController::class, 'saveProfile']);
+                    Route::get('reports/sales', \App\Http\Controllers\Api\CrmSalesReportController::class);
+                });
+                Route::middleware('permission:manage-crm-payments')->group(function () {
+                    Route::get('payments', [\App\Http\Controllers\Api\CrmPaymentController::class, 'index']);
+                    Route::post('payments', [\App\Http\Controllers\Api\CrmPaymentController::class, 'store']);
+                    Route::get('payments/{id}', [\App\Http\Controllers\Api\CrmPaymentController::class, 'show'])->whereNumber('id');
+                    Route::post('payments/{id}/allocate', [\App\Http\Controllers\Api\CrmPaymentController::class, 'allocate'])->whereNumber('id');
+                    Route::post('payments/{id}/reverse', [\App\Http\Controllers\Api\CrmPaymentController::class, 'reverse'])->whereNumber('id');
+                    Route::get('payments/{id}/receipt', [\App\Http\Controllers\Api\CrmPaymentController::class, 'receipt'])->whereNumber('id');
+                    Route::post('payments/{id}/send-receipt', [\App\Http\Controllers\Api\CrmPaymentController::class, 'sendReceipt'])->whereNumber('id');
+                    Route::post('documents/{id}/remind', [\App\Http\Controllers\Api\CrmDocumentController::class, 'remind'])->whereNumber('id');
+                    Route::get('reminders', [\App\Http\Controllers\Api\CrmPaymentController::class, 'reminders']);
+                    Route::post('reminders/{id}/approve', [\App\Http\Controllers\Api\CrmPaymentController::class, 'approveReminder'])->whereNumber('id');
+                    Route::post('reminders/{id}/skip', [\App\Http\Controllers\Api\CrmPaymentController::class, 'skipReminder'])->whereNumber('id');
+
+                    Route::get('settings/gateway', [\App\Http\Controllers\Api\CrmSalesSettingsController::class, 'gateway']);
+                    Route::put('settings/gateway', [\App\Http\Controllers\Api\CrmSalesSettingsController::class, 'saveGateway']);
+                    Route::get('settings/reminders', [\App\Http\Controllers\Api\CrmSalesSettingsController::class, 'reminders']);
+                    Route::put('settings/reminders', [\App\Http\Controllers\Api\CrmSalesSettingsController::class, 'saveReminders']);
+                });
+
+                Route::prefix('activities')->group(function () {
+                    Route::get('/', [\App\Http\Controllers\Api\CrmActivityController::class, 'index']);
+                    Route::post('/', [\App\Http\Controllers\Api\CrmActivityController::class, 'store']);
+                    Route::match(['put', 'patch'], '/{id}', [\App\Http\Controllers\Api\CrmActivityController::class, 'update'])->whereNumber('id');
+                    Route::delete('/{id}', [\App\Http\Controllers\Api\CrmActivityController::class, 'destroy'])->whereNumber('id');
+                });
 
                 /*
                  * Task 6 — the Kanban/pipeline view. READ-ONLY: moving a

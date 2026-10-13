@@ -304,6 +304,12 @@ class CrmContactController extends Controller
             'name' => $contact->name,
             'phone_number' => $contact->phone_number,
             'email' => $contact->email,
+            // CRM Sales — consent and company.
+            'designation' => $contact->designation,
+            'preferred_channel' => $contact->preferred_channel,
+            'marketing_opt_in' => $contact->marketing_opt_in,
+            'opted_out_at' => $contact->opted_out_at?->toIso8601String(),
+            'crm_company_id' => $contact->crm_company_id,
             'crm_leads_count' => $contact->crm_leads_count,
             'created_at' => $contact->created_at?->toIso8601String(),
             'updated_at' => $contact->updated_at?->toIso8601String(),

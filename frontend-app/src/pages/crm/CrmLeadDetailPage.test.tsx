@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 
 import CrmLeadDetailPage from './CrmLeadDetailPage';
 import crmService from '../../services/crmService';
+import crmSalesService from '../../services/crmSalesService';
 import { apiError, makeContact, makeLead, makeTag, networkError, paginated } from '../../test/crmFixtures';
 
 /**
@@ -25,6 +26,18 @@ vi.mock('../../services/crmService', () => ({
     detachTag: vi.fn(),
     reassignContact: vi.fn(),
     deleteLead: vi.fn(),
+  },
+}));
+
+// CRM Sales Phase 1 — the activity timeline and qualification card on the page.
+vi.mock('../../services/crmSalesService', () => ({
+  default: {
+    listActivities: vi.fn(),
+    createActivity: vi.fn(),
+    updateActivity: vi.fn(),
+    convertLead: vi.fn(),
+    reEngageLead: vi.fn(),
+    updateQualification: vi.fn(),
   },
 }));
 
@@ -69,6 +82,7 @@ const lead = makeLead({
 
 beforeEach(() => {
   auth.readOnly = false;
+  (crmSalesService.listActivities as unknown as Mock).mockResolvedValue(paginated([]));
   crm.getLead.mockResolvedValue(structuredClone(lead));
   crm.assignees.mockResolvedValue([{ id: 7, name: 'Asha' }, { id: 8, name: 'Bala' }]);
   crm.listTags.mockResolvedValue(paginated([makeTag({ id: 3, name: 'Hot' }), makeTag({ id: 5, name: 'VIP' })]));

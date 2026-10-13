@@ -35,6 +35,12 @@ class UpdateCrmContactRequest extends FormRequest
             'phone_number' => ['sometimes', 'string', 'max:32'],
             'name' => ['sometimes', 'nullable', 'string', 'max:255'],
             'email' => ['sometimes', 'nullable', 'email', 'max:255'],
+            // CRM Sales — consent and the person's company / role.
+            'designation' => ['sometimes', 'nullable', 'string', 'max:100'],
+            'preferred_channel' => ['sometimes', 'nullable', 'string', 'in:whatsapp,email,phone'],
+            'marketing_opt_in' => ['sometimes', 'nullable', 'boolean'],
+            'opted_out' => ['sometimes', 'boolean'],
+            'crm_company_id' => ['sometimes', 'nullable', 'integer'],
         ];
     }
 }

@@ -176,12 +176,27 @@ class CrmEntitlementRbacApiTest extends TestCase
     public function test_every_tenant_crm_route_carries_the_full_gate_chain(): void
     {
         $routes = collect(Route::getRoutes()->getRoutes())->filter(fn ($r) => str_starts_with($r->uri(), 'api/crm'));
-        $this->assertCount(31, $routes, 'a CRM route was added or removed — re-check its gates'); // 31 since Phase 10 Task 5 (+ GET/PATCH leads/{id}/conversion-value; both carry the full chain asserted below)
+        // 54 since CRM Sales Phase 1 (+ leads/{id}/convert, leads/{id}/re-engage, and the companies (5),
+        // stages (5), deals (7) and activities (4) routes); 86 since Phases 2–6 (+ products, documents,
+        // payments, reminders, settings, sales report: 32). Every one carries the full chain asserted below.
+        // 90 after the verification follow-up (+ documents/{id}/attachment GET+POST, payments/{id}/receipt, send-receipt).
+        $this->assertCount(90, $routes, 'a CRM route was added or removed — re-check its gates');
 
         foreach ($routes as $route) {
             $mw = $route->gatherMiddleware();
             foreach (['auth:sanctum', 'tenant.isolation', 'subscription.guard', 'module.guard:lead_crm', 'permission:manage-crm', 'capability.guard:crm'] as $required) {
                 $this->assertContains($required, $mw, "{$route->uri()} is missing {$required}");
+            }
+        }
+
+        // CRM Sales Phases 2–6: the financial routes ALSO carry their own permission.
+        foreach ($routes as $route) {
+            $uri = $route->uri();
+            $mw = $route->gatherMiddleware();
+            if (str_ends_with($uri, '/remind') || preg_match('#^api/crm/(payments|reminders|settings/(gateway|reminders))#', $uri)) {
+                $this->assertContains('permission:manage-crm-payments', $mw, "{$uri} is missing manage-crm-payments");
+            } elseif (preg_match('#^api/crm/(products|documents|settings/profile|reports)#', $uri)) {
+                $this->assertContains('permission:manage-crm-documents', $mw, "{$uri} is missing manage-crm-documents");
             }
         }
     }
@@ -203,6 +218,16 @@ class CrmEntitlementRbacApiTest extends TestCase
     {
         foreach (Route::getRoutes()->getRoutes() as $route) {
             $action = (string) ($route->getActionName() ?? '');
+            // CRM Sales Phases 3–4: the customer's document link and the tenant gateway webhook are public by
+            // design (an unguessable token is the access right) — and ONLY at those two prefixes.
+            if (str_contains($action, 'CrmPublicDocumentController@')) {
+                $this->assertTrue(
+                    str_starts_with($route->uri(), 'api/public/crm-documents/') || str_starts_with($route->uri(), 'api/webhooks/crm-payments/'),
+                    "{$action} is exposed at {$route->uri()}",
+                );
+
+                continue;
+            }
             if (preg_match('/\\\\(Crm[A-Za-z]*Controller)@/', $action)) {
                 $this->assertTrue(
                     str_starts_with($route->uri(), 'api/crm') || str_starts_with($route->uri(), 'api/v1/crm'),

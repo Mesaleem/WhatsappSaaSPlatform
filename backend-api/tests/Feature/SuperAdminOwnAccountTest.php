@@ -88,4 +88,11 @@ class SuperAdminOwnAccountTest extends TestCase
 
         $this->assertSame(0, ContactGroup::where('account_id', $this->platform->id)->count());
     }
+
+    public function test_ai_with_no_client_selected_runs_on_the_platform_account(): void
+    {
+        $authorization = app(\App\Services\Ai\AiAuthorizer::class)->forUser($this->superAdmin, null, 'chatbot', null);
+
+        $this->assertSame($this->platform->id, $authorization->account->id);
+    }
 }

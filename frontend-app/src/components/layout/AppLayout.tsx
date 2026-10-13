@@ -8,6 +8,13 @@ import {
   ChevronsRight,
   ClipboardList,
   Columns3,
+  Handshake,
+  ListChecks,
+  FileText,
+  Wallet,
+  Package,
+  SlidersHorizontal,
+  TrendingUp,
   GraduationCap,
   PieChart,
   Code2,
@@ -275,7 +282,17 @@ const NAV_ITEMS: NavItem[] = [
   // capability.
   { label: 'CRM Leads', to: '/crm/leads', icon: UserSearch, tint: NAV_TINTS.social, permission: 'manage-crm', requiresModule: 'lead_crm', requiresCapability: 'crm' },
   { label: 'CRM Pipeline', to: '/crm/pipeline', icon: Columns3, tint: NAV_TINTS.social, permission: 'manage-crm', requiresModule: 'lead_crm', requiresCapability: 'crm' },
+  // CRM Sales Phase 1 — deals (the sale pipeline), follow-up tasks and customer companies; same three gates.
+  { label: 'CRM Deals', to: '/crm/deals', icon: Handshake, tint: NAV_TINTS.social, permission: 'manage-crm', requiresModule: 'lead_crm', requiresCapability: 'crm' },
+  { label: 'CRM Tasks', to: '/crm/tasks', icon: ListChecks, tint: NAV_TINTS.social, permission: 'manage-crm', requiresModule: 'lead_crm', requiresCapability: 'crm' },
   { label: 'CRM Contacts', to: '/crm/contacts', icon: Contact, tint: NAV_TINTS.social, permission: 'manage-crm', requiresModule: 'lead_crm', requiresCapability: 'crm' },
+  { label: 'CRM Companies', to: '/crm/companies', icon: Building2, tint: NAV_TINTS.social, permission: 'manage-crm', requiresModule: 'lead_crm', requiresCapability: 'crm' },
+  // CRM Sales Phases 2–6 — documents and money; the CRM gates plus manage-crm-documents / manage-crm-payments.
+  { label: 'Sales Dashboard', to: '/crm/sales', icon: TrendingUp, tint: NAV_TINTS.social, permission: 'manage-crm-documents', requiresModule: 'lead_crm', requiresCapability: 'crm' },
+  { label: 'Quotes & Invoices', to: '/crm/documents', icon: FileText, tint: NAV_TINTS.social, permission: 'manage-crm-documents', requiresModule: 'lead_crm', requiresCapability: 'crm' },
+  { label: 'Payments Received', to: '/crm/payments', icon: Wallet, tint: NAV_TINTS.social, permission: 'manage-crm-payments', requiresModule: 'lead_crm', requiresCapability: 'crm' },
+  { label: 'Products', to: '/crm/products', icon: Package, tint: NAV_TINTS.social, permission: 'manage-crm-documents', requiresModule: 'lead_crm', requiresCapability: 'crm' },
+  { label: 'Sales Settings', to: '/crm/settings', icon: SlidersHorizontal, tint: NAV_TINTS.social, permission: 'manage-crm-documents', requiresModule: 'lead_crm', requiresCapability: 'crm' },
   { label: 'CRM Tags', to: '/crm/tags', icon: Tags, tint: NAV_TINTS.social, permission: 'manage-crm', requiresModule: 'lead_crm', requiresCapability: 'crm' },
   // Phase 6 CRM Task 12 — same three gates; the API is GET /api/crm/analytics.
   { label: 'CRM Analytics', to: '/crm/analytics', icon: PieChart, tint: NAV_TINTS.social, permission: 'manage-crm', requiresModule: 'lead_crm', requiresCapability: 'crm' },

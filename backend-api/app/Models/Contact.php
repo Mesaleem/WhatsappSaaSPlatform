@@ -44,12 +44,21 @@ class Contact extends Model
         // Phase 6 Hardening (Issue 3) — nullable, not unique, stored as
         // supplied. See the adding migration for why.
         'email',
+        // CRM Sales Phase 1.
+        'crm_company_id',
+        'designation',
+        'preferred_channel',
+        'marketing_opt_in',
+        'opted_out_at',
     ];
 
     protected function casts(): array
     {
         return [
             'account_id' => 'integer',
+            'crm_company_id' => 'integer',
+            'marketing_opt_in' => 'boolean',
+            'opted_out_at' => 'datetime',
         ];
     }
 
@@ -71,7 +80,29 @@ class Contact extends Model
             if ($contact->isDirty('phone_number') && $contact->phone_number !== null) {
                 $contact->phone_number = PhoneNumberNormalizer::normalize((string) $contact->phone_number);
             }
+
+            // CRM Sales Phase 1 — the person's company must be this tenant's.
+            if ($contact->crm_company_id !== null && $contact->isDirty(['crm_company_id', 'account_id'])) {
+                \App\Services\Crm\CrmTenantLinks::assertBelong((int) $contact->account_id, ['crm_company_id' => $contact->crm_company_id]);
+            }
         });
+
+        // CRM Sales Phase 1 — a deleted contact's activities keep their history, unlinked.
+        static::deleted(function (Contact $contact): void {
+            CrmActivity::query()->where('account_id', $contact->account_id)->where('contact_id', $contact->id)->update(['contact_id' => null]);
+        });
+    }
+
+    /** CRM Sales Phase 1 — the company this person works for. */
+    public function company(): BelongsTo
+    {
+        return $this->belongsTo(CrmCompany::class, 'crm_company_id');
+    }
+
+    /** CRM Sales Phase 1. */
+    public function deals(): HasMany
+    {
+        return $this->hasMany(CrmDeal::class);
     }
 
     public function account(): BelongsTo
@@ -149,6 +180,8 @@ class Contact extends Model
         return array_filter([
             'crm_leads' => $this->crmLeads()->count(),
             'group_memberships' => $this->groupMemberships()->count(),
+            // CRM Sales Phase 1 — a deal is for this person; delete or move the deal first.
+            'crm_deals' => $this->deals()->count(),
             // Phase 11 Task 2 — a student / parent / guardian profile hangs off this contact.
         ] + app(\App\Services\Education\EducationContactReferences::class)->blocking($this));
     }

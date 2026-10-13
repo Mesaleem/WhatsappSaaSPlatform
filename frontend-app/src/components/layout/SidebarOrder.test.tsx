@@ -47,7 +47,7 @@ const WORKFLOW = [
   'Developer API',
   'Social Accounts', 'Social Inbox', 'Comment Rules', 'Social Analytics', 'Social Reports',
   'Meta Ads Launcher', 'Ads Dashboard',
-  'Instant Lead CRM', 'CRM Leads', 'CRM Pipeline', 'CRM Contacts', 'CRM Tags', 'CRM Analytics',
+  'Instant Lead CRM', 'CRM Leads', 'CRM Pipeline', 'CRM Deals', 'CRM Tasks', 'CRM Contacts', 'CRM Companies', 'Sales Dashboard', 'Quotes & Invoices', 'Payments Received', 'Products', 'Sales Settings', 'CRM Tags', 'CRM Analytics',
   'Education',
   'Billing & Plans', 'Add-ons', 'Plans', 'Admin Gateway Settings', 'Social Gateway Settings', 'Device Settings', 'Route Master', 'Activity Logs', 'Audit Logs', 'Quota Top-Up Requests',
 ];
@@ -92,7 +92,9 @@ describe('Sidebar workflow order', () => {
     expect(at('Team Users')).toBe(at('Manage Clients') + 1);
     expect(at('Ads Dashboard')).toBe(at('Meta Ads Launcher') + 1);
     expect(at('CRM Leads')).toBe(at('Instant Lead CRM') + 1);
-    expect(['CRM Pipeline', 'CRM Contacts', 'CRM Tags', 'CRM Analytics'].map(at)).toEqual([at('CRM Leads') + 1, at('CRM Leads') + 2, at('CRM Leads') + 3, at('CRM Leads') + 4]);
+    // CRM Sales Phase 1 added Deals, Tasks and Companies to the CRM block.
+    const crm = ['CRM Pipeline', 'CRM Deals', 'CRM Tasks', 'CRM Contacts', 'CRM Companies', 'Sales Dashboard', 'Quotes & Invoices', 'Payments Received', 'Products', 'Sales Settings', 'CRM Tags', 'CRM Analytics'];
+    expect(crm.map(at)).toEqual(crm.map((_, i) => at('CRM Leads') + i + 1));
     expect(labels.slice(0, 4)).toEqual(['Dashboard', 'Analytics', 'Message Logs', 'Notifications']);
     expect(at('Billing & Plans')).toBeGreaterThan(at('CRM Analytics'));
     expect(labels[labels.length - 1]).toBe('Quota Top-Up Requests');

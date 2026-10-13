@@ -181,7 +181,8 @@ class IndustryFoundationTest extends TestCase
         $this->actingAs($adminA)->getJson('/api/industry/healthcare/modules')->assertForbidden();
     }
 
-    public function test_super_admin_must_select_the_target_account_and_never_gets_a_fallback(): void
+    /** Owner rule (2026-10-13): with no client selected the Super Admin sees its own Platform account's industries. */
+    public function test_super_admin_with_no_client_uses_its_own_platform_account(): void
     {
         $client = $this->tenant();
         $this->assign($client);
@@ -190,7 +191,7 @@ class IndustryFoundationTest extends TestCase
         $admin = $this->superAdmin();
         $this->app['env'] = 'local';
 
-        $this->actingAs($admin)->getJson('/api/industry/context')->assertStatus(422);
+        $this->actingAs($admin)->getJson('/api/industry/context')->assertOk()->assertJsonPath('data.0.industry', 'ecommerce');
         $this->actingAs($admin)->getJson('/api/industry/education/modules')->assertStatus(422)->assertJsonPath('error_code', 'TARGET_ACCOUNT_REQUIRED');
 
         $this->actingAs($admin)->getJson("/api/industry/context?account_id={$client->id}")->assertOk()->assertJsonPath('data.0.industry', 'education');

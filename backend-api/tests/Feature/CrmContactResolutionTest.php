@@ -310,10 +310,12 @@ class CrmContactResolutionTest extends TestCase
     {
         $account = Account::factory()->create();
         $lead = $this->service()->create($account, ['phone_number' => '9876543210']);
-        $this->service()->update($lead, ['status' => CrmLead::STATUS_CONVERTED]);
+        // A not-converted lead is reopened (a converted one is final since CRM Sales Phase 1).
+        $this->service()->update($lead, ['status' => CrmLead::STATUS_NOT_CONVERTED, 'not_converted_reason' => 'No budget.']);
 
         $reopened = $this->service()->update($lead->fresh(), ['status' => CrmLead::STATUS_CONTACTED]);
 
+        $this->assertNull($reopened->not_converted_reason);
         $this->assertNull($reopened->converted_at);
         $this->assertNull($reopened->not_converted_at);
         $this->assertSame(CrmLead::STATUS_CONTACTED, $reopened->status);

@@ -118,6 +118,17 @@ class ContactService
                 $contact->email = $this->blankToNull($data['email']);
             }
 
+            // CRM Sales — consent and company. Opting out stamps the moment (kept when already
+            // out); opting back in clears it. Every send path checks opted_out_at.
+            foreach (['designation', 'preferred_channel', 'marketing_opt_in', 'crm_company_id'] as $field) {
+                if (array_key_exists($field, $data)) {
+                    $contact->{$field} = is_string($data[$field]) ? $this->blankToNull($data[$field]) : $data[$field];
+                }
+            }
+            if (array_key_exists('opted_out', $data)) {
+                $contact->opted_out_at = $data['opted_out'] ? ($contact->opted_out_at ?? now()) : null;
+            }
+
             $contact->save();
 
             return $contact->fresh();
@@ -208,6 +219,24 @@ class ContactService
                         $member->forceFill(['contact_id' => $target->getKey()])->save();
                     }
                 });
+
+            // CRM Sales Phase 1 — the source's deals and activities follow it, and so
+            // does its company when the surviving contact has none.
+            \App\Models\CrmDeal::query()
+                ->where('contact_id', $source->getKey())
+                ->chunkById(200, function ($deals) use ($target): void {
+                    foreach ($deals as $deal) {
+                        $deal->forceFill(['contact_id' => $target->getKey()])->save();
+                    }
+                });
+            \App\Models\CrmActivity::query()
+                ->where('account_id', $source->account_id)
+                ->where('contact_id', $source->getKey())
+                ->update(['contact_id' => $target->getKey()]);
+
+            if ($target->crm_company_id === null && $source->crm_company_id !== null) {
+                $target->crm_company_id = $source->crm_company_id;
+            }
 
             if (blank($target->name) && filled($source->name)) {
                 $target->name = $source->name;

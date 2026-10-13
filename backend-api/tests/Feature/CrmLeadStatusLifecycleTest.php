@@ -282,8 +282,9 @@ class CrmLeadStatusLifecycleTest extends TestCase
     {
         $cases = [];
 
-        foreach (CrmLead::STATUSES as $from) {
-            foreach (CrmLead::STATUSES as $to) {
+        // Owner decision (CRM Sales Phase 1): only the DECLARED moves; converted is final.
+        foreach (CrmLead::STATUS_TRANSITIONS as $from => $targets) {
+            foreach ($targets as $to) {
                 if ($from !== $to) {
                     $cases["{$from} -> {$to}"] = [$from, $to];
                 }
@@ -291,6 +292,38 @@ class CrmLeadStatusLifecycleTest extends TestCase
         }
 
         return $cases;
+    }
+
+    /** @return array<string, array{0: string}> every status a converted lead may NOT move to. */
+    public static function forbiddenFromConvertedProvider(): array
+    {
+        return [
+            'converted -> new' => ['new'],
+            'converted -> contacted' => ['contacted'],
+            'converted -> not_converted' => ['not_converted'],
+        ];
+    }
+
+    /**
+     * Owner decision (CRM Sales Phase 1): a converted lead is final. Every way out is a
+     * 422 and the lead (status, converted_at) is left exactly as it was.
+     *
+     * @dataProvider forbiddenFromConvertedProvider
+     */
+    public function test_a_converted_lead_cannot_leave_converted(string $to): void
+    {
+        $t = $this->tenant();
+        $lead = $this->leadAt($t['account'], CrmLead::STATUS_CONVERTED);
+        $convertedAt = $lead->converted_at?->toIso8601String();
+
+        $this->actingAs($t['user'])->patchJson($this->statusUrl($lead), ['status' => $to])
+            ->assertStatus(422)->assertJsonValidationErrors('status');
+        $this->actingAs($t['user'])->patchJson(self::LEADS.'/'.$lead->id, ['status' => $to])
+            ->assertStatus(422)->assertJsonValidationErrors('status');
+
+        $fresh = $lead->fresh();
+        $this->assertSame(CrmLead::STATUS_CONVERTED, $fresh->status);
+        $this->assertSame($convertedAt, $fresh->converted_at?->toIso8601String());
     }
 
     /**
@@ -338,8 +371,14 @@ class CrmLeadStatusLifecycleTest extends TestCase
         $this->assertSame(CrmLead::STATUSES, array_keys(CrmLead::STATUS_TRANSITIONS));
 
         foreach (CrmLead::STATUSES as $from) {
-            $this->assertSame(CrmLead::STATUSES, CrmLead::STATUS_TRANSITIONS[$from]);
             $this->assertTrue(CrmLead::canTransitionTo($from, $from), 'A status must be a legal no-op destination.');
+        }
+
+        // Owner decision (CRM Sales Phase 1): converted is final; every other status may
+        // still move anywhere (a not-converted lead can be reopened).
+        $this->assertSame([CrmLead::STATUS_CONVERTED], CrmLead::STATUS_TRANSITIONS[CrmLead::STATUS_CONVERTED]);
+        foreach ([CrmLead::STATUS_NEW, CrmLead::STATUS_CONTACTED, CrmLead::STATUS_NOT_CONVERTED] as $from) {
+            $this->assertSame(CrmLead::STATUSES, CrmLead::STATUS_TRANSITIONS[$from]);
         }
 
         // Fails closed on anything outside the vocabulary, either end.
@@ -362,18 +401,24 @@ class CrmLeadStatusLifecycleTest extends TestCase
             'not_converted_reason' => 'Wrong call.',
         ])->assertOk();
 
+        // A not-converted lead may be reopened, and reopening clears the stale outcome.
+        $this->actingAs($t['user'])->patchJson($this->statusUrl($lead), ['status' => 'new'])->assertOk();
+
+        $reopened = $lead->fresh();
+        $this->assertNull($reopened->converted_at);
+        $this->assertNull($reopened->not_converted_at);
+        $this->assertNull($reopened->not_converted_reason);
+
+        $this->actingAs($t['user'])->patchJson($this->statusUrl($lead), [
+            'status' => 'not_converted',
+            'not_converted_reason' => 'Wrong call.',
+        ])->assertOk();
         $this->actingAs($t['user'])->patchJson($this->statusUrl($lead), ['status' => 'converted'])->assertOk();
 
         $fresh = $lead->fresh();
         $this->assertNotNull($fresh->converted_at);
         $this->assertNull($fresh->not_converted_at);
         $this->assertNull($fresh->not_converted_reason, 'A converted lead cannot keep a not-converted reason.');
-
-        $this->actingAs($t['user'])->patchJson($this->statusUrl($lead), ['status' => 'new'])->assertOk();
-
-        $reopened = $lead->fresh();
-        $this->assertNull($reopened->converted_at);
-        $this->assertNull($reopened->not_converted_at);
     }
 
     // =================================================================
@@ -648,15 +693,16 @@ class CrmLeadStatusLifecycleTest extends TestCase
             ];
         });
 
-        foreach (['contacted', 'converted', 'not_converted'] as $target) {
+        // converted is final (CRM Sales Phase 1), so the walk ends there.
+        foreach (['contacted', 'not_converted', 'converted'] as $target) {
             $this->actingAs($t['user'])
                 ->patchJson($this->statusUrl($lead), ['status' => $target])
                 ->assertOk();
         }
 
         $this->assertCount(3, $events);
-        $this->assertSame(['new', 'contacted', 'converted'], array_column($events, 'old'));
-        $this->assertSame(['contacted', 'converted', 'not_converted'], array_column($events, 'new'));
+        $this->assertSame(['new', 'contacted', 'not_converted'], array_column($events, 'old'));
+        $this->assertSame(['contacted', 'not_converted', 'converted'], array_column($events, 'new'));
 
         foreach ($events as $event) {
             $this->assertSame($t['user']->id, $event['actor'], 'LogsActivity writes Auth::id() as the actor.');
@@ -888,7 +934,7 @@ class CrmLeadStatusLifecycleTest extends TestCase
     public function test_status_is_serialized_identically_everywhere(): void
     {
         $t = $this->tenant();
-        $lead = $this->leadAt($t['account'], CrmLead::STATUS_CONVERTED);
+        $lead = $this->leadAt($t['account'], CrmLead::STATUS_NOT_CONVERTED);
         $contact = $lead->contact;
 
         $fromShow = $this->actingAs($t['user'])->getJson(self::LEADS.'/'.$lead->id)->json('data');
@@ -896,9 +942,9 @@ class CrmLeadStatusLifecycleTest extends TestCase
         $fromContact = collect($this->actingAs($t['user'])->getJson('/api/crm/contacts/'.$contact->id.'/leads')->json('data'))->firstWhere('id', $lead->id);
         $fromStatusEndpoint = $this->actingAs($t['user'])->patchJson($this->statusUrl($lead), ['status' => 'contacted'])->json('data');
 
-        $this->assertSame('converted', $fromShow['status']);
-        $this->assertSame('converted', $fromIndex['status']);
-        $this->assertSame('converted', $fromContact['status']);
+        $this->assertSame('not_converted', $fromShow['status']);
+        $this->assertSame('not_converted', $fromIndex['status']);
+        $this->assertSame('not_converted', $fromContact['status']);
         $this->assertSame('contacted', $fromStatusEndpoint['status']);
 
         // One serializer, so one shape.

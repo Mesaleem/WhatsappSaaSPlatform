@@ -602,8 +602,14 @@ export async function startSession(
 
   if (ownerAccountId != null) {
     registerSessionOwner(id, { accountId: ownerAccountId, slotBased });
+    // [Bug fix]: set OR clear on every external start. The value used to stay for the
+    // life of the process, so a slot started once with a number kept refusing every
+    // other number even after backend-api stopped sending expected_phone (seat model:
+    // any number may connect) -- "not the number added for this slot".
     if (expectedPhone) {
       expectedPhones.set(id, String(expectedPhone).replace(/\D/g, ''));
+    } else if (!isReconnect) {
+      expectedPhones.delete(id);
     }
   }
   const existing = getSession(id);
@@ -692,8 +698,17 @@ export async function startSession(
     // companion_platform_display = `${browser[1]} (${browser[0]})`, which the
     // custom name turned into "Chrome (WapHub WhatsApp)". QR login never sends
     // that field, which matches QR still working while pairing-code broke after
-    // the 2026-10-08 rename. Linked Devices now shows "Ubuntu" again.
-    browser: Browsers.ubuntu('Chrome'),
+    // the 2026-10-08 rename.
+    //
+    // [Owner request 2026-10-13, scoped]: so Linked Devices shows "WapHub" for a QR
+    // login, the custom name is used ONLY when no phone number is given (QR, and a
+    // resume of saved creds). Verified in Baileys (Utils/validate-connection.js):
+    // browser[0] is read only by generateRegistrationNode (the shown device name,
+    // sent once at linking) and, for the login node, only when syncFullHistory is on
+    // (it is off here); companion_platform_display is built only for a pairing-code
+    // request. A pairing-code session (phoneNumber set, also on its own 515 restart,
+    // which passes pairingPhone through) keeps the proven Browsers.ubuntu('Chrome').
+    browser: phoneNumber ? Browsers.ubuntu('Chrome') : ['WapHub', 'Chrome', '22.04.4'],
     printQRInTerminal: false,
     // [Owner instruction, disclosed]: this platform only ever SENDS messages
     // through a linked number -- it never reads or displays the account's own

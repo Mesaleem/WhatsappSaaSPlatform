@@ -87,6 +87,10 @@ class RolePermissionSeeder extends Seeder
         // roles receive it, so nobody's effective access changes.
         // /api/social/leads deliberately KEEPS manage-social-leads.
         'manage-crm',
+        // CRM Sales Phases 2–3 — documents (quotations, orders, invoices) and the
+        // payments received against them; see add_crm_documents_and_payments_permissions.
+        'manage-crm-documents',
+        'manage-crm-payments',
         'view-social-analytics',
         // Social Media Marketing & Meta Ads Automation Expansion (Phase 4).
         // Separate from manage-social-leads on purpose, mirroring the
@@ -174,6 +178,9 @@ class RolePermissionSeeder extends Seeder
             // the CRM through manage-social-leads; this keeps that
             // unchanged under the new permission.
             'manage-crm',
+            // CRM Sales Phases 2–3 — the tenant owner manages documents and payments.
+            'manage-crm-documents',
+            'manage-crm-payments',
             'view-social-analytics',
             'manage-comment-automation',
             'view-industry-modules',

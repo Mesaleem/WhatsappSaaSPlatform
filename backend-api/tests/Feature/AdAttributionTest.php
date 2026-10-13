@@ -320,12 +320,16 @@ class AdAttributionTest extends TestCase
         $this->ctwa()->assertOk();
         $lead = CrmLead::sole();
 
+        // CRM Sales Phase 1: a converted lead is final, so the attribution is checked on the
+        // way to converted, and a refused move away from it changes nothing.
+        $this->actingAs($this->user($account))->patchJson("/api/crm/leads/{$lead->id}/status", ['status' => 'contacted'])->assertOk();
+        $this->assertNull(AdAttribution::sole()->converted_at, 'the row reflects the lead\'s current state');
+
         $this->actingAs($this->user($account))->patchJson("/api/crm/leads/{$lead->id}/status", ['status' => 'converted'])->assertOk();
         $this->assertNotNull(AdAttribution::sole()->converted_at);
 
-        $this->actingAs($this->user($account))->patchJson("/api/crm/leads/{$lead->id}/status", ['status' => 'contacted'])->assertOk();
-        $this->assertNull(AdAttribution::sole()->converted_at, 'the row reflects the lead\'s current state');
-        $this->assertNull(AdAttribution::sole()->conversion_value);
+        $this->actingAs($this->user($account))->patchJson("/api/crm/leads/{$lead->id}/status", ['status' => 'contacted'])->assertStatus(422);
+        $this->assertNotNull(AdAttribution::sole()->converted_at, 'a refused move leaves the conversion in place');
     }
 
     // ================================================================== coexistence

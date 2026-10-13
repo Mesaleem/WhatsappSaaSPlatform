@@ -50,6 +50,12 @@ export interface ContactPayload {
   phone_number?: string;
   name?: string | null;
   email?: string | null;
+  // CRM Sales — consent and company.
+  designation?: string | null;
+  preferred_channel?: 'whatsapp' | 'email' | 'phone' | null;
+  marketing_opt_in?: boolean | null;
+  opted_out?: boolean;
+  crm_company_id?: number | null;
 }
 
 const crmService = {

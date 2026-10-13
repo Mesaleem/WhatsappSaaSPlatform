@@ -5,7 +5,7 @@ import PromptModal from '../common/PromptModal';
 import { useClientGate } from '../common/actionGateHooks';
 import { describeApiError } from '../../utils/apiError';
 import {
-  CRM_LEAD_STATUSES,
+  crmAllowedStatuses,
   crmLabel,
   type CrmAssignee,
   type CrmLead,
@@ -178,13 +178,16 @@ export function StatusControl({
       });
   };
 
+  // CRM Sales Phase 1 — a converted lead is final; "Re-engage" makes a new lead instead.
+  const final = lead.status === 'converted';
+
   return (
     <>
       <select
         aria-label="Change status"
         value={lead.status}
-        disabled={disabled || busy}
-        title={disabled ? READ_ONLY_TITLE : undefined}
+        disabled={disabled || busy || final}
+        title={disabled ? READ_ONLY_TITLE : final ? 'A converted lead is final. Use Re-engage for new business from this customer.' : undefined}
         onClick={(e) => e.stopPropagation()}
         onChange={(e) => {
           const next = e.target.value as CrmLeadStatus;
@@ -197,7 +200,7 @@ export function StatusControl({
         }}
         className={selectClass}
       >
-        {CRM_LEAD_STATUSES.map((s) => (
+        {crmAllowedStatuses(lead.status).map((s) => (
           <option key={s} value={s}>
             {crmLabel(s)}
           </option>

@@ -1,7 +1,12 @@
 import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { ArrowRightLeft, Loader2, Trash2, UserRound, XCircle } from 'lucide-react';
+import { ArrowRightLeft, BadgeCheck, Building2, Handshake, Loader2, RotateCcw, Trash2, UserRound, XCircle } from 'lucide-react';
 import crmService from '../../services/crmService';
+import crmSalesService from '../../services/crmSalesService';
+import ActivityPanel from '../../components/crm/ActivityPanel';
+import ConvertLeadModal from '../../components/crm/ConvertLeadModal';
+import QualificationCard from '../../components/crm/QualificationCard';
+import PromptModal from '../../components/common/PromptModal';
 import { Card } from '../../components/common/Card';
 import ConfirmModal from '../../components/common/ConfirmModal';
 import { SearchInput } from '../../components/common/DataTableControls';
@@ -46,6 +51,10 @@ export default function CrmLeadDetailPage() {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [reassigning, setReassigning] = useState(false);
+  // CRM Sales Phase 1 — Convert / Re-engage.
+  const [converting, setConverting] = useState(false);
+  const [reEngaging, setReEngaging] = useState(false);
+  const [reEngageBusy, setReEngageBusy] = useState(false);
 
   const validId = Number.isInteger(leadId) && leadId > 0;
   const query = useCrmQuery(
@@ -65,6 +74,20 @@ export default function CrmLeadDetailPage() {
   const onUpdated = (updated: CrmLead, message: string) => {
     query.setData(() => updated);
     show(message);
+  };
+
+  const doReEngage = (requirement: string) => {
+    if (!lead || reEngageBusy) return;
+    setReEngageBusy(true);
+    crmSalesService
+      .reEngageLead(lead.id, requirement.trim() || null)
+      .then((res) => {
+        setReEngaging(false);
+        navigate(`/crm/leads/${res.data.id}`);
+        show(res.message);
+      })
+      .catch((err: unknown) => show(describeApiError(err, 'Could not re-engage this customer.').message))
+      .finally(() => setReEngageBusy(false));
   };
 
   const doDelete = () => {
@@ -94,6 +117,31 @@ export default function CrmLeadDetailPage() {
             <p className="mt-1 text-sm text-slate-500">One CRM opportunity: its lifecycle, owner, tags and contact.</p>
           </div>
           {lead && (
+            <div className="flex flex-wrap gap-2">
+            {lead.status !== 'converted' || !lead.deal ? (
+              <button
+                type="button"
+                onClick={() => setConverting(true)}
+                disabled={readOnly}
+                title={readOnly ? READ_ONLY_TITLE : undefined}
+                className="flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <BadgeCheck className="h-4 w-4" />
+                {lead.status === 'converted' ? 'Add company / deal' : 'Convert lead'}
+              </button>
+            ) : null}
+            {lead.status === 'converted' && (
+              <button
+                type="button"
+                onClick={() => setReEngaging(true)}
+                disabled={readOnly}
+                title={readOnly ? READ_ONLY_TITLE : 'The customer is back with new business: start a new lead for them.'}
+                className="flex items-center gap-2 rounded-lg border border-emerald-200 bg-white px-3 py-2 text-sm font-medium text-emerald-800 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <RotateCcw className="h-4 w-4" />
+                Re-engage
+              </button>
+            )}
             <button
               type="button"
               onClick={() => setConfirmDelete(true)}
@@ -104,6 +152,7 @@ export default function CrmLeadDetailPage() {
               <Trash2 className="h-4 w-4" />
               Delete lead
             </button>
+            </div>
           )}
         </div>
 
@@ -186,9 +235,31 @@ export default function CrmLeadDetailPage() {
                   <p className="text-xs text-slate-500">{formatDate(lead.capture_lead.captured_at)}</p>
                 </div>
               )}
+              {lead.previous_lead_id && (
+                <p className="text-xs text-slate-500">
+                  Re-engaged from{' '}
+                  <Link to={`/crm/leads/${lead.previous_lead_id}`} className="font-medium text-emerald-700 hover:underline">
+                    converted lead #{lead.previous_lead_id}
+                  </Link>
+                </p>
+              )}
             </Card>
 
             <Card className="space-y-3">
+              {(lead.company || lead.deal) && (
+                <div className="space-y-2 border-b border-slate-100 pb-3" data-testid="crm-lead-links">
+                  {lead.company && (
+                    <Link to={`/crm/companies/${lead.company.id}`} className="flex items-center gap-2 text-sm font-medium text-emerald-700 hover:underline">
+                      <Building2 className="h-4 w-4" /> {lead.company.name}
+                    </Link>
+                  )}
+                  {lead.deal && (
+                    <Link to={`/crm/deals/${lead.deal.id}`} className="flex items-center gap-2 text-sm font-medium text-emerald-700 hover:underline">
+                      <Handshake className="h-4 w-4" /> {lead.deal.number} · {lead.deal.name}
+                    </Link>
+                  )}
+                </div>
+              )}
               <div className="flex items-center gap-2">
                 <UserRound className="h-4 w-4 text-slate-400" />
                 <p className="text-sm font-semibold text-slate-900">Contact</p>
@@ -223,6 +294,14 @@ export default function CrmLeadDetailPage() {
                 <p className="text-sm text-slate-500">No contact.</p>
               )}
             </Card>
+
+            <Card className="lg:col-span-2">
+              <QualificationCard key={lead.updated_at ?? lead.id} lead={lead} readOnly={readOnly} onUpdated={onUpdated} />
+            </Card>
+
+            <Card>
+              <ActivityPanel link={{ crm_lead_id: lead.id }} readOnly={readOnly} />
+            </Card>
           </div>
         ) : null}
       </div>
@@ -246,6 +325,29 @@ export default function CrmLeadDetailPage() {
             setReassigning(false);
             onUpdated(updated, message);
           }}
+        />
+      )}
+
+      {converting && lead && (
+        <ConvertLeadModal
+          lead={lead}
+          onCancel={() => setConverting(false)}
+          onDone={(updated, message) => {
+            setConverting(false);
+            onUpdated(updated, message);
+          }}
+        />
+      )}
+
+      {reEngaging && lead && (
+        <PromptModal
+          title="Re-engage this customer"
+          message="A converted lead stays as it is. This starts a NEW lead for the same contact, linked to this one."
+          label="What do they need now? (optional)"
+          confirmLabel="Create new lead"
+          isLoading={reEngageBusy}
+          onSubmit={doReEngage}
+          onCancel={() => setReEngaging(false)}
         />
       )}
 

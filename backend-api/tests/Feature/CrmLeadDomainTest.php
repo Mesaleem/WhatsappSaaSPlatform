@@ -358,7 +358,8 @@ class CrmLeadDomainTest extends TestCase
         $account = Account::factory()->create();
         $contact = $this->contactFor($account, '9000000012');
 
-        $this->assertSame(['manual', 'whatsapp', 'meta_ad', 'api', 'journey'], CrmLead::SOURCES);
+        // CRM Sales Phase 1 added `website` (the public contact form).
+        $this->assertSame(['manual', 'whatsapp', 'meta_ad', 'api', 'journey', 'website'], CrmLead::SOURCES);
 
         foreach (CrmLead::SOURCES as $source) {
             $lead = CrmLead::create([

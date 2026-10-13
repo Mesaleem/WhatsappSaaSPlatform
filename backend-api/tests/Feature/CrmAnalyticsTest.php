@@ -135,7 +135,7 @@ class CrmAnalyticsTest extends TestCase
             'total' => 10, 'new' => 3, 'contacted' => 2, 'converted' => 4, 'not_converted' => 1, 'conversion_rate' => 40,
         ]);
         $this->assertSame(['new' => 3, 'contacted' => 2, 'converted' => 4, 'not_converted' => 1], $this->statusCounts($r));
-        $this->assertSame(['manual' => 2, 'whatsapp' => 1, 'meta_ad' => 4, 'api' => 2, 'journey' => 1], $this->sourceCounts($r));
+        $this->assertSame(['manual' => 2, 'whatsapp' => 1, 'meta_ad' => 4, 'api' => 2, 'journey' => 1, 'website' => 0], $this->sourceCounts($r));
         $this->assertSame([
             ['assigned_user_id' => $asha->id, 'name' => 'Asha', 'count' => 4],
             ['assigned_user_id' => $ben->id, 'name' => 'Ben', 'count' => 3],

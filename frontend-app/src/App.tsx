@@ -54,6 +54,21 @@ const CrmContactsPage = lazy(() => import('./pages/crm/CrmContactsPage'));
 const CrmContactDetailPage = lazy(() => import('./pages/crm/CrmContactDetailPage'));
 const CrmTagsPage = lazy(() => import('./pages/crm/CrmTagsPage'));
 const CrmAnalyticsPage = lazy(() => import('./pages/crm/CrmAnalyticsPage'));
+// CRM Sales Phase 1.
+const CrmCompaniesPage = lazy(() => import('./pages/crm/CrmCompaniesPage'));
+const CrmCompanyDetailPage = lazy(() => import('./pages/crm/CrmCompanyDetailPage'));
+const CrmDealsPage = lazy(() => import('./pages/crm/CrmDealsPage'));
+const CrmDealDetailPage = lazy(() => import('./pages/crm/CrmDealDetailPage'));
+const CrmTasksPage = lazy(() => import('./pages/crm/CrmTasksPage'));
+// CRM Sales Phases 2–6.
+const CrmDocumentsPage = lazy(() => import('./pages/crm/sales/CrmDocumentsPage'));
+const CrmDocumentEditorPage = lazy(() => import('./pages/crm/sales/CrmDocumentEditorPage'));
+const CrmDocumentDetailPage = lazy(() => import('./pages/crm/sales/CrmDocumentDetailPage'));
+const CrmPaymentsPage = lazy(() => import('./pages/crm/sales/CrmPaymentsPage'));
+const CrmProductsPage = lazy(() => import('./pages/crm/sales/CrmProductsPage'));
+const CrmSalesSettingsPage = lazy(() => import('./pages/crm/sales/CrmSalesSettingsPage'));
+const CrmSalesDashboardPage = lazy(() => import('./pages/crm/sales/CrmSalesDashboardPage'));
+const PublicDocumentPage = lazy(() => import('./pages/public/PublicDocumentPage'));
 const EducationPage = lazy(() => import('./pages/education/EducationPage'));
 const SubscriptionExpiredPage = lazy(() => import('./pages/errors/SubscriptionExpiredPage'));
 const UnauthorizedPage = lazy(() => import('./pages/errors/UnauthorizedPage'));
@@ -74,6 +89,8 @@ export default function App() {
         <Suspense fallback={<RouteFallback />}>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
+          {/* CRM Sales Phases 3–4 — a business's customer opens / pays a document from its link (no login). */}
+          <Route path="/d/:token" element={<PublicDocumentPage />} />
           <Route path="/forgot-password" element={<ForgotPasswordPage />} />
           <Route path="/reset-password" element={<ResetPasswordPage />} />
           <Route path="/subscription-expired" element={<SubscriptionExpiredPage />} />
@@ -552,6 +569,49 @@ export default function App() {
                 </ProtectedRoute>
               }
             />
+            {/* CRM Sales Phase 1 — same three gates as every CRM page (and every /api/crm/* route). */}
+            {(
+              [
+                ['/crm/companies', <CrmCompaniesPage />],
+                ['/crm/companies/:id', <CrmCompanyDetailPage />],
+                ['/crm/deals', <CrmDealsPage />],
+                ['/crm/deals/:id', <CrmDealDetailPage />],
+                ['/crm/tasks', <CrmTasksPage />],
+              ] as const
+            ).map(([path, page]) => (
+              <Route
+                key={path}
+                path={path}
+                element={
+                  <ProtectedRoute permission="manage-crm" module="lead_crm" capability="crm">
+                    {page}
+                  </ProtectedRoute>
+                }
+              />
+            ))}
+            {/* CRM Sales Phases 2–6 — the CRM gates plus the documents / payments permission (the backend's too). */}
+            {(
+              [
+                ['/crm/sales', <CrmSalesDashboardPage />, 'manage-crm-documents'],
+                ['/crm/documents', <CrmDocumentsPage />, 'manage-crm-documents'],
+                ['/crm/documents/new', <CrmDocumentEditorPage />, 'manage-crm-documents'],
+                ['/crm/documents/:id', <CrmDocumentDetailPage />, 'manage-crm-documents'],
+                ['/crm/documents/:id/edit', <CrmDocumentEditorPage />, 'manage-crm-documents'],
+                ['/crm/products', <CrmProductsPage />, 'manage-crm-documents'],
+                ['/crm/settings', <CrmSalesSettingsPage />, 'manage-crm-documents'],
+                ['/crm/payments', <CrmPaymentsPage />, 'manage-crm-payments'],
+              ] as const
+            ).map(([path, page, permission]) => (
+              <Route
+                key={path}
+                path={path}
+                element={
+                  <ProtectedRoute permission={permission} module="lead_crm" capability="crm">
+                    {page}
+                  </ProtectedRoute>
+                }
+              />
+            ))}
             {/* Phase 11 Task 2 — Education. Permission here; industry assigned + capability + module + shipped come
                 from the backend's industry_modules keys (IndustryModuleRoute). API calls are re-authorized by industry.guard. */}
             <Route

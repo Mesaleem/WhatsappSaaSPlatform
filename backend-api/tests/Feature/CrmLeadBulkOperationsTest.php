@@ -484,25 +484,30 @@ class CrmLeadBulkOperationsTest extends TestCase
         $leads = $this->leads($t['account'], 3);
         $ids = $this->ids($leads);
 
-        $this->assertSummary($this->actingAs($t['user'])->postJson(self::STATUS, ['lead_ids' => $ids, 'status' => 'converted']), 'status', 3, 3);
-        foreach (CrmLead::whereIn('id', $ids)->get() as $lead) {
-            $this->assertSame('converted', $lead->status);
-            $this->assertNotNull($lead->converted_at);
-        }
-
-        $this->actingAs($t['user'])->postJson(self::STATUS, ['lead_ids' => $ids, 'status' => 'not_converted', 'not_converted_reason' => 'Budget'])->assertOk();
+        $this->assertSummary($this->actingAs($t['user'])->postJson(self::STATUS, ['lead_ids' => $ids, 'status' => 'not_converted', 'not_converted_reason' => 'Budget']), 'status', 3, 3);
         foreach (CrmLead::whereIn('id', $ids)->get() as $lead) {
             $this->assertSame('not_converted', $lead->status);
-            $this->assertNull($lead->converted_at, 'The stale outcome must be cleared, as individually.');
+            $this->assertNull($lead->converted_at);
             $this->assertNotNull($lead->not_converted_at);
             $this->assertSame('Budget', $lead->not_converted_reason);
         }
 
         $this->actingAs($t['user'])->postJson(self::STATUS, ['lead_ids' => $ids, 'status' => 'contacted'])->assertOk();
         foreach (CrmLead::whereIn('id', $ids)->get() as $lead) {
-            $this->assertNull($lead->not_converted_at);
+            $this->assertNull($lead->not_converted_at, 'The stale outcome must be cleared, as individually.');
             $this->assertNull($lead->not_converted_reason);
         }
+
+        $this->actingAs($t['user'])->postJson(self::STATUS, ['lead_ids' => $ids, 'status' => 'converted'])->assertOk();
+        foreach (CrmLead::whereIn('id', $ids)->get() as $lead) {
+            $this->assertSame('converted', $lead->status);
+            $this->assertNotNull($lead->converted_at);
+        }
+
+        // CRM Sales Phase 1: converted is final, so a bulk move out is refused for the
+        // whole batch and nothing changes.
+        $this->actingAs($t['user'])->postJson(self::STATUS, ['lead_ids' => $ids, 'status' => 'contacted'])->assertStatus(422);
+        $this->assertSame(3, CrmLead::whereIn('id', $ids)->where('status', 'converted')->count());
     }
 
     public function test_bulk_and_individual_status_produce_identical_rows(): void

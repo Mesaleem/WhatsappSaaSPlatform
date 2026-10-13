@@ -4,6 +4,8 @@ namespace App\Services\Crm;
 
 use App\Models\Account;
 use App\Models\Contact;
+use App\Models\CrmCompany;
+use App\Models\CrmDeal;
 use App\Models\CrmLead;
 use Illuminate\Validation\ValidationException;
 use Illuminate\Support\Facades\DB;
@@ -24,9 +26,18 @@ use Illuminate\Support\Facades\DB;
  */
 class CrmLeadService
 {
+    /**
+     * CRM Sales Phase 1 — qualification fields a user may set on create and update.
+     * `attribution` is NOT here: it is written only by system callers of create().
+     */
+    public const QUALIFICATION_FIELDS = ['company_name', 'requirement', 'budget', 'timeline', 'temperature', 'next_follow_up_at'];
+
     public function __construct(
         private readonly ContactResolver $contacts,
         private readonly CrmBulkLeadSelection $bulkSelection,
+        private readonly CrmCompanyService $companies,
+        private readonly CrmDealService $deals,
+        private readonly CrmActivityService $activities,
     ) {
     }
 
@@ -68,7 +79,7 @@ class CrmLeadService
                 'status' => $status,
                 'source' => $data['source'] ?? CrmLead::SOURCE_MANUAL,
                 'assigned_user_id' => $data['assigned_user_id'] ?? null,
-            ]);
+            ] + array_intersect_key($data, array_flip([...self::QUALIFICATION_FIELDS, 'attribution'])));
 
             $this->stampTerminalOutcome($lead, $status, $data['not_converted_reason'] ?? null);
 
@@ -112,6 +123,9 @@ class CrmLeadService
             if (array_key_exists('not_converted_reason', $data)) {
                 $lead->not_converted_reason = $data['not_converted_reason'];
             }
+
+            // CRM Sales Phase 1 — qualification fields.
+            $lead->fill(array_intersect_key($data, array_flip(self::QUALIFICATION_FIELDS)));
 
             // Task 5 — the SAME step the dedicated status endpoint
             // uses, so the two paths cannot validate, transition or
@@ -406,6 +420,125 @@ class CrmLeadService
             $lead->save();
 
             return $lead->fresh();
+        });
+    }
+
+    /**
+     * CRM Sales Phase 1 — Convert Lead. One transaction, the lead row locked, so two
+     * clicks (or two tabs) cannot convert twice:
+     *   1. the contact is already this lead's (ContactResolver deduped it by phone);
+     *   2. company: an existing one (crm_company_id) or `company` data, found by GSTIN,
+     *      else by name, else created (CrmCompanyService::findOrCreate); the contact
+     *      joins it when it has no company yet;
+     *   3. deal: only when create_deal is true, and never a second one for the same
+     *      lead (crm_deals.crm_lead_id is unique); value defaults to the lead's budget;
+     *   4. the lead becomes converted (converted_at, converted_by_user_id), keeping its
+     *      source, attribution, tags and history; a timeline event is written.
+     * Converting an already converted lead returns its existing links (and only adds a
+     * deal or company that does not exist yet).
+     *
+     * @param array{crm_company_id?: int|null, company?: array<string, mixed>|null, create_deal?: bool, deal?: array<string, mixed>} $options
+     * @return array{lead: CrmLead, company: ?CrmCompany, deal: ?CrmDeal}
+     */
+    public function convert(CrmLead $lead, array $options, ?int $actorUserId = null): array
+    {
+        return DB::transaction(function () use ($lead, $options, $actorUserId): array {
+            $lead = CrmLead::query()->whereKey($lead->id)->lockForUpdate()->firstOrFail();
+            $account = Account::query()->findOrFail($lead->account_id);
+            $alreadyConverted = $lead->status === CrmLead::STATUS_CONVERTED;
+
+            $company = $lead->crm_company_id ? CrmCompany::query()->forAccount($account->id)->find($lead->crm_company_id) : null;
+            if ($company === null && ! empty($options['crm_company_id'])) {
+                $company = CrmCompany::query()->forAccount($account->id)->find((int) $options['crm_company_id']);
+                if (! $company) {
+                    throw ValidationException::withMessages(['crm_company_id' => ['The selected company is not available.']]);
+                }
+            }
+            if ($company === null && ! empty($options['company']['name'])) {
+                $company = $this->companies->findOrCreate($account, $options['company']);
+            }
+
+            if ($company !== null) {
+                $lead->crm_company_id = $company->id;
+                $contact = $lead->contact;
+                if ($contact && $contact->crm_company_id === null) {
+                    $contact->forceFill(['crm_company_id' => $company->id])->save();
+                }
+            }
+
+            if (! $alreadyConverted) {
+                $this->applyStatus($lead, CrmLead::STATUS_CONVERTED, null);
+                $lead->converted_by_user_id = $actorUserId;
+            }
+            $lead->save();
+
+            $deal = CrmDeal::query()->where('crm_lead_id', $lead->id)->first();
+            if ($deal === null && ! empty($options['create_deal'])) {
+                $dealData = $options['deal'] ?? [];
+                $contact = $lead->contact;
+                $defaultName = $company->name ?? $contact?->name ?? $contact?->phone_number ?? 'Deal';
+                if ($lead->requirement) {
+                    $defaultName .= ' — '.mb_substr($lead->requirement, 0, 80);
+                }
+                $deal = $this->deals->create($account, [
+                    'name' => $dealData['name'] ?? $defaultName,
+                    'value' => $dealData['value'] ?? ($lead->budget ?? '0'),
+                    'stage_id' => $dealData['stage_id'] ?? null,
+                    'expected_close_date' => $dealData['expected_close_date'] ?? null,
+                    'owner_user_id' => $dealData['owner_user_id'] ?? $lead->assigned_user_id,
+                    'crm_lead_id' => $lead->id,
+                    'contact_id' => $lead->contact_id,
+                    'crm_company_id' => $company?->id,
+                    'source' => $lead->source,
+                ], $actorUserId);
+            }
+
+            if (! $alreadyConverted) {
+                $this->activities->logEvent($account->id, 'Lead converted'.($deal ? " to deal {$deal->number}" : ''), [
+                    'crm_lead_id' => $lead->id, 'contact_id' => $lead->contact_id, 'crm_company_id' => $company?->id, 'crm_deal_id' => $deal?->id,
+                ], $actorUserId);
+            }
+
+            return ['lead' => $lead->fresh(), 'company' => $company, 'deal' => $deal?->fresh()];
+        });
+    }
+
+    /**
+     * CRM Sales Phase 1 — the owner's rule: a converted lead is final. When the same
+     * customer comes back, this creates a NEW lead for the same contact (status new,
+     * source manual, previous_lead_id = the converted lead), keeping the company and
+     * the owner when the owner may still be assigned.
+     *
+     * @param array{requirement?: string|null} $data
+     */
+    public function reEngage(CrmLead $lead, array $data = [], ?int $actorUserId = null): CrmLead
+    {
+        if ($lead->status !== CrmLead::STATUS_CONVERTED) {
+            throw ValidationException::withMessages(['status' => ['Only a converted lead is re-engaged. Change this lead\'s status instead.']]);
+        }
+
+        return DB::transaction(function () use ($lead, $data, $actorUserId): CrmLead {
+            $owner = $lead->assigned_user_id !== null && CrmLead::assigneeIsEligibleById((int) $lead->assigned_user_id, (int) $lead->account_id)
+                ? $lead->assigned_user_id
+                : null;
+
+            $new = CrmLead::create([
+                'account_id' => $lead->account_id,
+                'contact_id' => $lead->contact_id,
+                'status' => CrmLead::STATUS_NEW,
+                'source' => CrmLead::SOURCE_MANUAL,
+                'assigned_user_id' => $owner,
+                'previous_lead_id' => $lead->id,
+                'crm_company_id' => $lead->crm_company_id,
+                'company_name' => $lead->company_name,
+                'requirement' => $data['requirement'] ?? null,
+            ]);
+
+            $this->activities->logEvent((int) $lead->account_id, "Re-engaged from converted lead #{$lead->id}", [
+                'crm_lead_id' => $new->id, 'contact_id' => $new->contact_id, 'crm_company_id' => $new->crm_company_id,
+            ], $actorUserId);
+
+            return $new;
         });
     }
 

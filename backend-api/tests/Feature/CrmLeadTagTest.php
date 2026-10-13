@@ -189,10 +189,11 @@ class CrmLeadTagTest extends TestCase
     public function test_the_lifecycle_definitions_are_unchanged(): void
     {
         $this->assertSame(['new', 'contacted', 'converted', 'not_converted'], CrmLead::STATUSES);
+        // Tags never change the lifecycle. Its own rules (converted is final since CRM
+        // Sales Phase 1) are pinned by CrmLeadStatusLifecycleTest.
         foreach (CrmLead::STATUSES as $from) {
-            $this->assertSame(CrmLead::STATUSES, CrmLead::STATUS_TRANSITIONS[$from]);
             foreach (CrmLead::STATUSES as $to) {
-                $this->assertTrue(CrmLead::canTransitionTo($from, $to));
+                $this->assertSame(in_array($to, CrmLead::STATUS_TRANSITIONS[$from], true), CrmLead::canTransitionTo($from, $to));
             }
         }
         $this->assertSame(['new', 'contacted', 'converted', 'not_converted'], array_column(CrmLead::pipelineStatuses(), 'status'));

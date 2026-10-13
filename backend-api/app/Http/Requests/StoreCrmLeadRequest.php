@@ -58,6 +58,13 @@ class StoreCrmLeadRequest extends FormRequest
             'source' => ['nullable', 'string', Rule::in([CrmLead::SOURCE_MANUAL])],
             'assigned_user_id' => ['nullable', 'integer'],
             'not_converted_reason' => ['nullable', 'string', 'max:255'],
+            // CRM Sales Phase 1 — qualification.
+            'company_name' => ['sometimes', 'nullable', 'string', 'max:191'],
+            'requirement' => ['sometimes', 'nullable', 'string', 'max:5000'],
+            'budget' => ['sometimes', 'nullable', 'numeric', 'min:0', 'max:999999999999', 'decimal:0,2'],
+            'timeline' => ['sometimes', 'nullable', 'string', 'max:50'],
+            'temperature' => ['sometimes', 'nullable', 'string', Rule::in(CrmLead::TEMPERATURES)],
+            'next_follow_up_at' => ['sometimes', 'nullable', 'date'],
         ];
     }
 }

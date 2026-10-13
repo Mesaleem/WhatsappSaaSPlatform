@@ -103,12 +103,19 @@ class CrmLead extends Model
      * lifecycle is one edit here plus its tests, not a hunt through
      * service code.
      *
+     * Owner decision (CRM Sales Phase 1, 2026-10-14): CONVERTED IS FINAL. A converted
+     * lead never goes back to new / contacted / not_converted -- that rewrote its
+     * conversion history (converted_at, the deal it produced). When the same customer
+     * comes back, "Re-engage" (CrmLeadService::reEngage()) creates a NEW lead for the
+     * same contact, linked through previous_lead_id. A not-converted lead may still be
+     * reopened.
+     *
      * @var array<string, list<string>>
      */
     public const STATUS_TRANSITIONS = [
         self::STATUS_NEW => [self::STATUS_NEW, self::STATUS_CONTACTED, self::STATUS_CONVERTED, self::STATUS_NOT_CONVERTED],
         self::STATUS_CONTACTED => [self::STATUS_NEW, self::STATUS_CONTACTED, self::STATUS_CONVERTED, self::STATUS_NOT_CONVERTED],
-        self::STATUS_CONVERTED => [self::STATUS_NEW, self::STATUS_CONTACTED, self::STATUS_CONVERTED, self::STATUS_NOT_CONVERTED],
+        self::STATUS_CONVERTED => [self::STATUS_CONVERTED],
         self::STATUS_NOT_CONVERTED => [self::STATUS_NEW, self::STATUS_CONTACTED, self::STATUS_CONVERTED, self::STATUS_NOT_CONVERTED],
     ];
 
@@ -128,6 +135,8 @@ class CrmLead extends Model
     public const SOURCE_META_AD = 'meta_ad';
     public const SOURCE_API = 'api';
     public const SOURCE_JOURNEY = 'journey';
+    /** CRM Sales Phase 1 — an enquiry from the public website's contact form. */
+    public const SOURCE_WEBSITE = 'website';
 
     /**
      * Where a lead came from.
@@ -140,7 +149,11 @@ class CrmLead extends Model
         self::SOURCE_META_AD,
         self::SOURCE_API,
         self::SOURCE_JOURNEY,
+        self::SOURCE_WEBSITE,
     ];
+
+    /** CRM Sales Phase 1 — qualification temperature. @var list<string> */
+    public const TEMPERATURES = ['hot', 'warm', 'cold'];
 
     /**
      * Phase 6 Hardening (Issues 5 & 6) — how a capture row's
@@ -193,6 +206,17 @@ class CrmLead extends Model
         'converted_at',
         'not_converted_at',
         'not_converted_reason',
+        // CRM Sales Phase 1 — qualification, attribution and the conversion record.
+        'crm_company_id',
+        'previous_lead_id',
+        'converted_by_user_id',
+        'company_name',
+        'requirement',
+        'budget',
+        'timeline',
+        'temperature',
+        'next_follow_up_at',
+        'attribution',
     ];
 
     protected $attributes = [
@@ -209,6 +233,12 @@ class CrmLead extends Model
             'assigned_user_id' => 'integer',
             'converted_at' => 'datetime',
             'not_converted_at' => 'datetime',
+            'crm_company_id' => 'integer',
+            'previous_lead_id' => 'integer',
+            'converted_by_user_id' => 'integer',
+            'budget' => 'decimal:2',
+            'next_follow_up_at' => 'datetime',
+            'attribution' => 'array',
         ];
     }
 
@@ -326,7 +356,29 @@ class CrmLead extends Model
                 }
             }
 
+            // CRM Sales Phase 1 — the new links and qualification values.
+            if ($lead->temperature !== null && ! in_array($lead->temperature, self::TEMPERATURES, true)) {
+                throw ValidationException::withMessages(['temperature' => ['The selected temperature is invalid.']]);
+            }
+
+            $links = [];
+            if ($lead->isDirty(['crm_company_id', 'account_id'])) {
+                $links['crm_company_id'] = $lead->crm_company_id;
+            }
+            if ($lead->isDirty(['previous_lead_id', 'account_id'])) {
+                $links['crm_lead_id'] = $lead->previous_lead_id;
+            }
+            \App\Services\Crm\CrmTenantLinks::assertBelong((int) $lead->account_id, $links);
+
             $lead->assertStatusInvariants();
+        });
+
+        // CRM Sales Phase 1 — deleting a lead (an existing action) keeps working: the deal
+        // it produced and its activities stay, unlinked from it.
+        static::deleted(function (CrmLead $lead): void {
+            CrmDeal::query()->where('account_id', $lead->account_id)->where('crm_lead_id', $lead->id)->update(['crm_lead_id' => null]);
+            CrmActivity::query()->where('account_id', $lead->account_id)->where('crm_lead_id', $lead->id)->update(['crm_lead_id' => null]);
+            static::query()->where('account_id', $lead->account_id)->where('previous_lead_id', $lead->id)->update(['previous_lead_id' => null]);
         });
     }
 
@@ -517,6 +569,29 @@ class CrmLead extends Model
     public function captureLead(): BelongsTo
     {
         return $this->belongsTo(Lead::class, 'capture_lead_id');
+    }
+
+    /** CRM Sales Phase 1 — the company this lead was converted to (or linked with). */
+    public function company(): BelongsTo
+    {
+        return $this->belongsTo(CrmCompany::class, 'crm_company_id');
+    }
+
+    /** CRM Sales Phase 1 — the deal this lead was converted to (at most one). */
+    public function deal(): \Illuminate\Database\Eloquent\Relations\HasOne
+    {
+        return $this->hasOne(CrmDeal::class, 'crm_lead_id');
+    }
+
+    /** CRM Sales Phase 1 — the converted lead this one re-engages. */
+    public function previousLead(): BelongsTo
+    {
+        return $this->belongsTo(self::class, 'previous_lead_id');
+    }
+
+    public function convertedBy(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'converted_by_user_id');
     }
 
     /**

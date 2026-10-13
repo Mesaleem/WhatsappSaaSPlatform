@@ -77,6 +77,17 @@ trait PresentsCrmLeads
                 ->map(fn ($tag): array => ['id' => $tag->id, 'name' => $tag->name])
                 ->values()
                 ->all(),
+            // CRM Sales Phase 1 — qualification, attribution and the conversion record.
+            'company_name' => $lead->company_name,
+            'requirement' => $lead->requirement,
+            'budget' => $lead->budget === null ? null : (string) $lead->budget,
+            'timeline' => $lead->timeline,
+            'temperature' => $lead->temperature,
+            'next_follow_up_at' => $lead->next_follow_up_at?->toIso8601String(),
+            'attribution' => $lead->attribution,
+            'previous_lead_id' => $lead->previous_lead_id,
+            'company' => $lead->relationLoaded('company') && $lead->company ? ['id' => $lead->company->id, 'name' => $lead->company->name] : null,
+            'deal' => $lead->relationLoaded('deal') && $lead->deal ? ['id' => $lead->deal->id, 'number' => $lead->deal->number, 'name' => $lead->deal->name, 'status' => $lead->deal->status] : null,
             'converted_at' => $lead->converted_at?->toIso8601String(),
             'not_converted_at' => $lead->not_converted_at?->toIso8601String(),
             'not_converted_reason' => $lead->not_converted_reason,
@@ -88,6 +99,6 @@ trait PresentsCrmLeads
     /** The relations presentCrmLead() reads, for eager loading. */
     protected function crmLeadRelations(): array
     {
-        return ['contact', 'assignedUser', 'captureLead', 'tags'];
+        return ['contact', 'assignedUser', 'captureLead', 'tags', 'company', 'deal'];
     }
 }

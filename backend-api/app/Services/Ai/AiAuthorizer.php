@@ -112,6 +112,10 @@ class AiAuthorizer
     private function resolveTarget(User $actor, ?int $targetAccountId, string $module, ?string $permission, string $source): Account
     {
         if ($actor->isSuperAdmin()) {
+            // Owner rule (2026-10-13): with no client selected the Super Admin works on its
+            // own Platform account (ResolvesTenantAccount::superAdminOwnAccount()).
+            $targetAccountId ??= app(\App\Services\Crm\PlatformCrmAccount::class)->find()?->id;
+
             if ($targetAccountId === null) {
                 $this->deny(null, 'unauthorized_target_account', AiException::targetAccountRequired(), $module, $permission, $source, $actor);
             }

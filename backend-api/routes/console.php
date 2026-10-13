@@ -235,3 +235,16 @@ Schedule::command('security:refresh-disposable-domains')
     ->weekly()
     ->onOneServer()
     ->withoutOverlapping(30);
+
+// CRM Sales Phase 5 — payment reminders: plan the due ones and send them, every hour, one server only.
+// Each reminder occurrence is unique per invoice and rule, so a rerun never sends it twice.
+Schedule::command('crm:send-payment-reminders')
+    ->hourly()
+    ->onOneServer()
+    ->withoutOverlapping(30);
+
+// CRM Sales Phase 2 — quotations / proposals past their validity become expired, once a day.
+Schedule::command('crm:expire-quotations')
+    ->dailyAt('00:30')
+    ->onOneServer()
+    ->withoutOverlapping();
