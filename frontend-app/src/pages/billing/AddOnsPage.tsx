@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { Link } from 'react-router-dom';
 import { useAuth } from '../../core/context/AuthContext';
+import ModuleAddonCard from '../../components/common/ModuleAddonCard';
 import moduleAddonService, {
   type AddonHistory,
   type AddonHistoryNumberPurchase,
@@ -51,8 +53,63 @@ function Pill({ tone, children }: { tone: string; children: ReactNode }) {
  * numbers bought, with each step's date. Admins and agents also see the queue to act on.
  * The API decides which clients each person sees; this page only renders it.
  */
+/** Unit names for tiered add-ons, shown in their request card. */
+const ADDON_UNIT_LABEL: Record<string, string> = {
+  whatsapp_groups: 'native groups',
+  contact_groups: 'group chats',
+};
+
+/**
+ * "Buy add-ons": every paid add-on the Super Admin offers, each with its request form
+ * (request → Super Admin/agent approves → invoice → pay online, or they record a manual
+ * payment), plus the way to add WhatsApp numbers. Cards hide themselves when the add-on
+ * is free or already included in the plan.
+ */
+function BuyAddonsSection({ capabilities }: { capabilities: Record<string, boolean> }) {
+  const [offers, setOffers] = useState<string[] | null>(null);
+
+  useEffect(() => {
+    moduleAddonService
+      .list()
+      .then((res) => setOffers(res.offers.filter((o) => o.is_active && !o.is_free).map((o) => o.module)))
+      .catch(() => setOffers([]));
+  }, []);
+
+  return (
+    <section className="rounded-xl border border-slate-200 bg-white shadow-sm" data-testid="buy-addons">
+      <div className="border-b border-slate-200 px-6 py-4">
+        <h2 className="text-sm font-semibold text-slate-900">Buy add-ons</h2>
+        <p className="mt-0.5 text-xs text-slate-500">
+          Ask for an add-on here. Your Super Admin or agent approves it and sends the invoice; pay it on the Billing page.
+        </p>
+      </div>
+      <div className="space-y-3 px-6 py-4">
+        {offers === null && <p className="text-sm text-slate-500">Loading add-ons…</p>}
+        {offers?.map((module) => (
+          <ModuleAddonCard
+            key={module}
+            module={module}
+            enabled={false}
+            includedInPlan={Boolean(capabilities[module])}
+            unitLabel={ADDON_UNIT_LABEL[module] ?? 'units'}
+          />
+        ))}
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 px-4 py-3">
+          <div className="text-sm text-slate-700">
+            <p className="font-medium text-slate-900">Extra WhatsApp numbers</p>
+            <p className="mt-0.5 text-xs text-slate-500">Your plan includes one number. Each extra number is a paid seat, added from WhatsApp Setup.</p>
+          </div>
+          <Link to="/settings/whatsapp" className="rounded-lg bg-emerald-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-emerald-700">
+            Add a number
+          </Link>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 export default function AddOnsPage() {
-  const { isSuperAdmin, hasRole } = useAuth();
+  const { isSuperAdmin, hasRole, user } = useAuth();
   const admin = isSuperAdmin() || hasRole('agent');
 
   const [history, setHistory] = useState<AddonHistory | null>(null);
@@ -90,6 +147,8 @@ export default function AddOnsPage() {
             Paid add-ons requested, approved and paid, and the WhatsApp numbers bought, with the date of each step.
           </p>
         </div>
+
+        {!isSuperAdmin() && <BuyAddonsSection capabilities={user?.capabilities ?? {}} />}
 
         {admin && <ModuleAddonQueueCard onChanged={load} />}
         {admin && <NumberChangeQueueCard />}

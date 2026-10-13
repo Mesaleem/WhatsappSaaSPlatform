@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { Link } from 'react-router-dom';
 import {
   AlertTriangle,
@@ -33,6 +33,7 @@ import type {
   MetaTemplateCategory,
 } from '../../types/templates';
 import { inputClass, TableCard } from '../../components/common/Card';
+import VariableInserter from '../../components/templates/VariableInserter';
 import { PageHeader, PageShell } from '../../components/common/PageShell';
 import { ClearFiltersButton, Pagination, SearchInput, StatusFilterSelect } from '../../components/common/DataTableControls';
 import { TableSkeletonRows } from '../../components/common/Skeleton';
@@ -223,6 +224,7 @@ function TemplateModal({
   const [templateCode, setTemplateCode] = useState(template?.template_code ?? '');
   const [industryType, setIndustryType] = useState(template?.industry_type ?? '');
   const [templateBody, setTemplateBody] = useState(template?.template_body ?? '');
+  const bodyRef = useRef<HTMLTextAreaElement>(null);
   const [headerType, setHeaderType] = useState<TemplateHeaderType>(template?.header_type ?? 'text');
   const [headerMediaUrl, setHeaderMediaUrl] = useState(template?.header_media_url ?? '');
   const [accountId, setAccountId] = useState<number | ''>(template?.account_id ?? '');
@@ -284,7 +286,7 @@ function TemplateModal({
    * ends up belonging to.
    */
   const handleGenerateDraft = async () => {
-    if (accountId === '' || !aiPurpose.trim()) {
+    if ((accountId === '' && !allowGlobal) || !aiPurpose.trim()) {
       return;
     }
 
@@ -292,7 +294,7 @@ function TemplateModal({
     setAiDraftError(null);
     try {
       const result = await aiService.generateTemplateDraft({
-        account_id: accountId,
+        ...(accountId === '' ? {} : { account_id: accountId }),
         purpose: aiPurpose.trim(),
         category: category || 'MARKETING',
         tone: aiTone.trim() || undefined,
@@ -471,8 +473,12 @@ function TemplateModal({
         template_body: templateBody,
         account_id: accountId === '' ? null : accountId,
         variables_schema: variablesSchema,
-        header_type: headerType,
-        header_media_url: headerType === 'text' ? null : headerMediaUrl.trim(),
+        // Header type matters only for a Meta template (its header is part of what Meta
+        // approved). A QR template sends a file only when a media_url is given at send
+        // time, so its header fields are left out -- an existing template keeps its own.
+        ...(isMetaTemplate
+          ? { header_type: headerType, header_media_url: headerType === 'text' ? null : headerMediaUrl.trim() }
+          : {}),
         language: language.trim() || null,
         category: category === '' ? null : category,
         meta_template_name: metaTemplateName.trim() || null,
@@ -648,7 +654,7 @@ function TemplateModal({
 
             {showAiPanel && (
               <div className="mt-2 space-y-2 rounded-lg border border-emerald-100 bg-emerald-50/50 p-3">
-                {accountId === '' && (
+                {accountId === '' && !allowGlobal && (
                   <p className="text-xs text-amber-700">Select an account above first — it pays the AI credit for this draft.</p>
                 )}
                 <div>
@@ -691,7 +697,7 @@ function TemplateModal({
                   <button
                     type="button"
                     onClick={() => void handleGenerateDraft()}
-                    disabled={isGeneratingDraft || accountId === '' || !aiPurpose.trim()}
+                    disabled={isGeneratingDraft || (accountId === '' && !allowGlobal) || !aiPurpose.trim()}
                     className="flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-60"
                   >
                     {isGeneratingDraft ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
@@ -702,16 +708,23 @@ function TemplateModal({
             )}
 
             <textarea
+              ref={bodyRef}
               value={templateBody}
               onChange={(e) => setTemplateBody(e.target.value)}
               rows={5}
               placeholder="Hello {{name}}, your dose {{dose_name}} is scheduled at {{dose_time}}."
               className={`${inputClass} mt-2 font-mono text-sm`}
             />
+            <VariableInserter value={templateBody} onChange={setTemplateBody} textareaRef={bodyRef} />
           </div>
 
+          {isMetaTemplate && (
           <div>
-            <label className="text-sm font-medium text-slate-700">Header type</label>
+            <label className="text-sm font-medium text-slate-700">Meta header type</label>
+            <p className="mt-0.5 text-xs text-slate-500">
+              Must match the header Meta approved for this template. QR templates need no header type — a file is sent
+              only when a media URL is given at send time.
+            </p>
             <div className="mt-1 grid grid-cols-1 gap-2 sm:grid-cols-3">
               {HEADER_TYPE_OPTIONS.map((opt) => (
                 <button
@@ -759,6 +772,7 @@ function TemplateModal({
               </div>
             )}
           </div>
+          )}
 
           {variablesSchema.length > 0 && (
             <div className="space-y-2 rounded-lg border border-slate-200 bg-slate-50/60 p-3">

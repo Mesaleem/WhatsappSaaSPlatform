@@ -268,10 +268,12 @@ class JourneyAiGenerateTest extends TestCase
 
         $this->actingAs($superAdmin)->postJson(self::URL, $this->payload(['account_id' => $account->id]))->assertOk();
 
+        // Owner rule (2026-10-13): the Super Admin is never charged -- the run is recorded
+        // on the account at 0 credits and the account keeps its balance.
         $balance = app(CreditService::class)->balance($account->fresh());
-        $this->assertLessThan(100, $balance['balance'], 'the named account paid, not the Super Admin');
+        $this->assertSame(100, $balance['balance'], 'the Super Admin does not use the account\'s credits');
         $op = AiOperation::where('account_id', $account->id)->sole();
-        $this->assertSame([AiOperation::STATUS_SETTLED, 'journeys.ai_generate'], [$op->status, $op->operation]);
+        $this->assertSame([AiOperation::STATUS_SETTLED, 'journeys.ai_generate', 0], [$op->status, $op->operation, (int) $op->credits_charged]);
     }
 
     public function test_a_provider_failure_falls_back_to_a_deterministic_draft_uncharged(): void

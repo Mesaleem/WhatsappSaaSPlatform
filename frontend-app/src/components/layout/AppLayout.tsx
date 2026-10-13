@@ -405,6 +405,13 @@ function AppShell() {
   const location = useLocation();
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
+  // Header "Refresh": re-mounts the current page so it fetches its data again, and
+  // re-reads the signed-in user (plan, modules) -- no full browser reload needed.
+  const [refreshKey, setRefreshKey] = useState(0);
+  const refreshPage = useCallback(() => {
+    setRefreshKey((k) => k + 1);
+    void refreshUser();
+  }, [refreshUser]);
 
   // The mobile drawer closes on every navigation and on Esc.
   useEffect(() => setMobileOpen(false), [location.pathname]);
@@ -570,10 +577,10 @@ function AppShell() {
 
       {/* Main column */}
       <div className="flex min-w-0 flex-1 flex-col">
-        <Header pageTitle={pageTitle} onOpenMenu={() => setMobileOpen(true)} menuOpen={mobileOpen} />
+        <Header pageTitle={pageTitle} onOpenMenu={() => setMobileOpen(true)} menuOpen={mobileOpen} onRefresh={refreshPage} />
 
         <main className="flex-1 overflow-y-auto">
-          <Outlet />
+          <Outlet key={refreshKey} />
         </main>
       </div>
     </div>

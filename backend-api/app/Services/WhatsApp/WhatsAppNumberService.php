@@ -89,7 +89,8 @@ class WhatsAppNumberService
                     'phone_number' => $phone,
                     'is_included' => $isFirst,
                     'is_default' => $isFirst,
-                    'status' => WhatsAppNumber::STATUS_PENDING_PAYMENT,
+                    // The Super Admin's own account never pays for a number.
+                    'status' => $account->isPlatformAccount() ? WhatsAppNumber::STATUS_UNLINKED : WhatsAppNumber::STATUS_PENDING_PAYMENT,
                 ]);
             });
         } catch (QueryException $e) {
@@ -182,6 +183,7 @@ class WhatsAppNumberService
 
         try {
             $target->forceFill(['phone_number' => $phone])->save();
+            $this->forgetSavedLogin($target);
         } catch (QueryException $e) {
             if ($this->isUniqueViolation($e)) {
                 throw new WhatsAppNumberException(
@@ -220,12 +222,39 @@ class WhatsAppNumberService
         return $target->refresh();
     }
 
+    /**
+     * A seat whose number changes must never come back as the OLD number: drop the saved
+     * WhatsApp login for the seat (the engine keeps it in whatsapp_engine_auth_states) and
+     * ask the engine to log the seat out. Otherwise a number that dropped by itself (not
+     * via Disconnect) would reconnect as the old number on the next Connect.
+     */
+    private function forgetSavedLogin(WhatsAppNumber $slot): void
+    {
+        \App\Models\WhatsAppEngineAuthState::query()->where('whatsapp_number_id', $slot->id)->delete();
+        app(WhatsAppAddonService::class)->disconnectEngine($slot);
+    }
+
     public function remove(Account $account, int $id): void
     {
         $target = $this->findOwned($account, $id);
 
+        // The plan's included seat itself stays (it comes with the plan); deleting
+        // it clears its number so any number can be connected to it next.
         if ($target->is_included) {
-            throw new WhatsAppNumberException('The number included in your plan cannot be removed.', 'included_number');
+            if ($target->status === WhatsAppNumber::STATUS_LINKED) {
+                throw new WhatsAppNumberException('Disconnect this number first, then you can delete it.', 'must_disconnect_first', 409);
+            }
+
+            $target->forceFill([
+                // 'pending-s<slot id>': unique (slot ids are), never a valid phone shape,
+                // and within the 20-character phone_number column. The 's' keeps it from
+                // ever equalling another account's 'pending-<account id>' placeholder.
+                'phone_number' => WhatsAppNumber::PENDING_PLACEHOLDER_PREFIX.'s'.$target->id,
+                'status' => $target->status === WhatsAppNumber::STATUS_PAUSED ? WhatsAppNumber::STATUS_PAUSED : WhatsAppNumber::STATUS_UNLINKED,
+            ])->save();
+            $this->forgetSavedLogin($target);
+
+            return;
         }
 
         // [Owner instruction, disclosed]: an add-on whose term has ENDED (status

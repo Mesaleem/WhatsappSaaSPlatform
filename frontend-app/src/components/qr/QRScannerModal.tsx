@@ -176,7 +176,7 @@ export default function QRScannerModal({ accountId, onClose, onConnected, startS
         // engine has logged this device out again.
         setQr(null);
         setPairingCode(null);
-        setSocketError('This WhatsApp number is already connected elsewhere. It was refused and logged out — use a different number.');
+        setSocketError('This WhatsApp number is already added on another slot (default or add-on), so it was refused and logged out. One number can be connected to only one slot — use a different number.');
         return;
       }
       if (payload.error) {

@@ -137,8 +137,9 @@ function parsePhoneColumnFromCsv(text: string): string[] {
  * form, the endpoint, and its validation are all unchanged.
  */
 export default function SendAlertPage() {
-  const { isReadOnly, isSuperAdmin } = useAuth();
+  const { isReadOnly, isSuperAdmin, user } = useAuth();
   const superAdmin = isSuperAdmin();
+  const hasPlatformAccount = !!user?.platform_crm_account;
 
   // Super Admin Multi-Tenant Scoping: re-check WhatsApp status whenever the
   // Header's client selector changes — a status fetched for one tenant (or
@@ -168,7 +169,10 @@ export default function SendAlertPage() {
     // truth Device Settings uses, full stop — no re-check needed on
     // selectedAccountId, since the platform device isn't the selected
     // tenant at all.
-    const request = superAdmin ? whatsappService.selfDeviceStatus() : whatsappService.status();
+    // Since 2026-10-13 a Super Admin with no client selected sends from its own Platform
+    // account (the backend falls back to it), so its status is the one to show; the test
+    // device is read only on an install that has no Platform account.
+    const request = superAdmin && selectedAccountId === null && !hasPlatformAccount ? whatsappService.selfDeviceStatus() : whatsappService.status();
     request
       .then((res) => {
         if (!cancelled) setWaStatus(res.status);
@@ -182,7 +186,7 @@ export default function SendAlertPage() {
     return () => {
       cancelled = true;
     };
-  }, [selectedAccountId, superAdmin]);
+  }, [selectedAccountId, superAdmin, hasPlatformAccount]);
 
   const isDisconnected = waStatus === 'disconnected';
   const readOnly = isReadOnly();
@@ -284,8 +288,16 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
   const [senderNumbers, setSenderNumbers] = useState<SenderNumber[]>([]);
   const [senderNumberId, setSenderNumberId] = useState<number | null>(null);
   const defaultSenderId = senderNumbers.find((n) => n.is_default)?.id ?? null;
-  // A group belongs to the number it was created on (a group with no number is on the default one).
-  const groupsOnSender = groups.filter((g) => (g.whatsapp_number_id ?? defaultSenderId) === senderNumberId);
+  // Owner rule (2026-10-13): a custom group is a list of contacts messaged one by one, so it
+  // can go from any number. A native WhatsApp group lives inside one WhatsApp account: it is
+  // listed only for the number it belongs to (no number = the default one), and only while
+  // that slot still carries the phone that owns the group. The server enforces the same rule
+  // (SenderNumberResolver) for web and API sends.
+  const senderPhone = senderNumbers.find((n) => n.id === senderNumberId)?.phone_number ?? null;
+  const sendableFromSender = (g: ContactGroup) =>
+    g.group_type !== 'native_wa_group' ||
+    ((g.whatsapp_number_id ?? defaultSenderId) === senderNumberId && (!g.wa_owner_phone || g.wa_owner_phone === senderPhone));
+  const groupsOnSender = groups.filter(sendableFromSender);
 
   useEffect(() => {
     senderNumberService
@@ -299,9 +311,10 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
 
   // When the number changes, drop any selected group that is not on it: the user must choose again.
   useEffect(() => {
-    const allowed = new Set(groups.filter((g) => (g.whatsapp_number_id ?? defaultSenderId) === senderNumberId).map((g) => g.id));
+    const allowed = new Set(groups.filter(sendableFromSender).map((g) => g.id));
     setSelectedGroupIds((prev) => prev.filter((id) => allowed.has(id)));
-  }, [senderNumberId, groups, defaultSenderId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [senderNumberId, groups, defaultSenderId, senderPhone]);
 
   const [recipientPhone, setRecipientPhone] = useState('');
   const [csvError, setCsvError] = useState<string | null>(null);

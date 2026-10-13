@@ -33,6 +33,11 @@ interface ModuleAddonCardProps {
   enabled: boolean;
   /** What one unit is called, for example 'groups'. */
   unitLabel?: string;
+  /**
+   * The account's plan already includes this module with no paid term behind it (e.g. a
+   * plan bundling native WhatsApp groups): there is nothing to buy, so the card hides.
+   */
+  includedInPlan?: boolean;
 }
 
 /**
@@ -40,7 +45,7 @@ interface ModuleAddonCardProps {
  * needs, the price comes from the tier that holds that number, and the request goes to the
  * Super Admin or agent, who approves it and sends an invoice. Nothing is charged here.
  */
-export default function ModuleAddonCard({ module, accountId, enabled, unitLabel = 'units' }: ModuleAddonCardProps) {
+export default function ModuleAddonCard({ module, accountId, enabled, unitLabel = 'units', includedInPlan = false }: ModuleAddonCardProps) {
   const [offer, setOffer] = useState<ModuleAddonOffer | null>(null);
   const [rows, setRows] = useState<ModuleAddonRow[]>([]);
   const [units, setUnits] = useState('1');
@@ -49,8 +54,15 @@ export default function ModuleAddonCard({ module, accountId, enabled, unitLabel 
 
   const load = () =>
     moduleAddonService.list(accountId).then((res) => {
+      const mine = res.data.filter((r) => r.module === module);
       setOffer(res.offers.find((o) => o.module === module) ?? null);
-      setRows(res.data.filter((r) => r.module === module));
+      setRows(mine);
+      // An upgrade starts from one more than the running term holds -- set in the same
+      // update as the rows, so the first render already shows it (never a stale "1").
+      const running = mine
+        .filter((r) => r.status === 'paid' && r.term_ends_at && new Date(r.term_ends_at) > new Date())
+        .reduce((max, r) => Math.max(max, r.units ?? 0), 0);
+      if (running > 0) setUnits(String(running + 1));
     });
 
   useEffect(() => {
@@ -58,12 +70,24 @@ export default function ModuleAddonCard({ module, accountId, enabled, unitLabel 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [module, accountId]);
 
-  // Hidden once the module is enabled for this account, or the Super Admin has switched it free for everyone.
-  if (!offer || enabled || offer.is_free) return null;
+  const tiers = offer?.tiers ?? [];
+  // Units in the term running now (a tiered add-on already paid for).
+  const runningUnits = rows
+    .filter((r) => r.status === 'paid' && r.term_ends_at && new Date(r.term_ends_at) > new Date())
+    .reduce((max, r) => Math.max(max, r.units ?? 0), 0);
+  const upgrade = tiers.length > 0 && runningUnits > 0;
+  const minUnits = upgrade ? runningUnits + 1 : 1;
 
-  const tiers = offer.tiers ?? [];
+
+  // Hidden when: no offer, free for everyone, included in the plan, or a flat (untiered)
+  // module that is already on. A TIERED add-on stays visible while a term runs, as an
+  // upgrade: the server accepts a bigger tier at any time (ModuleAddonService::request()).
+  if (!offer || offer.is_free) return null;
+  if (includedInPlan && !upgrade) return null;
+  if (enabled && !upgrade) return null;
+
   const count = Number.parseInt(units, 10);
-  const tier = Number.isFinite(count) && count > 0 ? tierFor(tiers, count) : null;
+  const tier = Number.isFinite(count) && count >= minUnits ? tierFor(tiers, count) : null;
   const open = rows.find((r) => r.status === 'requested' || r.status === 'invoiced');
   const latest = open ?? rows[0];
 
@@ -86,7 +110,12 @@ export default function ModuleAddonCard({ module, accountId, enabled, unitLabel 
     <div className="mb-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="text-sm text-slate-700">
-          <p className="font-medium text-slate-900">{offer.label} is a paid add-on</p>
+          <p className="font-medium text-slate-900">{upgrade ? `Need more ${unitLabel}?` : `${offer.label} is a paid add-on`}</p>
+          {upgrade && (
+            <p className="mt-0.5 text-xs text-slate-600">
+              Your current term includes <strong>{runningUnits}</strong> {unitLabel}. You can move to a bigger tier any time.
+            </p>
+          )}
           {tiers.length > 0 ? (
             <p className="mt-0.5 text-xs text-slate-500">
               {tiers.map((t) => `${tierLabel(t, unitLabel)}: ₹${Number(t.price).toFixed(2)}`).join(' · ')} (GST included) per {offer.term_months} month
@@ -124,7 +153,7 @@ export default function ModuleAddonCard({ module, accountId, enabled, unitLabel 
               How many {unitLabel} do you need?
               <input
                 type="number"
-                min={1}
+                min={minUnits}
                 value={units}
                 onChange={(e) => setUnits(e.target.value)}
                 disabled={!!open}
@@ -137,7 +166,7 @@ export default function ModuleAddonCard({ module, accountId, enabled, unitLabel 
                   Price: <strong>₹{Number(tier.price).toFixed(2)}</strong> (GST included)
                 </>
               ) : (
-                'Enter a number of at least 1.'
+                `Enter a number of at least ${minUnits}.`
               )}
             </p>
             <button
@@ -147,7 +176,7 @@ export default function ModuleAddonCard({ module, accountId, enabled, unitLabel 
               title={open ? 'A request for this add-on is already open.' : 'Ask your Super Admin or agent for this add-on.'}
               className="rounded-lg bg-emerald-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-slate-300"
             >
-              {open ? 'Requested' : 'Request add-on'}
+              {open ? 'Requested' : upgrade ? 'Request upgrade' : 'Request add-on'}
             </button>
           </div>
         ) : (
@@ -158,7 +187,7 @@ export default function ModuleAddonCard({ module, accountId, enabled, unitLabel 
             title={open ? 'A request for this add-on is already open.' : 'Ask your Super Admin or agent for this add-on.'}
             className="rounded-lg bg-emerald-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-slate-300"
           >
-            {open ? 'Requested' : 'Request add-on'}
+            {open ? 'Requested' : upgrade ? 'Request upgrade' : 'Request add-on'}
           </button>
         )}
       </div>

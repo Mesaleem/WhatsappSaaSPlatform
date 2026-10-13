@@ -526,13 +526,19 @@ class AiCreditMeteringTest extends TestCase
         $superAdmin = User::factory()->create(['account_id' => null, 'is_active' => true]);
         $superAdmin->assignRole('super_admin');
 
-        $auth = app(AiAuthorizer::class)->forUser($superAdmin->fresh(), $customer->id, 'chatbot', 'manage-chatbot');
-        $this->metered()->generateText($auth, $this->request());
+        // Automated use for the customer: the customer pays, nobody else.
+        $this->metered()->generateText(app(AiAuthorizer::class)->forAccount($customer, 'chatbot'), $this->request());
 
         $this->assertSame(48, $this->state($customer)[0]);
         $this->assertSame([50, 0, 50], $this->state($other));
         $this->assertSame($customer->id, AiOperation::sole()->account_id);
-        $this->assertSame($superAdmin->id, AiOperation::sole()->actor_user_id);
+
+        // Owner rule (2026-10-13): the Super Admin's own use is recorded on the target, never charged.
+        $auth = app(AiAuthorizer::class)->forUser($superAdmin->fresh(), $customer->id, 'chatbot', 'manage-chatbot');
+        $this->metered()->generateText($auth, $this->request(), 'sa-op');
+        $this->assertSame(48, $this->state($customer)[0]);
+        $sa = AiOperation::query()->where('actor_user_id', $superAdmin->id)->sole();
+        $this->assertSame([$customer->id, 0], [$sa->account_id, (int) $sa->credits_charged]);
     }
 
     public function test_an_agent_acting_for_a_sub_client_bills_the_sub_client(): void

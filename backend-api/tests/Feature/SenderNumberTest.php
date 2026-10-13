@@ -126,17 +126,55 @@ class SenderNumberTest extends TestCase
         $template = $this->template($account);
         $group = ContactGroup::query()->create([
             'account_id' => $account->id, 'name' => 'Stock team', 'group_code' => 'STOCK_1', 'is_default' => false,
+            'group_type' => ContactGroup::GROUP_TYPE_NATIVE, 'wa_group_jid' => '120363000000000002@g.us', 'whatsapp_number_id' => $default->id,
+        ]);
+
+        // A native group belongs to the number it lives on: sending it from another is refused.
+        try {
+            app(SenderNumberResolver::class)->resolve($account, $second->id, $group);
+            $this->fail('a native group must not send from another number');
+        } catch (SenderNumberException $e) {
+            $this->assertSame('group_not_on_number', $e->errorCode);
+            $this->assertStringContainsString($default->phone_number, $e->getMessage());
+        }
+        $this->assertSame($default->id, app(SenderNumberResolver::class)->resolve($account, $default->id, $group));
+    }
+
+    /** A custom (internal) group is a list of contacts: it may go from any connected number. */
+    public function test_a_custom_group_sends_from_any_connected_number(): void
+    {
+        [$account, , $default, $second] = $this->client('919800000001');
+        $group = ContactGroup::query()->create([
+            'account_id' => $account->id, 'name' => 'Customers', 'group_code' => 'CUST_1', 'is_default' => false,
             'group_type' => ContactGroup::GROUP_TYPE_INTERNAL, 'whatsapp_number_id' => $default->id,
         ]);
 
-        $response = $this->actingAs($user)->postJson("/api/groups/{$group->id}/send-template", [
-            'template_id' => $template->id,
-            'variables' => ['name' => 'Asha'],
-            'sender_number_id' => $second->id,
-        ]);
+        $this->assertSame($second->id, app(SenderNumberResolver::class)->resolve($account, $second->id, $group));
+        $this->assertSame($default->id, app(SenderNumberResolver::class)->resolve($account, null, $group));
+    }
 
-        $response->assertStatus(422)->assertJsonPath('error_code', 'group_not_on_number');
-        $this->assertStringContainsString($default->phone_number, $response->json('message'));
+    /** Seat model: once a slot carries another number, the old number's native groups are refused. */
+    public function test_a_native_group_is_refused_after_its_slot_changed_number(): void
+    {
+        [$account, , $default] = $this->client('919800000001');
+        $group = ContactGroup::query()->create([
+            'account_id' => $account->id, 'name' => 'Old line group', 'group_code' => 'OLD_1', 'is_default' => false,
+            'group_type' => ContactGroup::GROUP_TYPE_NATIVE, 'wa_group_jid' => '120363000000000009@g.us',
+            'whatsapp_number_id' => $default->id, 'wa_owner_phone' => '919800000001',
+        ]);
+        $default->forceFill(['phone_number' => '919811112222'])->save();
+
+        try {
+            app(SenderNumberResolver::class)->resolve($account, null, $group);
+            $this->fail('the new number is not a member of the old number\'s group');
+        } catch (SenderNumberException $e) {
+            $this->assertSame('group_number_changed', $e->errorCode);
+        }
+        $this->assertSame([], app(SenderNumberResolver::class)->nativeGroupIdsSendableFrom($account, $default->id));
+
+        // The original number back on the slot: sendable again.
+        $default->forceFill(['phone_number' => '919800000001'])->save();
+        $this->assertSame([$group->id], app(SenderNumberResolver::class)->nativeGroupIdsSendableFrom($account, $default->id));
     }
 
     public function test_a_send_from_an_unlinked_number_is_refused(): void
@@ -152,35 +190,27 @@ class SenderNumberTest extends TestCase
         }
     }
 
-    public function test_the_developer_api_refuses_a_group_that_is_not_on_the_default_number(): void
+    /**
+     * Owner rule (2026-10-13): with no sender chosen (the Developer API never takes one), a
+     * native group goes from its OWN number, and is refused when that number is not connected.
+     */
+    public function test_with_no_sender_chosen_a_native_group_goes_from_its_own_number(): void
     {
-        [$account, , $default, $second] = $this->client('919800000001');
-        $template = $this->template($account);
-        $account->forceFill(['authorized_server_ip' => '127.0.0.1'])->save();
-
+        [$account, , , $second] = $this->client('919800000001');
         $group = ContactGroup::query()->create([
             'account_id' => $account->id, 'name' => 'Other line', 'group_code' => 'OTHER_1', 'is_default' => false,
-            'group_type' => ContactGroup::GROUP_TYPE_INTERNAL, 'whatsapp_number_id' => $second->id,
+            'group_type' => ContactGroup::GROUP_TYPE_NATIVE, 'wa_group_jid' => '120363000000000003@g.us', 'whatsapp_number_id' => $second->id,
         ]);
 
-        $plainKey = 'wasaas_live_'.Str::random(40);
-        // Phase 4 Task 7 FIX — a valid per-key legacy deadline is now required for the legacy-IP path to
-        // authenticate; this test is about sender-number resolution, not binding enforcement.
-        ApiKey::create([
-            'account_id' => $account->id, 'name' => 'Test', 'key_prefix' => substr($plainKey, 0, 20),
-            'key_hash' => ApiKey::hashKey($plainKey),
-            'legacy_binding_grace_expires_at' => now()->addDays(30),
-        ]);
+        $this->assertSame($second->id, app(SenderNumberResolver::class)->resolve($account, null, $group));
 
-        $this->withHeaders(['X-API-KEY' => $plainKey, 'Idempotency-Key' => 'grp-'.Str::random(8)])
-            ->postJson('/api/v1/send-message', [
-                'recipient_type' => 'group',
-                'template_code' => $template->template_code,
-                'group_code' => $group->group_code,
-                'variables' => ['name' => 'Asha'],
-            ])
-            ->assertStatus(422)
-            ->assertJsonPath('error_code', 'group_not_on_number');
+        $second->forceFill(['status' => WhatsAppNumber::STATUS_UNLINKED])->save();
+        try {
+            app(SenderNumberResolver::class)->resolve($account, null, $group);
+            $this->fail('a group whose own number is not connected must not send');
+        } catch (SenderNumberException $e) {
+            $this->assertSame('sender_not_active', $e->errorCode);
+        }
     }
 
     public function test_a_manual_bulk_list_of_more_than_30_numbers_is_refused(): void

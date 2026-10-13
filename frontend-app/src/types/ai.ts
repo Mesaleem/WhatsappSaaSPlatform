@@ -85,13 +85,12 @@ export interface UpdateAiProviderSettingsPayload {
 
 /**
  * Phase 8 Task 13 — "Generate with AI" draft for the Template Designer
- * (AITemplateController). account_id is REQUIRED: it names which
- * account's AI credits pay for the draft (AiAuthorizer has no "global
- * AI" path), independent of which account the eventually-SAVED template
- * belongs to — this endpoint never saves anything itself.
+ * (AITemplateController). account_id names which account's AI credits pay
+ * for the draft. Since 2026-10-13 the Super Admin may omit it (a platform
+ * draft) and is never charged; everyone else must send it.
  */
 export interface GenerateTemplateDraftPayload {
-  account_id: number;
+  account_id?: number;
   purpose: string;
   category: 'MARKETING' | 'UTILITY' | 'AUTHENTICATION';
   tone?: string;

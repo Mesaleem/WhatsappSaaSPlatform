@@ -19,9 +19,12 @@ use App\Models\Capability;
  * the codebase reads. The client-management list filters on
  * account_type = 'client', so it never appears as a client there.
  *
- * Used only by EnsureCrmTargetAccount (the CRM route group): a Super Admin
- * with no client selected acts on this account in the CRM, and nowhere
- * else. Created by the 2026_09_23_130000 data migration or
+ * A Super Admin with no client selected acts on this account in the CRM
+ * (EnsureCrmTargetAccount), Social (EnsureTargetAccountMiddleware) and, since
+ * 2026-10-13, every single-account action (ResolvesTenantAccount::
+ * superAdminOwnAccount()). It holds every capability (AccessControlService::
+ * canTenant()) and an unlimited subscription (ensure() below).
+ * Created by the 2026_09_23_130000 / 2026_10_13_130000 data migrations or
  * `php artisan crm:platform-account` — never lazily on a request.
  */
 class PlatformCrmAccount
@@ -57,6 +60,24 @@ class PlatformCrmAccount
                 'allowed_modules' => null,
             ]);
             $created = true;
+        }
+
+        // Owner rule (2026-10-13): the Super Admin's own account has no limits. A
+        // never-expiring 'unlimited' subscription (price 0, like Account::platformDevice())
+        // lets every send, journey and quota check pass without special cases.
+        if ($account->subscriptions()->doesntExist()) {
+            $account->subscriptions()->create([
+                'engine_type' => 'qr',
+                'billing_model' => 'unlimited',
+                'rate_per_message' => null,
+                'total_allocated_messages' => null,
+                'used_messages' => 0,
+                'price_paid' => 0,
+                'payment_mode' => 'cash',
+                'starts_at' => now(),
+                'expires_at' => null,
+                'status' => 'active',
+            ]);
         }
 
         $crmGranted = false;

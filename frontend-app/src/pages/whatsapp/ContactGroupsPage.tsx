@@ -51,7 +51,7 @@ function extractMessage(err: unknown, fallback: string): string {
  * `moduleEnabled` reflects any more.
  */
 export default function ContactGroupsPage() {
-  const { hasModule } = useAuth();
+  const { hasModule, user } = useAuth();
   const moduleEnabled = hasModule('contact_groups');
 
   const [groups, setGroups] = useState<ContactGroup[]>([]);
@@ -198,7 +198,24 @@ export default function ContactGroupsPage() {
       {/* Native WhatsApp Groups is the chargeable, plan-limited half of this feature (internal
           segment groups are free and unlimited — see ContactGroupController's own re-scoping
           docblock); this card/usage banner is about native groups only. */}
-      <ModuleAddonCard module="contact_groups" enabled={usage?.limit != null} unitLabel="group chats" />
+      {/* Native WhatsApp Groups ACCESS: the paid `whatsapp_groups` add-on (tiers by group
+          count) switches the capability on. Hidden while the plan already includes it;
+          shown as an upgrade while a paid term runs. Request → Super Admin/Agent approves
+          → invoice → paid online or recorded as a manual payment. */}
+      <ModuleAddonCard
+        module="whatsapp_groups"
+        enabled={false}
+        includedInPlan={Boolean(user?.capabilities?.whatsapp_groups)}
+        unitLabel="native groups"
+      />
+      {/* Native group COUNT pricing (`contact_groups` offer) -- hidden while the Super
+          Admin has it switched to Free. */}
+      <ModuleAddonCard
+        module="contact_groups"
+        enabled={false}
+        includedInPlan={usage?.limit == null && Boolean(user?.capabilities?.whatsapp_groups)}
+        unitLabel="group chats"
+      />
 
       {usage && usage.limit !== null && (
         <p className="mb-4 text-sm text-slate-600" data-testid="group-usage">

@@ -266,18 +266,25 @@ class AiAgentRegistryTest extends TestCase
         $this->assertSame(0, AiAgent::count());
     }
 
-    public function test_super_admin_needs_a_selected_client_and_gets_no_entitlement_bypass(): void
+    /**
+     * Owner rule (2026-10-13): the Super Admin has AI without limits. An agent still
+     * belongs to one selected client, but the client's AI plan never blocks the Super Admin.
+     */
+    public function test_super_admin_needs_a_selected_client_but_has_no_entitlement_limits(): void
     {
         $superAdmin = $this->user(null, 'super_admin');
         $client = $this->tenant();
         $noAi = $this->tenant('starter', grants: []);
 
         $this->actingAs($superAdmin)->postJson(self::API, $this->body())->assertStatus(422)->assertJsonPath('error_code', 'AI_TARGET_ACCOUNT_REQUIRED');
-        $this->actingAs($superAdmin)->postJson(self::API.'?account_id='.$noAi->id, $this->body())->assertForbidden()->assertJsonPath('error_code', 'AI_CAPABILITY_UNAVAILABLE');
+
+        $onNoAi = $this->create($superAdmin, [], '?account_id='.$noAi->id);
+        $this->assertSame($noAi->id, (int) AiAgent::find($onNoAi)->account_id);
 
         $id = $this->create($superAdmin, ['tools' => [CrmCaptureCurrentLeadTool::NAME]], '?account_id='.$client->id);
         $this->assertSame($client->id, (int) AiAgent::find($id)->account_id);
-        $this->actingAs($superAdmin)->getJson(self::API."/{$id}?account_id=".$noAi->id)->assertForbidden(); // no bypass on another target either
+        // An agent is still only reachable through its own client.
+        $this->actingAs($superAdmin)->getJson(self::API."/{$id}?account_id=".$noAi->id)->assertNotFound();
     }
 
     public function test_a_reseller_agent_manages_its_own_sub_clients_agents_only(): void

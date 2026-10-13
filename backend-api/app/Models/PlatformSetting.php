@@ -9,6 +9,12 @@ class PlatformSetting extends Model
 {
     public const WHATSAPP_ADDON_PRICE = 'whatsapp_addon_price';
 
+    /** Free AI credits a client account gets each day (AiDailyAllowance). */
+    public const AI_FREE_DAILY_CLIENT = 'ai_free_daily_credits_client';
+
+    /** Free AI credits an agent account gets each day (AiDailyAllowance). */
+    public const AI_FREE_DAILY_AGENT = 'ai_free_daily_credits_agent';
+
     protected $table = 'platform_settings';
 
     protected $primaryKey = 'key';

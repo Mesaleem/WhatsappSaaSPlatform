@@ -68,8 +68,42 @@ class TemplateCopywriterService
     /** MessageTemplate.template_body's own DB column cap (store()'s own validation rule). */
     private const MAX_BODY_LENGTH = 4000;
 
-    public function __construct(private readonly MeteredAiService $metered)
+    public function __construct(
+        private readonly MeteredAiService $metered,
+        private readonly AiManager $manager,
+    ) {
+    }
+
+    /**
+     * Super Admin draft with no account selected (e.g. a global template): straight to
+     * the configured provider -- no account, no credits (owner rule: the Super Admin is
+     * unlimited). Same prompt, same output shape and same fallback as generate().
+     */
+    public function generateForPlatform(string $purpose, string $category, ?string $tone, array $variableKeys = []): array
     {
+        $tokens = compact('purpose', 'category', 'tone', 'variableKeys');
+
+        try {
+            $response = $this->manager->provider()->generateStructured(new AiRequest(
+                prompt: $this->userPrompt($tokens),
+                system: $this->systemPrompt(),
+                maxTokens: self::MAX_TOKENS,
+                temperature: self::TEMPERATURE,
+                operation: self::OPERATION,
+                requiredKeys: ['title', 'template_body'],
+            ));
+
+            $draft = $this->usableDraft($response->data);
+            if ($draft !== null) {
+                return ['provider' => $response->provider, ...$draft];
+            }
+        } catch (\Throwable $e) {
+            Log::warning('TemplateCopywriterService: platform AI draft unavailable, serving the deterministic fallback.', [
+                'error' => class_basename($e),
+            ]);
+        }
+
+        return ['provider' => 'template', ...$this->generateFromTemplate($tokens)];
     }
 
     /**

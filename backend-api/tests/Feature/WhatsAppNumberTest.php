@@ -168,18 +168,54 @@ class WhatsAppNumberTest extends TestCase
             ->assertJsonPath('error_code', 'default_not_allowed');
     }
 
-    public function test_an_included_number_cannot_be_removed_but_an_unpaid_extra_can(): void
+    /**
+     * Seat model (2026-10-13): deleting the included number clears it from the seat
+     * (the seat comes with the plan and stays, ready for any number); an unpaid
+     * extra is removed outright.
+     */
+    public function test_deleting_the_included_number_clears_its_seat_and_an_unpaid_extra_is_removed(): void
     {
         [, $user] = $this->tenant();
         $included = $this->actingAs($user)->postJson('/api/whatsapp/numbers', ['phone_number' => '919876543210'])->json('data');
         $extra = $this->actingAs($user)->postJson('/api/whatsapp/numbers', ['phone_number' => '917236062374'])->json('data');
 
-        $this->actingAs($user)->deleteJson("/api/whatsapp/numbers/{$included['id']}")
-            ->assertUnprocessable()
-            ->assertJsonPath('error_code', 'included_number');
+        $this->actingAs($user)->deleteJson("/api/whatsapp/numbers/{$included['id']}")->assertOk();
+        $seat = WhatsAppNumber::findOrFail($included['id']);
+        $this->assertTrue($seat->is_included);
+        $this->assertTrue($seat->hasPendingPlaceholderNumber());
+        $this->assertSame(WhatsAppNumber::STATUS_UNLINKED, $seat->status);
 
         $this->actingAs($user)->deleteJson("/api/whatsapp/numbers/{$extra['id']}")->assertOk();
         $this->assertDatabaseMissing('whatsapp_numbers', ['id' => $extra['id']]);
+    }
+
+    /** A seat that changes or clears its number forgets the saved WhatsApp login, so the old number never comes back on Connect. */
+    public function test_changing_or_deleting_a_seats_number_forgets_its_saved_login(): void
+    {
+        \Illuminate\Support\Facades\Http::fake();
+        [, $user] = $this->tenant();
+        $included = $this->actingAs($user)->postJson('/api/whatsapp/numbers', ['phone_number' => '919876543210'])->json('data');
+        \App\Models\WhatsAppEngineAuthState::query()->create(['whatsapp_number_id' => $included['id'], 'name' => 'creds', 'value' => '{}']);
+
+        $this->actingAs($user)->putJson("/api/whatsapp/numbers/{$included['id']}", ['phone_number' => '919811122233'])->assertOk();
+        $this->assertSame(0, \App\Models\WhatsAppEngineAuthState::query()->where('whatsapp_number_id', $included['id'])->count());
+
+        \App\Models\WhatsAppEngineAuthState::query()->create(['whatsapp_number_id' => $included['id'], 'name' => 'creds', 'value' => '{}']);
+        $this->actingAs($user)->deleteJson("/api/whatsapp/numbers/{$included['id']}")->assertOk();
+        $this->assertSame(0, \App\Models\WhatsAppEngineAuthState::query()->where('whatsapp_number_id', $included['id'])->count());
+        \Illuminate\Support\Facades\Http::assertSent(fn ($r) => str_contains($r->url(), '/api/qr/logout'));
+    }
+
+    public function test_a_connected_included_number_must_be_disconnected_before_deleting(): void
+    {
+        [, $user] = $this->tenant();
+        $included = $this->actingAs($user)->postJson('/api/whatsapp/numbers', ['phone_number' => '919876543210'])->json('data');
+        WhatsAppNumber::whereKey($included['id'])->update(['status' => WhatsAppNumber::STATUS_LINKED]);
+
+        $this->actingAs($user)->deleteJson("/api/whatsapp/numbers/{$included['id']}")
+            ->assertStatus(409)
+            ->assertJsonPath('error_code', 'must_disconnect_first');
+        $this->assertSame('919876543210', WhatsAppNumber::findOrFail($included['id'])->phone_number);
     }
 
     /**

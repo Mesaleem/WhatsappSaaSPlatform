@@ -423,6 +423,11 @@ Route::middleware('auth:sanctum')->group(function () {
         ->get('/admin/whatsapp/addon-invoices/pending', [WhatsAppAddonController::class, 'pending']);
     // The extra WhatsApp number price: the Super Admin changes it; invoices already issued keep theirs.
     Route::middleware(['role:super_admin'])->put('/admin/whatsapp/addon-price', [WhatsAppAddonController::class, 'updatePrice']);
+    // Free daily AI credits (AiDailyAllowance): the header chip for the user's own account, and the
+    // Super Admin's per-day setting for clients and agents.
+    Route::get('/ai/credit-status', [\App\Http\Controllers\Api\AiCreditStatusController::class, 'status']);
+    Route::middleware(['role:super_admin'])->get('/admin/ai/free-daily-credits', [\App\Http\Controllers\Api\AiCreditStatusController::class, 'settings']);
+    Route::middleware(['role:super_admin'])->put('/admin/ai/free-daily-credits', [\App\Http\Controllers\Api\AiCreditStatusController::class, 'saveSettings']);
     // Number change requests: a Super Admin, or the agent for its own client, approves or rejects.
     Route::middleware(['tenant.isolation', 'role:super_admin|agent'])->prefix('admin/whatsapp/number-change-requests')->group(function () {
         Route::get('/', [WhatsAppNumberChangeController::class, 'pending']);

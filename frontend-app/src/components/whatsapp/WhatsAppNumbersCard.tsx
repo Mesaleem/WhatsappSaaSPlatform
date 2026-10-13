@@ -193,7 +193,8 @@ export default function WhatsAppNumbersCard({ accountId, onConnected, reloadKey 
       // Open the checkout immediately when a gateway is configured, instead
       // of leaving the client to find this invoice again on Billing &
       // Plans/Add-ons just to pay it.
-      if (onlineGateway) {
+      // No invoice for the Super Admin's own account: its numbers are free and ready to connect.
+      if (onlineGateway && res.invoice) {
         payForInvoice(res.invoice);
       }
     } catch (err) {
@@ -353,6 +354,9 @@ export default function WhatsAppNumbersCard({ accountId, onConnected, reloadKey 
           // A never-paid reservation can be dropped while unlocked; a paused (expired)
           // add-on can always be deleted outright, regardless of the account's lock.
           const canRemove = !row.is_included && (row.status === 'paused' || (row.status === 'pending_payment' && !row.locked));
+          // Seat model: the plan's included seat can have its number deleted once
+          // disconnected; the seat stays and any number can be connected to it again.
+          const canClearIncluded = row.is_included && row.status !== 'linked' && !row.has_pending_number;
           // Self-service edit: offered once the slot is disconnected (or was never
           // connected). While linked, disconnect first -- the server enforces the same rule.
           const canEdit = row.status !== 'linked';
@@ -450,7 +454,7 @@ export default function WhatsAppNumbersCard({ accountId, onConnected, reloadKey 
                     Edit
                   </button>
                 )}
-                {canRemove && (
+                {(canRemove || canClearIncluded) && (
                   <button
                     type="button"
                     disabled={busy}
@@ -458,7 +462,7 @@ export default function WhatsAppNumbersCard({ accountId, onConnected, reloadKey 
                     className="flex items-center gap-1 rounded-lg border border-red-200 px-3 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50 disabled:opacity-60"
                   >
                     <Trash2 className="h-3.5 w-3.5" />
-                    Remove
+                    {row.is_included ? 'Delete' : 'Remove'}
                   </button>
                 )}
                 {busy && <RefreshCw className="h-4 w-4 animate-spin text-slate-400" />}
@@ -471,9 +475,11 @@ export default function WhatsAppNumbersCard({ accountId, onConnected, reloadKey 
       {confirmRemove && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4" role="dialog" aria-modal="true">
           <div className="w-full max-w-sm rounded-xl bg-white p-6 shadow-xl">
-            <h2 className="text-base font-semibold text-slate-900">Remove this number?</h2>
+            <h2 className="text-base font-semibold text-slate-900">{confirmRemove.is_included ? 'Delete this number?' : 'Remove this number?'}</h2>
             <p className="mt-2 text-sm text-slate-600">
-              {confirmRemove.status === 'paused'
+              {confirmRemove.is_included
+                ? `+${confirmRemove.phone_number} will be deleted from your plan's WhatsApp seat. The seat stays — connect any number to it again with Connect.`
+                : confirmRemove.status === 'paused'
                 ? `+${confirmRemove.phone_number} will be removed from your WhatsApp numbers. It already ran its paid term; buying this number again starts a new one.`
                 : `+${confirmRemove.phone_number} will be removed from your WhatsApp numbers. Its unpaid invoice is not affected.`}
             </p>
@@ -505,9 +511,9 @@ export default function WhatsAppNumbersCard({ accountId, onConnected, reloadKey 
         <QRScannerModal
           accountId={accountId}
           numberId={connectingRow.id}
-          // Only a paid add-on is bound to its number; the plan's included
-          // number accepts whatever number connects (server rule: acceptsAnyNumber).
-          expectedPhone={connectingRow.is_included || connectingRow.has_pending_number ? null : connectingRow.phone_number}
+          // Seat model (2026-10-13): every slot accepts whatever number connects
+          // (server rule: acceptsAnyNumber), so the modal never locks the number field.
+          expectedPhone={null}
           onClose={() => setConnectingId(null)}
           onConnected={() => {
             setConnectingId(null);

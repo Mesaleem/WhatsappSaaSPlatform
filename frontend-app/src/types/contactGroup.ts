@@ -27,6 +27,8 @@ export interface ContactGroup {
   group_type: ContactGroupType;
   /** Native WhatsApp Group Re-Architecture. Set once CreateNativeWhatsAppGroupJob resolves; null for internal_segment groups and for a native group still pending/failed. */
   wa_group_jid: string | null;
+  /** The WhatsApp number that owns a native group; null for custom groups and old rows. */
+  wa_owner_phone?: string | null;
   /** e.g. "https://chat.whatsapp.com/<code>" — null until synced, and may stay null even once synced (groupInviteCode() can fail non-fatally — see sessionManager.js's createGroup()). */
   invite_link: string | null;
   /** null for internal_segment groups (the concept doesn't apply); 'pending' | 'synced' | 'failed' for native_wa_group. */

@@ -102,13 +102,27 @@ class TemplateAiGenerateTest extends TestCase
 
     // ==================================================================
 
-    public function test_a_super_admin_must_name_an_account_to_authorize_and_charge(): void
+    /** Owner rule (2026-10-13): the Super Admin drafts without choosing an account, and nothing is charged. */
+    public function test_a_super_admin_can_draft_without_an_account_and_nothing_is_charged(): void
     {
+        Http::fake(fn () => Http::response($this->openAiAnswer('Global', 'Hello {{customer_name}}.'), 200));
         $superAdmin = User::factory()->create(['account_id' => null]);
         $superAdmin->assignRole('super_admin');
 
         $this->actingAs($superAdmin)->postJson(self::URL, $this->payload(['account_id' => null]))
-            ->assertStatus(422); // validation: account_id required
+            ->assertOk()
+            ->assertJsonPath('data.title', 'Global');
+
+        $this->assertSame(0, AiOperation::count());
+    }
+
+    public function test_an_account_user_must_name_an_account(): void
+    {
+        $agentAccount = $this->tenant();
+        $agentAccount->update(['account_type' => 'agent']);
+
+        $this->actingAs($this->user($agentAccount, 'agent'))->postJson(self::URL, $this->payload(['account_id' => null]))
+            ->assertStatus(422);
     }
 
     public function test_a_super_admin_can_generate_a_draft_against_a_chosen_account(): void
@@ -186,16 +200,31 @@ class TemplateAiGenerateTest extends TestCase
     public function test_credits_are_charged_to_the_named_account_and_metered(): void
     {
         Http::fake(fn () => Http::response($this->openAiAnswer('T', 'Hello {{customer_name}}, confirmed for {{appointment_time}}.'), 200));
+        $account = $this->tenant(credits: 100);
+
+        // An agent drafting for its own account: that account pays.
+        $account->update(['account_type' => 'agent']);
+        $this->actingAs($this->user($account, 'agent'))->postJson(self::URL, $this->payload(['account_id' => $account->id]))->assertOk();
+
+        $balance = app(CreditService::class)->balance($account->fresh());
+        $this->assertLessThan(100, $balance['balance'], 'the named account paid');
+        $op = AiOperation::where('account_id', $account->id)->sole();
+        $this->assertSame([AiOperation::STATUS_SETTLED, 'templates.ai_generate'], [$op->status, $op->operation]);
+    }
+
+    /** Owner rule (2026-10-13): a Super Admin drafting for a client never uses the client's credits. */
+    public function test_a_super_admin_drafting_for_a_client_is_not_charged(): void
+    {
+        Http::fake(fn () => Http::response($this->openAiAnswer('T', 'Hello {{customer_name}}.'), 200));
         $superAdmin = User::factory()->create(['account_id' => null]);
         $superAdmin->assignRole('super_admin');
         $account = $this->tenant(credits: 100);
 
         $this->actingAs($superAdmin)->postJson(self::URL, $this->payload(['account_id' => $account->id]))->assertOk();
 
-        $balance = app(CreditService::class)->balance($account->fresh());
-        $this->assertLessThan(100, $balance['balance'], 'the named account paid, not the Super Admin');
+        $this->assertSame(100, app(CreditService::class)->balance($account->fresh())['balance']);
         $op = AiOperation::where('account_id', $account->id)->sole();
-        $this->assertSame([AiOperation::STATUS_SETTLED, 'templates.ai_generate'], [$op->status, $op->operation]);
+        $this->assertSame([AiOperation::STATUS_SETTLED, 0], [$op->status, (int) $op->credits_charged]);
     }
 
     public function test_a_provider_failure_falls_back_to_a_deterministic_draft_uncharged(): void

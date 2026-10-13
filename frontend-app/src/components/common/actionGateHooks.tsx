@@ -28,7 +28,11 @@ export function useClientGate(options: { platformFallback?: boolean } = {}): {
 } {
   const { isSuperAdmin, user } = useAuth();
   const { selectedAccountId } = useTenant();
-  const needsClient = isSuperAdmin() && selectedAccountId === null && !(options.platformFallback && user?.platform_crm_account);
+  // Since 2026-10-13 the backend falls back to that account in EVERY module (owner rule: no
+  // restriction for the Super Admin), so the fallback applies on every page; the option is kept
+  // for the callers that still pass it.
+  void options;
+  const needsClient = isSuperAdmin() && selectedAccountId === null && !user?.platform_crm_account;
   const [pending, setPending] = useState<{ purpose: string; action: (() => void) | null } | null>(null);
 
   const guard = useCallback(

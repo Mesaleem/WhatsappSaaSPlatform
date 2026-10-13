@@ -59,6 +59,7 @@ class ContactGroup extends Model
         'locked_at',
         'group_type',
         'wa_group_jid',
+        'wa_owner_phone',
         'invite_link',
         'sync_status',
         'sync_error',

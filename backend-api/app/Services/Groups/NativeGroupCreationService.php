@@ -40,6 +40,8 @@ class NativeGroupCreationService
                 'name' => $name,
                 'group_code' => ContactGroup::generateGroupCode($account->id, $name),
                 'whatsapp_number_id' => app(\App\Services\WhatsApp\SenderNumberResolver::class)->defaultId($account),
+                // The number that owns the group; a send is refused once its slot carries another number.
+                'wa_owner_phone' => app(\App\Services\WhatsApp\SenderNumberResolver::class)->defaultPhone($account),
                 'is_default' => false,
                 'group_type' => ContactGroup::GROUP_TYPE_NATIVE,
                 'sync_status' => ContactGroup::SYNC_STATUS_PENDING,
@@ -117,6 +119,8 @@ class NativeGroupCreationService
                 'name' => $name,
                 'group_code' => ContactGroup::generateGroupCode($account->id, $name),
                 'whatsapp_number_id' => app(\App\Services\WhatsApp\SenderNumberResolver::class)->defaultId($account),
+                // The number that owns the group; a send is refused once its slot carries another number.
+                'wa_owner_phone' => app(\App\Services\WhatsApp\SenderNumberResolver::class)->defaultPhone($account),
                 'is_default' => false,
                 'group_type' => ContactGroup::GROUP_TYPE_NATIVE,
                 'wa_group_jid' => $groupJid,

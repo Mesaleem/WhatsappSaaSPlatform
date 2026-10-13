@@ -73,6 +73,7 @@ class MeteredAiService
         private readonly AiCreditPricing $pricing,
         private readonly CreditConsumptionService $consumption,
         private readonly CreditEntitlementService $gate,
+        private readonly AiDailyAllowance $daily,
     ) {
     }
 
@@ -243,8 +244,13 @@ class MeteredAiService
     {
         $operation = $this->claim($authorization, $operationKey, $label, $providerName, $model);
 
-        // 2. hold the upper bound
-        $reservation = $this->reserve($authorization, $operation, $estimate);
+        // Owner rule (2026-10-13): the Super Admin's own AI use is unlimited -- no credit
+        // hold, no charge, on any account. The operation is still recorded (0 credits).
+        $unmetered = $this->isSuperAdminActor($authorization);
+
+        // 2. hold the upper bound: today's free credits first (AiDailyAllowance), else the wallet
+        $freeHold = $unmetered ? null : $this->holdFree($authorization, $operation, $estimate);
+        $reservation = ($unmetered || $freeHold !== null) ? null : $this->reserve($authorization, $operation, $estimate);
 
         // 3. call the provider
         try {
@@ -252,11 +258,55 @@ class MeteredAiService
         } catch (Throwable $e) {
             $error = $e instanceof AiException ? $e : AiException::providerFailed($providerName, $e);
             $this->fail($operation, $error->errorCode, $error->category());
+            if ($freeHold !== null) {
+                $this->daily->release($freeHold, $estimate);
+            }
 
             throw $error;
         }
 
         [$respProvider, $respModel, $inputTokens, $outputTokens, $latency] = $usage($response);
+
+        if ($freeHold !== null) {
+            // Paid from today's free credits: keep what was used, give the rest back.
+            $price = $this->pricing->chargeTokens($inputTokens, $outputTokens, $respProvider, $respModel, $estimate);
+            $this->daily->settle($freeHold, $estimate, $price['charged']);
+
+            AiOperation::query()->whereKey($operation->id)->where('status', AiOperation::STATUS_RUNNING)->update([
+                'status' => AiOperation::STATUS_SETTLED,
+                'provider' => $respProvider,
+                'model' => mb_substr((string) $respModel, 0, 128),
+                'input_tokens' => $inputTokens,
+                'output_tokens' => $outputTokens,
+                'usage_reported' => $price['usage_reported'],
+                'credits_reserved' => $estimate,
+                'credits_charged' => $price['charged'],
+                'credits_uncharged' => $price['uncharged'],
+                'latency_ms' => $latency,
+                'completed_at' => now(),
+                'settled_at' => now(),
+                'updated_at' => now(),
+            ]);
+
+            return [$response, $operation->fresh(), $price['charged'], true];
+        }
+
+        if ($unmetered) {
+            AiOperation::query()->whereKey($operation->id)->where('status', AiOperation::STATUS_RUNNING)->update([
+                'status' => AiOperation::STATUS_SETTLED,
+                'provider' => $respProvider,
+                'model' => mb_substr((string) $respModel, 0, 128),
+                'input_tokens' => $inputTokens,
+                'output_tokens' => $outputTokens,
+                'credits_charged' => 0,
+                'latency_ms' => $latency,
+                'completed_at' => now(),
+                'settled_at' => now(),
+                'updated_at' => now(),
+            ]);
+
+            return [$response, $operation->fresh(), 0, true];
+        }
 
         // 4. record usage + the computed charge (durable before the ledger write)
         $price = $this->pricing->chargeTokens($inputTokens, $outputTokens, $respProvider, $respModel, $estimate);
@@ -310,6 +360,12 @@ class MeteredAiService
         }
 
         return [$response, $operation->fresh(), $price['charged'], $settled];
+    }
+
+    private function isSuperAdminActor(AiAuthorization $authorization): bool
+    {
+        return $authorization->actorUserId !== null
+            && (bool) \App\Models\User::query()->find($authorization->actorUserId)?->isSuperAdmin();
     }
 
     private function claim(AiAuthorization $authorization, string $key, string $label, string $provider, ?string $model): AiOperation
@@ -367,17 +423,49 @@ class MeteredAiService
         }
     }
 
+    /**
+     * Hold the estimate from today's free credits, after the same product gate the
+     * wallet uses (AI capability, account, subscription). Null when today's free
+     * credits cannot cover it -- the wallet is used instead.
+     */
+    private function holdFree(AiAuthorization $authorization, AiOperation $operation, int $estimate): ?int
+    {
+        try {
+            $this->gate->assertMaySpend($authorization->account, $estimate);
+        } catch (CreditException $e) {
+            $error = $this->creditError($authorization, $e, $estimate);
+            $this->fail($operation, $error->errorCode, $error->category(), releaseHold: false);
+
+            throw $error;
+        }
+
+        try {
+            return $this->daily->hold($authorization->account, $estimate);
+        } catch (Throwable $e) {
+            Log::warning('MeteredAiService: free daily AI credits unavailable; using the wallet.', [
+                'account_id' => $operation->account_id, 'exception' => class_basename($e),
+            ]);
+
+            return null;
+        }
+    }
+
+    private function creditError(AiAuthorization $authorization, CreditException $e, int $estimate): AiException
+    {
+        return match ($e->reason) {
+            CreditException::INSUFFICIENT_CREDITS => AiException::insufficientCredits($estimate, $this->available($authorization), $e),
+            CreditException::ENTITLEMENT_BLOCKED => AiException::capabilityUnavailable(),
+            CreditException::ACCOUNT_BLOCKED => str_contains($e->getMessage(), 'suspended') ? AiException::accountSuspended() : AiException::subscriptionInactive(),
+            default => AiException::billingUnavailable($e),
+        };
+    }
+
     private function reserve(AiAuthorization $authorization, AiOperation $operation, int $estimate): CreditReservation
     {
         try {
             $result = $this->consumption->reserve($authorization->account, $estimate, "ai:{$operation->id}:a{$operation->attempt}", $this->context($operation), $this->gate);
         } catch (CreditException $e) {
-            $error = match ($e->reason) {
-                CreditException::INSUFFICIENT_CREDITS => AiException::insufficientCredits($estimate, $this->available($authorization), $e),
-                CreditException::ENTITLEMENT_BLOCKED => AiException::capabilityUnavailable(),
-                CreditException::ACCOUNT_BLOCKED => str_contains($e->getMessage(), 'suspended') ? AiException::accountSuspended() : AiException::subscriptionInactive(),
-                default => AiException::billingUnavailable($e),
-            };
+            $error = $this->creditError($authorization, $e, $estimate);
             $this->fail($operation, $error->errorCode, $error->category(), releaseHold: false);
 
             throw $error;

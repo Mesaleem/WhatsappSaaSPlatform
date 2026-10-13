@@ -176,6 +176,8 @@ class TemplateService
             'title' => 'Template awaiting your review',
             'body' => sprintf('"%s" (%s) needs your review.', $template->title, $account->company_name),
             'category' => 'template_review',
+            // Clicking the notification opens the Template Manager, where the review happens.
+            'link' => '/admin/templates',
             'is_read' => false,
             'created_at' => $now,
             'updated_at' => $now,

@@ -81,12 +81,15 @@ class WhatsAppNumber extends Model
     }
 
     /**
-     * The plan's included (free) slot links to whatever number connects, every
-     * time -- by QR or by pairing code -- and adopts it (owner rule). Only a paid
-     * add-on slot stays bound to the number it was bought for.
+     * Seat model (owner rule, 2026-10-13): every slot -- the plan's included one
+     * and each paid add-on -- is a SEAT, not a fixed number. Whatever WhatsApp
+     * number connects to it (QR or pairing code) is adopted, for every role. The
+     * only limits are: one number per seat, the same number never on two seats
+     * (checked where the number is adopted), and no more seats than are paid for
+     * (adding one more asks for payment).
      */
     public function acceptsAnyNumber(): bool
     {
-        return $this->is_included || $this->hasPendingPlaceholderNumber();
+        return true;
     }
 }

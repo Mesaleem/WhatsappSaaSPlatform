@@ -1,4 +1,5 @@
 import axiosInstance from '../core/api/axiosInstance';
+import { AI_CREDITS_CHANGED_EVENT } from './aiCreditService';
 import type {
   GenerateAdCopyPayload,
   GenerateAdCopyResult,
@@ -26,7 +27,7 @@ const aiService = {
   generate(payload: GenerateAdCopyPayload, idempotencyKey: string = newIdempotencyKey()) {
     return axiosInstance
       .post<{ data: GenerateAdCopyResult }>(`${BASE}/generate`, payload, { headers: { 'Idempotency-Key': idempotencyKey } })
-      .then((res) => res.data.data);
+      .then((res) => creditsChanged(res.data.data));
   },
 
   /**
@@ -43,7 +44,7 @@ const aiService = {
       .post<{ data: GenerateTemplateDraftResult }>('/message-templates/ai-generate', payload, {
         headers: { 'Idempotency-Key': idempotencyKey },
       })
-      .then((res) => res.data.data);
+      .then((res) => creditsChanged(res.data.data));
   },
 
   /**
@@ -58,9 +59,15 @@ const aiService = {
       .post<{ data: GenerateJourneyDraftResult }>('/whatsapp/flows/ai-generate', payload, {
         headers: { 'Idempotency-Key': idempotencyKey },
       })
-      .then((res) => res.data.data);
+      .then((res) => creditsChanged(res.data.data));
   },
 };
+
+/** Tells the header's AI credit chip to re-read the balance after a metered AI call. */
+function creditsChanged<T>(data: T): T {
+  if (typeof window !== 'undefined') window.dispatchEvent(new Event(AI_CREDITS_CHANGED_EVENT));
+  return data;
+}
 
 function newIdempotencyKey(prefix: string = 'adcopy'): string {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {

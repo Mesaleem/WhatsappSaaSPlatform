@@ -519,14 +519,18 @@ class AiFoundationTest extends TestCase
         $this->assertAiError(AiException::TARGET_ACCOUNT_FORBIDDEN, fn () => $this->allow($agentUser, $stranger->id));
     }
 
-    public function test_the_super_admin_needs_a_target_and_gets_no_entitlement_bypass(): void
+    /**
+     * Owner rule (2026-10-13): the Super Admin has AI without limits -- a target is still
+     * needed for account-bound AI, but the target's AI capability/plan never blocks them.
+     */
+    public function test_the_super_admin_needs_a_target_but_has_no_entitlement_limits(): void
     {
         $superAdmin = $this->user(null, 'super_admin');
         $growth = $this->tenant('growth');
         $starter = $this->tenant('starter');
 
         $this->assertAiError(AiException::TARGET_ACCOUNT_REQUIRED, fn () => $this->allow($superAdmin));
-        $this->assertAiError(AiException::CAPABILITY_UNAVAILABLE, fn () => $this->allow($superAdmin, $starter->id));
+        $this->assertSame($starter->id, $this->allow($superAdmin, $starter->id)->account->id); // Starter has no AI: not a limit for them
         $this->assertAiError(AiException::TARGET_ACCOUNT_FORBIDDEN, fn () => $this->allow($superAdmin, 999999));
         $this->assertSame($growth->id, $this->allow($superAdmin, $growth->id)->account->id);
     }

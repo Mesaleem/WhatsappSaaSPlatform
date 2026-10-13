@@ -235,23 +235,27 @@ class AdCopywriterMeteredAiTest extends TestCase
     // Target account / who pays
     // ==================================================================
 
-    public function test_a_super_admin_without_a_client_uses_its_own_platform_account_and_a_selected_client_pays_for_itself(): void
+    /**
+     * Owner rule (2026-10-13, replacing 2026-09-30): the Super Admin's AI use is unlimited and
+     * free -- with no client (their Platform account) or for a selected client, nobody's
+     * credits are used. The operation is still recorded against the account, at 0 credits.
+     */
+    public function test_a_super_admin_is_never_charged_with_or_without_a_selected_client(): void
     {
         $this->openAiAnswers();
         $client = $this->tenant();
         $platform = $this->tenant('growth', ['account_type' => 'super_admin']);
         $superAdmin = $this->user(null, 'super_admin');
 
-        // Owner decision (2026-09-30): no client selected = the Super Admin's own Platform account (it pays for itself).
         $this->generate($superAdmin)->assertOk();
-        $this->assertSame([98, 0], $this->balance($platform));
+        $this->assertSame([100, 0], $this->balance($platform));
 
-        // A selected client pays for its own copy; the platform account is not charged for it.
         $this->generate($superAdmin, ['account_id' => $client->id])->assertOk();
 
-        $this->assertSame([98, 0], $this->balance($client));
-        $this->assertSame([98, 0], $this->balance($platform), 'the platform account is never charged for a client');
-        $this->assertSame([$client->id, $superAdmin->id], [AiOperation::query()->latest('id')->first()->account_id, AiOperation::query()->latest('id')->first()->actor_user_id]);
+        $this->assertSame([100, 0], $this->balance($client), 'the client is not charged for the Super Admin');
+        $this->assertSame([100, 0], $this->balance($platform));
+        $latest = AiOperation::query()->latest('id')->first();
+        $this->assertSame([$client->id, $superAdmin->id, 0], [$latest->account_id, $latest->actor_user_id, (int) $latest->credits_charged]);
     }
 
     public function test_an_agent_acting_for_its_sub_client_bills_the_sub_client_only(): void

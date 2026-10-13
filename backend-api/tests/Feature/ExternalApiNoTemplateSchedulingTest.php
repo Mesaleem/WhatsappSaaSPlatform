@@ -109,7 +109,12 @@ class ExternalApiNoTemplateSchedulingTest extends TestCase
         $this->assertSame($defaultNumberId, $row->payload['sender_number_id']);
     }
 
-    public function test_a_no_template_group_send_scheduled_from_the_wrong_number_is_refused_before_it_is_stored(): void
+    /**
+     * Owner rule (2026-10-13): a native group goes from ITS OWN number. The API takes no sender,
+     * so a group on the second number is scheduled from that number -- and refused only when
+     * that number is not connected.
+     */
+    public function test_a_no_template_native_group_send_is_scheduled_from_the_groups_own_number(): void
     {
         [$account, $key] = $this->client();
 
@@ -117,23 +122,25 @@ class ExternalApiNoTemplateSchedulingTest extends TestCase
             'account_id' => $account->id, 'phone_number' => '919800000002', 'is_included' => true,
             'is_default' => false, 'status' => WhatsAppNumber::STATUS_LINKED,
         ]);
-
-        // On the second number, not the default -- the default is what template_code=no_template resolves to,
-        // since this endpoint never accepts a sender_number_id.
         $group = ContactGroup::query()->create([
             'account_id' => $account->id, 'name' => 'Other line', 'group_code' => 'OTHER_API_1',
-            'is_default' => false, 'group_type' => ContactGroup::GROUP_TYPE_INTERNAL, 'whatsapp_number_id' => $otherNumber->id,
+            'is_default' => false, 'group_type' => ContactGroup::GROUP_TYPE_NATIVE, 'whatsapp_number_id' => $otherNumber->id, 'wa_group_jid' => '120363000000000001@g.us',
         ]);
-
-        $response = $this->withHeaders($this->headers($key))->postJson('/api/v1/send-message', [
+        $body = [
             'recipient_type' => 'group',
             'template_code' => 'no_template',
             'group_code' => $group->group_code,
             'text' => 'Stock update',
             'scheduled_at' => now()->addHours(7)->format('Y-m-d H:i:s'),
-        ]);
+        ];
 
-        $response->assertStatus(422)->assertJsonPath('error_code', 'group_not_on_number');
-        $this->assertSame(0, ScheduledMessage::query()->count());
+        $this->withHeaders($this->headers($key))->postJson('/api/v1/send-message', $body)->assertStatus(202);
+        $this->assertSame($otherNumber->id, ScheduledMessage::query()->firstOrFail()->payload['sender_number_id']);
+
+        // Its own number disconnected: refused, nothing stored.
+        $otherNumber->forceFill(['status' => WhatsAppNumber::STATUS_UNLINKED])->save();
+        $this->withHeaders($this->headers($key))->postJson('/api/v1/send-message', $body)
+            ->assertStatus(422)->assertJsonPath('error_code', 'sender_not_active');
+        $this->assertSame(1, ScheduledMessage::query()->count());
     }
 }

@@ -1,9 +1,10 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { AxiosError } from 'axios';
 import { FileText, Loader2, XCircle } from 'lucide-react';
 import templateService from '../../services/templateService';
 import type { ApiErrorResponse } from '../../types/auth';
 import DismissibleAlert from '../common/DismissibleAlert';
+import VariableInserter from './VariableInserter';
 
 function extractMessage(err: unknown, fallback: string): string {
   const axiosErr = err as AxiosError<ApiErrorResponse>;
@@ -39,6 +40,7 @@ export default function RequestTemplateModal({
   const [title, setTitle] = useState('');
   const [industryType, setIndustryType] = useState('');
   const [templateBody, setTemplateBody] = useState('');
+  const bodyRef = useRef<HTMLTextAreaElement>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -117,6 +119,7 @@ export default function RequestTemplateModal({
             </label>
             <textarea
               id="template-request-body"
+              ref={bodyRef}
               value={templateBody}
               onChange={(e) => setTemplateBody(e.target.value)}
               rows={5}
@@ -124,6 +127,7 @@ export default function RequestTemplateModal({
               placeholder="Hi {{customer_name}}, we've received your payment of {{amount}}. Thank you!"
               className={inputClass}
             />
+            <VariableInserter value={templateBody} onChange={setTemplateBody} textareaRef={bodyRef} />
             <p className="mt-1 text-xs text-slate-500">
               Use <code className="rounded bg-slate-100 px-1 py-0.5">{'{{variable_name}}'}</code> for anything that
               changes per message, like a customer name or order ID.

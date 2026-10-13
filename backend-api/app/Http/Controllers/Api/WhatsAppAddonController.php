@@ -62,6 +62,19 @@ class WhatsAppAddonController extends Controller
             'phone_numbers.*' => ['required', 'string', 'max:25'],
         ]);
 
+        // The Super Admin's own account adds numbers free: no invoice, ready to connect.
+        if ($account->isPlatformAccount()) {
+            try {
+                foreach (array_unique($data['phone_numbers']) as $raw) {
+                    app(\App\Services\WhatsApp\WhatsAppNumberService::class)->add($account, (string) $raw);
+                }
+            } catch (WhatsAppNumberException $e) {
+                return $this->error($e);
+            }
+
+            return response()->json(['message' => 'Numbers added. Connect them from the list.', 'invoice' => null], 201);
+        }
+
         try {
             $invoice = $this->addons->purchase($account, $data['phone_numbers']);
         } catch (WhatsAppNumberException $e) {

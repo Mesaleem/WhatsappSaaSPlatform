@@ -76,7 +76,7 @@ class SendDirectSenderTest extends TestCase
         [$account, $user, $default, $second] = $this->client();
         $group = ContactGroup::query()->create([
             'account_id' => $account->id, 'name' => 'Stock team', 'group_code' => 'STOCK_DIRECT_1',
-            'is_default' => false, 'group_type' => ContactGroup::GROUP_TYPE_INTERNAL, 'whatsapp_number_id' => $default->id,
+            'is_default' => false, 'group_type' => ContactGroup::GROUP_TYPE_NATIVE, 'whatsapp_number_id' => $default->id, 'wa_group_jid' => '120363000000000001@g.us',
         ]);
 
         $response = $this->actingAs($user)->postJson('/api/alerts/send-direct', [

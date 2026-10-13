@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Building2, Menu, Zap } from 'lucide-react';
+import { Building2, Menu, RefreshCw, Zap } from 'lucide-react';
 import { useAuth } from '../../core/context/AuthContext';
 import { useTenant } from '../../core/context/TenantContext';
 import { indigo, activeGradient } from '../../theme/signalIndigo';
@@ -11,6 +11,7 @@ import { useOptionalTheme } from '../../core/theme/ThemeContext';
 import ExpiryWarningBanner from './ExpiryWarningBanner';
 import ExpiryHeaderChip from './ExpiryHeaderChip';
 import SocialConnectionWarningBanner from './SocialConnectionWarningBanner';
+import AiCreditChip from './AiCreditChip';
 
 /**
  * Global Quota Top-Up Access — the header's quota indicator renders on
@@ -138,14 +139,25 @@ export default function Header({
   pageTitle,
   onOpenMenu,
   menuOpen = false,
+  onRefresh,
 }: {
   pageTitle: string;
   /** Opens the sidebar drawer on small screens (AppLayout). */
   onOpenMenu?: () => void;
   menuOpen?: boolean;
+  /** Re-loads the current page's data (AppLayout re-mounts the page). */
+  onRefresh?: () => void;
 }) {
   const { canSwitchClients } = useTenant();
   const theme = useOptionalTheme();
+  const [spinning, setSpinning] = useState(false);
+
+  const refresh = () => {
+    if (!onRefresh) return;
+    onRefresh();
+    setSpinning(true);
+    window.setTimeout(() => setSpinning(false), 700);
+  };
 
   return (
     <>
@@ -175,6 +187,19 @@ export default function Header({
         {canSwitchClients && <ClientSwitcher />}
         <ExpiryHeaderChip />
         <QuotaBadge />
+        <AiCreditChip />
+        {onRefresh && (
+          <button
+            type="button"
+            onClick={refresh}
+            disabled={spinning}
+            aria-label="Refresh this page"
+            title="Refresh this page"
+            className="flex h-9 w-9 items-center justify-center rounded-lg text-slate-500 transition hover:bg-slate-100 hover:text-slate-800 disabled:opacity-70"
+          >
+            <RefreshCw className={`h-5 w-5 ${spinning ? 'animate-spin' : ''}`} />
+          </button>
+        )}
         {theme && <ThemePicker />}
         <NotificationBell />
         <AvatarMenu />

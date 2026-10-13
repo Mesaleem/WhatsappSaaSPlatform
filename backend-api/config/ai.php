@@ -117,6 +117,8 @@ return [
         // `ai:settle-operations` (hold released, nothing charged). Must exceed
         // timeout × (retries + 1).
         'stale_after_seconds' => max(60, (int) env('AI_STALE_AFTER_SECONDS', 900)),
+        // The free daily AI credits (AiDailyAllowance) reset at midnight in this timezone.
+        'daily_timezone' => env('AI_DAILY_TIMEZONE', 'Asia/Kolkata'),
     ],
 
     /*

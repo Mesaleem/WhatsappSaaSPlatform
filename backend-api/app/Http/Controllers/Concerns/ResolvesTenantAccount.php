@@ -83,7 +83,7 @@ trait ResolvesTenantAccount
         Request $request,
         string $message = 'Select a client/tenant account first (pass ?account_id=).'
     ): Account {
-        $account = $this->resolveAccount($request);
+        $account = $this->resolveAccount($request) ?? $this->superAdminOwnAccount($request);
 
         if (! $account && app()->environment('local')) {
             $fallback = Account::query()->orderBy('id')->first();
@@ -117,10 +117,33 @@ trait ResolvesTenantAccount
         Request $request,
         string $message = 'Select a client/tenant account first (pass ?account_id=).'
     ): Account {
-        $account = $this->resolveAccount($request);
+        $account = $this->resolveAccount($request) ?? $this->superAdminOwnAccount($request);
 
         abort_if(! $account, 422, $message);
 
         return $account;
+    }
+
+    /**
+     * Owner rule (2026-10-13): "Super Admin has no restriction in any module". A Super
+     * Admin with no client selected works on its own "Platform (Super Admin)" account
+     * (PlatformCrmAccount) -- its own groups, journeys, chats, social pages, numbers --
+     * in every single-account action, as CRM and Social already did. Never for anyone
+     * else, and never a client nobody selected. Read/list actions that use
+     * resolveAccount() directly keep their cross-client Global View.
+     */
+    protected function superAdminOwnAccount(Request $request): ?Account
+    {
+        if (! $request->attributes->get('is_super_admin')) {
+            return null;
+        }
+
+        $own = app(\App\Services\Crm\PlatformCrmAccount::class)->find();
+
+        if ($own) {
+            $request->attributes->set('account_id', $own->id);
+        }
+
+        return $own;
     }
 }

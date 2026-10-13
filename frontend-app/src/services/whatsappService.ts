@@ -126,7 +126,7 @@ const whatsappService = {
   /** Creates one invoice for the chosen extra numbers. They are connected after payment. */
   purchaseAddons(phoneNumbers: string[], accountId?: number) {
     return axiosInstance
-      .post<{ message: string; invoice: AddonInvoice }>(
+      .post<{ message: string; invoice: AddonInvoice | null }>(
         `${BASE}/numbers/purchase`,
         { phone_numbers: phoneNumbers },
         accountId ? { params: { account_id: accountId } } : undefined,

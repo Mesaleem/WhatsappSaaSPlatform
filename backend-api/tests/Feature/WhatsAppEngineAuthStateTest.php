@@ -529,17 +529,37 @@ class WhatsAppEngineAuthStateTest extends TestCase
     }
 
     /** A paid add-on stays bound to its own number (the included slot does not). */
-    public function test_a_typed_number_that_is_not_the_slot_number_is_refused_before_any_engine_call(): void
+    /**
+     * One number, one slot: WhatsApp lets one number run on several linked devices, so
+     * pairing the default slot's number onto an add-on seat is refused before any
+     * pairing code is requested.
+     */
+    public function test_a_number_already_on_another_slot_cannot_be_paired_onto_a_seat(): void
     {
         [, $user, $addon] = $this->tenantWithAddonSlot('919876543210');
         Http::fake();
 
+        // 919811111111 is this client's default slot number (tenantWithAddonSlot).
         $this->actingAs($user)
-            ->postJson("/api/whatsapp/start-session?number_id={$addon->id}", ['phone_number' => '917236062374'])
-            ->assertUnprocessable()
-            ->assertJsonPath('error_code', 'number_mismatch');
+            ->postJson("/api/whatsapp/start-session?number_id={$addon->id}", ['phone_number' => '919811111111'])
+            ->assertStatus(409)
+            ->assertJsonPath('error_code', 'number_already_used');
 
         Http::assertNothingSent();
+    }
+
+    /** Seat model (2026-10-13): an add-on seat takes ANY number -- no "not your slot's number" refusal. */
+    public function test_a_typed_number_that_is_not_the_slot_number_is_accepted_on_a_seat(): void
+    {
+        [, $user, $addon] = $this->tenantWithAddonSlot('919876543210');
+        Http::fake(['*/api/qr/start-session' => Http::response(['status' => 'connecting'], 202)]);
+
+        $this->actingAs($user)
+            ->postJson("/api/whatsapp/start-session?number_id={$addon->id}", ['phone_number' => '917236062374'])
+            ->assertOk();
+
+        // The engine is no longer told to enforce a specific number for the seat.
+        Http::assertSent(fn ($request) => str_contains($request->url(), '/api/qr/start-session') && ! isset($request['expected_phone']));
     }
 
     /**
@@ -748,7 +768,8 @@ class WhatsAppEngineAuthStateTest extends TestCase
     }
 
     /** A paid add-on that links to a different number is refused (the included slot adopts instead). */
-    public function test_a_slot_that_links_to_a_different_number_is_refused_and_stays_unlinked(): void
+    /** Seat model (2026-10-13): a different number connecting to an add-on seat is adopted. */
+    public function test_a_seat_that_links_to_a_different_number_adopts_it(): void
     {
         [$account, , $slot] = $this->tenantWithAddonSlot('919876543210');
 
@@ -757,7 +778,24 @@ class WhatsAppEngineAuthStateTest extends TestCase
             'session_id' => $slot->id,
             'status' => 'connected',
             'phone_number' => '917236062374',
-        ])->assertUnprocessable()->assertJsonPath('error_code', 'number_mismatch');
+        ])->assertOk();
+
+        $this->assertSame(WhatsAppNumber::STATUS_LINKED, $slot->fresh()->status);
+        $this->assertSame('917236062374', $slot->fresh()->phone_number);
+    }
+
+    /** ...but never a number that is already on another seat. */
+    public function test_a_seat_cannot_adopt_a_number_already_on_another_seat(): void
+    {
+        [$account, , $slot] = $this->tenantWithAddonSlot('919876543210');
+        $other = WhatsAppNumber::where('account_id', $account->id)->whereKeyNot($slot->id)->firstOrFail();
+
+        $this->internal()->postJson('/api/internal/whatsapp-status', [
+            'account_id' => $account->id,
+            'session_id' => $slot->id,
+            'status' => 'connected',
+            'phone_number' => $other->phone_number,
+        ])->assertUnprocessable()->assertJsonPath('error_code', 'number_already_used');
 
         $this->assertSame(WhatsAppNumber::STATUS_UNLINKED, $slot->fresh()->status);
     }

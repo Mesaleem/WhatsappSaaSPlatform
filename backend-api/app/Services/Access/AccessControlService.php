@@ -70,6 +70,11 @@ class AccessControlService
 
     public function canTenant(Account $account, string $capability): bool
     {
+        // The Super Admin's own account holds every capability (no plan, no limits).
+        if ($account->isPlatformAccount()) {
+            return true;
+        }
+
         return $account->entitlements()
             // Phase 5 Task 9 — a deliberately revoked entitlement still
             // has a row (so a plan backfill cannot silently reverse the
@@ -119,6 +124,10 @@ class AccessControlService
      */
     public function capabilityMapForAccount(Account $account): array
     {
+        if ($account->isPlatformAccount()) {
+            return Capability::pluck('slug')->mapWithKeys(fn (string $slug) => [$slug => true])->all();
+        }
+
         return Capability::query()
             ->select('capabilities.slug')
             ->selectRaw('CASE WHEN account_entitlements.id IS NOT NULL THEN 1 ELSE 0 END AS granted')

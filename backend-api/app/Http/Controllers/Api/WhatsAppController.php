@@ -288,6 +288,18 @@ class WhatsAppController extends Controller
             ], 422);
         }
 
+        // One WhatsApp number, one slot (owner rule): WhatsApp itself allows a number
+        // on several linked devices, so a number already on another slot -- the
+        // default or an add-on, this client's or anyone's -- is refused before a
+        // pairing code is even requested. The QR path is guarded the same way when
+        // the number is adopted (WhatsAppStatusController).
+        if ($typed !== null && \App\Models\WhatsAppNumber::query()->where('phone_number', $typed)->whereKeyNot($slot->id)->exists()) {
+            return response()->json([
+                'message' => 'This WhatsApp number already exists on another slot and is in use there. One number can be connected to only one slot.',
+                'error_code' => 'number_already_used',
+            ], 409);
+        }
+
         $extra = ['session_id' => $slot->id];
         // qr-engine-service only enforces a number match when expected_phone is sent
         // at all (see sessionManager.js's `if (expectedPhone)`) -- omitted here for a

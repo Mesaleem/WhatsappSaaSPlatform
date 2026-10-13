@@ -953,11 +953,12 @@ function SelectClientPrompt() {
  * above for the no-selection case).
  */
 export default function ChatbotPage() {
-  const { isSuperAdmin } = useAuth();
+  const { isSuperAdmin, user } = useAuth();
   const { selectedAccountId } = useTenant();
   const [tab, setTab] = useState<Tab>('rules');
 
-  const needsClientSelection = isSuperAdmin() && selectedAccountId === null;
+  // With no client selected the Super Admin works on its own Platform account.
+  const needsClientSelection = isSuperAdmin() && selectedAccountId === null && !user?.platform_crm_account;
 
   return (
     <div className="p-6">

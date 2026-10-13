@@ -2,6 +2,8 @@ import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowLeft, Bot, CheckCircle2, Loader2, XCircle } from 'lucide-react';
 import aiGatewayService from '../../services/aiGatewayService';
+import aiCreditService from '../../services/aiCreditService';
+import { useAuth } from '../../core/context/AuthContext';
 import type { AiProvider, AiProviderSettingsRow } from '../../types/ai';
 import { extractErrorMessage } from '../../utils/apiError';
 import DismissibleAlert from '../../components/common/DismissibleAlert';
@@ -268,6 +270,74 @@ function ProviderCard({ settings, onSaved }: ProviderCardProps) {
 }
 
 /**
+ * Free daily AI credits (owner rule, 2026-10-13): how many free AI credits a client account and
+ * an agent account get each day. They are used before the paid wallet and expire at midnight:
+ * today's unused credits never add to tomorrow's. Super Admin only (the route is role-gated too).
+ */
+function FreeDailyCreditsCard() {
+  const [client, setClient] = useState('0');
+  const [agent, setAgent] = useState('0');
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
+
+  useEffect(() => {
+    aiCreditService
+      .settings()
+      .then((data) => {
+        setClient(String(data.client_per_day));
+        setAgent(String(data.agent_per_day));
+      })
+      .catch(() => setMessage({ ok: false, text: 'Could not load the free daily credits.' }));
+  }, []);
+
+  const valid = (v: string) => /^\d+$/.test(v.trim());
+
+  const save = async () => {
+    setBusy(true);
+    setMessage(null);
+    try {
+      const res = await aiCreditService.saveSettings({ client_per_day: Number(client), agent_per_day: Number(agent) });
+      setMessage({ ok: true, text: res.message });
+    } catch (err) {
+      setMessage({ ok: false, text: extractErrorMessage(err, 'Could not save the free daily credits.') });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+      <h3 className="text-base font-semibold text-slate-900">Free daily AI credits</h3>
+      <p className="mt-1 text-sm text-slate-500">
+        Free AI credits every client and agent account gets each day. They are used before the paid wallet and expire at
+        midnight. Unused credits do not carry over, so an account always starts the day with this number. 0 turns it off.
+      </p>
+      <div className="mt-4 grid gap-4 sm:grid-cols-2">
+        <label className="block text-sm font-medium text-slate-700">
+          Per client account, per day
+          <input type="number" min={0} value={client} onChange={(e) => setClient(e.target.value)} className={inputClass} />
+        </label>
+        <label className="block text-sm font-medium text-slate-700">
+          Per agent account, per day
+          <input type="number" min={0} value={agent} onChange={(e) => setAgent(e.target.value)} className={inputClass} />
+        </label>
+      </div>
+      <div className="mt-4 flex flex-wrap items-center gap-3">
+        <button
+          type="button"
+          onClick={() => void save()}
+          disabled={busy || !valid(client) || !valid(agent)}
+          className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+        >
+          {busy ? 'Saving…' : 'Save'}
+        </button>
+        {message && <p className={`text-sm ${message.ok ? 'text-emerald-700' : 'text-red-700'}`}>{message.text}</p>}
+      </div>
+    </section>
+  );
+}
+
+/**
  * Phase 8 Task 12 (continued) — Super Admin platform AI provider/model
  * settings. Route-gated permission="manage-ai-settings" (App.tsx), same
  * split from manage-billing-settings/manage-social-settings as those two
@@ -277,6 +347,7 @@ function ProviderCard({ settings, onSaved }: ProviderCardProps) {
  * Admin fixes it HERE — no .env edit, no redeploy.
  */
 export default function AdminAiSettingsPage() {
+  const { isSuperAdmin } = useAuth();
   const [settings, setSettings] = useState<AiProviderSettingsRow[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -327,6 +398,8 @@ export default function AdminAiSettingsPage() {
             {loadError}
           </DismissibleAlert>
         )}
+
+        {isSuperAdmin() && <FreeDailyCreditsCard />}
 
         {isLoading ? (
           <div className="flex items-center gap-2 text-sm text-slate-500">

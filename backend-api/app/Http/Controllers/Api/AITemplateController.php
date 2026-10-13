@@ -50,14 +50,26 @@ class AITemplateController extends Controller
      */
     public function generate(Request $request, TemplateCopywriterService $service, AiAuthorizer $authorizer): JsonResponse
     {
+        $isSuperAdmin = (bool) $request->user()?->isSuperAdmin();
+
         $data = $request->validate([
-            'account_id' => ['required', 'integer', 'exists:accounts,id'],
+            // The Super Admin may draft without choosing an account (a global template).
+            'account_id' => [$isSuperAdmin ? 'nullable' : 'required', 'integer', 'exists:accounts,id'],
             'purpose' => ['required', 'string', 'max:1000'],
             'category' => ['required', 'string', Rule::in(MessageTemplate::META_CATEGORIES)],
             'tone' => ['nullable', 'string', 'max:100'],
             'variable_keys' => ['sometimes', 'array', 'max:10'],
             'variable_keys.*' => ['string', 'max:100', 'regex:/^[a-zA-Z0-9_]+$/'],
         ]);
+
+        if ($isSuperAdmin && empty($data['account_id'])) {
+            return response()->json(['data' => $service->generateForPlatform(
+                $data['purpose'],
+                $data['category'],
+                $data['tone'] ?? null,
+                $data['variable_keys'] ?? [],
+            )]);
+        }
 
         $authorization = $authorizer->forUser($request->user(), (int) $data['account_id'], self::MODULE, self::PERMISSION, 'templates');
 

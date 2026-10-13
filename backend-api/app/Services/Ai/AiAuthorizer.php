@@ -19,7 +19,10 @@ use Illuminate\Http\Request;
  *   2. target account — same rules as TenantIsolationMiddleware:
  *        tenant user  → own account only (another id = cross-tenant)
  *        agent        → own account or an own sub-client
- *        Super Admin  → a SELECTED client is required (no global AI);
+ *        Super Admin  → a SELECTED client is required here (the template draft
+ *                       also has an account-less platform path); since
+ *                       2026-10-13 checks 3–7 are skipped for them and their
+ *                       use is never charged (owner rule: Super Admin is unlimited);
  *   3. account administratively active       (Account::isAdministrativelyActive)
  *   4. subscription current (not expired)    — the rule the AI side already
  *      uses (CreditEntitlementService): an exhausted MESSAGE quota does not
@@ -74,6 +77,13 @@ class AiAuthorizer
         }
 
         $account = $this->resolveTarget($actor, $targetAccountId, $module, $permission, $source);
+
+        // Owner rule (2026-10-13): the Super Admin has AI without limits -- the selected
+        // account's AI capability, plan, module and credits never block them (and
+        // MeteredAiService charges nothing for their use).
+        if ($actor->isSuperAdmin()) {
+            return new AiAuthorization($account, (int) $actor->id, $module, $permission, $source);
+        }
 
         $this->assertAccount($account, $module, $source, $actor, $permission, function () use ($actor, $permission, $account, $module, $source) {
             if ($permission !== null && ! $actor->can($permission)) {
