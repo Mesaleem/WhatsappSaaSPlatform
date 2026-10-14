@@ -92,6 +92,38 @@ final class CreditEntitlementService implements CreditSpendGate
         }
     }
 
+    /**
+     * The same gate without the plan's `ai` capability — for the basic writing helpers every
+     * client has (see AiAuthorization::$requiresCapability). Account and subscription still count.
+     */
+    public function withoutCapability(): CreditSpendGate
+    {
+        return new class($this) implements CreditSpendGate {
+            public function __construct(private readonly CreditEntitlementService $gate)
+            {
+            }
+
+            public function assertMaySpend(Account $account, int $amount): void
+            {
+                $this->gate->assertAccountMaySpend($account);
+            }
+        };
+    }
+
+    /** Account active and subscription current; the `ai` capability is not checked. */
+    public function assertAccountMaySpend(Account $account): void
+    {
+        [, $accountActive, $subscriptionActive] = $this->productState(Account::query()->findOrFail($account->id));
+
+        if (! $accountActive) {
+            throw CreditException::accountBlocked('account_suspended');
+        }
+
+        if (! $subscriptionActive) {
+            throw CreditException::accountBlocked('subscription_inactive');
+        }
+    }
+
     /** @return array{0: bool, 1: bool, 2: bool} [ai capability, account active, subscription current] */
     private function productState(Account $account): array
     {

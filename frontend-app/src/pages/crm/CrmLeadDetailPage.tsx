@@ -3,6 +3,8 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { ArrowRightLeft, BadgeCheck, Building2, Handshake, Loader2, RotateCcw, Trash2, UserRound, XCircle } from 'lucide-react';
 import crmService from '../../services/crmService';
 import crmSalesService from '../../services/crmSalesService';
+import aiService from '../../services/aiService';
+import AiWriter from '../../components/ai/AiWriter';
 import ActivityPanel from '../../components/crm/ActivityPanel';
 import ConvertLeadModal from '../../components/crm/ConvertLeadModal';
 import QualificationCard from '../../components/crm/QualificationCard';
@@ -293,6 +295,34 @@ export default function CrmLeadDetailPage() {
               ) : (
                 <p className="text-sm text-slate-500">No contact.</p>
               )}
+            </Card>
+
+            {/* Basic AI writing (every client, own AI credits): a follow-up from this lead's own details. */}
+            <Card>
+              <p className="text-sm font-semibold text-slate-900">Follow-up message</p>
+              <p className="mt-0.5 text-xs text-slate-500">Let AI draft a WhatsApp follow-up from this lead's details. Nothing is sent until you send it.</p>
+              <div className="mt-3">
+                <AiWriter
+                  label="Draft a follow-up with AI"
+                  promptLabel="Goal of the message (optional)"
+                  placeholder="e.g. Ask if they want a quote, or book a short call"
+                  promptRequired={false}
+                  testId="lead-ai"
+                  generate={async ({ prompt, language }) => (await aiService.leadFollowUp(lead.id, { goal: prompt || undefined, language })).text}
+                  actions={(text) =>
+                    lead.contact?.phone_number ? (
+                      <a
+                        href={`https://wa.me/${lead.contact.phone_number.replace(/\D/g, '')}?text=${encodeURIComponent(text)}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700"
+                      >
+                        Open in WhatsApp
+                      </a>
+                    ) : null
+                  }
+                />
+              </div>
             </Card>
 
             <Card className="lg:col-span-2">

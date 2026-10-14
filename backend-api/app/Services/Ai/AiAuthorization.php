@@ -23,6 +23,10 @@ final class AiAuthorization
         public readonly string $module,
         public readonly ?string $permission,
         public readonly string $source,
+        // false for the basic writing helpers every client has (AiAuthorizer::forUser(...,
+        // requireCapability: false)): credits are still checked and charged, only the plan's
+        // `ai` capability is not asked for.
+        public readonly bool $requiresCapability = true,
     ) {
     }
 }

@@ -21,6 +21,8 @@ import { extractCooldownRemainingSeconds, extractErrorMessage } from '../../util
 import DismissibleAlert from '../../components/common/DismissibleAlert';
 import TemplateSearchSelect from '../../components/common/TemplateSearchSelect';
 import ApiKeySetupBanner from '../../components/profile/ApiKeySetupBanner';
+import AiWriter from '../../components/ai/AiWriter';
+import aiService from '../../services/aiService';
 
 /**
  * Client-side mirror of the backend's TemplateRenderer::render(), as
@@ -1238,6 +1240,20 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
               placeholder="Type the message to send…"
               className={`${inputClass} mt-2 w-full`}
             />
+            {/* Basic AI writing (every client, own AI credits): write from a purpose, or improve what is typed. */}
+            <div className="mt-2">
+              <AiWriter
+                label={directMessage.trim() ? 'Improve with AI' : 'Write with AI'}
+                promptLabel={directMessage.trim() ? 'Anything to change? (optional)' : 'What is the message for?'}
+                placeholder={directMessage.trim() ? 'e.g. make it shorter and friendlier' : 'e.g. Tell customers our shop is closed on Sunday for Diwali'}
+                promptRequired={directMessage.trim() === ''}
+                testId="message-ai"
+                generate={async ({ prompt, language }) =>
+                  (await aiService.writeMessage({ purpose: prompt || undefined, draft: directMessage.trim() || undefined, language })).text
+                }
+                onUse={setDirectMessage}
+              />
+            </div>
           </div>
         )}
 

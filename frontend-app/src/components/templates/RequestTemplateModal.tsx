@@ -4,7 +4,9 @@ import { FileText, Loader2, XCircle } from 'lucide-react';
 import templateService from '../../services/templateService';
 import type { ApiErrorResponse } from '../../types/auth';
 import DismissibleAlert from '../common/DismissibleAlert';
-import VariableInserter from './VariableInserter';
+import VariableInserter, { variablesIn } from './VariableInserter';
+import AiWriter from '../ai/AiWriter';
+import aiService from '../../services/aiService';
 import VariableSettings, { variableSettingsError } from './VariableSettings';
 import type { TemplateVariableSchemaField } from '../../types/templates';
 
@@ -121,9 +123,30 @@ export default function RequestTemplateModal({
             />
           </div>
           <div>
-            <label htmlFor="template-request-body" className="text-sm font-medium text-slate-700">
-              Message Text <span className="text-red-500">*</span>
-            </label>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <label htmlFor="template-request-body" className="text-sm font-medium text-slate-700">
+                Message Text <span className="text-red-500">*</span>
+              </label>
+            </div>
+            {/* Basic AI writing (every client, own AI credits): fills the title and the message. */}
+            <div className="mb-2 mt-1">
+              <AiWriter
+                label="Write the template with AI"
+                promptLabel="What should this template say?"
+                placeholder="e.g. Remind a customer that their payment is due, with the amount and due date"
+                testId="template-ai"
+                generate={async ({ prompt, language }) => {
+                  const draft = await aiService.requestTemplateDraft({
+                    purpose: [prompt, industryType.trim() ? `Business: ${industryType.trim()}` : '', language !== 'english' ? `Write it in ${language === 'hindi' ? 'Hindi' : 'Hinglish'}.` : '']
+                      .filter(Boolean)
+                      .join('. '),
+                    variable_keys: variablesIn(templateBody),
+                  });
+                  if (!title.trim()) setTitle(draft.title);
+                  setTemplateBody(draft.template_body);
+                }}
+              />
+            </div>
             <textarea
               id="template-request-body"
               ref={bodyRef}

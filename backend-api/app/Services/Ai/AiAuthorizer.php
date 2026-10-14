@@ -70,7 +70,15 @@ class AiAuthorizer
     }
 
     /** @throws AiException */
-    public function forUser(?User $actor, ?int $targetAccountId, string $module, ?string $permission, string $source = 'manual'): AiAuthorization
+    /**
+     * $requireCapability = false is for the basic writing helpers every client has (owner,
+     * 2026-10-14: "AI se template / message likhwana har client ko"): template drafts, a message
+     * draft on Send Notification, a CRM follow-up draft. They still need an active account and
+     * plan, the module, the permission and credits (free daily allowance first, then the
+     * wallet); only the plan's `ai` capability is not asked for. Journey AI, AI agents and Ads AI
+     * keep requiring it.
+     */
+    public function forUser(?User $actor, ?int $targetAccountId, string $module, ?string $permission, string $source = 'manual', bool $requireCapability = true): AiAuthorization
     {
         if (! $actor || $actor->is_active === false) {
             throw AiException::unauthenticated();
@@ -89,9 +97,9 @@ class AiAuthorizer
             if ($permission !== null && ! $actor->can($permission)) {
                 $this->deny($account, 'missing_permission', AiException::permissionDenied(), $module, $permission, $source, $actor);
             }
-        });
+        }, $requireCapability);
 
-        return new AiAuthorization($account, (int) $actor->id, $module, $permission, $source);
+        return new AiAuthorization($account, (int) $actor->id, $module, $permission, $source, $requireCapability);
     }
 
     /**
@@ -147,7 +155,7 @@ class AiAuthorizer
     }
 
     /** Account-level checks, in route-chain order; $permissionCheck runs between module and capability. */
-    private function assertAccount(Account $account, string $module, string $source, ?User $actor, ?string $permission, ?callable $permissionCheck): void
+    private function assertAccount(Account $account, string $module, string $source, ?User $actor, ?string $permission, ?callable $permissionCheck, bool $requireCapability = true): void
     {
         if (! $account->isAdministrativelyActive()) {
             $this->deny($account, 'account_suspended', AiException::accountSuspended(), $module, $permission, $source, $actor);
@@ -166,7 +174,7 @@ class AiAuthorizer
             $permissionCheck();
         }
 
-        if (! $this->access->canTenant($account, self::CAPABILITY)) {
+        if ($requireCapability && ! $this->access->canTenant($account, self::CAPABILITY)) {
             $this->deny($account, 'capability_not_entitled', AiException::capabilityUnavailable(), $module, $permission, $source, $actor);
         }
 

@@ -948,6 +948,8 @@ Route::middleware('auth:sanctum')->group(function () {
                      * gates as every route in this group.
                      */
                     Route::patch('/{id}/contact', [CrmLeadController::class, 'reassignContact'])->whereNumber('id');
+                    // Basic AI writing (2026-10-14): a WhatsApp follow-up draft from the lead's own details.
+                    Route::post('/{id}/ai-follow-up', [\App\Http\Controllers\Api\AiWritingController::class, 'leadFollowUp'])->whereNumber('id')->middleware('throttle:20,1');
                     /*
                      * Task 4 — the explicit ownership action. Assign,
                      * reassign and unassign all land here; the general
@@ -1296,6 +1298,10 @@ Route::middleware('auth:sanctum')->group(function () {
             // ::resolveCreationStatus() purely from the caller's OWN
             // account.agent_id -- never client-supplied.
             Route::post('/message-templates/request', [MessageTemplateController::class, 'submitRequest']);
+            // Basic AI writing for every client (2026-10-14): a template draft for the request form and a
+            // message for "No template". Charged to the client's AI credits; throttled per user.
+            Route::post('/message-templates/ai-generate', [\App\Http\Controllers\Api\AiWritingController::class, 'templateDraft'])->middleware('throttle:20,1');
+            Route::post('/ai-write', [\App\Http\Controllers\Api\AiWritingController::class, 'message'])->middleware('throttle:20,1');
             // GET /api/alerts/message-templates/mine -- every template on
             // the caller's own account regardless of status, so a plain
             // Client Admin/User (who can never reach the permission:

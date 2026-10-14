@@ -431,7 +431,7 @@ class MeteredAiService
     private function holdFree(AiAuthorization $authorization, AiOperation $operation, int $estimate): ?int
     {
         try {
-            $this->gate->assertMaySpend($authorization->account, $estimate);
+            $this->gateFor($authorization)->assertMaySpend($authorization->account, $estimate);
         } catch (CreditException $e) {
             $error = $this->creditError($authorization, $e, $estimate);
             $this->fail($operation, $error->errorCode, $error->category(), releaseHold: false);
@@ -450,6 +450,12 @@ class MeteredAiService
         }
     }
 
+    /** The spend gate for this call: without the `ai` capability check for basic writing helpers. */
+    private function gateFor(AiAuthorization $authorization): \App\Services\Credits\CreditSpendGate
+    {
+        return $authorization->requiresCapability ? $this->gate : $this->gate->withoutCapability();
+    }
+
     private function creditError(AiAuthorization $authorization, CreditException $e, int $estimate): AiException
     {
         return match ($e->reason) {
@@ -463,7 +469,7 @@ class MeteredAiService
     private function reserve(AiAuthorization $authorization, AiOperation $operation, int $estimate): CreditReservation
     {
         try {
-            $result = $this->consumption->reserve($authorization->account, $estimate, "ai:{$operation->id}:a{$operation->attempt}", $this->context($operation), $this->gate);
+            $result = $this->consumption->reserve($authorization->account, $estimate, "ai:{$operation->id}:a{$operation->attempt}", $this->context($operation), $this->gateFor($authorization));
         } catch (CreditException $e) {
             $error = $this->creditError($authorization, $e, $estimate);
             $this->fail($operation, $error->errorCode, $error->category(), releaseHold: false);

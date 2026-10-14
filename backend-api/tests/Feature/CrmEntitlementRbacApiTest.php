@@ -180,7 +180,8 @@ class CrmEntitlementRbacApiTest extends TestCase
         // stages (5), deals (7) and activities (4) routes); 86 since Phases 2–6 (+ products, documents,
         // payments, reminders, settings, sales report: 32). Every one carries the full chain asserted below.
         // 90 after the verification follow-up (+ documents/{id}/attachment GET+POST, payments/{id}/receipt, send-receipt).
-        $this->assertCount(90, $routes, 'a CRM route was added or removed — re-check its gates');
+        // 91 since 2026-10-14: POST /crm/leads/{id}/ai-follow-up (same gate chain as the rest).
+        $this->assertCount(91, $routes, 'a CRM route was added or removed — re-check its gates');
 
         foreach ($routes as $route) {
             $mw = $route->gatherMiddleware();

@@ -9,6 +9,8 @@ import type {
   GenerateTemplateDraftResult,
 } from '../types/ai';
 
+export type AiWritingLanguage = 'english' | 'hindi' | 'hinglish';
+
 const BASE = '/social/ai';
 
 /**
@@ -59,6 +61,28 @@ const aiService = {
       .post<{ data: GenerateJourneyDraftResult }>('/whatsapp/flows/ai-generate', payload, {
         headers: { 'Idempotency-Key': idempotencyKey },
       })
+      .then((res) => creditsChanged(res.data.data));
+  },
+
+  /**
+   * Basic AI writing for every client (2026-10-14) — charged to the client's own AI credits
+   * (free daily allowance first). Drafts only; nothing is saved or sent.
+   */
+  requestTemplateDraft(payload: { purpose: string; category?: string; tone?: string; variable_keys?: string[] }, idempotencyKey: string = newIdempotencyKey('reqtpl')) {
+    return axiosInstance
+      .post<{ data: GenerateTemplateDraftResult }>('/alerts/message-templates/ai-generate', payload, { headers: { 'Idempotency-Key': idempotencyKey } })
+      .then((res) => creditsChanged(res.data.data));
+  },
+
+  writeMessage(payload: { purpose?: string; draft?: string; tone?: string; language?: AiWritingLanguage }, idempotencyKey: string = newIdempotencyKey('msg')) {
+    return axiosInstance
+      .post<{ data: { provider: string; text: string } }>('/alerts/ai-write', payload, { headers: { 'Idempotency-Key': idempotencyKey } })
+      .then((res) => creditsChanged(res.data.data));
+  },
+
+  leadFollowUp(leadId: number, payload: { goal?: string; tone?: string; language?: AiWritingLanguage }, idempotencyKey: string = newIdempotencyKey('lead')) {
+    return axiosInstance
+      .post<{ data: { provider: string; text: string } }>(`/crm/leads/${leadId}/ai-follow-up`, payload, { headers: { 'Idempotency-Key': idempotencyKey } })
       .then((res) => creditsChanged(res.data.data));
   },
 };
