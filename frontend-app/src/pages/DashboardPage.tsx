@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import CustomPlanRequestsCard from '../components/billing/CustomPlanRequestsCard';
 import { Link, useNavigate } from 'react-router-dom';
 import { AxiosError } from 'axios';
 import {
@@ -1213,6 +1214,9 @@ function SuperAdminDashboard() {
         )}
 
         {overview.data?.platform && <PlatformAttention platform={overview.data.platform} onOpenExpiring={() => setShowExpiringModal(true)} />}
+
+        {/* "Contact sales" custom plan requests waiting for the sales team. */}
+        <CustomPlanRequestsCard />
 
         <div>
           <h3 className="mb-3 font-display text-sm font-bold" style={{ color: indigo.ink }}>

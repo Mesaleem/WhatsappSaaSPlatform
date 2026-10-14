@@ -48,8 +48,8 @@ class QuotaRequestController extends Controller
     /** INR per extra message — [Hypothesis], see class docblock. */
     private const RATE_PER_EXTRA_MESSAGE = 1.00;
 
-    /** Mirrors PaymentGatewayController::TAX_RATE exactly (same disclosed 18% GST assumption). */
-    private const TAX_RATE = 0.18;
+    /** Mirrors PaymentGatewayController::TAX_RATE (no GST since 2026-10-14). */
+    private const TAX_RATE = PaymentGatewayController::TAX_RATE;
 
     /**
      * Agent-Routed Quota Top-Up Requests — same convention as

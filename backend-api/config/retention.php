@@ -50,6 +50,12 @@ return [
             'min_days' => 14,
         ],
 
+        // Website visitor analytics (site_visits; their page views go with them). Super Admin report only.
+        'site_visits' => [
+            'days' => (int) env('RETENTION_SITE_VISITS_DAYS', 365),
+            'min_days' => 30,
+        ],
+
         // Laravel's failed-job store (queue.failed.*). Kept long enough to investigate and `queue:retry`.
         'failed_jobs' => [
             'days' => (int) env('RETENTION_FAILED_JOBS_DAYS', 60),

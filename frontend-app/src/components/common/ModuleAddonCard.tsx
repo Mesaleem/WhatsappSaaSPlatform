@@ -118,12 +118,12 @@ export default function ModuleAddonCard({ module, accountId, enabled, unitLabel 
           )}
           {tiers.length > 0 ? (
             <p className="mt-0.5 text-xs text-slate-500">
-              {tiers.map((t) => `${tierLabel(t, unitLabel)}: ₹${Number(t.price).toFixed(2)}`).join(' · ')} (GST included) per {offer.term_months} month
+              {tiers.map((t) => `${tierLabel(t, unitLabel)}: ₹${Number(t.price).toFixed(2)}`).join(' · ')} per {offer.term_months} month
               {offer.term_months === 1 ? '' : 's'}.
             </p>
           ) : (
             <p className="mt-0.5 text-xs text-slate-500">
-              ₹{offer.price.toFixed(2)} (GST included) for {offer.term_months} month{offer.term_months === 1 ? '' : 's'} from payment.
+              ₹{offer.price.toFixed(2)} for {offer.term_months} month{offer.term_months === 1 ? '' : 's'} from payment.
             </p>
           )}
           {open && (
@@ -163,7 +163,7 @@ export default function ModuleAddonCard({ module, accountId, enabled, unitLabel 
             <p className="text-xs text-slate-600">
               {tier ? (
                 <>
-                  Price: <strong>₹{Number(tier.price).toFixed(2)}</strong> (GST included)
+                  Price: <strong>₹{Number(tier.price).toFixed(2)}</strong>
                 </>
               ) : (
                 `Enter a number of at least ${minUnits}.`

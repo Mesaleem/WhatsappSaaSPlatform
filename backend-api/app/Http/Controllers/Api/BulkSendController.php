@@ -57,6 +57,10 @@ class BulkSendController extends Controller
             if (! $template) {
                 return response()->json(['message' => 'Choose an approved template for this account.', 'error_code' => 'TEMPLATE_NOT_APPROVED'], 422);
             }
+            // Every number gets the same values, so a missing required one is refused here.
+            if ($variableErrors = $template->variableErrors($data['variables'] ?? [])) {
+                return response()->json(['message' => $variableErrors->first(), 'errors' => $variableErrors, 'error_code' => 'INVALID_VARIABLES'], 422);
+            }
         } elseif (trim((string) ($data['message_text'] ?? '')) === '' && trim((string) ($data['media_url'] ?? '')) === '') {
             return response()->json(['message' => 'Choose a template, or write a message or attach a media URL.', 'error_code' => 'TEMPLATE_OR_TEXT_REQUIRED'], 422);
         }

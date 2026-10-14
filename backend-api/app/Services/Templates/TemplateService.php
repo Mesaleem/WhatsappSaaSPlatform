@@ -51,6 +51,9 @@ use App\Models\User;
  */
 class TemplateService
 {
+    /** Where a client sees its own template requests (Send Notification → My Templates). */
+    public const CLIENT_TEMPLATES_LINK = '/alerts/send?templates=mine';
+
     /**
      * The initial status for a NEW template row, given who is
      * authoring/submitting it and which account it is FOR.
@@ -196,6 +199,10 @@ class TemplateService
     {
         $account = $template->account;
         $owner = $account?->owner;
+        // An Agent's own account has no 'admin' user — its owner is the 'agent' user.
+        if (! $owner && $account?->account_type === 'agent') {
+            $owner = User::query()->where('account_id', $account->id)->whereHas('roles', fn ($q) => $q->where('name', 'agent'))->oldest()->first();
+        }
 
         if (! $owner) {
             return;
@@ -208,7 +215,9 @@ class TemplateService
                 ? sprintf('"%s" was rejected: %s', $template->title, $template->rejection_reason)
                 : sprintf('"%s" was rejected.', $template->title),
             'category' => 'template_review',
-            'link' => '/admin/templates',
+            // An Agent reviews in Template Manager; a client has no access there (it would land on
+            // /unauthorized) and sees its requests under Send Notification → My Templates.
+            'link' => $account->account_type === 'agent' ? '/admin/templates' : self::CLIENT_TEMPLATES_LINK,
             'is_read' => false,
         ]);
     }

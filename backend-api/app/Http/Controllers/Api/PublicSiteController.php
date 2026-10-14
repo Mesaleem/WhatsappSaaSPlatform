@@ -10,6 +10,7 @@ use App\Services\Billing\PlanRepository;
 use App\Support\SiteContentDefaults;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 
 /**
  * Unauthenticated endpoints behind the public marketing website.
@@ -20,6 +21,21 @@ use Illuminate\Http\Request;
  */
 class PublicSiteController extends Controller
 {
+    /** Cache keys (Super-Admin-authored, read on every website visit). */
+    public const CONTENT_CACHE_KEY = 'public_site:content:v1';
+
+    public const PLANS_CACHE_KEY = 'public_site:plans:v1';
+
+    /** Saved content is forgotten the moment it changes; plans also expire after a minute (capability edits fire no Plan event). */
+    private const PLANS_TTL_SECONDS = 60;
+
+    /** Drops the cached website content and plans; called whenever either is edited. */
+    public static function forgetCache(): void
+    {
+        Cache::forget(self::CONTENT_CACHE_KEY);
+        Cache::forget(self::PLANS_CACHE_KEY);
+    }
+
     public function __construct(private readonly PlanRepository $plans)
     {
     }
@@ -33,12 +49,13 @@ class PublicSiteController extends Controller
     /** GET /api/public/plans — active plans with the features each includes. */
     public function plans(): JsonResponse
     {
-        $plans = $this->plans->purchasable()
+        $plans = Cache::remember(self::PLANS_CACHE_KEY, self::PLANS_TTL_SECONDS, fn () => $this->plans->purchasable()
             ->load('capabilities:id,slug,label')
             ->map(fn (Plan $plan) => $this->plans->toPublicArray($plan, PaymentGatewayController::TAX_RATE) + [
                 'features' => $plan->capabilities->pluck('label')->filter()->values()->all(),
             ])
-            ->values();
+            ->values()
+            ->all());
 
         return response()->json([
             'data' => $plans,
@@ -115,7 +132,8 @@ class PublicSiteController extends Controller
      */
     public static function content(): array
     {
-        $saved = SiteContent::query()->whereIn('key', SiteContentDefaults::KEYS)->pluck('value', 'key');
+        // Read on every website page and every signup; cached until the Super Admin edits it.
+        $saved = Cache::rememberForever(self::CONTENT_CACHE_KEY, fn () => SiteContent::query()->whereIn('key', SiteContentDefaults::KEYS)->pluck('value', 'key')->all());
 
         $content = [];
         foreach (SiteContentDefaults::all() as $key => $default) {

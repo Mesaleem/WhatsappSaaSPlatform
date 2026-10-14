@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
-import publicSiteService from '../services/publicSiteService';
 import type { SiteContent } from '../types/site';
+import { cachedSite, loadSite } from './siteData';
 
 interface SiteContentValue {
   content: SiteContent | null;
@@ -10,22 +10,25 @@ interface SiteContentValue {
 
 const SiteContentContext = createContext<SiteContentValue | undefined>(undefined);
 
-/** Loads GET /api/public/site once for every website page. */
+/**
+ * GET /api/public/site for every website page — usually already on its way (main.tsx prefetches
+ * it), and shown at once from the browser's saved copy for a returning visitor, then refreshed.
+ */
 export function SiteContentProvider({ children }: { children: ReactNode }) {
-  const [content, setContent] = useState<SiteContent | null>(null);
+  const [content, setContent] = useState<SiteContent | null>(() => cachedSite());
   const [error, setError] = useState(false);
 
-  const load = useCallback(() => {
+  const load = useCallback((force = false) => {
     setError(false);
-    publicSiteService
-      .site()
+    loadSite(force)
       .then(setContent)
-      .catch(() => setError(true));
+      // With a saved copy on screen, a failed refresh is not worth an error page.
+      .catch(() => setError(cachedSite() === null));
   }, []);
 
-  useEffect(load, [load]);
+  useEffect(() => load(), [load]);
 
-  return <SiteContentContext.Provider value={{ content, error, reload: load }}>{children}</SiteContentContext.Provider>;
+  return <SiteContentContext.Provider value={{ content, error, reload: () => load(true) }}>{children}</SiteContentContext.Provider>;
 }
 
 export function useSiteContent(): SiteContentValue {

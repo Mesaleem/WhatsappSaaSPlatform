@@ -16,7 +16,7 @@ interface RecordAddonPaymentModalProps {
   invoiceId: number;
   accountId: number;
   invoiceNumber: string;
-  /** GST-inclusive total the payment must equal. */
+  /** The invoice total the payment must equal. */
   totalAmount: number;
   onClose: () => void;
   onRecorded: () => void;
@@ -133,7 +133,7 @@ export default function RecordAddonPaymentModal({
             <X className="h-5 w-5" />
           </button>
         </div>
-        <p className="mt-1 text-sm text-slate-500">Invoice {invoiceNumber} · Total ₹{totalAmount.toFixed(2)} (GST included)</p>
+        <p className="mt-1 text-sm text-slate-500">Invoice {invoiceNumber} · Total ₹{totalAmount.toFixed(2)}</p>
 
         <div className="mt-4 grid grid-cols-2 gap-3">
           <label className="text-xs font-medium text-slate-700">

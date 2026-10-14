@@ -79,6 +79,8 @@ return [
         // Phase 8 Task 12 — AiProviderSettings::api_key (EncryptedOrNull),
         // the DB override for a provider's API key (see AiManager::resolve()).
         'ai_provider_settings' => ['api_key'],
+        // CRM Sales — a tenant's own Razorpay/Stripe keys for collecting from its customers.
+        'crm_gateway_settings' => ['key_secret', 'webhook_secret'],
     ],
 
     // Rows sampled per encrypted column when checking decryptability.

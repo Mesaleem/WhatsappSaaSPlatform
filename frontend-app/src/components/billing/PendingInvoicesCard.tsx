@@ -88,7 +88,7 @@ export default function PendingInvoicesCard() {
                     <p className="text-xs text-slate-500">{KIND_LABEL[row.kind]}</p>
                   </td>
                   <td className={td}>
-                    ₹{Number(row.total_amount).toFixed(2)} <span className="text-xs text-slate-500">(GST incl.)</span>
+                    ₹{Number(row.total_amount).toFixed(2)}
                   </td>
                   <td className={td}>{formatDate(row.created_at)}</td>
                   <td className="px-4 py-3 text-right">

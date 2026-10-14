@@ -87,7 +87,7 @@ export default function PlanLockedAction({ module, featureLabel, accountId }: Pl
           <p className="mt-1">
             {tiers.length > 0
               ? 'Choose how many groups you need. The price depends on that number.'
-              : `You can add it for ${money(offer.price)} (GST included) for ${offer.term_months} month${offer.term_months === 1 ? '' : 's'}.`}
+              : `You can add it for ${money(offer.price)} for ${offer.term_months} month${offer.term_months === 1 ? '' : 's'}.`}
           </p>
 
           {tiers.length > 0 && (
@@ -105,7 +105,7 @@ export default function PlanLockedAction({ module, featureLabel, accountId }: Pl
               <p className="text-xs text-slate-800">
                 {tier ? (
                   <>
-                    <strong>{money(Number(tier.price))}</strong> for {offer.term_months} month{offer.term_months === 1 ? '' : 's'}, GST included
+                    <strong>{money(Number(tier.price))}</strong> for {offer.term_months} month{offer.term_months === 1 ? '' : 's'}
                     <span className="text-amber-800"> ({tierText(tier)})</span>
                   </>
                 ) : (

@@ -227,7 +227,7 @@ export default function WhatsAppNumbersCard({ accountId, onConnected, reloadKey 
         <div>
           <p className="text-sm font-semibold text-slate-900">WhatsApp numbers</p>
           <p className="mt-0.5 text-sm text-slate-500">
-            Your plan includes one number. Each extra number is ₹{price?.price ?? 99} (GST included) for {price?.term_months ?? 1} month.
+            Your plan includes one number. Each extra number is ₹{price?.price ?? 99} for {price?.term_months ?? 1} month.
           </p>
         </div>
         <button
@@ -258,7 +258,7 @@ export default function WhatsAppNumbersCard({ accountId, onConnected, reloadKey 
                 ))}
               </ul>
               <p className="flex justify-between border-t border-slate-200 pt-2 text-sm font-semibold text-slate-900">
-                <span>Total (GST included)</span>
+                <span>Total</span>
                 <span>₹{invoice.total_amount.toFixed(2)}</span>
               </p>
               {onlineGateway ? (
@@ -310,7 +310,7 @@ export default function WhatsAppNumbersCard({ accountId, onConnected, reloadKey 
               </p>
               <div className="flex items-center justify-between">
                 <p className="text-sm text-slate-700">
-                  {numbers.length} number{numbers.length === 1 ? '' : 's'} · Total <strong>₹{total.toFixed(2)}</strong> (GST included)
+                  {numbers.length} number{numbers.length === 1 ? '' : 's'} · Total <strong>₹{total.toFixed(2)}</strong>
                 </p>
                 <button
                   type="button"

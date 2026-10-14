@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { BadgeCheck, Check, Info, Loader2, ShieldCheck, Sparkles, Zap } from 'lucide-react';
 import { useAuth } from '../../core/context/AuthContext';
-import publicSiteService from '../../services/publicSiteService';
+import { cachedPlans, loadPlans } from '../siteData';
 import type { PublicPlan } from '../../types/site';
 import { useSiteContent } from '../SiteContentContext';
 import { ButtonLink, Container, FaqList, PageHero, SectionHeading, list } from '../ui';
@@ -42,7 +42,7 @@ function featuresFor(plan: PublicPlan, configured: { plan: string; features: str
 function PriceBlock({ plan, taxRate, large }: { plan: PublicPlan; taxRate: number; large?: boolean }) {
   return (
     <>
-      {/* The headline is what the customer pays: price including tax. */}
+      {/* The headline is what the customer pays (no GST is added since 2026-10-14). */}
       <p className="flex items-baseline gap-1">
         <span className={`font-display font-extrabold tracking-tight text-slate-900 ${large ? 'text-6xl' : 'text-4xl'}`}>{formatRupees(plan.total_amount)}</span>
         <span className="text-sm text-slate-500">/ {periodLabel(plan.duration_days)}</span>
@@ -59,18 +59,18 @@ function PriceBlock({ plan, taxRate, large }: { plan: PublicPlan; taxRate: numbe
 export default function PricingPage() {
   const { content } = useSiteContent();
   const { isAuthenticated } = useAuth();
-  const [plans, setPlans] = useState<PublicPlan[] | null>(null);
-  const [taxRate, setTaxRate] = useState(0);
+  // Prefetched at start-up (website/siteData.ts); a returning visitor sees the saved copy at once.
+  const [plans, setPlans] = useState<PublicPlan[] | null>(() => cachedPlans()?.data ?? null);
+  const [taxRate, setTaxRate] = useState(() => cachedPlans()?.tax_rate ?? 0);
   const [error, setError] = useState(false);
 
   useEffect(() => {
-    publicSiteService
-      .plans()
+    loadPlans()
       .then((res) => {
         setPlans(res.data);
         setTaxRate(res.tax_rate);
       })
-      .catch(() => setError(true));
+      .catch(() => setError(cachedPlans() === null));
   }, []);
 
   if (!content) return null;

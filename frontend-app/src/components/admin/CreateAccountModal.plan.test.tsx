@@ -21,12 +21,12 @@ vi.mock('../../core/context/AuthContext', () => ({
 
 const starter: ClientPlanOption = {
   key: 'starter', label: 'Starter', description: null, engine_type: 'qr', billing_model: 'unlimited',
-  total_allocated_messages: null, duration_days: 30, price: 507.63, tax_amount: 91.37, total_amount: 599,
+  total_allocated_messages: null, duration_days: 30, price: 599, tax_amount: 0, total_amount: 599,
   capabilities: [{ slug: 'whatsapp_send', label: 'WhatsApp Messaging' }],
   modules: ['dashboard', 'analytics', 'billing', 'team_management', 'notifications', 'whatsapp_setup', 'send_alert'],
 };
 const growth: ClientPlanOption = {
-  ...starter, key: 'growth', label: 'Growth', price: 1999, tax_amount: 359.82, total_amount: 2358.82,
+  ...starter, key: 'growth', label: 'Growth', price: 1999, tax_amount: 0, total_amount: 1999,
   capabilities: [{ slug: 'crm', label: 'CRM' }],
 };
 
@@ -41,7 +41,7 @@ describe('Create Client — plan', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     auth.superAdmin = true;
-    (accountService.planOptions as Mock).mockResolvedValue({ data: [starter, growth], tax_rate: 0.18 });
+    (accountService.planOptions as Mock).mockResolvedValue({ data: [starter, growth], tax_rate: 0 });
     (accountService.create as Mock).mockResolvedValue({ id: 5 });
     (accountService.listAgents as Mock).mockResolvedValue([]);
   });
@@ -54,14 +54,14 @@ describe('Create Client — plan', () => {
     const summary = await screen.findByTestId('plan-summary');
     expect(within(summary).getByText('Starter')).toBeTruthy();
     expect(within(summary).getByText('Unlimited messages')).toBeTruthy();
-    expect((screen.getByLabelText('Amount paid (incl. GST)') as HTMLInputElement).value).toBe('599');
+    expect((screen.getByLabelText('Amount paid') as HTMLInputElement).value).toBe('599');
     // The manual subscription fields are hidden in plan mode.
     expect(screen.queryByText('Billing Model')).toBeNull();
 
     await user.selectOptions(screen.getByLabelText('Plan'), 'growth');
-    expect((screen.getByLabelText('Amount paid (incl. GST)') as HTMLInputElement).value).toBe('2358.82');
-    await user.clear(screen.getByLabelText('Amount paid (incl. GST)'));
-    await user.type(screen.getByLabelText('Amount paid (incl. GST)'), '2000');
+    expect((screen.getByLabelText('Amount paid') as HTMLInputElement).value).toBe('1999');
+    await user.clear(screen.getByLabelText('Amount paid'));
+    await user.type(screen.getByLabelText('Amount paid'), '2000');
     await user.selectOptions(screen.getByLabelText('Payment method'), 'upi');
     await user.type(screen.getByLabelText('Receipt / transaction ID'), 'UPI-1');
     await fillClient(user);

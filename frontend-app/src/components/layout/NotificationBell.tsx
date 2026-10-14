@@ -2,10 +2,13 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Bell } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import notificationService from '../../services/notificationService';
+import { useAuth } from '../../core/context/AuthContext';
 import type { InAppNotification } from '../../types/notifications';
 import { indigo } from '../../theme/signalIndigo';
 
 const POLL_INTERVAL_MS = 60_000;
+/** Where a client sees its own template requests (TemplateService::CLIENT_TEMPLATES_LINK). */
+const CLIENT_TEMPLATES_LINK = '/alerts/send?templates=mine';
 
 function timeAgo(iso: string): string {
   const seconds = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 1000));
@@ -71,13 +74,35 @@ export default function NotificationBell() {
   };
 
   const navigate = useNavigate();
+  const { isSuperAdmin, hasPermission, hasModule } = useAuth();
+
+  // Whether this user can open a notification's page — the same guards App.tsx puts on these
+  // routes, so a click never lands on /unauthorized.
+  const canOpen = (link: string) => {
+    if (isSuperAdmin()) return true;
+    const path = link.split('?')[0];
+    if (path.startsWith('/admin/templates')) return hasPermission('manage-templates');
+    if (path === '/alerts/send') return hasPermission('send-messages') && hasModule('send_alert');
+    if (path === '/billing') return hasPermission('manage-subscriptions') && hasModule('billing');
+    if (path === '/add-ons') return hasModule('billing');
+    if (path === '/settings/whatsapp') return hasModule('whatsapp_setup');
+    return true;
+  };
+
+  // Older "template rejected" notifications point a client at Template Manager; it goes to its own
+  // templates instead, and to the dashboard when it cannot open that page either.
+  const resolveLink = (link: string) => {
+    if (canOpen(link)) return link;
+    if (link.startsWith('/admin/templates') && canOpen(CLIENT_TEMPLATES_LINK)) return CLIENT_TEMPLATES_LINK;
+    return '/';
+  };
 
   // Opens the page a notification is about, after marking it read. Only in-app paths are followed.
   const openNotification = (n: InAppNotification) => {
     void handleMarkRead(n.id);
     if (n.link && n.link.startsWith('/') && !n.link.startsWith('//')) {
       setIsOpen(false);
-      navigate(n.link);
+      navigate(resolveLink(n.link));
     }
   };
 

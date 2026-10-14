@@ -219,20 +219,26 @@ class PaymentFulfillmentExactlyOnceTest extends TestCase
 
     public function test_two_separate_purchases_of_one_account_stack_on_one_subscription(): void
     {
+        // Plan purchase rules (owner, 2026-10-14): one plan request at a time, and the running
+        // plan is renewed only after it ends — so a second purchase can no longer stack.
         ['account' => $account, 'user' => $user] = $this->agentCustomer();
         $first = $this->order($user);
-        $second = $this->order($user);
         $plan = Plan::where('slug', 'growth')->firstOrFail();
 
+        $this->actingAs($user)->postJson('/api/billing/create-order', ['plan_key' => 'growth', 'gateway' => 'razorpay'])
+            ->assertStatus(409)->assertJsonPath('error_code', 'pending');
+
         $this->webhook($first, 'pay_1')->assertOk();
-        $this->verify($user, $second, 'pay_2')->assertOk();
-        $this->webhook($second, 'pay_2')->assertOk();
+        $this->webhook($first, 'pay_1')->assertOk();
+
+        $this->actingAs($user)->postJson('/api/billing/create-order', ['plan_key' => 'growth', 'gateway' => 'razorpay'])
+            ->assertStatus(409)->assertJsonPath('error_code', 'renew_after_expiry');
 
         $f = $this->footprint($account);
         $this->assertSame(1, $f['subscriptions']);
-        $this->assertSame(2 * (int) $plan->total_allocated_messages, (int) $f['allocated']);
-        $this->assertSame(now()->addDays(2 * (int) $plan->duration_days)->toDateString(), substr($f['expires_at'], 0, 10));
-        $this->assertCount(2, $f['commissions'], 'one per paid invoice');
+        $this->assertSame((int) $plan->total_allocated_messages, (int) $f['allocated']);
+        $this->assertSame(now()->addDays((int) $plan->duration_days)->toDateString(), substr($f['expires_at'], 0, 10));
+        $this->assertCount(1, $f['commissions'], 'one per paid invoice');
     }
 
     // ==================================================================

@@ -22,6 +22,9 @@ import { useOnlineInvoicePayment } from '../../components/billing/useOnlineInvoi
 import ClientBillingSummaryTable from '../../components/billing/ClientBillingSummaryTable';
 import PendingInvoicesCard from '../../components/billing/PendingInvoicesCard';
 import AmountsDueCard from '../../components/billing/AmountsDueCard';
+import ContactSalesModal from '../../components/billing/ContactSalesModal';
+import CustomPlanRequestsCard from '../../components/billing/CustomPlanRequestsCard';
+import ConfirmModal from '../../components/common/ConfirmModal';
 import { PageHeader, PageShell } from '../../components/common/PageShell';
 import { TableSkeletonRows } from '../../components/common/Skeleton';
 import { loadRazorpayScript } from '../../utils/loadRazorpayScript';
@@ -127,6 +130,10 @@ export default function BillingPage() {
   const [checkoutSuccess, setCheckoutSuccess] = useState<string | null>(null);
   const [stripeModal, setStripeModal] = useState<StripeModalState | null>(null);
   const [isQuotaModalOpen, setIsQuotaModalOpen] = useState(false);
+  // Plan purchase rules (owner, 2026-10-14): upgrade warning, contact sales, cancel a request.
+  const [confirmUpgrade, setConfirmUpgrade] = useState<Plan | null>(null);
+  const [contactSales, setContactSales] = useState(false);
+  const [cancellingId, setCancellingId] = useState<number | null>(null);
 
   const loadPlans = useCallback(async () => {
     setIsLoadingPlans(true);
@@ -187,6 +194,32 @@ export default function BillingPage() {
     }
     void loadInvoices(1);
     setInvoicePage(1);
+    void loadPlans();
+  };
+
+  /** Withdraw an unpaid plan request so another plan can be chosen. */
+  const handleCancelRequest = async (invoiceId: number) => {
+    setCancellingId(invoiceId);
+    setCheckoutError(null);
+    try {
+      const res = await billingService.cancelInvoice(invoiceId);
+      setCheckoutSuccess(res.message);
+      void loadInvoices(invoicePage);
+      void loadPlans();
+    } catch (err) {
+      setCheckoutError(extractMessage(err, 'Could not cancel this request.'));
+    } finally {
+      setCancellingId(null);
+    }
+  };
+
+  /** A plan's button: upgrade asks first (the running plan ends at payment), others go straight on. */
+  const startPurchase = (plan: Plan) => {
+    if (plan.purchase?.action === 'upgrade') {
+      setConfirmUpgrade(plan);
+      return;
+    }
+    void (gatewayReady ? handleUpgrade(plan) : handleManualRequest(plan));
   };
 
   const handleRazorpaySuccess = async (invoiceId: number, response: RazorpaySuccessResponse) => {
@@ -228,6 +261,7 @@ export default function BillingPage() {
       const res = await billingService.manualCheckout(plan.key);
       setCheckoutSuccess(res.message);
       void loadInvoices(invoicePage);
+      void loadPlans();
     } catch (err) {
       setCheckoutError(extractMessage(err, 'Could not create the invoice for this plan. Please try again.'));
     } finally {
@@ -282,6 +316,7 @@ export default function BillingPage() {
       }
     } catch (err) {
       setCheckoutError(extractMessage(err, 'Could not start checkout for this plan. Please try again.'));
+      void loadPlans();
     } finally {
       setCheckoutPlanKey(null);
     }
@@ -321,6 +356,7 @@ export default function BillingPage() {
         <PageHeader title="Billing & Plans" subtitle="Platform-wide billing overview across every client." />
         <ClientBillingSummaryTable />
         <PendingInvoicesCard />
+        <CustomPlanRequestsCard />
       </PageShell>
     );
   }
@@ -487,6 +523,41 @@ export default function BillingPage() {
           </DismissibleAlert>
         )}
 
+        {/* Plan purchase rules: one request at a time — pay it or cancel it. */}
+        {plansData?.plan_status?.pending_invoice && (
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3" data-testid="pending-plan-request">
+            <p className="text-sm text-amber-900">
+              You requested the <strong>{plansData.plan_status.pending_invoice.plan_label}</strong> plan (invoice{' '}
+              {plansData.plan_status.pending_invoice.invoice_number}, {formatMoney(plansData.plan_status.pending_invoice.total_amount)}). Pay it, or cancel the
+              request to choose another plan.
+            </p>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  const p = plansData.plan_status!.pending_invoice!;
+                  const gateway = selectedGateway ?? plansData.available_gateways[0] ?? null;
+                  if (gateway !== 'razorpay' && gateway !== 'stripe') return;
+                  void payOnline({ id: p.id, account_id: account.id, plan_key: p.plan_key, plan_label: p.plan_label }, gateway);
+                }}
+                disabled={!gatewayReady || payingInvoiceId === plansData.plan_status.pending_invoice.id}
+                title={gatewayReady ? 'Pay this invoice online.' : 'Online payment is not set up: pay by bank transfer, UPI or cash and your Super Admin or agent records it.'}
+                className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+              >
+                Pay invoice
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleCancelRequest(plansData.plan_status!.pending_invoice!.id)}
+                disabled={cancellingId === plansData.plan_status.pending_invoice.id}
+                className="rounded-lg border border-red-200 bg-white px-3 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-50 disabled:opacity-60"
+              >
+                {cancellingId === plansData.plan_status.pending_invoice.id ? 'Cancelling…' : 'Cancel request'}
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Plans */}
         <div>
           <div className="flex flex-wrap items-center justify-between gap-3">
@@ -536,44 +607,66 @@ export default function BillingPage() {
                   <div className="flex items-center gap-2">
                     <Zap className="h-4 w-4 text-emerald-700" />
                     <h3 className="text-base font-semibold text-slate-900">{plan.label}</h3>
+                    {plansData?.plan_status?.running && plansData.plan_status.plan_key === plan.key && (
+                      <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-700 ring-1 ring-inset ring-emerald-200">Current plan</span>
+                    )}
                   </div>
                   <p className="mt-1 text-sm text-slate-500">{plan.description}</p>
                   <p className="mt-4 text-2xl font-bold text-slate-900">
-                    {formatMoney(plan.price)}
-                    <span className="text-sm font-normal text-slate-500"> / {plan.duration_days} days</span>
+                    {formatMoney(plan.total_amount)}
+                    <span className="text-sm font-normal text-slate-500"> / {plan.duration_days === 30 ? 'month' : `${plan.duration_days} days`}</span>
                   </p>
-                  <p className="text-xs text-slate-500">+ tax: {formatMoney(plan.tax_amount)} · total {formatMoney(plan.total_amount)}</p>
                   <ul className="mt-4 space-y-1 text-sm text-slate-600">
                     <li>{plan.total_allocated_messages?.toLocaleString() ?? 'Unlimited'} messages</li>
                     <li className="uppercase">{plan.engine_type} engine</li>
                   </ul>
-                  {gatewayReady ? (
-                    <button
-                      onClick={() => void handleUpgrade(plan)}
-                      disabled={!selectedGateway || checkoutPlanKey === plan.key}
-                      className="mt-5 flex items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-60"
-                    >
-                      {checkoutPlanKey === plan.key ? (
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                      ) : (
-                        <CreditCard className="h-4 w-4" />
-                      )}
-                      Upgrade Plan
-                    </button>
+                  {plan.purchase && !plan.purchase.allowed ? (
+                    <>
+                      <button
+                        type="button"
+                        disabled
+                        className="mt-5 flex cursor-not-allowed items-center justify-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-4 py-2 text-sm font-semibold text-slate-500"
+                      >
+                        {plan.purchase.action === 'renew_after_expiry'
+                          ? 'Current plan'
+                          : plan.purchase.action === 'pending'
+                            ? 'Request pending'
+                            : 'Available after your plan ends'}
+                      </button>
+                      {plan.purchase.message && <p className="mt-2 text-xs text-slate-500">{plan.purchase.message}</p>}
+                    </>
                   ) : (
                     <button
-                      onClick={() => void handleManualRequest(plan)}
-                      disabled={checkoutPlanKey === plan.key}
-                      className="mt-5 flex items-center justify-center gap-2 rounded-lg border border-emerald-600 bg-white px-4 py-2 text-sm font-semibold text-emerald-800 shadow-sm hover:bg-emerald-50 disabled:opacity-60"
+                      onClick={() => startPurchase(plan)}
+                      disabled={(gatewayReady && !selectedGateway) || checkoutPlanKey === plan.key}
+                      className={
+                        gatewayReady
+                          ? 'mt-5 flex items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-60'
+                          : 'mt-5 flex items-center justify-center gap-2 rounded-lg border border-emerald-600 bg-white px-4 py-2 text-sm font-semibold text-emerald-800 shadow-sm hover:bg-emerald-50 disabled:opacity-60'
+                      }
                     >
                       {checkoutPlanKey === plan.key ? <Loader2 className="h-4 w-4 animate-spin" /> : <CreditCard className="h-4 w-4" />}
-                      Request invoice
+                      {plan.purchase?.action === 'upgrade'
+                        ? 'Upgrade'
+                        : plan.purchase?.action === 'renew'
+                          ? gatewayReady ? 'Renew plan' : 'Request renewal invoice'
+                          : gatewayReady ? 'Buy plan' : 'Request invoice'}
                     </button>
                   )}
                 </div>
               ))}
             </div>
           )}
+        </div>
+
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white p-5 shadow-sm" data-testid="contact-sales-card">
+          <div>
+            <p className="text-sm font-semibold text-slate-900">Need a custom plan?</p>
+            <p className="text-sm text-slate-500">Our plans are monthly. For a yearly plan, more numbers or higher volumes, talk to our sales team.</p>
+          </div>
+          <button type="button" onClick={() => setContactSales(true)} className="rounded-lg border border-emerald-600 px-4 py-2 text-sm font-semibold text-emerald-800 hover:bg-emerald-50">
+            Contact sales
+          </button>
         </div>
 
         <AmountsDueCard />
@@ -627,6 +720,15 @@ export default function BillingPage() {
                             >
                               {payingInvoiceId === invoice.id ? 'Starting…' : 'Pay Invoice'}
                             </button>
+                            {!invoice.plan_key.startsWith('module_addon:') && invoice.plan_key !== 'whatsapp_addon' && (
+                              <button
+                                onClick={() => void handleCancelRequest(invoice.id)}
+                                disabled={cancellingId === invoice.id}
+                                className="rounded-lg border border-red-200 px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-50 disabled:opacity-60"
+                              >
+                                {cancellingId === invoice.id ? 'Cancelling…' : 'Cancel'}
+                              </button>
+                            )}
                             {canRecordPayment && (
                               <button
                                 onClick={() => setRecordingInvoice(invoice)}
@@ -728,6 +830,32 @@ export default function BillingPage() {
         />
       )}
 
+      {confirmUpgrade && (
+        <ConfirmModal
+          title={`Upgrade to ${confirmUpgrade.label}?`}
+          message={
+            confirmUpgrade.purchase?.message ??
+            'Upgrading ends your current plan as soon as this payment is made; the new plan starts then. To keep the current plan to its end, upgrade after it ends.'
+          }
+          confirmLabel="Upgrade now"
+          onConfirm={() => {
+            const plan = confirmUpgrade;
+            setConfirmUpgrade(null);
+            void (gatewayReady ? handleUpgrade(plan) : handleManualRequest(plan));
+          }}
+          onCancel={() => setConfirmUpgrade(null)}
+        />
+      )}
+      {contactSales && (
+        <ContactSalesModal
+          defaults={{ name: user?.name, email: user?.email, company: account.company_name }}
+          onClose={() => setContactSales(false)}
+          onSent={(message) => {
+            setContactSales(false);
+            setCheckoutSuccess(message);
+          }}
+        />
+      )}
       {isQuotaModalOpen && (
         <QuotaTopUpModal
           billingModel={subscription?.billing_model === 'per_message' ? 'per_message' : 'flat_quota'}

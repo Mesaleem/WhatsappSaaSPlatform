@@ -34,6 +34,7 @@ import type {
 } from '../../types/templates';
 import { inputClass, TableCard } from '../../components/common/Card';
 import VariableInserter from '../../components/templates/VariableInserter';
+import { RequiredToggle } from '../../components/templates/VariableSettings';
 import { PageHeader, PageShell } from '../../components/common/PageShell';
 import { ClearFiltersButton, Pagination, SearchInput, StatusFilterSelect } from '../../components/common/DataTableControls';
 import { TableSkeletonRows } from '../../components/common/Skeleton';
@@ -377,6 +378,11 @@ function TemplateModal({
     );
     if (incompleteSelect) {
       setError(`"${incompleteSelect.label || incompleteSelect.key}" is a Dropdown field — add at least one option.`);
+      return;
+    }
+    const optionalOnMeta = isMetaTemplate ? variablesSchema.find((f) => !f.required) : undefined;
+    if (optionalOnMeta) {
+      setError(`"${optionalOnMeta.label || optionalOnMeta.key}" must be Required — Meta templates need a value for every variable.`);
       return;
     }
     // Phase 4 Task 5 -- mirrors MessageTemplateController's own rules so
@@ -780,6 +786,9 @@ function TemplateModal({
                 <ListChecks className="h-4 w-4 text-emerald-700" />
                 Variable Configurator
               </div>
+              <p className="text-xs text-slate-500">
+                Tick <strong>Required</strong> if a value must be given every time this template is sent (dashboard or API). Untick it to make the variable optional.
+              </p>
               <div className="space-y-3">
                 {variablesSchema.map((field) => (
                   <div key={field.key} className="rounded-lg border border-slate-200 bg-white p-3">
@@ -815,16 +824,11 @@ function TemplateModal({
                           ))}
                         </select>
                       </div>
-                      <div className="flex items-end pb-1.5">
-                        <label className="flex items-center gap-1.5 text-xs font-medium text-slate-600">
-                          <input
-                            type="checkbox"
-                            checked={field.required}
-                            onChange={(e) => updateVariableField(field.key, { required: e.target.checked })}
-                            className="h-3.5 w-3.5 rounded border-slate-300 text-emerald-700 focus:ring-emerald-500"
-                          />
-                          Required
-                        </label>
+                      <div>
+                        <span className="text-xs font-medium text-slate-500">Required?</span>
+                        <div className="mt-1">
+                          <RequiredToggle field={field} lockRequired={isMetaTemplate} onChange={(required) => updateVariableField(field.key, { required })} />
+                        </div>
                       </div>
                     </div>
                     {/*

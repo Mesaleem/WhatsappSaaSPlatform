@@ -26,10 +26,52 @@ export interface Plan {
   price: string;
   tax_amount: string;
   total_amount: string;
+  /** Plan purchase rules (PlanChangePolicy): what this plan's button may do for this account. */
+  purchase?: PlanPurchase | null;
+}
+
+export type PlanPurchaseAction = 'new' | 'renew' | 'upgrade' | 'pending' | 'renew_after_expiry' | 'downgrade_after_expiry';
+
+export interface PlanPurchase {
+  action: PlanPurchaseAction;
+  allowed: boolean;
+  /** Why it is refused, or the upgrade warning. */
+  message: string | null;
+}
+
+export interface PlanStatus {
+  running: boolean;
+  expires_at: string | null;
+  /** The last plan paid for (the running one when `running`). */
+  plan_key: string | null;
+  plan_label: string | null;
+  pending_invoice: { id: number; invoice_number: string; plan_key: string; plan_label: string; total_amount: string; plan_change: string | null } | null;
+}
+
+export interface CustomPlanRequestPayload {
+  name: string;
+  email: string;
+  phone: string;
+  company?: string | null;
+  expected_messages?: number | null;
+  whatsapp_numbers?: number | null;
+  team_users?: number | null;
+  requirement: string;
+}
+
+export interface CustomPlanRequest extends CustomPlanRequestPayload {
+  id: number;
+  status: 'new' | 'contacted' | 'closed';
+  admin_note: string | null;
+  account: { id: number; company_name: string } | null;
+  handled_by: { id: number; name: string } | null;
+  contacted_at: string | null;
+  created_at: string;
 }
 
 export interface PlansResponse {
   plans: Plan[];
+  plan_status?: PlanStatus | null;
   /** Gateways that are both enabled AND fully configured — the only ones checkout can offer. */
   available_gateways: PaymentGateway[];
   tax_rate: number;

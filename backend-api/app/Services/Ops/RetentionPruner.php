@@ -119,6 +119,9 @@ class RetentionPruner
                 'constraint' => fn (Builder $q) => $q->whereNotExists(fn ($s) => $s->select(DB::raw(1))
                     ->from('journey_execution_events as e')
                     ->whereColumn('e.inbound_event_id', 'inbound_message_events.id'))],
+            // Page views are removed with their visit (cascading foreign key).
+            ['category' => 'site_visits', 'scope' => 'all', 'table' => 'site_visits', 'column' => 'started_at', 'connection' => null, 'days_key' => 'days',
+                'constraint' => fn (Builder $q) => $q],
         ];
 
         if (! in_array($failedDriver, ['null', ''], true)) {

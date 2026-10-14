@@ -185,6 +185,17 @@ class InvoiceCreditService
             $isRunning = $subscription->expires_at && $subscription->expires_at->isFuture();
             $baseExpiry = $isRunning ? $subscription->expires_at : ($periodStart ?? now());
 
+            // Plan purchase rules (owner, 2026-10-14): an UPGRADE ends the running plan at
+            // payment. The new period starts now (not at the old expiry), and the message
+            // quota and amount paid are the new plan's own (not added to the old ones).
+            $isUpgrade = $invoice->plan_change === 'upgrade';
+            if ($isUpgrade) {
+                $baseExpiry = now();
+                $subscription->total_allocated_messages = null;
+                $subscription->used_messages = 0;
+                $subscription->price_paid = 0;
+            }
+
             // "Credit allocated message quotas" (spec, literal): additive,
             // not a reset — a tenant upgrading mid-period keeps whatever
             // unused balance they already had. [Inference — disclosed
@@ -199,7 +210,7 @@ class InvoiceCreditService
                 : ($subscription->total_allocated_messages ?? 0) + (int) $terms['total_allocated_messages'];
             $subscription->price_paid = (float) ($subscription->price_paid ?? 0) + (float) $invoice->total_amount;
             $subscription->payment_mode = $invoice->payment_gateway;
-            $subscription->starts_at = ($periodStart && ! $isRunning) ? $periodStart : ($subscription->starts_at ?? now());
+            $subscription->starts_at = $isUpgrade ? now() : (($periodStart && ! $isRunning) ? $periodStart : ($subscription->starts_at ?? now()));
             $subscription->expires_at = $baseExpiry->copy()->addDays($terms['duration_days']);
             $subscription->status = 'active';
             $subscription->save();

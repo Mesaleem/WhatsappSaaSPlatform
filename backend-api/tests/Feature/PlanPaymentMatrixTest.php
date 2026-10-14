@@ -89,7 +89,7 @@ class PlanPaymentMatrixTest extends TestCase
         $this->assertSame('pending', $invoice->status);
         $this->assertSame('manual', $invoice->payment_gateway);
         $plan = app(\App\Services\Billing\PlanRepository::class)->findPurchasable('starter');
-        $this->assertEqualsWithDelta((float) $plan->price * 1.18, (float) $invoice->total_amount, 0.01, 'GST is added to the plan price');
+        $this->assertEqualsWithDelta((float) $plan->price, (float) $invoice->total_amount, 0.01, 'No GST: the invoice total is the plan price');
     }
 
     public function test_a_second_manual_request_for_the_same_plan_waits_for_the_first(): void

@@ -5,6 +5,8 @@ import templateService from '../../services/templateService';
 import type { ApiErrorResponse } from '../../types/auth';
 import DismissibleAlert from '../common/DismissibleAlert';
 import VariableInserter from './VariableInserter';
+import VariableSettings, { variableSettingsError } from './VariableSettings';
+import type { TemplateVariableSchemaField } from '../../types/templates';
 
 function extractMessage(err: unknown, fallback: string): string {
   const axiosErr = err as AxiosError<ApiErrorResponse>;
@@ -23,12 +25,10 @@ const inputClass =
  * existed server-side (routed to pending_agent_review/pending_admin_review
  * purely by the caller's own account.agent_id — see TemplateService::
  * resolveCreationStatus()) but had no frontend form calling it until now.
- * Deliberately does NOT expose the Variable Configurator Panel
- * (variables_schema) here — that stays a reviewer-side step (the
- * Agent/Super Admin fills it in via Template Manager's own edit form
- * before approving), keeping this request form to the two things a
- * Client actually needs to describe: what the message should say, and
- * roughly for what kind of business.
+ * Each {{variable}} gets its settings here too (VariableSettings: label, type,
+ * Required / Optional), sent as variables_schema — the client knows which values
+ * it will always have. The Agent/Super Admin reviewer can still change them in
+ * Template Manager before approving.
  */
 export default function RequestTemplateModal({
   onClose,
@@ -41,6 +41,7 @@ export default function RequestTemplateModal({
   const [industryType, setIndustryType] = useState('');
   const [templateBody, setTemplateBody] = useState('');
   const bodyRef = useRef<HTMLTextAreaElement>(null);
+  const [variablesSchema, setVariablesSchema] = useState<TemplateVariableSchemaField[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -51,6 +52,11 @@ export default function RequestTemplateModal({
       setError('Give the template a title and write out the message text.');
       return;
     }
+    const settingsError = variableSettingsError(variablesSchema);
+    if (settingsError) {
+      setError(settingsError);
+      return;
+    }
     setIsSubmitting(true);
     setError(null);
     try {
@@ -58,6 +64,7 @@ export default function RequestTemplateModal({
         title: title.trim(),
         industry_type: industryType.trim() || undefined,
         template_body: templateBody.trim(),
+        ...(variablesSchema.length > 0 ? { variables_schema: variablesSchema } : {}),
         // Requests are plain text only; attachments are not offered on this form.
         header_type: 'text',
       });
@@ -71,7 +78,7 @@ export default function RequestTemplateModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4">
-      <div className="w-full max-w-lg rounded-xl bg-white p-6 shadow-xl">
+      <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-xl bg-white p-6 shadow-xl">
         <div className="flex items-center justify-between">
           <h3 className="flex items-center gap-2 text-base font-semibold text-slate-900">
             <FileText className="h-4 w-4 text-emerald-700" />
@@ -128,6 +135,7 @@ export default function RequestTemplateModal({
               className={inputClass}
             />
             <VariableInserter value={templateBody} onChange={setTemplateBody} textareaRef={bodyRef} />
+            <VariableSettings body={templateBody} value={variablesSchema} onChange={setVariablesSchema} />
             <p className="mt-1 text-xs text-slate-500">
               Use <code className="rounded bg-slate-100 px-1 py-0.5">{'{{variable_name}}'}</code> for anything that
               changes per message, like a customer name or order ID.

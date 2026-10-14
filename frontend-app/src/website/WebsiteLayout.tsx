@@ -1,11 +1,13 @@
-import { useEffect, useState } from 'react';
+import { Suspense, useEffect, useState } from 'react';
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom';
-import { Loader2, Mail, MapPin, Menu, Phone, RefreshCw, X } from 'lucide-react';
+import { Mail, MapPin, Menu, Phone, RefreshCw, X } from 'lucide-react';
 import { useAuth } from '../core/context/AuthContext';
 import LogoMark from '../components/common/LogoMark';
 import { SiteContentProvider, useSiteContent } from './SiteContentContext';
 import { ButtonLink, Container, list } from './ui';
 import { usePageTitle } from '../utils/usePageTitle';
+import { useSiteTracking } from './siteTracking';
+import { prefetchWebsitePages } from './pageLoaders';
 
 /** Tab title per website page: "WapHub | Home", "WapHub | Contact", ... */
 const PAGE_TITLES: Record<string, string> = {
@@ -42,6 +44,10 @@ function WebsiteShell() {
   const location = useLocation();
   const [menuOpen, setMenuOpen] = useState(false);
   const [scrolled, setScrolled] = useState(false);
+  // Website Analytics (Super Admin): records the page and how long it is viewed.
+  useSiteTracking();
+  // Every other website page's code, fetched while the visitor reads this one.
+  useEffect(() => prefetchWebsitePages(), []);
 
   const brand = content?.brand ?? {};
   const brandName = brand.name || 'WapHub';
@@ -134,7 +140,10 @@ function WebsiteShell() {
 
       <main className="flex-1">
         {content ? (
-          <Outlet />
+          // A page whose code is still downloading keeps the header and footer on screen.
+          <Suspense fallback={<PageSkeleton />}>
+            <Outlet />
+          </Suspense>
         ) : error ? (
           <Container className="flex flex-col items-center py-32 text-center">
             <p className="text-lg font-semibold">We couldn't load this page.</p>
@@ -148,9 +157,7 @@ function WebsiteShell() {
             </button>
           </Container>
         ) : (
-          <div className="flex justify-center py-40" role="status" aria-label="Loading">
-            <Loader2 className="h-8 w-8 animate-spin text-emerald-600" />
-          </div>
+          <PageSkeleton />
         )}
       </main>
 
@@ -249,6 +256,37 @@ function FooterColumn({ title, links }: { title: string; links: { label: string;
           </li>
         ))}
       </ul>
+    </div>
+  );
+}
+
+/** The page's shape while its content arrives (a first visit only): a hero, then cards — no spinner. */
+function PageSkeleton() {
+  return (
+    <div role="status" aria-label="Loading" className="animate-pulse">
+      <Container className="py-16 sm:py-24">
+        <div className="mx-auto max-w-3xl text-center">
+          <div className="mx-auto h-5 w-40 rounded-full bg-slate-200" />
+          <div className="mx-auto mt-6 h-10 w-full max-w-xl rounded-xl bg-slate-200" />
+          <div className="mx-auto mt-3 h-10 w-4/5 max-w-lg rounded-xl bg-slate-200" />
+          <div className="mx-auto mt-6 h-4 w-full max-w-md rounded bg-slate-100" />
+          <div className="mx-auto mt-2 h-4 w-3/4 max-w-sm rounded bg-slate-100" />
+          <div className="mt-8 flex justify-center gap-3">
+            <div className="h-11 w-36 rounded-xl bg-slate-200" />
+            <div className="h-11 w-32 rounded-xl bg-slate-100" />
+          </div>
+        </div>
+        <div className="mt-16 grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+          {[0, 1, 2].map((i) => (
+            <div key={i} className="rounded-2xl border border-slate-200 p-6">
+              <div className="h-10 w-10 rounded-xl bg-slate-200" />
+              <div className="mt-4 h-5 w-2/3 rounded bg-slate-200" />
+              <div className="mt-3 h-4 w-full rounded bg-slate-100" />
+              <div className="mt-2 h-4 w-5/6 rounded bg-slate-100" />
+            </div>
+          ))}
+        </div>
+      </Container>
     </div>
   );
 }

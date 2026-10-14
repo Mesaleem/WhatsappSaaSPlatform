@@ -79,6 +79,7 @@ class BulkSendTest extends TestCase
         $this->actingAs($user)->postJson('/api/alerts/bulk-sends', [
             'recipient_phones' => ['919876543210', 'abc'],
             'template_id' => $template->id,
+            'variables' => ['name' => 'Asha'],
             'sender_number_ids' => [$ids[0]],
         ])->assertStatus(422)->assertJsonPath('error_code', 'INVALID_NUMBERS');
 

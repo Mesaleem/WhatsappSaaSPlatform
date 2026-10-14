@@ -38,6 +38,7 @@ class SiteContentController extends Controller
             ['key' => $key],
             ['value' => $data['value'], 'updated_by_user_id' => $request->user()->id],
         );
+        PublicSiteController::forgetCache();
 
         return response()->json(['message' => 'Saved.', 'data' => PublicSiteController::content()[$key]]);
     }
@@ -48,6 +49,7 @@ class SiteContentController extends Controller
         abort_unless(in_array($key, SiteContentDefaults::KEYS, true), 404);
 
         SiteContent::where('key', $key)->delete();
+        PublicSiteController::forgetCache();
 
         return response()->json(['message' => 'Reset to default.', 'data' => SiteContentDefaults::get($key)]);
     }

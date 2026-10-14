@@ -610,6 +610,14 @@ class ContactGroupController extends Controller
             return response()->json(['success' => false, 'message' => 'Group not found.'], 404);
         }
 
+        // Required / type checks for the template's variables, before anything is queued. A contact
+        // list fills {{name}} from each member, so only a native WhatsApp group must supply it.
+        $template = \App\Models\MessageTemplate::query()->find((int) $data['template_id']);
+        $variableErrors = $template?->variableErrors($data['variables'] ?? [], $group->isNative() ? [] : ['name']);
+        if ($variableErrors) {
+            return response()->json(['success' => false, 'message' => $variableErrors->first(), 'errors' => $variableErrors, 'error_code' => 'INVALID_VARIABLES'], 422);
+        }
+
         try {
             $senderId = app(\App\Services\WhatsApp\SenderNumberResolver::class)->resolve(
                 $account,

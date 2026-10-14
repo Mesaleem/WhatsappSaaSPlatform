@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ComponentType } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import {
   BarChart3,
@@ -55,6 +55,9 @@ import { ThemeProvider } from '../../core/theme/ThemeContext';
 import { usePageTitle } from '../../utils/usePageTitle';
 import { hasIndustryModule } from './industryNav';
 import { useIndustryModuleKeys } from './useIndustryModuleKeys';
+
+/** Automatic /auth/me refreshes (navigation, tab focus) happen at most this often. */
+const AUTO_REFRESH_MIN_MS = 30_000;
 
 interface NavItem {
   label: string;
@@ -314,6 +317,7 @@ const NAV_ITEMS: NavItem[] = [
   { label: 'AI Gateway Settings', to: '/admin/ai-settings', icon: Bot, tint: NAV_TINTS.gateway, superAdminOnly: true },
   // Public marketing website: page text, pricing intro, legal pages, contact-form inbox.
   { label: 'Website Content', to: '/admin/website', icon: Globe, tint: NAV_TINTS.gateway, superAdminOnly: true },
+  { label: 'Website Analytics', to: '/admin/website/analytics', icon: BarChart3, tint: NAV_TINTS.gateway, superAdminOnly: true },
   // Super Admin WhatsApp Device Integration — link/view/disconnect/reconnect any client's device from one screen.
   { label: 'Device Settings', to: '/admin/device-settings', icon: Smartphone, tint: NAV_TINTS.whatsapp, superAdminOnly: true },
   { label: 'API Access', to: '/admin/api-access', icon: Settings, tint: NAV_TINTS.gateway, superAdminOnly: true },
@@ -490,15 +494,28 @@ function AppShell() {
   // [Disclosed]: previously lived as a Dashboard-only mount effect;
   // consolidated here so it applies to every module-gated nav item,
   // not just the ones Dashboard happens to render.
-  useEffect(() => {
+  //
+  // Scale (2026-10-14): both triggers are throttled to one /auth/me per
+  // AUTO_REFRESH_MIN_MS, so clicking through ten pages or flicking between
+  // tabs no longer sends ten requests per user. The header Refresh button
+  // (refreshPage) and the explicit refreshUser() calls after a payment or a
+  // profile change are not throttled.
+  const lastAutoRefresh = useRef(0);
+  const autoRefreshUser = useCallback(() => {
+    const now = Date.now();
+    if (now - lastAutoRefresh.current < AUTO_REFRESH_MIN_MS) return;
+    lastAutoRefresh.current = now;
     void refreshUser();
-  }, [location.pathname, refreshUser]);
+  }, [refreshUser]);
 
   useEffect(() => {
-    const onFocus = () => void refreshUser();
-    window.addEventListener('focus', onFocus);
-    return () => window.removeEventListener('focus', onFocus);
-  }, [refreshUser]);
+    autoRefreshUser();
+  }, [location.pathname, autoRefreshUser]);
+
+  useEffect(() => {
+    window.addEventListener('focus', autoRefreshUser);
+    return () => window.removeEventListener('focus', autoRefreshUser);
+  }, [autoRefreshUser]);
 
   const pageTitle = resolvePageTitle(location.pathname, visibleItems);
   usePageTitle(pageTitle);

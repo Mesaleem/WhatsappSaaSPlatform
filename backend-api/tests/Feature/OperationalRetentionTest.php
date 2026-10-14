@@ -278,7 +278,8 @@ class OperationalRetentionTest extends TestCase
         $this->assertSame($u->id, User::find($u->id)->id);
 
         // And the pruner only knows the audited categories.
-        $this->assertEqualsCanonicalizing(['api_request_logs', 'webhook_deliveries', 'journey_execution_events', 'inbound_message_events', 'failed_jobs'], app(RetentionPruner::class)->categories());
+        // site_visits: website analytics only (2026-10-14), kept a year by default.
+        $this->assertEqualsCanonicalizing(['api_request_logs', 'webhook_deliveries', 'journey_execution_events', 'inbound_message_events', 'site_visits', 'failed_jobs'], app(RetentionPruner::class)->categories());
     }
 
     public function test_rows_inside_retention_are_never_deleted_even_with_out_of_order_timestamps(): void

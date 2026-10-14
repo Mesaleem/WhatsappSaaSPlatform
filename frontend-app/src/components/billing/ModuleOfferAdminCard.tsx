@@ -136,7 +136,7 @@ export default function ModuleOfferAdminCard() {
                 <span className="text-red-500" aria-hidden="true"> *</span><input className={field} value={d.label} maxLength={120} onChange={(e) => update(offer.module, { label: e.target.value })} required />
               </label>
               <label className="text-xs font-medium text-slate-700">
-                Price (₹, incl. GST)
+                Price (₹)
                 <span className="text-red-500" aria-hidden="true"> *</span><input className={field} type="number" min="0" step="0.01" value={d.price} disabled={d.is_free} onChange={(e) => update(offer.module, { price: Number(e.target.value) })} required />
               </label>
               <label className="text-xs font-medium text-slate-700">
@@ -194,7 +194,7 @@ export default function ModuleOfferAdminCard() {
                         <input className={field} type="number" min="1" value={row.to_units} disabled={d.is_free} onChange={(e) => updateTier(offer.module, index, { to_units: e.target.value })} />
                       </label>
                       <label className="text-xs font-medium text-slate-700">
-                        Price (₹, incl. GST)
+                        Price (₹)
                         <span className="text-red-500" aria-hidden="true"> *</span><input className={field} type="number" min="0" step="0.01" value={row.price} disabled={d.is_free} onChange={(e) => updateTier(offer.module, index, { price: e.target.value })} required />
                       </label>
                       <div className="col-span-2 md:col-span-1">

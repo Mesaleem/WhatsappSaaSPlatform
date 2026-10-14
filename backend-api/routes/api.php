@@ -104,6 +104,8 @@ Route::prefix('public')->group(function () {
     Route::get('/site', [PublicSiteController::class, 'site'])->middleware('throttle:120,1');
     Route::get('/plans', [PublicSiteController::class, 'plans'])->middleware('throttle:120,1');
     Route::post('/contact', [PublicSiteController::class, 'contact'])->middleware('throttle:5,10');
+    // Website visitor analytics — the public site's page-view / time-on-page tracker (write-only, always 204).
+    Route::post('/site-events', [\App\Http\Controllers\Api\SiteAnalyticsController::class, 'track'])->middleware('throttle:120,1');
     // CRM Sales Phases 3–4 — a customer opens / pays a document from its unguessable link (no login).
     Route::get('/crm-documents/{token}', [\App\Http\Controllers\Api\CrmPublicDocumentController::class, 'show'])->middleware('throttle:60,1');
     Route::get('/crm-documents/{token}/pdf', [\App\Http\Controllers\Api\CrmPublicDocumentController::class, 'pdf'])->middleware('throttle:60,1');
@@ -300,6 +302,9 @@ Route::middleware('auth:sanctum')->group(function () {
         // a Super Admin or agent. And online payment of a pending plan invoice.
         Route::post('/manual-checkout', [BillingPaymentController::class, 'manualCheckout']);
         Route::post('/invoices/{id}/pay', [BillingPaymentController::class, 'payInvoice'])->whereNumber('id');
+        // Plan purchase rules (owner, 2026-10-14): withdraw an unpaid plan request; ask sales for a custom plan.
+        Route::post('/invoices/{id}/cancel', [BillingPaymentController::class, 'cancelInvoice'])->whereNumber('id');
+        Route::post('/custom-plan-requests', [\App\Http\Controllers\Api\CustomPlanRequestController::class, 'store'])->middleware('throttle:5,60');
         Route::get('/invoices', [BillingController::class, 'index']);
         // Phase 8 Task 1 — the resolved account's OWN credits (read-only;
         // credits change only through CreditService). See CreditController.
@@ -431,6 +436,12 @@ Route::middleware('auth:sanctum')->group(function () {
         ->get('/admin/whatsapp/addon-invoices/pending', [WhatsAppAddonController::class, 'pending']);
     // The extra WhatsApp number price: the Super Admin changes it; invoices already issued keep theirs.
     Route::middleware(['role:super_admin'])->put('/admin/whatsapp/addon-price', [WhatsAppAddonController::class, 'updatePrice']);
+    // Custom plan requests ("Contact sales"): the Super Admin's queue.
+    Route::middleware(['role:super_admin'])->get('/admin/custom-plan-requests', [\App\Http\Controllers\Api\CustomPlanRequestController::class, 'index']);
+    Route::middleware(['role:super_admin'])->patch('/admin/custom-plan-requests/{id}', [\App\Http\Controllers\Api\CustomPlanRequestController::class, 'update'])->whereNumber('id');
+    // Website visitor analytics: who visited the public website, from where, which pages and for how long.
+    Route::middleware(['role:super_admin'])->get('/admin/site-analytics', [\App\Http\Controllers\Api\SiteAnalyticsController::class, 'report']);
+    Route::middleware(['role:super_admin'])->get('/admin/site-analytics/visits', [\App\Http\Controllers\Api\SiteAnalyticsController::class, 'visits']);
     // Free daily AI credits (AiDailyAllowance): the header chip for the user's own account, and the
     // Super Admin's per-day setting for clients and agents.
     Route::get('/ai/credit-status', [\App\Http\Controllers\Api\AiCreditStatusController::class, 'status']);

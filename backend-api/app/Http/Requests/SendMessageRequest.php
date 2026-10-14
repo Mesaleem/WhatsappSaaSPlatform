@@ -101,7 +101,8 @@ class SendMessageRequest extends FormRequest
      */
     public function messages(): array
     {
-        return [
+        // Per-variable messages name the label and the key: The "Customer Name" variable (variables.customer_name) is required.
+        return MessageTemplate::variableValidationMessages($this->targetSchema()) + [
             'recipient_phone.required_if' => 'The :attribute field is required when recipient_type is "individual".',
             'recipient_phone.not_regex' => 'The Developer API sends to one number per request. To send to more than one number (up to 30), make one request per number. For a larger list, use Bulk in the dashboard and upload an Excel or CSV file.',
             'group_code.required_if' => 'The :attribute field is required when recipient_type is "group".',

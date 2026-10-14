@@ -21,6 +21,8 @@ class SchedulerTopologyTest extends TestCase
         'journeys:resume-due',
         'group-dispatch:recover-stale',
         'credits:release-expired-reservations',
+        'crm:expire-quotations',
+        'crm:send-payment-reminders',
         'ai:settle-operations',
         'knowledge:recover-documents',
         'social:check-connections',

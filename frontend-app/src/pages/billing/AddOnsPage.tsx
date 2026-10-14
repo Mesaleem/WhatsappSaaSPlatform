@@ -199,7 +199,7 @@ export default function AddOnsPage() {
                         {row.invoice_number ? (
                           <>
                             <p>{row.invoice_number}</p>
-                            <p className="text-xs text-slate-500">{formatAmount(row.total_amount)} (GST included)</p>
+                            <p className="text-xs text-slate-500">{formatAmount(row.total_amount)}</p>
                           </>
                         ) : (
                           '—'
@@ -252,7 +252,7 @@ export default function AddOnsPage() {
                       </td>
                       <td className={td}>
                         <p>{row.invoice_number ?? '—'}</p>
-                        <p className="text-xs text-slate-500">{formatAmount(row.total_amount)} (GST included)</p>
+                        <p className="text-xs text-slate-500">{formatAmount(row.total_amount)}</p>
                       </td>
                       <td className={td}>{formatDate(row.bought_at)}</td>
                       <td className={td}>{formatDate(row.paid_at)}</td>

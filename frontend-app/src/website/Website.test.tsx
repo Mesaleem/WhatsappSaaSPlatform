@@ -8,6 +8,7 @@ import HomePage from './pages/HomePage';
 import PricingPage from './pages/PricingPage';
 import ContactPage from './pages/ContactPage';
 import SignupPage from './pages/SignupPage';
+import { resetSiteDataForTests } from './siteData';
 import LegalPage from './pages/LegalPage';
 import { SiteContentProvider } from './SiteContentContext';
 import { ProtectedRoute } from '../core/guards/ProtectedRoute';
@@ -75,6 +76,8 @@ describe('Public website', () => {
     vi.clearAllMocks();
     auth.authenticated = false;
     localStorage.clear();
+    // The site data is fetched once per page load and remembered; each test is its own page load.
+    resetSiteDataForTests();
     (publicSiteService.site as Mock).mockResolvedValue(site);
   });
 

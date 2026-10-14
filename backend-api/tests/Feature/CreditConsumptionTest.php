@@ -613,7 +613,8 @@ class CreditConsumptionTest extends TestCase
     public function test_there_is_no_spending_endpoint_and_tenants_cannot_move_credits(): void
     {
         $spendingRoutes = collect(Route::getRoutes()->getRoutes())
-            ->filter(fn ($route) => str_contains($route->uri(), 'credit') && array_diff($route->methods(), ['GET', 'HEAD']))
+            // CRM credit notes are sales documents (money owed to a tenant's customer), not AI credits.
+            ->filter(fn ($route) => str_contains($route->uri(), 'credit') && ! str_contains($route->uri(), 'credit-note') && array_diff($route->methods(), ['GET', 'HEAD']))
             ->map(fn ($route) => $route->uri())
             ->values()
             ->all();

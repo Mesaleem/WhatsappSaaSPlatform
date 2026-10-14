@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { AlertTriangle, CalendarClock, CheckCircle2, Code2, Copy, Download, Loader2, Send, ShieldCheck, Sparkles, Upload, Users, XCircle } from 'lucide-react';
 import { useAuth } from '../../core/context/AuthContext';
 import BatchSendPanel from '../../components/alerts/BatchSendPanel';
@@ -378,7 +378,9 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
   // the right home: every caller who reaches Send Alert at all lacks
   // manage-templates, so there is no separate gate needed here).
   const [showRequestTemplate, setShowRequestTemplate] = useState(false);
-  const [showMyTemplates, setShowMyTemplates] = useState(false);
+  // ?templates=mine (the "template rejected" notification) opens My Templates straight away.
+  const [searchParams] = useSearchParams();
+  const [showMyTemplates, setShowMyTemplates] = useState(() => searchParams.get('templates') === 'mine');
   const [requestSuccess, setRequestSuccess] = useState<string | null>(null);
 
   useEffect(() => {
@@ -1441,7 +1443,8 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
                           : 'bg-slate-100 text-slate-500'
                       }`}
                     >
-                      {field.key} — {field.required ? 'required' : 'optional'} ({field.type})
+                      {field.key} — {field.required ? 'required' : 'optional'} ({field.type}
+                      {field.type === 'select' && field.options?.length ? `: ${field.options.join(' | ')}` : ''})
                     </span>
                   ))
                 )}
@@ -1462,6 +1465,24 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
                   </span>
                 )}
               </div>
+              {!noTemplate && selectedTemplate!.variables_schema.some((f) => f.required) && (() => {
+                // What the API answers when a required variable is missing (HTTP 422), same text as the server's.
+                const f = selectedTemplate!.variables_schema.find((x) => x.required)!;
+                const msg = `The "${f.label || f.key}" variable (variables.${f.key}) is required.`;
+                const sample = recipientType === 'group'
+                  ? { success: false, message: `Validation failed: ${msg}`, errors: { [`variables.${f.key}`]: [msg] } }
+                  : { status: false, message: msg, errors: { [`variables.${f.key}`]: [msg] } };
+                return (
+                  <div className="mt-3" data-testid="api-validation-error-sample">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">If a required variable is missing — HTTP 422</p>
+                    <pre className="mt-1 overflow-x-auto rounded-lg bg-slate-900 px-3 py-2 font-mono text-xs text-slate-200">{JSON.stringify(sample, null, 2)}</pre>
+                    <p className="mt-1 text-xs text-slate-500">
+                      Every required variable must be sent inside <code className="font-mono">variables</code>. An optional one may be left out and is sent blank. A wrong type
+                      (text for a number, a value not in a dropdown) is refused the same way.
+                    </p>
+                  </div>
+                );
+              })()}
             </div>
           </>
         )}

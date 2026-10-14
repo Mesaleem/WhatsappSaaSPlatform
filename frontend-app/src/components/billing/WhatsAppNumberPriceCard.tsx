@@ -3,7 +3,7 @@ import whatsappService from '../../services/whatsappService';
 import { extractErrorMessage } from '../../utils/apiError';
 
 /**
- * Super Admin: the price of one extra WhatsApp number (GST included). New purchases use it;
+ * Super Admin: the price of one extra WhatsApp number. New purchases use it;
  * invoices already issued keep the price they were issued at.
  */
 export default function WhatsAppNumberPriceCard() {
@@ -38,7 +38,7 @@ export default function WhatsAppNumberPriceCard() {
     <form onSubmit={(e) => void save(e)} className="mt-6 rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
       <p className="text-sm font-semibold text-slate-900">Extra WhatsApp number price</p>
       <p className="mt-0.5 text-xs text-slate-500">
-        Charged per extra number, for one month, GST included. New purchases use this price; invoices already issued keep theirs.
+        Charged per extra number, for one month. New purchases use this price; invoices already issued keep theirs.
       </p>
       <div className="mt-4 flex flex-wrap items-end gap-3">
         <label className="text-xs font-medium text-slate-700">

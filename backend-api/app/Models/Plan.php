@@ -11,6 +11,13 @@ class Plan extends Model
 {
     use LogsActivity;
 
+    /** A plan edit shows on the public pricing page at once (see PublicSiteController's cache). */
+    protected static function booted(): void
+    {
+        static::saved(fn () => \App\Http\Controllers\Api\PublicSiteController::forgetCache());
+        static::deleted(fn () => \App\Http\Controllers\Api\PublicSiteController::forgetCache());
+    }
+
     protected $fillable = [
         'slug',
         'label',

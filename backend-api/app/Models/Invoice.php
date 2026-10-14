@@ -14,6 +14,7 @@ class Invoice extends Model
         'invoice_number',
         'plan_key',
         'plan_label',
+        'plan_change',
         'amount',
         'tax_amount',
         'total_amount',

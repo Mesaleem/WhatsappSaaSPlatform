@@ -69,7 +69,7 @@ export default function ModuleAddonQueueCard({ onChanged }: { onChanged?: () => 
               <p className="text-xs text-slate-500">
                 {row.units ? `${row.units} ${row.units === 1 ? 'group' : 'groups'} · ` : ''}
                 {row.status === 'requested' ? 'Waiting for approval' : 'Invoice sent. Waiting for payment'}
-                {row.total_amount !== null ? ` · ₹${Number(row.total_amount).toFixed(2)} (GST included)` : ''}
+                {row.total_amount !== null ? ` · ₹${Number(row.total_amount).toFixed(2)}` : ''}
                 {row.reason ? ` · "${row.reason}"` : ''}
               </p>
             </div>

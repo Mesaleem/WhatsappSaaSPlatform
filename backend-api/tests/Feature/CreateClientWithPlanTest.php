@@ -60,12 +60,13 @@ class CreateClientWithPlanTest extends TestCase
         ];
     }
 
-    public function test_plan_options_list_active_plans_with_price_incl_gst_and_modules(): void
+    public function test_plan_options_list_active_plans_with_their_price_and_modules(): void
     {
         $this->actingAs($this->superAdmin())->getJson('/api/admin/accounts/plan-options')
             ->assertOk()
             ->assertJsonPath('data.0.key', 'starter')
-            ->assertJsonPath('data.0.total_amount', round(599 * 1.18, 2))
+            // No GST since 2026-10-14: the total is the plan price.
+            ->assertJsonPath('data.0.total_amount', 599)
             ->assertJsonFragment(['slug' => 'whatsapp_send'])
             ->assertJsonPath('data.0.duration_days', 30);
 
@@ -92,7 +93,7 @@ class CreateClientWithPlanTest extends TestCase
         $this->assertSame('paid', $invoice->status);
         $this->assertSame('growth', $invoice->plan_key);
         $this->assertSame('manual', $invoice->payment_gateway);
-        $this->assertEqualsWithDelta(round(1999 * 1.18, 2), (float) $invoice->total_amount, 0.01);
+        $this->assertEqualsWithDelta(1999.00, (float) $invoice->total_amount, 0.01);
 
         $payment = ManualPayment::where('invoice_id', $invoice->id)->firstOrFail();
         $this->assertSame('upi', $payment->method);
@@ -113,7 +114,7 @@ class CreateClientWithPlanTest extends TestCase
         $this->assertSame(1, Subscription::where('account_id', $account->id)->count());
     }
 
-    public function test_a_discounted_price_is_recorded_as_paid_including_gst(): void
+    public function test_a_discounted_price_is_recorded_as_paid(): void
     {
         $response = $this->actingAs($this->superAdmin())->postJson('/api/admin/accounts', $this->client([
             'plan_key' => 'starter',
@@ -124,7 +125,8 @@ class CreateClientWithPlanTest extends TestCase
         $invoice = Invoice::where('account_id', $response->json('id'))->firstOrFail();
         $this->assertEqualsWithDelta(500.00, (float) $invoice->total_amount, 0.001);
         $this->assertEqualsWithDelta(500.00, (float) $invoice->amount + (float) $invoice->tax_amount, 0.001);
-        $this->assertEqualsWithDelta(423.73, (float) $invoice->amount, 0.01);
+        $this->assertEqualsWithDelta(500.00, (float) $invoice->amount, 0.01);
+        $this->assertEqualsWithDelta(0.00, (float) $invoice->tax_amount, 0.001);
         $this->assertStringStartsWith('NEW-CLIENT-', ManualPayment::where('invoice_id', $invoice->id)->value('transaction_id'));
     }
 

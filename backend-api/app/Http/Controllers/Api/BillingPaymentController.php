@@ -41,16 +41,14 @@ class BillingPaymentController extends Controller
             return response()->json(['message' => 'Unknown plan.', 'error_code' => 'unknown_plan'], 422);
         }
 
-        $waiting = Invoice::query()
-            ->where('account_id', $account->id)
-            ->where('plan_key', $plan->slug)
-            ->where('payment_gateway', 'manual')
-            ->where('status', 'pending')
-            ->exists();
-        if ($waiting) {
+        // Plan purchase rules (owner, 2026-10-14) — the same policy as the online checkout:
+        // one request at a time, the running plan is renewed only after it ends, a smaller
+        // plan only after it ends, a bigger plan is an upgrade.
+        $decision = app(\App\Services\Billing\PlanChangePolicy::class)->decide($account->loadMissing('currentSubscription'), $plan);
+        if (! $decision['allowed']) {
             return response()->json([
-                'message' => 'An invoice for this plan is already waiting for payment.',
-                'error_code' => 'request_pending',
+                'message' => $decision['message'],
+                'error_code' => $decision['action'] === 'pending' ? 'request_pending' : $decision['action'],
             ], 409);
         }
 
@@ -71,6 +69,7 @@ class BillingPaymentController extends Controller
             'payment_gateway' => 'manual',
             'status' => 'pending',
         ]);
+        $invoice->plan_change = \App\Services\Billing\PlanChangePolicy::invoiceChange($decision['action']);
         $invoice->capturePlanTerms($plan)->save();
 
         return response()->json([
@@ -132,6 +131,26 @@ class BillingPaymentController extends Controller
             'currency' => 'INR',
             'plan' => ['key' => $invoice->plan_key, 'label' => $invoice->plan_label],
         ], 201);
+    }
+
+    /**
+     * POST /api/billing/invoices/{id}/cancel — withdraw a plan request that is not paid yet
+     * (online or manual), so another plan can be requested. A paid invoice is never cancelled.
+     */
+    public function cancelInvoice(Request $request, int $id): JsonResponse
+    {
+        $account = $this->requireAccount($request, 'Select a client account first (pass ?account_id=).');
+        $invoice = Invoice::query()->where('account_id', $account->id)->whereKey($id)->first();
+        if ($invoice === null || $this->payments->kindOf($invoice) !== 'plan') {
+            return response()->json(['message' => 'Invoice not found.', 'error_code' => 'not_found'], 404);
+        }
+        if ($invoice->status !== 'pending') {
+            return response()->json(['message' => 'Only an unpaid request can be cancelled. This invoice is '.$invoice->status.'.', 'error_code' => 'invoice_not_pending'], 409);
+        }
+
+        $invoice->forceFill(['status' => 'cancelled'])->save();
+
+        return response()->json(['message' => 'Plan request cancelled.', 'invoice' => $invoice->fresh()]);
     }
 
     /** GET /api/admin/billing/pending-invoices — the pending invoices the caller may act on. */

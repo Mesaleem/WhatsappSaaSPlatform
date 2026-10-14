@@ -107,7 +107,8 @@ class SendBulkTemplateMessageRequest extends FormRequest
      */
     public function messages(): array
     {
-        return [
+        // Per-variable messages name the label and the key: The "Customer Name" variable (variables.customer_name) is required.
+        return MessageTemplate::variableValidationMessages($this->targetSchema()) + [
             // Literal copy requested for this feature -- kept identical
             // to the frontend's own input-validation warning
             // (SendAlertPage.tsx) so a caller sees the exact same wording

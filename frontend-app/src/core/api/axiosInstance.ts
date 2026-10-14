@@ -1,5 +1,6 @@
 import axios, { AxiosError, type InternalAxiosRequestConfig } from 'axios';
 import type { ApiErrorResponse } from '../../types/auth';
+import { defaultDedupedAdapter } from './dedupeAdapter';
 
 export const AUTH_TOKEN_KEY = 'auth_token';
 
@@ -32,6 +33,8 @@ const axiosInstance = axios.create({
     Accept: 'application/json',
   },
   withCredentials: false,
+  // Identical GETs in flight at the same moment share one network call (see dedupeAdapter.ts).
+  adapter: defaultDedupedAdapter(),
 });
 
 axiosInstance.interceptors.request.use((config: InternalAxiosRequestConfig) => {

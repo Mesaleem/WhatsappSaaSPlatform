@@ -5,6 +5,8 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Support\Facades\Validator;
+use Illuminate\Support\MessageBag;
 use Illuminate\Validation\Rule;
 use Illuminate\Support\Str;
 use App\Traits\LogsActivity;
@@ -269,6 +271,76 @@ class MessageTemplate extends Model
         }
 
         return $rules;
+    }
+
+    /**
+     * Error messages for variableValidationRules(): each names the variable by its label AND by
+     * the key the caller sends, e.g. 'The "Customer Name" variable (variables.customer_name) is
+     * required.', so a dashboard user and a Developer API caller both see which field to fill.
+     *
+     * @param list<array{key: string, label?: string, options?: list<string>}> $schema
+     * @return array<string, string>
+     */
+    public static function variableValidationMessages(array $schema, string $fieldPrefix = 'variables'): array
+    {
+        $messages = [];
+
+        foreach ($schema as $field) {
+            $attribute = $fieldPrefix.'.'.$field['key'];
+            $name = sprintf('The "%s" variable (%s)', $field['label'] ?? $field['key'], $attribute);
+
+            $messages["{$attribute}.required"] = "{$name} is required.";
+            $messages["{$attribute}.numeric"] = "{$name} must be a number.";
+            $messages["{$attribute}.date"] = "{$name} must be a valid date.";
+            $messages["{$attribute}.string"] = "{$name} must be text.";
+            $messages["{$attribute}.in"] = "{$name} must be one of: ".implode(', ', $field['options'] ?? []).'.';
+            $messages["{$attribute}.max"] = "{$name} is too long (500 characters at most).";
+        }
+
+        return $messages;
+    }
+
+    /**
+     * Checks send-time values against this template's variables (required, type, options) for the
+     * paths that take one set of values for many recipients (group send, Excel batch), so a missing
+     * required value is refused up front instead of failing every recipient later. $autoFilled
+     * keys are filled per recipient by the sender (a contact list member's name) and skipped.
+     *
+     * @param array<string, mixed> $variables
+     * @param list<string> $autoFilled
+     */
+    public function variableErrors(array $variables, array $autoFilled = []): ?MessageBag
+    {
+        $schema = array_values(array_filter(
+            $this->effectiveVariablesSchema(),
+            static fn (array $field) => ! in_array($field['key'], $autoFilled, true),
+        ));
+
+        $validator = Validator::make(
+            ['variables' => $variables],
+            self::variableValidationRules($schema),
+            self::variableValidationMessages($schema),
+        );
+
+        return $validator->fails() ? $validator->errors() : null;
+    }
+
+    /**
+     * $variables plus '' for every declared variable not given, so an optional variable left out
+     * is sent blank instead of as the literal text "{{token}}".
+     *
+     * @param array<string, mixed> $variables
+     * @return array<string, mixed>
+     */
+    public function withBlankOptionalVariables(array $variables): array
+    {
+        foreach ($this->effectiveVariablesSchema() as $field) {
+            if (! array_key_exists($field['key'], $variables) || $variables[$field['key']] === null) {
+                $variables[$field['key']] = '';
+            }
+        }
+
+        return $variables;
     }
 
     /**

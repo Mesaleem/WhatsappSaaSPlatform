@@ -119,7 +119,8 @@ class SendTemplateMessageRequest extends FormRequest
      */
     public function messages(): array
     {
-        return [
+        // Per-variable messages name the label and the key: The "Customer Name" variable (variables.customer_name) is required.
+        return MessageTemplate::variableValidationMessages($this->targetSchema()) + [
             'variables.*.required' => 'The :attribute field is required.',
             'variables.*.numeric' => 'The :attribute field must be a number.',
             'variables.*.date' => 'The :attribute field must be a valid date.',

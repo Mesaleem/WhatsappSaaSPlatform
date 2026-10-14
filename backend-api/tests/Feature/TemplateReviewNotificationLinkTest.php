@@ -35,6 +35,39 @@ class TemplateReviewNotificationLinkTest extends TestCase
         $this->assertSame('/admin/templates', $notification->link);
     }
 
+    public function test_a_rejected_client_template_links_to_the_clients_own_templates(): void
+    {
+        $this->seed(RolePermissionSeeder::class);
+        $account = Account::factory()->create(['account_type' => 'client']);
+        $owner = User::factory()->create(['account_id' => $account->id]);
+        $owner->assignRole('admin');
+
+        $template = new MessageTemplate(['title' => 'Diwali offer', 'template_body' => 'Hi']);
+        $template->forceFill(['account_id' => $account->id, 'status' => 'rejected']);
+        $template->setRelation('account', $account);
+
+        app(TemplateService::class)->notifyRejected($template);
+
+        // Template Manager would be /unauthorized for a client.
+        $this->assertSame(TemplateService::CLIENT_TEMPLATES_LINK, InAppNotification::where('user_id', $owner->id)->value('link'));
+    }
+
+    public function test_a_rejected_agent_template_links_to_the_template_manager(): void
+    {
+        $this->seed(RolePermissionSeeder::class);
+        $account = Account::factory()->create(['account_type' => 'agent']);
+        $owner = User::factory()->create(['account_id' => $account->id]);
+        $owner->assignRole('agent');
+
+        $template = new MessageTemplate(['title' => 'Diwali offer', 'template_body' => 'Hi']);
+        $template->forceFill(['account_id' => $account->id, 'status' => 'rejected']);
+        $template->setRelation('account', $account);
+
+        app(TemplateService::class)->notifyRejected($template);
+
+        $this->assertSame('/admin/templates', InAppNotification::where('user_id', $owner->id)->value('link'));
+    }
+
     public function test_old_review_notifications_without_a_link_are_backfilled(): void
     {
         $user = User::factory()->create();

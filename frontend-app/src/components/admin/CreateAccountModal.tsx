@@ -269,7 +269,7 @@ export default function CreateAccountModal({ account, onClose, onSaved }: Create
     }
     if (planMode) {
       if (!selectedPlan) return 'Choose a plan for this client.';
-      if (planTotal === '' || Number(planTotal) < 0) return 'Enter the amount paid (including GST).';
+      if (planTotal === '' || Number(planTotal) < 0) return 'Enter the amount paid.';
       if (!startsAt) return 'Choose when the plan starts.';
       return null;
     }
@@ -804,7 +804,7 @@ export default function CreateAccountModal({ account, onClose, onSaved }: Create
                     {planOptions?.length === 0 && !superAdmin && <option value="">No plans available</option>}
                     {planOptions?.map((p) => (
                       <option key={p.key} value={p.key}>
-                        {p.label} — ₹{p.total_amount.toLocaleString('en-IN')} incl. GST / {p.duration_days} days
+                        {p.label} — ₹{p.total_amount.toLocaleString('en-IN')} / {p.duration_days} days
                       </option>
                     ))}
                     {superAdmin && <option value="custom">Custom (manual terms, no plan)</option>}
@@ -835,14 +835,13 @@ export default function CreateAccountModal({ account, onClose, onSaved }: Create
                         </p>
                       )}
                       <p className="mt-1 text-xs text-slate-500">
-                        Plan price ₹{selectedPlan.price.toLocaleString('en-IN')} + GST ₹{selectedPlan.tax_amount.toLocaleString('en-IN')} = ₹
-                        {selectedPlan.total_amount.toLocaleString('en-IN')}
+                        Plan price ₹{selectedPlan.total_amount.toLocaleString('en-IN')}
                         {planEndsOn ? ` · runs until ${planEndsOn}` : ''}
                       </p>
                     </div>
 
                     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                      <Field label="Amount paid (incl. GST)" required hint="Pre-filled from the plan. Change it for a discount.">
+                      <Field label="Amount paid" required hint="Pre-filled from the plan. Change it for a discount.">
                         <input
                           type="number"
                           step="0.01"
@@ -850,7 +849,7 @@ export default function CreateAccountModal({ account, onClose, onSaved }: Create
                           value={planTotal}
                           onChange={(e) => setPlanTotal(e.target.value)}
                           className={inputClass}
-                          aria-label="Amount paid (incl. GST)"
+                          aria-label="Amount paid"
                         />
                       </Field>
                       <Field label="Payment method" required>

@@ -7,6 +7,7 @@ import AppLayout from './components/layout/AppLayout';
 import { IndustryModuleRoute } from './core/guards/IndustryModuleRoute';
 import WebsiteLayout from './website/WebsiteLayout';
 import { SiteContentProvider } from './website/SiteContentContext';
+import { loadAboutPage, loadContactPage, loadFeaturesPage, loadHomePage, loadLegalPage, loadPricingPage, loadSignupPage } from './website/pageLoaders';
 
 // Every page is its own chunk: a visitor downloads only the code of the page it opens
 // (the public website no longer pulls in the whole dashboard). See RouteFallback below.
@@ -73,13 +74,15 @@ const EducationPage = lazy(() => import('./pages/education/EducationPage'));
 const SubscriptionExpiredPage = lazy(() => import('./pages/errors/SubscriptionExpiredPage'));
 const UnauthorizedPage = lazy(() => import('./pages/errors/UnauthorizedPage'));
 const WebsiteContentPage = lazy(() => import('./pages/admin/WebsiteContentPage'));
-const HomePage = lazy(() => import('./website/pages/HomePage'));
-const FeaturesPage = lazy(() => import('./website/pages/FeaturesPage'));
-const PricingPage = lazy(() => import('./website/pages/PricingPage'));
-const AboutPage = lazy(() => import('./website/pages/AboutPage'));
-const ContactPage = lazy(() => import('./website/pages/ContactPage'));
-const LegalPage = lazy(() => import('./website/pages/LegalPage'));
-const SignupPage = lazy(() => import('./website/pages/SignupPage'));
+const SiteAnalyticsPage = lazy(() => import('./pages/admin/SiteAnalyticsPage'));
+// Website pages share their loaders with the prefetch in website/pageLoaders.ts.
+const HomePage = lazy(loadHomePage);
+const FeaturesPage = lazy(loadFeaturesPage);
+const PricingPage = lazy(loadPricingPage);
+const AboutPage = lazy(loadAboutPage);
+const ContactPage = lazy(loadContactPage);
+const LegalPage = lazy(loadLegalPage);
+const SignupPage = lazy(loadSignupPage);
 
 export default function App() {
   return (
@@ -458,6 +461,15 @@ export default function App() {
               element={
                 <ProtectedRoute strictRole="super_admin">
                   <WebsiteContentPage />
+                </ProtectedRoute>
+              }
+            />
+            {/* Website visitor analytics — Super Admin only. */}
+            <Route
+              path="/admin/website/analytics"
+              element={
+                <ProtectedRoute strictRole="super_admin">
+                  <SiteAnalyticsPage />
                 </ProtectedRoute>
               }
             />

@@ -4,6 +4,8 @@ import type {
   ClientBillingSummaryResponse,
   CreateOrderPayload,
   CreateOrderResponse,
+  CustomPlanRequest,
+  CustomPlanRequestPayload,
   Invoice,
   PlansResponse,
   VerifyPaymentPayload,
@@ -77,6 +79,27 @@ const billingService = {
   },
 
   /** No gateway configured: request an invoice for a plan, paid by hand and recorded by a Super Admin or agent. */
+  /** Withdraw an unpaid plan request (online or manual) so another plan can be requested. */
+  cancelInvoice(invoiceId: number) {
+    return axiosInstance.post<{ message: string }>(`/billing/invoices/${invoiceId}/cancel`).then((res) => res.data);
+  },
+
+  /** "Contact sales" for a custom plan. */
+  requestCustomPlan(payload: CustomPlanRequestPayload) {
+    return axiosInstance.post<{ message: string }>('/billing/custom-plan-requests', payload).then((res) => res.data);
+  },
+
+  /** Super Admin — the custom plan request queue. */
+  customPlanRequests(status?: string) {
+    return axiosInstance
+      .get<{ data: CustomPlanRequest[]; total: number; new_count: number }>('/admin/custom-plan-requests', { params: status ? { status } : {} })
+      .then((res) => res.data);
+  },
+
+  updateCustomPlanRequest(id: number, payload: { status: string; admin_note?: string | null }) {
+    return axiosInstance.patch<{ message: string; data: CustomPlanRequest }>(`/admin/custom-plan-requests/${id}`, payload).then((res) => res.data);
+  },
+
   manualCheckout(planKey: string) {
     return axiosInstance
       .post<{ message: string; invoice: Invoice }>('/billing/manual-checkout', { plan_key: planKey })

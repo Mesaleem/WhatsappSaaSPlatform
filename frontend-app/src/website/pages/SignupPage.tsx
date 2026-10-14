@@ -10,6 +10,7 @@ import { AuthSplit, BRAND_NAME } from '../AuthShowcase';
 import { useSiteContent } from '../SiteContentContext';
 import { ButtonLink } from '../ui';
 import { usePageTitle } from '../../utils/usePageTitle';
+import { trackSignup, useSiteTracking } from '../siteTracking';
 
 /** Seconds before "Resend code" is offered again. */
 const RESEND_SECONDS = 60;
@@ -34,6 +35,7 @@ export default function SignupPage() {
   const [params] = useSearchParams();
   const plan = params.get('plan');
   usePageTitle('Sign up', content?.brand.name || BRAND_NAME);
+  useSiteTracking();
 
   const [form, setForm] = useState<RegisterPayload>(EMPTY);
   const [showPassword, setShowPassword] = useState(false);
@@ -154,6 +156,7 @@ export default function SignupPage() {
         email_code: code,
       });
       localStorage.setItem(AUTH_TOKEN_KEY, res.token);
+      trackSignup();
       await refreshUser();
       navigate(plan ? '/billing' : '/', { replace: true });
     } catch (err) {

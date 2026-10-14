@@ -17,12 +17,12 @@ use RuntimeException;
 class PaymentGatewayController extends Controller
 {
     /**
-     * 18% GST — India's standard SaaS/digital-services rate. [Inference —
-     * disclosed assumption, not stated anywhere in the spec: no tax rate
-     * or jurisdiction was given. This is a constant specifically so it's a
-     * one-line change if the real rate differs.]
+     * No GST (owner, 2026-10-14): the customer pays exactly the plan price shown
+     * (₹599 / ₹1,999 / ₹7,999 a month) and invoices carry no tax line. Was 0.18.
+     * Every plan price, order, manual invoice and the public pricing page read
+     * this one constant, so charging GST again is a one-line change.
      */
-    public const TAX_RATE = 0.18;
+    public const TAX_RATE = 0.0;
 
     /*
      * Phase 5 Task 11 — checkout resolves plans from the DATABASE now,
@@ -35,8 +35,8 @@ class PaymentGatewayController extends Controller
     {
     }
 
-    /** GET /api/billing/plans */
-    public function plans(): JsonResponse
+    /** GET /api/billing/plans — with, for a tenant user, what each plan's button may do (PlanChangePolicy). */
+    public function plans(Request $request): JsonResponse
     {
         /*
          * Only ACTIVE plans, and only the customer-facing fields —
@@ -55,8 +55,34 @@ class PaymentGatewayController extends Controller
             ->pluck('gateway')
             ->values();
 
+        // Plan purchase rules (owner, 2026-10-14): each plan's action for THIS account, and
+        // the running plan + any pending request, so the page shows the right buttons.
+        $accountId = $request->user()?->account_id;
+        $account = $accountId ? Account::query()->with('currentSubscription')->find($accountId) : null;
+        if ($account) {
+            $policy = app(\App\Services\Billing\PlanChangePolicy::class);
+            $decisions = $policy->forAllPlans($account)->keyBy('key');
+            $plans = $plans->map(fn (array $p) => $p + ['purchase' => $decisions[$p['key']] ?? null])->values();
+            $state = $policy->state($account);
+            $planStatus = [
+                'running' => $state['running'],
+                'expires_at' => $state['expires_at'],
+                'plan_key' => $state['plan_key'],
+                'plan_label' => $state['plan_label'],
+                'pending_invoice' => $state['pending'] ? [
+                    'id' => $state['pending']->id,
+                    'invoice_number' => $state['pending']->invoice_number,
+                    'plan_key' => $state['pending']->plan_key,
+                    'plan_label' => $state['pending']->plan_label,
+                    'total_amount' => $state['pending']->total_amount,
+                    'plan_change' => $state['pending']->plan_change,
+                ] : null,
+            ];
+        }
+
         return response()->json([
             'plans' => $plans,
+            'plan_status' => $planStatus ?? null,
             'available_gateways' => $availableGateways,
             'tax_rate' => self::TAX_RATE,
         ]);
@@ -90,6 +116,13 @@ class PaymentGatewayController extends Controller
         $plan = $this->plans->findPurchasable($data['plan_key']);
         abort_if(! $plan, 422, 'Unknown plan.');
 
+        // Plan purchase rules: one request at a time; no re-buying the running plan; a
+        // smaller plan only after the running one ends; a bigger one is an upgrade.
+        $decision = app(\App\Services\Billing\PlanChangePolicy::class)->decide($account->loadMissing('currentSubscription'), $plan);
+        if (! $decision['allowed']) {
+            return response()->json(['message' => $decision['message'], 'error_code' => $decision['action']], 409);
+        }
+
         try {
             $driver = PaymentGatewayFactory::make($data['gateway']);
         } catch (RuntimeException $e) {
@@ -118,6 +151,7 @@ class PaymentGatewayController extends Controller
             'payment_gateway' => $data['gateway'],
             'status' => 'pending',
         ]);
+        $invoice->plan_change = \App\Services\Billing\PlanChangePolicy::invoiceChange($decision['action']);
 
         // Phase 5 fix P5-4 — and the rest of the purchased terms (engine,
         // billing model, rate, quota, duration), from the same database

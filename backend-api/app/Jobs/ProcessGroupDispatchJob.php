@@ -349,9 +349,9 @@ class ProcessGroupDispatchJob implements ShouldQueue
             // whole purpose is addressing each recipient by their own
             // stored name. Every other caller-supplied variable is
             // unchanged across the batch.
-            $memberVariables = array_merge($this->variables, [
+            $memberVariables = $template->withBlankOptionalVariables(array_merge($this->variables, [
                 'name' => $member->name ?? '',
-            ]);
+            ]));
 
             $renderedMessage = TemplateRenderer::render($template->template_body, $memberVariables);
 
@@ -459,7 +459,7 @@ class ProcessGroupDispatchJob implements ShouldQueue
             return;
         }
 
-        $renderedMessage = TemplateRenderer::render($template->template_body, $this->variables);
+        $renderedMessage = TemplateRenderer::render($template->template_body, $template->withBlankOptionalVariables($this->variables));
 
         $result = $driver->sendMessage($group->wa_group_jid, $renderedMessage, [
             'template_id' => $template->id,

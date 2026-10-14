@@ -94,19 +94,7 @@ class SendTemplateByCodeRequest extends FormRequest
             'text.required_if' => 'The "text" field is required when template_code is "'.MessageTemplate::NO_TEMPLATE_CODE.'".',
         ];
 
-        foreach ($this->targetSchema() as $field) {
-            $attribute = 'variables.'.$field['key'];
-            $label = $field['label'] ?? $field['key'];
-
-            $messages["{$attribute}.required"] = "The \"{$label}\" field is required.";
-            $messages["{$attribute}.numeric"] = "The \"{$label}\" field must be a number.";
-            $messages["{$attribute}.date"] = "The \"{$label}\" field must be a valid date.";
-            $messages["{$attribute}.string"] = "The \"{$label}\" field must be text.";
-            $messages["{$attribute}.in"] = "The \"{$label}\" field must be one of the allowed options.";
-            $messages["{$attribute}.max"] = "The \"{$label}\" field is too long.";
-        }
-
-        return $messages;
+        return $messages + MessageTemplate::variableValidationMessages($this->targetSchema());
     }
 
     /**

@@ -43,6 +43,7 @@ class CriticalRouteAuthorizationSweepTest extends TestCase
         'GET api/public/site' => 'read-only, Super-Admin-authored website copy',
         'GET api/public/plans' => 'read-only, PlanRepository::toPublicArray() projection',
         'POST api/public/contact' => 'throttle 5/10min + honeypot, write-only',
+        'POST api/public/site-events' => 'throttle 120/min, write-only website analytics (always 204, reads nothing back)',
         'POST api/auth/forgot-password' => 'throttle 5/15min, same answer for every email',
         'POST api/auth/reset-password' => 'throttle 10/15min + hashed, expiring broker token',
         'POST api/internal/whatsapp-inbound' => 'internal.secret',
@@ -60,6 +61,12 @@ class CriticalRouteAuthorizationSweepTest extends TestCase
         'POST api/webhooks/meta' => 'throttle:meta-webhook + HMAC signature',
         'POST api/webhooks/razorpay' => 'gateway signature (controller)',
         'POST api/webhooks/stripe' => 'gateway signature (controller)',
+        // CRM Sales — the tenant's customer opens a quotation/invoice by its unguessable link token.
+        'GET api/public/crm-documents/{token}' => 'throttle 60/min + 64-char random link token',
+        'GET api/public/crm-documents/{token}/pdf' => 'throttle 60/min + 64-char random link token',
+        'POST api/public/crm-documents/{token}/pay' => 'throttle 10/min + link token; opens the tenant gateway order',
+        'POST api/public/crm-documents/{token}/confirm' => 'throttle 20/min + link token + gateway signature check',
+        'POST api/webhooks/crm-payments/{webhookToken}' => 'throttle 120/min + per-tenant webhook token + gateway signature',
     ];
 
     protected function setUp(): void
