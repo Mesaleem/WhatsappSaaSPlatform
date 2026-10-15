@@ -69,13 +69,6 @@ class CheckAdPerformanceRules extends Command
     {
         // QA fixes (2026-10-14): a campaign paused, deleted or rejected in Ads Manager is
         // followed here (it stayed ACTIVE and was polled forever).
-        // Phase B: past its end date Meta delivers nothing more; stop polling it.
-        if ($campaign->hasEnded()) {
-            $campaign->forceFill(['status' => AdCampaign::STATUS_PAUSED, 'meta_stop_status' => 'COMPLETED', 'last_checked_at' => now()])->save();
-
-            return;
-        }
-
         $metaStatus = $this->effectiveStatus($campaign);
         if ($metaStatus !== null && ! in_array($metaStatus, ['ACTIVE', 'IN_PROCESS', 'WITH_ISSUES', 'PENDING_REVIEW', 'PREAPPROVED'], true)) {
             // Phase B: remember why, so the list can say "stopped on Meta" instead of a bare "paused".
@@ -132,6 +125,14 @@ class CheckAdPerformanceRules extends Command
                 'cpl' => $insights['cpl'],
             ]
         );
+
+        // Phase B: past its end date Meta delivers nothing more — keep the final figures
+        // above, then stop polling it (no rule to apply any more).
+        if ($campaign->hasEnded()) {
+            $campaign->forceFill(['status' => AdCampaign::STATUS_PAUSED, 'meta_stop_status' => 'COMPLETED'])->save();
+
+            return;
+        }
 
         $dailyBudget = (float) $campaign->daily_budget;
         $threshold = $campaign->cpl_threshold !== null ? (float) $campaign->cpl_threshold : null;

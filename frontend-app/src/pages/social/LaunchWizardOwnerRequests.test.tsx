@@ -315,6 +315,10 @@ describe('Running campaigns (Phase B)', () => {
     ads.account.mockResolvedValue({ ...inrAccount, account_status: 3, account_status_label: 'unsettled (payment due)', runnable: false });
     renderPage();
 
-    expect(await screen.findByTestId('ads-account-problem')).toHaveTextContent('payment due, so no ads are running');
+    const banner = await screen.findByTestId('ads-account-problem');
+    expect(banner).toHaveTextContent('payment due, so no ads are running');
+    // How to add money is right there, with the billing link.
+    expect(within(banner).getByText(/Add money \(prepaid accounts\)/)).toBeTruthy();
+    expect(within(banner).getByRole('link', { name: /Open Meta billing/ })).toHaveAttribute('href', 'https://business.facebook.com/billing_hub/');
   });
 });

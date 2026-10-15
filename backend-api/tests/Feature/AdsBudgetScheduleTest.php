@@ -264,7 +264,40 @@ class AdsBudgetScheduleTest extends TestCase
         $this->artisan('ads:check-performance-rules')->assertSuccessful();
 
         $this->assertSame(['PAUSED', 'COMPLETED'], [$ended->fresh()->status, $ended->fresh()->meta_stop_status]);
+        $this->assertNotNull($ended->fresh()->last_checked_at, 'its final figures were read before it was marked finished');
         $this->assertSame(['PAUSED', 'CAMPAIGN_PAUSED'], [$stopped->fresh()->status, $stopped->fresh()->meta_stop_status]);
-        Http::assertNotSent(fn (HttpRequest $r) => str_contains($r->url(), $ended->meta_campaign_id));
+    }
+
+    public function test_extending_a_finished_campaign_keeps_it_paused_on_meta_until_resume(): void
+    {
+        $account = $this->tenant();
+        $campaign = $this->running($account, ['status' => AdCampaign::STATUS_PAUSED, 'meta_stop_status' => 'COMPLETED',
+            'budget_type' => 'lifetime', 'daily_budget' => 0, 'lifetime_budget' => 5000, 'end_time' => now()->subDay()]);
+
+        $this->actingAs($this->user($account))->patchJson("/api/social/ads/{$campaign->id}/budget", ['budget' => 6000, 'end_time' => now()->addDays(5)->toIso8601String()])
+            ->assertOk()
+            ->assertJsonPath('data.status', 'PAUSED')
+            ->assertJsonPath('data.meta_stop_status', null)
+            ->assertJsonPath('data.has_ended', false);
+
+        Http::assertSent(fn (HttpRequest $r) => $r->method() === 'POST' && str_ends_with($r->url(), "/{$campaign->meta_campaign_id}") && ($r->data()['status'] ?? null) === 'PAUSED');
+    }
+
+    public function test_an_active_campaigns_budget_edit_does_not_pause_it(): void
+    {
+        $account = $this->tenant();
+        $campaign = $this->running($account);
+
+        $this->actingAs($this->user($account))->patchJson("/api/social/ads/{$campaign->id}/budget", ['budget' => 600])->assertOk()->assertJsonPath('data.status', 'ACTIVE');
+
+        Http::assertNotSent(fn (HttpRequest $r) => str_ends_with($r->url(), "/{$campaign->meta_campaign_id}"));
+    }
+
+    public function test_the_ended_message_shows_india_time(): void
+    {
+        $account = $this->tenant();
+        $campaign = $this->running($account, ['status' => AdCampaign::STATUS_PAUSED, 'end_time' => '2026-10-01 04:30:00']);
+
+        $this->assertStringContainsString('1 Oct 2026, 10:00 AM IST', $this->actingAs($this->user($account))->postJson("/api/social/ads/{$campaign->id}/resume")->json('message'));
     }
 }

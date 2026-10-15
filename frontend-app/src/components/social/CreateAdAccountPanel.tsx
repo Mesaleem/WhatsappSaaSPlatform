@@ -1,10 +1,9 @@
 import { useEffect, useState } from 'react';
-import { ExternalLink, Loader2, Megaphone, Plus } from 'lucide-react';
+import { Loader2, Megaphone, Plus } from 'lucide-react';
 import socialService from '../../services/socialService';
 import { extractErrorMessage } from '../../utils/apiError';
 import type { OfferedAsset } from '../../types/social';
-
-const META_BILLING_URL = 'https://business.facebook.com/billing_hub/';
+import MetaPaymentSteps from './MetaPaymentSteps';
 
 /**
  * Ads Phase C (2026-10-15) — inside the connect flow, a client with no Meta ad
@@ -66,12 +65,8 @@ export default function CreateAdAccountPanel({
     return (
       <div className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2.5 text-xs text-emerald-900" data-testid="ad-account-created">
         <p className="font-semibold">“{created.name}” was created in INR (India time) and is selected below.</p>
-        <p className="mt-1">
-          Before ads can run, add a payment method to it in Meta (Meta does not let apps add cards).{' '}
-          <a href={META_BILLING_URL} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-0.5 font-semibold underline">
-            Open Meta billing <ExternalLink className="h-3 w-3" />
-          </a>
-        </p>
+        <p className="mt-1">Before ads can run, add money or a payment method to it on Meta (Meta does not let apps add cards).</p>
+        <MetaPaymentSteps adAccountId={created.provider_id} startOpen />
       </div>
     );
   }

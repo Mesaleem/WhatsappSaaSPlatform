@@ -33,6 +33,7 @@ import { extractErrorCode, extractErrorMessage, extractFieldErrors } from '../..
 import { socialConnectionError, type SocialConnectionErrorInfo } from '../../utils/socialConnectionError';
 import SocialReconnectNotice from '../../components/social/SocialReconnectNotice';
 import { META_SETUP_ITEMS } from '../../components/social/MetaSetupGuide';
+import MetaPaymentSteps from '../../components/social/MetaPaymentSteps';
 import { indigo, activeGradient } from '../../theme/signalIndigo';
 import { AD_CTA_LABELS, AD_CTAS_BY_OBJECTIVE, AD_GENDER_LABELS, AD_OBJECTIVE_LABELS, AD_PLACEMENT_LABELS, formatAdMoney } from '../../types/ads';
 import type { AdAccountInfo, AdBudgetType, AdCallToAction, AdCampaign, AdCustomLocation, AdGender, AdLocation, AdObjective, AdPlacement, LaunchCampaignPayload, TargetingSpecs } from '../../types/ads';
@@ -582,7 +583,8 @@ function LaunchWizardModal({
                 ) : (
                   <p>{accountInfoError ? `${accountInfoError} Amounts are assumed to be in INR.` : 'Reading the Meta ad account…'}</p>
                 )}
-                <p className="mt-2 text-[11px] text-slate-500">Meta bills this ad account directly in its own currency; payment is managed in Meta Ads Manager.</p>
+                <p className="mt-2 text-[11px] text-slate-500">Meta bills this ad account directly in its own currency.</p>
+                <MetaPaymentSteps startOpen={accountInfo?.runnable === false || (accountInfo?.remaining_spend_cap != null && accountInfo.remaining_spend_cap <= 0)} />
               </div>
               <fieldset className="text-sm text-slate-700" data-testid="ad-budget-type">
                 <legend className="font-medium">How much do you want to spend?</legend>
@@ -1113,7 +1115,6 @@ function CplThresholdEditor({ campaign, onSaved }: { campaign: AdCampaign; onSav
 }
 
 const META_AD_ACCOUNTS_URL = 'https://business.facebook.com/settings/ad-accounts';
-const META_BILLING_URL = 'https://business.facebook.com/billing_hub/';
 
 /** Phase B "Run again": a new launch form filled from what the campaign was launched with (dates left empty). */
 function wizardFromCampaign(campaign: AdCampaign): Partial<WizardState> {
@@ -1511,6 +1512,7 @@ export default function MetaAdsPage() {
 
   const handleLaunched = () => {
     setIsWizardOpen(false);
+    setWizardInitial(null);
     showToast('Campaign launched.');
     loadCampaigns();
   };
@@ -1630,6 +1632,7 @@ export default function MetaAdsPage() {
           <LaunchWizardModal
             onClose={() => {
               setIsWizardOpen(false);
+              setWizardInitial(null);
               // Phase 10 Task 2 — a failed or unconfirmed launch is a stored row too.
               loadCampaigns();
             }}
@@ -1649,14 +1652,12 @@ export default function MetaAdsPage() {
             )}
 
             {accountProblem && (
-              <div className="mb-4 flex flex-wrap items-start justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900" role="alert" data-testid="ads-account-problem">
+              <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900" role="alert" data-testid="ads-account-problem">
                 <span className="flex items-start gap-2">
                   <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0" />
                   {accountProblem}
                 </span>
-                <a href={META_BILLING_URL} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 font-semibold underline">
-                  Open Meta billing <ExternalLink className="h-3.5 w-3.5" />
-                </a>
+                <MetaPaymentSteps startOpen />
               </div>
             )}
 

@@ -47,7 +47,10 @@ describe('Create a Meta ad account while connecting (Ads Phase C)', () => {
     expect(social.listMetaBusinesses).toHaveBeenCalledWith('n-1');
 
     await user.click(screen.getByRole('button', { name: 'Create ad account' }));
-    expect(await screen.findByTestId('ad-account-created')).toHaveTextContent('INR');
+    const done = await screen.findByTestId('ad-account-created');
+    expect(done).toHaveTextContent('INR');
+    // Payment steps open straight away, linking to this ad account's billing page.
+    expect(screen.getByRole('link', { name: /Open Meta billing/ })).toHaveAttribute('href', 'https://business.facebook.com/billing_hub/payment_settings/?asset_id=555');
     expect(social.createMetaAdAccount).toHaveBeenCalledWith('n-1', '9001', 'Shana Trends Ads');
 
     await user.click(screen.getByRole('button', { name: /Shana Trends\s*Facebook Page/ }));

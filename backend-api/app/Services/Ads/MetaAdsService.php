@@ -475,7 +475,7 @@ class MetaAdsService
     public function resumeBlocker(AdCampaign $campaign): ?string
     {
         if ($campaign->hasEnded()) {
-            return sprintf('This campaign ended on %s. Extend its end date with "Edit budget", or use "Run again" to start a new one.', $campaign->end_time->timezone(config('app.timezone'))->format('j M Y, g:i A'));
+            return sprintf('This campaign ended on %s IST. Extend its end date with "Edit budget", or use "Run again" to start a new one.', $campaign->end_time->copy()->timezone('Asia/Kolkata')->format('j M Y, g:i A'));
         }
 
         $adAccount = $campaign->socialAccount;
@@ -534,6 +534,11 @@ class MetaAdsService
 
             try {
                 $this->post($accessToken, "/{$campaign->meta_adset_id}", $body);
+                // Paused here = paused on Meta: a finished campaign whose end date is moved
+                // later must not start spending until Resume (the guard only watches ACTIVE ones).
+                if ($campaign->status === AdCampaign::STATUS_PAUSED) {
+                    $this->post($accessToken, "/{$campaign->meta_campaign_id}", ['status' => AdCampaign::STATUS_PAUSED]);
+                }
             } catch (AdProviderOutcomeUnknown $e) {
                 $this->noteProviderError($campaign, 'Meta did not confirm the budget change (no response). Check Meta Ads Manager before trying again.');
 
@@ -543,7 +548,14 @@ class MetaAdsService
                 $connections->escalate($campaign->socialAccount, $e, 'ads.budget');
             }
 
-            $campaign->forceFill([$field => $amount] + ($endTime !== null ? ['end_time' => $endTime] : []) + ['last_provider_error' => null, 'last_provider_error_at' => null])->save();
+            $extended = $endTime !== null && $endTime > now();
+            $campaign->forceFill(
+                [$field => $amount]
+                + ($endTime !== null ? ['end_time' => $endTime] : [])
+                // No longer "finished" once the end date is in the future; it waits for Resume.
+                + ($extended && $campaign->meta_stop_status === 'COMPLETED' ? ['meta_stop_status' => null] : [])
+                + ['last_provider_error' => null, 'last_provider_error_at' => null]
+            )->save();
 
             return $campaign->refresh();
         } finally {

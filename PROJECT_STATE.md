@@ -987,6 +987,18 @@ Production showed a Page flipping connected → revoked on every Social Inbox vi
 - Header "needs reconnecting" banner (`SocialConnectionWarningBanner.tsx`) used to load the account list once per app load, so it stayed after a reconnect/Check. `socialService.listAccounts()` now fires `social-accounts-loaded` with the fresh list; the banner listens to it and also reloads on every route change. Test: `SocialConnectionWarningBanner.test.tsx`.
 - `docs/WapHub-Social-Media-Connection-Guide.docx`: new 2.3.1 (permissions to "+ Add" inside each Meta use case), a Troubleshooting row for "Access revoked after connecting", a Checklist item.
 
+### Ads — review fixes, payment steps, INR everywhere (2026-10-15)
+
+Independent review of `bfb3b90..` found and fixed:
+- **Extending a finished campaign spent money unguarded**: the guard marks an ended campaign PAUSED/COMPLETED only locally, so moving its end date later (Edit budget) restarted delivery on Meta while WapHub said "paused" and the guard (ACTIVE only) ignored it. `updateBudget()` now also sends the campaign `status=PAUSED` to Meta when it is paused here, and clears `COMPLETED` once the end date is in the future — it runs again only after Resume.
+- Guard reads the final insights before marking an ended campaign COMPLETED.
+- `MetaAdAccountController`: the pending grant is re-read under a cache lock before the new ad account is added, so a grant consumed by a concurrent bind is not brought back (409 `SOCIAL_CONNECT_ATTEMPT_ENDED`, "created on Meta — connect again and select it").
+- Resume's "ended on …" time is shown in IST (app timezone is UTC).
+- "Run again" prefill is cleared when the launch form closes.
+- Known limitation kept: Edit budget cannot remove an end date from a daily-budget campaign.
+
+Also: `MetaPaymentSteps` (how to add a payment method / funds — UPI, card, net banking, "Add funds" for prepaid; Meta billing deep link `billing_hub/payment_settings/?asset_id=<n>` when the ad account number is known) shown after creating an ad account, in the launcher's payment-due banner and in the launch form's ad account box; the Word guide gained 4.3 (create an ad account in WapHub) and 4.4 (add money), old 4.3 → 4.5. The PDF monthly report wrote "$" — now "INR" (built-in Helvetica cannot draw "₹"); `SocialReportCurrencyTest`.
+
 ### Ads — Phase C (2026-10-15): create a Meta ad account from WapHub
 
 - Works **inside the open connect attempt** (the `social_oauth_pending:{nonce}` grant, 10 min): the Facebook user token there has `business_management` + `ads_management` (core scopes). Page tokens cannot create ad accounts and no user token is stored after bind, so creation is offered only while connecting.

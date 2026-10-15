@@ -82,9 +82,23 @@ class MetaAdAccountController extends Controller
 
         Log::info('Meta ad account created from WapHub.', ['account_id' => $account->id, 'user_id' => $request->user()->id, 'business_id' => $data['business_id'], 'ad_account' => $asset['provider_id']]);
 
-        $pending['assets'][] = $asset;
-        $pending['summary']['found']['meta_ad_account'] = (int) ($pending['summary']['found']['meta_ad_account'] ?? 0) + 1;
-        Cache::put("social_oauth_pending:{$data['nonce']}", $pending, now()->addMinutes(self::PENDING_TTL_MINUTES));
+        // Re-read under a lock: a bind that consumed the attempt meanwhile must not be brought back to life.
+        $key = "social_oauth_pending:{$data['nonce']}";
+        $stillOpen = Cache::lock("{$key}:lock", 10)->block(5, function () use ($key, $asset) {
+            $current = Cache::get($key);
+            if (! is_array($current)) {
+                return false;
+            }
+            $current['assets'][] = $asset;
+            $current['summary']['found']['meta_ad_account'] = (int) ($current['summary']['found']['meta_ad_account'] ?? 0) + 1;
+            Cache::put($key, $current, now()->addMinutes(self::PENDING_TTL_MINUTES));
+
+            return true;
+        });
+
+        if (! $stillOpen) {
+            return $this->error("The ad account \"{$asset['name']}\" was created on Meta, but this connection attempt has ended. Connect again and select it.", 'SOCIAL_CONNECT_ATTEMPT_ENDED', 409);
+        }
 
         return response()->json([
             'message' => 'Ad account created. Add a payment method in Meta billing before ads can run.',

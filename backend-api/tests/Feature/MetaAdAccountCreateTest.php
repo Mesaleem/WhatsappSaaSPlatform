@@ -149,6 +149,29 @@ class MetaAdAccountCreateTest extends TestCase
         $this->assertFalse(collect(Cache::get('social_oauth_pending:'.self::NONCE)['assets'])->contains('asset_type', 'meta_ad_account'));
     }
 
+    public function test_an_attempt_bound_meanwhile_is_not_brought_back(): void
+    {
+        $account = $this->tenant();
+        $user = $this->user($account);
+        $this->pending($account, $user);
+        // The user presses Connect while Meta is still creating the account.
+        $this->create = [200, ['id' => 'act_555', 'account_id' => '555']];
+        Http::fake(function (HttpRequest $request) {
+            $path = (string) parse_url($request->url(), PHP_URL_PATH);
+            if (str_ends_with($path, '/adaccount')) {
+                Cache::forget('social_oauth_pending:'.self::NONCE);
+
+                return Http::response(['id' => 'act_555', 'account_id' => '555']);
+            }
+
+            return Http::response(['data' => [['id' => '9001', 'name' => 'Shana Trends']]]);
+        });
+
+        $this->actingAs($user)->postJson('/api/social/oauth/meta/ad-accounts', ['nonce' => self::NONCE, 'business_id' => '9001', 'name' => 'Shana Ads'])
+            ->assertStatus(409)->assertJsonPath('error_code', 'SOCIAL_CONNECT_ATTEMPT_ENDED');
+        $this->assertNull(Cache::get('social_oauth_pending:'.self::NONCE), 'the used grant (and its token) stays gone');
+    }
+
     public function test_a_plan_without_ads_cannot_create_one(): void
     {
         $account = $this->tenant();

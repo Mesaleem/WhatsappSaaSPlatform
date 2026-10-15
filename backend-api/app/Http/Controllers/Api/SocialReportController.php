@@ -175,11 +175,12 @@ class SocialReportController extends Controller
             'Monthly Social Performance Report',
             'Period: '.$data['period']['label'],
             '',
-            'Total Ad Spend: $'.number_format($data['total_ad_spend'], 2),
+            // The PDF's built-in Helvetica cannot draw "₹", so amounts read "INR" (as on invoices); never "$".
+            'Total Ad Spend: INR '.number_format($data['total_ad_spend'], 2),
             'Total Leads Generated (Instant Lead Bridge): '.$data['total_leads_generated'],
             'Meta-Attributed Conversions (launched campaigns): '.$data['meta_attributed_leads'],
             'Average Cost Per Lead: '.($data['average_cpl'] !== null
-                ? '$'.number_format($data['average_cpl'], 2)
+                ? 'INR '.number_format($data['average_cpl'], 2)
                 : 'N/A (no attributed conversions this period)'),
             'Combined Social Reach (ad impressions): '.number_format($data['combined_impressions']),
             '',
@@ -191,12 +192,12 @@ class SocialReportController extends Controller
         } else {
             foreach ($data['top_campaigns'] as $i => $campaign) {
                 $lines[] = sprintf(
-                    '%d. %s - Spend $%s, Leads %d, CPL %s',
+                    '%d. %s - Spend INR %s, Leads %d, CPL %s',
                     $i + 1,
                     $campaign['name'],
                     number_format($campaign['spend'], 2),
                     $campaign['leads'],
-                    $campaign['cpl'] !== null ? '$'.number_format($campaign['cpl'], 2) : 'N/A'
+                    $campaign['cpl'] !== null ? 'INR '.number_format($campaign['cpl'], 2) : 'N/A'
                 );
             }
         }
