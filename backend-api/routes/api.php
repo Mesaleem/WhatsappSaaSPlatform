@@ -853,6 +853,7 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::middleware('permission:launch-meta-ads')->post('/{id}/pause', [AdCampaignController::class, 'pause']);
             Route::middleware('permission:launch-meta-ads')->post('/{id}/resume', [AdCampaignController::class, 'resume']);
             Route::middleware('permission:launch-meta-ads|social_ads.edit_budget')->patch('/{id}/cpl-threshold', [AdCampaignController::class, 'updateCplThreshold']);
+            Route::middleware('permission:launch-meta-ads|social_ads.edit_budget')->patch('/{id}/budget', [AdCampaignController::class, 'updateBudget'])->whereNumber('id');
         });
 
         // Social Media Marketing & Meta Ads Automation Expansion (Phase 4).

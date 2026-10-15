@@ -987,6 +987,16 @@ Production showed a Page flipping connected → revoked on every Social Inbox vi
 - Header "needs reconnecting" banner (`SocialConnectionWarningBanner.tsx`) used to load the account list once per app load, so it stayed after a reconnect/Check. `socialService.listAccounts()` now fires `social-accounts-loaded` with the fresh list; the banner listens to it and also reloads on every route change. Test: `SocialConnectionWarningBanner.test.tsx`.
 - `docs/WapHub-Social-Media-Connection-Guide.docx`: new 2.3.1 (permissions to "+ Add" inside each Meta use case), a Troubleshooting row for "Access revoked after connecting", a Checklist item.
 
+### Ads budget & control — Phase B (2026-10-15): total budget + schedule, edit budget, run again, why it stopped
+
+- **Migration** `2026_10_15_120000_add_budget_schedule_to_ad_campaigns` (additive; **must be run on the server**): `budget_type` (daily|lifetime, default daily), `lifetime_budget`, `start_time`, `end_time`, `launch_spec` (json: objective, targeting_specs, placements, creative, cpl_threshold — no tokens/ids), `meta_stop_status`.
+- **Launch**: `budget_type`, `lifetime_budget` (required for lifetime), `start_time` (not in the past), `end_time` (required for lifetime; after start; a daily budget with an end needs > 24 h — Meta rule). Ad set gets `daily_budget` or `lifetime_budget` (minor units) + `start_time`/`end_time` (ISO 8601). Lifetime stores `daily_budget = 0`. Spend-cap pre-check uses whichever budget applies.
+- **`PATCH /api/social/ads/{id}/budget`** `{budget, end_time?}` (launch-meta-ads | social_ads.edit_budget) → `MetaAdsService::updateBudget()` → `POST /{adset_id}`; ACTIVE/PAUSED with an ad set only (else 409); same per-campaign lock as pause/resume; budget type never switches.
+- **Resume** now refuses (422 `AD_CAMPAIGN_CANNOT_RUN`) with a plain reason, before any Meta write: end date passed; ad account payment due (status 3/8) or disabled; spending limit used up (`resumeBlocker()`). Successful resume clears `meta_stop_status`.
+- **Guard** (`ads:check-performance-rules`): an ended campaign → PAUSED + `meta_stop_status = COMPLETED`, no Meta call; a campaign stopped on Meta → PAUSED + Meta's effective_status stored.
+- **Frontend** (`MetaAdsPage.tsx`): "Per day / Total for the campaign" + Start/End in step 1; row shows "₹500 / day" or "₹5,000 total · ends …" and a stop note; **Edit budget** modal; **Run again** (launch form filled from `launch_spec`, name "(copy)", dates empty); page banner when the ad account has a payment due / is disabled / spending limit used up, with a link to Meta billing (cards/funds can only be added on Meta).
+- Tests: `AdsBudgetScheduleTest` (10), `LaunchWizardOwnerRequests.test.tsx` +4. Ads/Meta backend filter 599 passed; frontend social/components 249 passed. **Not verified live on Meta.**
+
 ### Ads targeting — Phase A (2026-10-15): gender, radius, current location, audience estimate
 
 Owner goal: run Facebook / Instagram ads end-to-end from WapHub. Phase A = targeting; B (lifetime budget/schedule, budget edit, duplicate/restart, out-of-funds status) and C (create a Meta ad account from WapHub — `POST /{business_id}/adaccount`, INR, timezone_id 71; card/funds can only be added on Meta) are not built.

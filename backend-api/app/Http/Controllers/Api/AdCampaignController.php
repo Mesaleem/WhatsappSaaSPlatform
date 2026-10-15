@@ -9,6 +9,7 @@ use App\Services\Ads\Exceptions\AdCampaignConflict;
 use App\Services\Ads\Exceptions\AdProviderOutcomeUnknown;
 use App\Services\Ads\MetaAdsService;
 use Illuminate\Validation\ValidationException;
+use Illuminate\Support\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
@@ -73,7 +74,12 @@ class AdCampaignController extends Controller
         $data = $request->validate([
             'campaign_name' => ['required', 'string', 'max:255'],
             'objective' => ['required', 'string', Rule::in(AdCampaign::OBJECTIVES)],
-            'daily_budget' => ['required', 'numeric', 'min:1'],
+            // Phase B (2026-10-15): a daily budget, or a total (lifetime) budget that needs an end date.
+            'budget_type' => ['nullable', 'string', Rule::in([AdCampaign::BUDGET_DAILY, AdCampaign::BUDGET_LIFETIME])],
+            'daily_budget' => ['required_unless:budget_type,'.AdCampaign::BUDGET_LIFETIME, 'nullable', 'numeric', 'min:1'],
+            'lifetime_budget' => ['required_if:budget_type,'.AdCampaign::BUDGET_LIFETIME, 'nullable', 'numeric', 'min:1'],
+            'start_time' => ['nullable', 'date', 'after_or_equal:-10 minutes'],
+            'end_time' => ['required_if:budget_type,'.AdCampaign::BUDGET_LIFETIME, 'nullable', 'date', 'after:now', 'after:start_time'],
             'cpl_threshold' => ['nullable', 'numeric', 'min:0'],
             ...self::targetingRules(),
             'creative' => ['required', 'array'],
@@ -86,6 +92,7 @@ class AdCampaignController extends Controller
         ]);
 
         self::assertHasLocation($data);
+        $data = self::normalizeSchedule($data);
 
         // Phase 10 Task 2 — optional Idempotency-Key: a repeated launch replays the stored row.
         $requestKey = $this->idempotencyKey($request);
@@ -134,6 +141,31 @@ class AdCampaignController extends Controller
             'targeting_specs.interests' => ['nullable', 'array'],
             'targeting_specs.interests.*' => ['string', 'max:100'],
         ];
+    }
+
+    /**
+     * One budget per campaign, schedule as Carbon. Meta: a daily budget with an end
+     * date needs more than 24 hours between start and end.
+     */
+    private static function normalizeSchedule(array $data): array
+    {
+        $data['budget_type'] ??= AdCampaign::BUDGET_DAILY;
+        $start = isset($data['start_time']) ? Carbon::parse($data['start_time']) : null;
+        $end = isset($data['end_time']) ? Carbon::parse($data['end_time']) : null;
+
+        if ($data['budget_type'] === AdCampaign::BUDGET_LIFETIME) {
+            $data['daily_budget'] = 0;
+        } else {
+            $data['lifetime_budget'] = null;
+            if ($end !== null && ($start ?? now())->copy()->addDay()->gte($end)) {
+                throw ValidationException::withMessages(['end_time' => 'With a daily budget the campaign must run for more than 24 hours. Pick a later end date, or use a total budget.']);
+            }
+        }
+
+        $data['start_time'] = $start;
+        $data['end_time'] = $end;
+
+        return $data;
     }
 
     private static function assertHasLocation(array $data): void
@@ -257,7 +289,47 @@ class AdCampaignController extends Controller
         $account = $this->requireTargetAccount($request);
         $campaign = AdCampaign::query()->forAccount($account->id)->findOrFail($id);
 
+        // Phase B: say why it cannot run (ended / payment due / spending limit) instead of
+        // resuming a campaign Meta will not deliver.
+        if ($campaign->status === AdCampaign::STATUS_PAUSED && ($blocker = $service->resumeBlocker($campaign))) {
+            return response()->json(['message' => $blocker, 'error_code' => 'AD_CAMPAIGN_CANNOT_RUN', 'data' => $this->present($campaign)], 422);
+        }
+
         return $this->transition($campaign, AdCampaign::STATUS_ACTIVE, $service, 'Campaign resumed.', 'Campaign is already active.');
+    }
+
+    /**
+     * PATCH /api/social/ads/{id}/budget — Phase B: change the campaign's budget (daily
+     * or total, whichever it was launched with) and optionally move its end date.
+     */
+    public function updateBudget(Request $request, int $id, MetaAdsService $service): JsonResponse
+    {
+        $account = $this->requireTargetAccount($request);
+        $campaign = AdCampaign::query()->forAccount($account->id)->findOrFail($id);
+
+        $data = $request->validate([
+            'budget' => ['required', 'numeric', 'min:1'],
+            'end_time' => ['nullable', 'date', 'after:now'],
+        ]);
+        $endTime = isset($data['end_time']) ? Carbon::parse($data['end_time']) : null;
+
+        if (! $campaign->isLifetimeBudget() && $endTime !== null && ($campaign->start_time ?? $campaign->created_at)->copy()->addDay()->gte($endTime)) {
+            throw ValidationException::withMessages(['end_time' => 'With a daily budget the campaign must run for more than 24 hours.']);
+        }
+
+        try {
+            $campaign = $service->updateBudget($campaign, (float) $data['budget'], $endTime);
+        } catch (SocialConnectionException $e) {
+            return $e->render();
+        } catch (AdCampaignConflict $e) {
+            return $e->respond($this->present(...));
+        } catch (AdProviderOutcomeUnknown) {
+            return (new AdCampaignConflict('Meta did not confirm the budget change. Check Meta Ads Manager before trying again.', 'AD_PROVIDER_OUTCOME_UNKNOWN', 502, $campaign->refresh()))->respond($this->present(...));
+        } catch (RuntimeException $e) {
+            return response()->json(['message' => $e->getMessage()], 422);
+        }
+
+        return response()->json(['message' => 'Budget updated.', 'data' => $this->present($campaign)]);
     }
 
     /**
@@ -315,6 +387,13 @@ class AdCampaignController extends Controller
             'objective' => $campaign->objective,
             'status' => $campaign->status,
             'daily_budget' => (float) $campaign->daily_budget,
+            'budget_type' => $campaign->budget_type ?? AdCampaign::BUDGET_DAILY,
+            'lifetime_budget' => $campaign->lifetime_budget !== null ? (float) $campaign->lifetime_budget : null,
+            'start_time' => $campaign->start_time?->toIso8601String(),
+            'end_time' => $campaign->end_time?->toIso8601String(),
+            'has_ended' => $campaign->hasEnded(),
+            'meta_stop_status' => $campaign->meta_stop_status,
+            'launch_spec' => $campaign->launch_spec,
             'currency' => $campaign->currency,
             'cpl_threshold' => $campaign->cpl_threshold !== null ? (float) $campaign->cpl_threshold : null,
             'spend' => (float) $campaign->last_spend,

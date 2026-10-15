@@ -157,10 +157,28 @@ export interface AdLeadForm {
 }
 
 /** POST /api/social/ads/launch — account_id is NOT sent; the tenant is resolved server-side (see AdCampaignController's docblock). */
+/** Phase B — a daily budget, or a total (lifetime) budget for the whole schedule (needs an end date). */
+export type AdBudgetType = 'daily' | 'lifetime';
+
+/** What a campaign was launched with (stored for "Run again"). */
+export interface AdLaunchSpec {
+  objective: AdObjective;
+  targeting_specs: TargetingSpecs & { countries?: string[] };
+  placements?: AdPlacement[];
+  creative: AdCreative;
+  cpl_threshold?: number | null;
+}
+
 export interface LaunchCampaignPayload {
   campaign_name: string;
   objective: AdObjective;
-  daily_budget: number;
+  budget_type?: AdBudgetType;
+  /** Required for a daily budget; omitted / null for a total budget. */
+  daily_budget?: number | null;
+  lifetime_budget?: number | null;
+  /** ISO 8601; omitted = start now / run until stopped. A total budget needs end_time. */
+  start_time?: string | null;
+  end_time?: string | null;
   cpl_threshold?: number | null;
   targeting_specs: TargetingSpecs;
   creative: AdCreative;
@@ -176,6 +194,15 @@ export interface AdCampaign {
   objective: AdObjective;
   status: AdCampaignStatus;
   daily_budget: number;
+  budget_type?: AdBudgetType;
+  lifetime_budget?: number | null;
+  start_time?: string | null;
+  end_time?: string | null;
+  /** Its end date has passed — Meta delivers nothing more. */
+  has_ended?: boolean;
+  /** Meta's own status when the guard found it stopped there (COMPLETED = schedule finished). */
+  meta_stop_status?: string | null;
+  launch_spec?: AdLaunchSpec | null;
   /** The ad account's currency at launch (null = not known). */
   currency?: string | null;
   cpl_threshold: number | null;

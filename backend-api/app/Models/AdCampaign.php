@@ -63,6 +63,12 @@ class AdCampaign extends Model
         'objective',
         'status',
         'daily_budget',
+        'budget_type',
+        'lifetime_budget',
+        'start_time',
+        'end_time',
+        'launch_spec',
+        'meta_stop_status',
         'currency',
         'cpl_threshold',
         'last_spend',
@@ -80,6 +86,10 @@ class AdCampaign extends Model
     {
         return [
             'daily_budget' => 'decimal:2',
+            'lifetime_budget' => 'decimal:2',
+            'start_time' => 'datetime',
+            'end_time' => 'datetime',
+            'launch_spec' => 'array',
             'cpl_threshold' => 'decimal:2',
             'last_spend' => 'decimal:2',
             'last_cpl' => 'decimal:2',
@@ -134,5 +144,19 @@ class AdCampaign extends Model
     public function isActive(): bool
     {
         return $this->status === self::STATUS_ACTIVE;
+    }
+
+    public const BUDGET_DAILY = 'daily';
+    public const BUDGET_LIFETIME = 'lifetime';
+
+    public function isLifetimeBudget(): bool
+    {
+        return $this->budget_type === self::BUDGET_LIFETIME;
+    }
+
+    /** The schedule's end date has passed — Meta stops delivery on its own. */
+    public function hasEnded(): bool
+    {
+        return $this->end_time !== null && $this->end_time->isPast();
     }
 }

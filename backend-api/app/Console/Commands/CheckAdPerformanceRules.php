@@ -69,9 +69,17 @@ class CheckAdPerformanceRules extends Command
     {
         // QA fixes (2026-10-14): a campaign paused, deleted or rejected in Ads Manager is
         // followed here (it stayed ACTIVE and was polled forever).
+        // Phase B: past its end date Meta delivers nothing more; stop polling it.
+        if ($campaign->hasEnded()) {
+            $campaign->forceFill(['status' => AdCampaign::STATUS_PAUSED, 'meta_stop_status' => 'COMPLETED', 'last_checked_at' => now()])->save();
+
+            return;
+        }
+
         $metaStatus = $this->effectiveStatus($campaign);
         if ($metaStatus !== null && ! in_array($metaStatus, ['ACTIVE', 'IN_PROCESS', 'WITH_ISSUES', 'PENDING_REVIEW', 'PREAPPROVED'], true)) {
-            $campaign->forceFill(['status' => AdCampaign::STATUS_PAUSED, 'last_checked_at' => now()])->save();
+            // Phase B: remember why, so the list can say "stopped on Meta" instead of a bare "paused".
+            $campaign->forceFill(['status' => AdCampaign::STATUS_PAUSED, 'meta_stop_status' => mb_substr($metaStatus, 0, 32), 'last_checked_at' => now()])->save();
             Log::info("CheckAdPerformanceRules: AdCampaign #{$campaign->id} is {$metaStatus} on Meta — marked paused here.");
 
             return;

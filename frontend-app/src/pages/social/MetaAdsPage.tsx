@@ -35,7 +35,7 @@ import SocialReconnectNotice from '../../components/social/SocialReconnectNotice
 import { META_SETUP_ITEMS } from '../../components/social/MetaSetupGuide';
 import { indigo, activeGradient } from '../../theme/signalIndigo';
 import { AD_CTA_LABELS, AD_CTAS_BY_OBJECTIVE, AD_GENDER_LABELS, AD_OBJECTIVE_LABELS, AD_PLACEMENT_LABELS, formatAdMoney } from '../../types/ads';
-import type { AdAccountInfo, AdCallToAction, AdCampaign, AdCustomLocation, AdGender, AdLocation, AdObjective, AdPlacement, LaunchCampaignPayload, TargetingSpecs } from '../../types/ads';
+import type { AdAccountInfo, AdBudgetType, AdCallToAction, AdCampaign, AdCustomLocation, AdGender, AdLocation, AdObjective, AdPlacement, LaunchCampaignPayload, TargetingSpecs } from '../../types/ads';
 import AdLocationPicker from '../../components/social/AdLocationPicker';
 import AdAudienceEstimate from '../../components/social/AdAudienceEstimate';
 import { AD_COPY_TONES, TARGET_GOAL_LABELS } from '../../types/ai';
@@ -105,7 +105,13 @@ function parseList(value: string): string[] {
 
 interface WizardState {
   objective: AdObjective;
+  /** Phase B: per day, or one total amount for the whole schedule. */
+  budget_type: AdBudgetType;
   daily_budget: string;
+  lifetime_budget: string;
+  /** datetime-local values ("" = start now / no end date). */
+  start_time: string;
+  end_time: string;
   cpl_threshold: string;
   /** Countries / states / cities from Meta's location search (owner request 2026-09-30). */
   locations: AdLocation[];
@@ -161,7 +167,11 @@ function estimableTargeting(form: WizardState): TargetingSpecs | null {
 const WIZARD_DEFAULTS: WizardState = {
   objective: 'LEAD_GENERATION',
   lead_gen_form_id: '',
+  budget_type: 'daily',
   daily_budget: '',
+  lifetime_budget: '',
+  start_time: '',
+  end_time: '',
   cpl_threshold: '',
   locations: [{ key: 'IN', name: 'India', type: 'country', country_code: 'IN', country_name: 'India' }],
   custom_locations: [],
@@ -204,13 +214,16 @@ function LaunchWizardModal({
   onClose,
   onLaunched,
   canManageSocialAccounts = false,
+  initial = null,
 }: {
   onClose: () => void;
   onLaunched: () => void;
   canManageSocialAccounts?: boolean;
+  /** Phase B "Run again": the form starts from an earlier campaign. */
+  initial?: Partial<WizardState> | null;
 }) {
   const [step, setStep] = useState(0);
-  const [form, setForm] = useState<WizardState>(WIZARD_DEFAULTS);
+  const [form, setForm] = useState<WizardState>(() => ({ ...WIZARD_DEFAULTS, ...initial }));
   const [stepError, setStepError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -334,12 +347,20 @@ function LaunchWizardModal({
   const validateStep = (): string | null => {
     if (step === 0) {
       if (!form.campaign_name.trim()) return 'Campaign name is required.';
-      const budget = Number(form.daily_budget);
-      if (!form.daily_budget || Number.isNaN(budget) || budget <= 0) return 'Enter a daily budget greater than 0.';
+      const lifetime = form.budget_type === 'lifetime';
+      const budgetText = lifetime ? form.lifetime_budget : form.daily_budget;
+      const budget = Number(budgetText);
+      if (!budgetText || Number.isNaN(budget) || budget <= 0) return lifetime ? 'Enter a total budget greater than 0.' : 'Enter a daily budget greater than 0.';
+      const start = form.start_time ? new Date(form.start_time) : null;
+      const end = form.end_time ? new Date(form.end_time) : null;
+      if (start && start.getTime() < Date.now() - 10 * 60_000) return 'The start date cannot be in the past.';
+      if (lifetime && !end) return 'A total budget needs an end date.';
+      if (end && end.getTime() <= Math.max(Date.now(), start?.getTime() ?? 0)) return 'The end date must be after the start date and in the future.';
+      if (!lifetime && end && end.getTime() - (start?.getTime() ?? Date.now()) <= 24 * 3_600_000) return 'With a daily budget the campaign must run for more than 24 hours. Pick a later end date, or use a total budget.';
       if (form.cpl_threshold && Number.isNaN(Number(form.cpl_threshold))) return 'CPL threshold must be a number.';
       if (accountInfo?.runnable === false) return `The connected Meta ad account is ${accountInfo.account_status_label ?? 'not active'}, so campaigns cannot run. Resolve it in Meta Ads Manager first.`;
       if (accountInfo?.remaining_spend_cap != null && budget > accountInfo.remaining_spend_cap) {
-        return `The daily budget is more than the ${formatMoney(accountInfo.remaining_spend_cap, currency)} left before the ad account's spend cap.`;
+        return `The ${lifetime ? 'total' : 'daily'} budget is more than the ${formatMoney(accountInfo.remaining_spend_cap, currency)} left before the ad account's spend cap.`;
       }
     }
     if (step === 1) {
@@ -386,7 +407,11 @@ function LaunchWizardModal({
     const payload: LaunchCampaignPayload = {
       campaign_name: form.campaign_name.trim(),
       objective: form.objective,
-      daily_budget: Number(form.daily_budget),
+      budget_type: form.budget_type,
+      daily_budget: form.budget_type === 'daily' ? Number(form.daily_budget) : null,
+      lifetime_budget: form.budget_type === 'lifetime' ? Number(form.lifetime_budget) : null,
+      start_time: form.start_time ? new Date(form.start_time).toISOString() : null,
+      end_time: form.end_time ? new Date(form.end_time).toISOString() : null,
       cpl_threshold: form.cpl_threshold ? Number(form.cpl_threshold) : null,
       targeting_specs: targetingFromForm(form),
       creative: {
@@ -559,19 +584,64 @@ function LaunchWizardModal({
                 )}
                 <p className="mt-2 text-[11px] text-slate-500">Meta bills this ad account directly in its own currency; payment is managed in Meta Ads Manager.</p>
               </div>
-              <label className="block text-sm font-medium text-slate-700">
-                Daily Budget ({currency}) <span className="text-red-500">*</span>
-                <input
-                  type="number"
-                  min="1"
-                  step="0.01"
-                  className={inputClass}
-                  value={form.daily_budget}
-                  onChange={(e) => update({ daily_budget: e.target.value })}
-                  placeholder={currency === 'INR' ? '500.00' : '25.00'}
-                />
-                {fieldError('daily_budget') && <p className="mt-1 text-xs font-medium text-red-600">{fieldError('daily_budget')}</p>}
-              </label>
+              <fieldset className="text-sm text-slate-700" data-testid="ad-budget-type">
+                <legend className="font-medium">How much do you want to spend?</legend>
+                <div className="mt-1 inline-flex rounded-lg border border-slate-200 p-0.5">
+                  {(['daily', 'lifetime'] as AdBudgetType[]).map((type) => (
+                    <label
+                      key={type}
+                      className={`cursor-pointer rounded-md px-3 py-1.5 text-sm font-medium ${form.budget_type === type ? 'bg-emerald-600 text-white' : 'text-slate-700 hover:bg-slate-50'}`}
+                    >
+                      <input type="radio" name="budget_type" value={type} checked={form.budget_type === type} onChange={() => update({ budget_type: type })} className="sr-only" />
+                      {type === 'daily' ? 'Per day' : 'Total for the campaign'}
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
+              {form.budget_type === 'daily' ? (
+                <label className="block text-sm font-medium text-slate-700">
+                  Daily Budget ({currency}) <span className="text-red-500">*</span>
+                  <input
+                    type="number"
+                    min="1"
+                    step="0.01"
+                    className={inputClass}
+                    value={form.daily_budget}
+                    onChange={(e) => update({ daily_budget: e.target.value })}
+                    placeholder={currency === 'INR' ? '500.00' : '25.00'}
+                  />
+                  {fieldError('daily_budget') && <p className="mt-1 text-xs font-medium text-red-600">{fieldError('daily_budget')}</p>}
+                </label>
+              ) : (
+                <label className="block text-sm font-medium text-slate-700">
+                  Total Budget ({currency}) <span className="text-red-500">*</span>
+                  <input
+                    type="number"
+                    min="1"
+                    step="0.01"
+                    className={inputClass}
+                    value={form.lifetime_budget}
+                    onChange={(e) => update({ lifetime_budget: e.target.value })}
+                    placeholder={currency === 'INR' ? '5000.00' : '250.00'}
+                  />
+                  <span className="mt-1 block text-xs font-normal text-slate-500">Meta spreads this amount over the dates below and stops at the end date.</span>
+                  {fieldError('lifetime_budget') && <p className="mt-1 text-xs font-medium text-red-600">{fieldError('lifetime_budget')}</p>}
+                </label>
+              )}
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <label className="block text-sm font-medium text-slate-700">
+                  Start (optional)
+                  <input type="datetime-local" className={inputClass} value={form.start_time} onChange={(e) => update({ start_time: e.target.value })} />
+                  <span className="mt-1 block text-xs font-normal text-slate-500">Empty = starts right after launch.</span>
+                  {fieldError('start_time') && <p className="mt-1 text-xs font-medium text-red-600">{fieldError('start_time')}</p>}
+                </label>
+                <label className="block text-sm font-medium text-slate-700">
+                  End {form.budget_type === 'lifetime' ? <span className="text-red-500">*</span> : '(optional)'}
+                  <input type="datetime-local" className={inputClass} value={form.end_time} onChange={(e) => update({ end_time: e.target.value })} />
+                  <span className="mt-1 block text-xs font-normal text-slate-500">{form.budget_type === 'lifetime' ? 'Required for a total budget.' : 'Empty = runs until you pause it.'}</span>
+                  {fieldError('end_time') && <p className="mt-1 text-xs font-medium text-red-600">{fieldError('end_time')}</p>}
+                </label>
+              </div>
               <label className="block text-sm font-medium text-slate-700">
                 CPL Auto-Pause Threshold ({currency}, optional)
                 <input
@@ -1043,6 +1113,132 @@ function CplThresholdEditor({ campaign, onSaved }: { campaign: AdCampaign; onSav
 }
 
 const META_AD_ACCOUNTS_URL = 'https://business.facebook.com/settings/ad-accounts';
+const META_BILLING_URL = 'https://business.facebook.com/billing_hub/';
+
+/** Phase B "Run again": a new launch form filled from what the campaign was launched with (dates left empty). */
+function wizardFromCampaign(campaign: AdCampaign): Partial<WizardState> {
+  const spec = campaign.launch_spec;
+  const lifetime = campaign.budget_type === 'lifetime';
+  const base: Partial<WizardState> = {
+    campaign_name: `${campaign.name} (copy)`,
+    objective: campaign.objective,
+    budget_type: lifetime ? 'lifetime' : 'daily',
+    daily_budget: lifetime ? '' : String(campaign.daily_budget),
+    lifetime_budget: lifetime && campaign.lifetime_budget != null ? String(campaign.lifetime_budget) : '',
+    cpl_threshold: campaign.cpl_threshold != null ? String(campaign.cpl_threshold) : '',
+  };
+  if (!spec) return base;
+
+  const targeting = spec.targeting_specs;
+  const countries: AdLocation[] = (targeting.countries ?? []).map((code) => ({ key: code, name: code, type: 'country', country_code: code }));
+  const locations: AdLocation[] = (targeting.locations ?? []).map((l) => ({ key: l.key, name: l.name ?? l.key, type: l.type, radius_km: l.radius_km ?? null }));
+  const placements = (spec.placements ?? []).filter((p): p is AdPlacement => p in AD_PLACEMENT_LABELS);
+
+  return {
+    ...base,
+    locations: [...countries, ...locations],
+    custom_locations: targeting.custom_locations ?? [],
+    gender: targeting.gender ?? 'all',
+    age_min: String(targeting.age_min),
+    age_max: String(targeting.age_max),
+    interests: (targeting.interests ?? []).join(', '),
+    placement_mode: placements.length > 0 ? 'manual' : 'automatic',
+    placements,
+    media_url: spec.creative.image_url,
+    media_type: spec.creative.image_url ? 'image' : null,
+    headline: spec.creative.headline,
+    primary_text: spec.creative.primary_text,
+    ...(spec.creative.call_to_action ? { call_to_action: spec.creative.call_to_action } : {}),
+    lead_gen_form_id: spec.creative.lead_gen_form_id ?? '',
+  };
+}
+
+/** "₹500 / day" or "₹5,000 total · ends 22 Oct". */
+function budgetSummary(campaign: AdCampaign): string {
+  const end = campaign.end_time ? ` · ends ${new Date(campaign.end_time).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}` : '';
+  return campaign.budget_type === 'lifetime'
+    ? `${formatMoney(campaign.lifetime_budget ?? 0, campaign.currency)} total${end}`
+    : `${formatMoney(campaign.daily_budget, campaign.currency)} / day${end}`;
+}
+
+/** Why a paused campaign is not delivering, in plain words — or null. */
+function stopNote(campaign: AdCampaign): string | null {
+  if (campaign.has_ended || campaign.meta_stop_status === 'COMPLETED') return 'Finished — its end date has passed. Extend it with Edit budget, or Run again.';
+  if (campaign.meta_stop_status) return `Stopped on Meta (${campaign.meta_stop_status.replace(/_/g, ' ').toLowerCase()}). Press Resume to start it again.`;
+  return null;
+}
+
+/** datetime-local value for an ISO string, in the browser's time zone. */
+function toLocalInput(iso: string | null | undefined): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+/** Phase B — change a campaign's daily / total budget and, optionally, move its end date. */
+function BudgetEditModal({ campaign, onClose, onSaved }: { campaign: AdCampaign; onClose: () => void; onSaved: (c: AdCampaign) => void }) {
+  const lifetime = campaign.budget_type === 'lifetime';
+  const [amount, setAmount] = useState(String(lifetime ? campaign.lifetime_budget ?? '' : campaign.daily_budget));
+  const [endTime, setEndTime] = useState(toLocalInput(campaign.end_time));
+  const [isSaving, setIsSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const save = () => {
+    const value = Number(amount);
+    if (!amount || Number.isNaN(value) || value <= 0) {
+      setError('Enter an amount greater than 0.');
+      return;
+    }
+    if (lifetime && !endTime) {
+      setError('A total budget needs an end date.');
+      return;
+    }
+    const changedEnd = endTime && endTime !== toLocalInput(campaign.end_time) ? new Date(endTime).toISOString() : null;
+    setError(null);
+    setIsSaving(true);
+    adsService
+      .updateBudget(campaign.id, value, changedEnd)
+      .then((res) => onSaved(res.data))
+      .catch((err: unknown) => setError(extractErrorMessage(err, 'Could not update the budget.')))
+      .finally(() => setIsSaving(false));
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4" role="dialog" aria-modal="true" aria-labelledby="budget-edit-title">
+      <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl" data-testid="budget-edit">
+        <div className="flex items-start justify-between gap-3">
+          <h2 id="budget-edit-title" className="text-base font-semibold text-slate-900">
+            Edit budget — {campaign.name}
+          </h2>
+          <button type="button" onClick={onClose} className="text-slate-400 hover:text-slate-600" aria-label="Close">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="mt-4 space-y-3">
+          <label className="block text-sm font-medium text-slate-700">
+            {lifetime ? 'Total budget' : 'Daily budget'} ({campaign.currency ?? 'INR'})
+            <input type="number" min="1" step="0.01" className={inputClass} value={amount} onChange={(e) => setAmount(e.target.value)} />
+          </label>
+          <label className="block text-sm font-medium text-slate-700">
+            End {lifetime ? '' : '(optional)'}
+            <input type="datetime-local" className={inputClass} value={endTime} onChange={(e) => setEndTime(e.target.value)} />
+            <span className="mt-1 block text-xs font-normal text-slate-500">Move it later to keep a finished campaign running.</span>
+          </label>
+          {error && <p className="text-sm text-red-600" role="alert">{error}</p>}
+        </div>
+        <div className="mt-5 flex justify-end gap-2">
+          <button type="button" onClick={onClose} className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
+            Cancel
+          </button>
+          <button type="button" onClick={save} disabled={isSaving} className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-60">
+            {isSaving ? 'Saving…' : 'Save'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 interface LaunchNotice {
   title: string;
@@ -1103,6 +1299,11 @@ export default function MetaAdsPage() {
   const [organicRefreshKey, setOrganicRefreshKey] = useState(0);
   const [busyId, setBusyId] = useState<number | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  // Phase B: "Run again" opens the launch form filled from an earlier campaign; budget edits open a modal.
+  const [wizardInitial, setWizardInitial] = useState<Partial<WizardState> | null>(null);
+  const [editingBudget, setEditingBudget] = useState<AdCampaign | null>(null);
+  // Phase B: the ad account's own state, so "no money / payment due" is said up front.
+  const [adAccountInfo, setAdAccountInfo] = useState<AdAccountInfo | null>(null);
 
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
@@ -1150,6 +1351,36 @@ export default function MetaAdsPage() {
   useEffect(() => {
     loadCampaigns();
   }, [loadCampaigns, selectedAccountId]);
+
+  useEffect(() => {
+    setAdAccountInfo(null);
+    if (noTenantSelected || !canLaunchAds) return undefined;
+    let cancelled = false;
+    Promise.resolve()
+      .then(() => adsService.account())
+      .then((info) => {
+        if (!cancelled) setAdAccountInfo(info ?? null);
+      })
+      .catch(() => {
+        // No ad account / not readable — the launch flow explains it when needed.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [noTenantSelected, canLaunchAds, selectedAccountId]);
+
+  const accountProblem = useMemo(() => {
+    if (!adAccountInfo) return null;
+    if (adAccountInfo.runnable === false) {
+      return adAccountInfo.account_status === 3 || adAccountInfo.account_status === 8
+        ? 'Your Meta ad account has a payment due, so no ads are running. Pay the due amount or update the payment method in Meta, then resume your campaigns here.'
+        : `Your Meta ad account is ${adAccountInfo.account_status_label ?? 'not active'}, so no ads are running. Resolve it in Meta, then resume your campaigns here.`;
+    }
+    if (adAccountInfo.remaining_spend_cap !== null && adAccountInfo.remaining_spend_cap <= 0) {
+      return 'Your Meta ad account has used up its spending limit, so no ads are running. Raise or remove the limit in Meta, then resume your campaigns here.';
+    }
+    return null;
+  }, [adAccountInfo]);
 
   const connectAction = (mode: 'paid' | 'organic'): GateNoticeAction | null =>
     canManageSocialAccounts ? { label: 'Connect Meta Account', to: `/social/accounts?returnTo=${encodeURIComponent(`/social/ads?open=${mode}`)}` } : null;
@@ -1253,7 +1484,14 @@ export default function MetaAdsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canManageSocialAccounts]);
 
-  const startPaid = () => guard(openPaidWithPrerequisites, 'launch a paid Meta ad campaign');
+  const startPaid = () => {
+    setWizardInitial(null);
+    guard(openPaidWithPrerequisites, 'launch a paid Meta ad campaign');
+  };
+  const runAgain = (campaign: AdCampaign) => {
+    setWizardInitial(wizardFromCampaign(campaign));
+    guard(openPaidWithPrerequisites, 'launch a paid Meta ad campaign');
+  };
   const startOrganic = () => guard(openOrganicWithPrerequisites, 'publish an organic post');
 
   // Returning from the Social Accounts connect flow (?open=paid|organic):
@@ -1397,6 +1635,7 @@ export default function MetaAdsPage() {
             }}
             onLaunched={handleLaunched}
             canManageSocialAccounts={canManageSocialAccounts}
+            initial={wizardInitial}
           />
         ) : noTenantSelected ? (
           <SelectClientNotice message="Ad campaigns belong to a client. Select one to view or launch their campaigns." onSelect={() => openPicker('view or launch ad campaigns')} />
@@ -1407,6 +1646,18 @@ export default function MetaAdsPage() {
                 <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0" />
                 {pageError}
               </DismissibleAlert>
+            )}
+
+            {accountProblem && (
+              <div className="mb-4 flex flex-wrap items-start justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900" role="alert" data-testid="ads-account-problem">
+                <span className="flex items-start gap-2">
+                  <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0" />
+                  {accountProblem}
+                </span>
+                <a href={META_BILLING_URL} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 font-semibold underline">
+                  Open Meta billing <ExternalLink className="h-3.5 w-3.5" />
+                </a>
+              </div>
             )}
 
             {hasCampaigns && (
@@ -1470,7 +1721,7 @@ export default function MetaAdsPage() {
                         <td className="px-4 py-3">
                           <p className="font-medium text-slate-900">{campaign.name}</p>
                           <p className="text-xs" style={{ color: indigo.muted }}>
-                            {AD_OBJECTIVE_LABELS[campaign.objective]}
+                            {AD_OBJECTIVE_LABELS[campaign.objective]} · {budgetSummary(campaign)}
                           </p>
                         </td>
                         <td className="px-4 py-3">
@@ -1482,6 +1733,11 @@ export default function MetaAdsPage() {
                           {campaign.auto_paused_at && (
                             <p className="mt-1 max-w-[180px] text-xs text-amber-600" title={campaign.auto_pause_reason ?? undefined}>
                               Auto-paused: {campaign.auto_pause_reason}
+                            </p>
+                          )}
+                          {campaign.status === 'PAUSED' && stopNote(campaign) && (
+                            <p className="mt-1 max-w-[220px] text-xs text-amber-700" data-testid={`ad-stop-note-${campaign.id}`}>
+                              {stopNote(campaign)}
                             </p>
                           )}
                           {campaign.last_provider_error && (
@@ -1501,6 +1757,25 @@ export default function MetaAdsPage() {
                           )}
                         </td>
                         <td className="px-4 py-3 text-right">
+                          <div className="inline-flex flex-wrap items-center justify-end gap-1.5">
+                          {canEditBudget && canToggle(campaign) && (
+                            <button
+                              type="button"
+                              onClick={() => setEditingBudget(campaign)}
+                              className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                            >
+                              Edit budget
+                            </button>
+                          )}
+                          {canLaunchAds && campaign.launch_spec && (
+                            <button
+                              type="button"
+                              onClick={() => runAgain(campaign)}
+                              className="rounded-lg border border-emerald-200 px-3 py-1.5 text-xs font-semibold text-emerald-800 hover:bg-emerald-50"
+                            >
+                              Run again
+                            </button>
+                          )}
                           {canToggleAds && canToggle(campaign) ? (
                             <button
                               type="button"
@@ -1517,10 +1792,13 @@ export default function MetaAdsPage() {
                               {campaign.status === 'ACTIVE' ? 'Pause' : 'Resume'}
                             </button>
                           ) : (
-                            <span className="text-xs" style={{ color: indigo.muted }}>
-                              —
-                            </span>
+                            !(canLaunchAds && campaign.launch_spec) && (
+                              <span className="text-xs" style={{ color: indigo.muted }}>
+                                —
+                              </span>
+                            )
                           )}
+                          </div>
                         </td>
                       </tr>
                     ))
@@ -1545,6 +1823,17 @@ export default function MetaAdsPage() {
           action={notice.action}
           secondary={notice.continueAnyway ? { label: 'Continue without a Page', onClick: notice.continueAnyway } : null}
           onClose={() => setNotice(null)}
+        />
+      )}
+      {editingBudget && (
+        <BudgetEditModal
+          campaign={editingBudget}
+          onClose={() => setEditingBudget(null)}
+          onSaved={(updated) => {
+            updateCampaignInPlace(updated);
+            setEditingBudget(null);
+            showToast('Budget updated.');
+          }}
         />
       )}
       {isOrganicModalOpen && <OrganicPostModal onClose={() => setIsOrganicModalOpen(false)} onPublished={handlePublished} canManageSocialAccounts={canManageSocialAccounts} />}

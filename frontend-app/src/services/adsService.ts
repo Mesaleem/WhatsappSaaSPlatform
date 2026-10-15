@@ -59,6 +59,13 @@ const adsService = {
       .patch<AdCampaignResponse>(`${BASE}/${id}/cpl-threshold`, { cpl_threshold: cplThreshold })
       .then((res) => res.data);
   },
+
+  /** Phase B — the campaign's daily or total budget (whichever it has), and optionally a new end date. */
+  updateBudget(id: number, budget: number, endTime?: string | null) {
+    return axiosInstance
+      .patch<AdCampaignResponse>(`${BASE}/${id}/budget`, { budget, ...(endTime ? { end_time: endTime } : {}) })
+      .then((res) => res.data);
+  },
 };
 
 export function newLaunchKey(): string {

@@ -225,7 +225,8 @@ class MetaAdsService
         // read-only probe; when Meta cannot be asked, the launch proceeds as
         // before (offset 100) and Meta remains the final judge.
         $info = $this->probeAdAccount($adAccount, $accessToken);
-        $this->assertBudgetFits($info, (float) $payload['daily_budget']);
+        $lifetime = ($payload['budget_type'] ?? AdCampaign::BUDGET_DAILY) === AdCampaign::BUDGET_LIFETIME;
+        $this->assertBudgetFits($info, (float) ($lifetime ? $payload['lifetime_budget'] : $payload['daily_budget']), $lifetime ? 'total budget' : 'daily budget');
         $payload['_currency_offset'] = self::currencyOffset($info['currency'] ?? null);
         $payload['placements'] = self::placementsFor($payload['placements'] ?? []);
         $payload['_instagram_actor_id'] = $this->instagramActorFor($account, $payload['placements']);
@@ -300,6 +301,18 @@ class MetaAdsService
                 'objective' => $payload['objective'],
                 'status' => AdCampaign::STATUS_LAUNCHING,
                 'daily_budget' => $payload['daily_budget'],
+                'budget_type' => $payload['budget_type'] ?? AdCampaign::BUDGET_DAILY,
+                'lifetime_budget' => $payload['lifetime_budget'] ?? null,
+                'start_time' => $payload['start_time'] ?? null,
+                'end_time' => $payload['end_time'] ?? null,
+                // What the form sent, so the campaign can be duplicated / run again (no tokens, no Meta ids).
+                'launch_spec' => [
+                    'objective' => $payload['objective'],
+                    'targeting_specs' => $payload['targeting_specs'],
+                    'placements' => $payload['placements'] ?? [],
+                    'creative' => $payload['creative'],
+                    'cpl_threshold' => $payload['cpl_threshold'] ?? null,
+                ],
                 'currency' => $payload['_currency'] ?? null,
                 'cpl_threshold' => $payload['cpl_threshold'] ?? null,
             ]);
@@ -439,13 +452,100 @@ class MetaAdsService
 
             $changes = ['status' => $target, 'last_provider_error' => null, 'last_provider_error_at' => null, 'updated_at' => now()];
             $changes += $target === AdCampaign::STATUS_ACTIVE
-                ? ['auto_paused_at' => null, 'auto_pause_reason' => null]
+                ? ['auto_paused_at' => null, 'auto_pause_reason' => null, 'meta_stop_status' => null]
                 : ($autoPauseReason !== null ? ['auto_paused_at' => now(), 'auto_pause_reason' => $autoPauseReason] : []);
 
             AdCampaign::query()->whereKey($campaign->id)->where('status', $from)->update($changes);
             $campaign->refresh();
 
             return true;
+        } finally {
+            $lock->release();
+        }
+    }
+
+    // ================================================================ Phase B (2026-10-15)
+
+    /**
+     * Why a campaign cannot be resumed right now, in words a client can act on —
+     * or null. Checked before the Meta status call: its end date passed, or the ad
+     * account cannot spend (payment due / disabled / spend cap used up). When Meta
+     * cannot be asked, null (Meta stays the final judge).
+     */
+    public function resumeBlocker(AdCampaign $campaign): ?string
+    {
+        if ($campaign->hasEnded()) {
+            return sprintf('This campaign ended on %s. Extend its end date with "Edit budget", or use "Run again" to start a new one.', $campaign->end_time->timezone(config('app.timezone'))->format('j M Y, g:i A'));
+        }
+
+        $adAccount = $campaign->socialAccount;
+        if (! $adAccount?->access_token) {
+            return null;
+        }
+
+        $info = $this->probeAdAccount($adAccount, $adAccount->access_token);
+        if ($info === null) {
+            return null;
+        }
+
+        if ($info['runnable'] === false) {
+            return in_array($info['account_status'], [3, 8], true)
+                ? 'Your Meta ad account has a payment due, so ads cannot run. Pay the due amount or update the payment method in Meta Billing & payments, then press Resume again.'
+                : "Your Meta ad account is {$info['account_status_label']}, so ads cannot run. Resolve it in Meta Ads Manager, then press Resume again.";
+        }
+
+        if ($info['remaining_spend_cap'] !== null && $info['remaining_spend_cap'] <= 0) {
+            return 'Your Meta ad account has used up its spending limit. Raise or remove the account spending limit in Meta Billing & payments, then press Resume again.';
+        }
+
+        return null;
+    }
+
+    /**
+     * Phase B — change a running or paused campaign's budget (and, optionally, its
+     * end date) on Meta, then locally. The budget type cannot change (Meta: an ad set
+     * keeps daily or lifetime). Same per-campaign lock as status changes.
+     */
+    public function updateBudget(AdCampaign $campaign, float $amount, ?\DateTimeInterface $endTime = null): AdCampaign
+    {
+        $lock = Cache::lock("ad-campaign-status:{$campaign->id}", 60);
+
+        if (! $lock->get()) {
+            throw new AdCampaignConflict('Another change to this campaign is in progress. Try again in a moment.', 'AD_CAMPAIGN_BUSY', 409, $campaign);
+        }
+
+        try {
+            $campaign->refresh();
+
+            if (! in_array($campaign->status, [AdCampaign::STATUS_ACTIVE, AdCampaign::STATUS_PAUSED], true) || ! $campaign->meta_adset_id) {
+                throw new AdCampaignConflict("A campaign in status {$campaign->status} cannot change its budget.", 'AD_CAMPAIGN_INVALID_STATE', 409, $campaign);
+            }
+
+            $accessToken = $campaign->socialAccount?->access_token ?: throw new RuntimeException('The connected Meta Ad Account has no stored access token. Please reconnect it.');
+            $connections = app(SocialConnectionService::class);
+            $connections->assertUsable($campaign->socialAccount, 'ads.budget');
+
+            $lifetime = $campaign->isLifetimeBudget();
+            $field = $lifetime ? 'lifetime_budget' : 'daily_budget';
+            $body = [$field => (int) round($amount * self::currencyOffset($campaign->currency))];
+            if ($endTime !== null) {
+                $body['end_time'] = $endTime->format(DATE_ATOM);
+            }
+
+            try {
+                $this->post($accessToken, "/{$campaign->meta_adset_id}", $body);
+            } catch (AdProviderOutcomeUnknown $e) {
+                $this->noteProviderError($campaign, 'Meta did not confirm the budget change (no response). Check Meta Ads Manager before trying again.');
+
+                throw $e;
+            } catch (ProviderRequestFailed $e) {
+                $this->noteProviderError($campaign, self::safeProviderError('budget change', $e));
+                $connections->escalate($campaign->socialAccount, $e, 'ads.budget');
+            }
+
+            $campaign->forceFill([$field => $amount] + ($endTime !== null ? ['end_time' => $endTime] : []) + ['last_provider_error' => null, 'last_provider_error_at' => null])->save();
+
+            return $campaign->refresh();
         } finally {
             $lock->release();
         }
@@ -546,7 +646,7 @@ class MetaAdsService
         return self::normalizeAccountInfo($response->json());
     }
 
-    private function assertBudgetFits(?array $info, float $dailyBudget): void
+    private function assertBudgetFits(?array $info, float $budget, string $label = 'daily budget'): void
     {
         if ($info === null) {
             return;
@@ -556,10 +656,10 @@ class MetaAdsService
             throw new RuntimeException("The connected Meta ad account is {$info['account_status_label']}, so campaigns cannot run. Resolve it in Meta Ads Manager first.");
         }
 
-        if ($info['remaining_spend_cap'] !== null && $dailyBudget > $info['remaining_spend_cap']) {
+        if ($info['remaining_spend_cap'] !== null && $budget > $info['remaining_spend_cap']) {
             throw new RuntimeException(sprintf(
-                'The daily budget (%s %s) is more than the %s %s left before the ad account reaches its spend cap. Lower the budget or raise the spend cap in Meta Ads Manager.',
-                $info['currency'], number_format($dailyBudget, 2), $info['currency'], number_format($info['remaining_spend_cap'], 2),
+                'The %s (%s %s) is more than the %s %s left before the ad account reaches its spend cap. Lower the budget or raise the spend cap in Meta Ads Manager.',
+                $label, $info['currency'], number_format($budget, 2), $info['currency'], number_format($info['remaining_spend_cap'], 2),
             ));
         }
     }
@@ -623,6 +723,23 @@ class MetaAdsService
         }
 
         return $geo;
+    }
+
+    /**
+     * The ad set's budget (Meta wants the ad account currency's smallest unit — paise for INR)
+     * and schedule. A lifetime budget always carries end_time (validated before this).
+     */
+    private static function budgetAndSchedule(array $payload): array
+    {
+        $offset = $payload['_currency_offset'] ?? 100;
+        $lifetime = ($payload['budget_type'] ?? AdCampaign::BUDGET_DAILY) === AdCampaign::BUDGET_LIFETIME;
+        $time = fn ($value) => $value instanceof \DateTimeInterface ? $value->format(DATE_ATOM) : (string) $value;
+
+        return array_filter([
+            $lifetime ? 'lifetime_budget' : 'daily_budget' => (int) round(((float) ($lifetime ? $payload['lifetime_budget'] : $payload['daily_budget'])) * $offset),
+            'start_time' => isset($payload['start_time']) ? $time($payload['start_time']) : null,
+            'end_time' => isset($payload['end_time']) ? $time($payload['end_time']) : null,
+        ], fn ($value) => $value !== null);
     }
 
     /**
@@ -888,7 +1005,7 @@ class MetaAdsService
             // *100 is the disclosed conversion, correct for 2-decimal
             // currencies (INR/USD) but NOT for zero-decimal currencies
             // (e.g. JPY) — a disclosed gap, not handled here.
-            'daily_budget' => (int) round(((float) $payload['daily_budget']) * ($payload['_currency_offset'] ?? 100)),
+            ...self::budgetAndSchedule($payload),
             'billing_event' => self::BILLING_EVENT,
             'optimization_goal' => self::OPTIMIZATION_GOAL_MAP[$objective],
             'bid_strategy' => 'LOWEST_COST_WITHOUT_CAP',
