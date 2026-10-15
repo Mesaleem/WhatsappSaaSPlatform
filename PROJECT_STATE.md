@@ -987,6 +987,15 @@ Production showed a Page flipping connected → revoked on every Social Inbox vi
 - Header "needs reconnecting" banner (`SocialConnectionWarningBanner.tsx`) used to load the account list once per app load, so it stayed after a reconnect/Check. `socialService.listAccounts()` now fires `social-accounts-loaded` with the fresh list; the banner listens to it and also reloads on every route change. Test: `SocialConnectionWarningBanner.test.tsx`.
 - `docs/WapHub-Social-Media-Connection-Guide.docx`: new 2.3.1 (permissions to "+ Add" inside each Meta use case), a Troubleshooting row for "Access revoked after connecting", a Checklist item.
 
+### Ads — Phase C (2026-10-15): create a Meta ad account from WapHub
+
+- Works **inside the open connect attempt** (the `social_oauth_pending:{nonce}` grant, 10 min): the Facebook user token there has `business_management` + `ads_management` (core scopes). Page tokens cannot create ad accounts and no user token is stored after bind, so creation is offered only while connecting.
+- `GET /api/social/oauth/meta/businesses?nonce=` → `MetaOAuthProvider::listBusinesses()` (`GET /me/businesses`).
+- `POST /api/social/oauth/meta/ad-accounts {nonce, business_id, name}` (throttle 10/min) → `MetaOAuthProvider::createAdAccount()` → `POST /{business_id}/adaccount` with `currency=INR`, `timezone_id=71` (Asia/Kolkata), `end_advertiser`/`media_agency`/`partner=NONE`. Only the account + user that started the attempt; business_id must be one of that user's portfolios; target gate + `allow_facebook` + plan ads (summary `plan_has_ads`) required. The new `act_…` is appended to the attempt's offered assets (and `summary.found`) so the normal bind connects it. Meta errors mapped to plain messages (3979 limit, 3980 restricted account in the portfolio, 415 2FA, 10/2xx permission).
+- In `MetaAdAccountController` — `SocialAuthController` must stay provider-agnostic (`SocialAccountFoundationTest` asserts it).
+- **Frontend**: `CreateAdAccountPanel` inside `AssetSelectionModal` (open by default when no ad account was offered; the created account is pre-selected; then a Meta billing link — **cards / funds cannot be added by API**). `MetaSetupGuide` ad-account steps and the launcher's no-ad-account notice now point to this flow first.
+- Tests: `MetaAdAccountCreateTest` (5), `CreateAdAccountPanel.test.tsx` (3). Social/Meta/Ads backend filter 764 passed (+6 local GD-only failures in `SocialMediaDiskTest`); frontend 252 passed. **Not verified live on Meta** (Meta may cap new ad accounts per portfolio, and may require Business Verification / Advanced Access for `business_management` on other clients' businesses).
+
 ### Ads budget & control — Phase B (2026-10-15): total budget + schedule, edit budget, run again, why it stopped
 
 - **Migration** `2026_10_15_120000_add_budget_schedule_to_ad_campaigns` (additive; **must be run on the server**): `budget_type` (daily|lifetime, default daily), `lifetime_budget`, `start_time`, `end_time`, `launch_spec` (json: objective, targeting_specs, placements, creative, cpl_threshold — no tokens/ids), `meta_stop_status`.

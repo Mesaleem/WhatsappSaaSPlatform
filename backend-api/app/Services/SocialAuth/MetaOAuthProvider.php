@@ -391,6 +391,89 @@ class MetaOAuthProvider implements SocialOAuthProviderInterface
         return is_string($pageAccessToken) && $pageAccessToken !== '' ? $pageAccessToken : null;
     }
 
+    /** Meta Marketing API timezone_id for Asia/Kolkata (Marketing API "Timezone IDs" reference). */
+    public const TIMEZONE_ASIA_KOLKATA = 71;
+
+    /**
+     * Ads Phase C — the Business portfolios the connecting user can manage
+     * (GET /me/businesses, business_management). A new ad account is created inside one.
+     *
+     * @return list<array{id: string, name: string}>
+     */
+    public function listBusinesses(string $userAccessToken): array
+    {
+        try {
+            $response = Http::withToken($userAccessToken)->timeout(15)->get('https://graph.facebook.com/'.self::API_VERSION.'/me/businesses', ['fields' => 'id,name', 'limit' => 50]);
+        } catch (Throwable $e) {
+            throw new RuntimeException('Could not reach Meta to list your Business portfolios. Try again.', previous: $e);
+        }
+
+        if ($response->failed()) {
+            throw new RuntimeException(self::isPermissionFailure((array) $response->json())
+                ? 'Meta did not share your Business portfolios with WapHub. Connect again and allow every permission (business_management).'
+                : 'Meta could not list your Business portfolios right now. Try again.');
+        }
+
+        return collect($response->json('data') ?? [])
+            ->filter(fn ($row) => is_array($row) && isset($row['id']))
+            ->map(fn (array $row) => ['id' => (string) $row['id'], 'name' => (string) ($row['name'] ?? $row['id'])])
+            ->values()->all();
+    }
+
+    /**
+     * Ads Phase C — creates an ad account in INR on India time inside the given Business
+     * portfolio (POST /{business_id}/adaccount) and returns it as a connectable asset.
+     * Meta's API cannot add a card or funds; that stays in Meta billing.
+     *
+     * @return array{asset_type: string, provider_id: string, name: string, avatar_url: null, metadata: array<string, mixed>}
+     */
+    public function createAdAccount(string $userAccessToken, string $businessId, string $name, string $currency = 'INR', int $timezoneId = self::TIMEZONE_ASIA_KOLKATA): array
+    {
+        try {
+            $response = Http::asForm()->withToken($userAccessToken)->timeout(20)->post(
+                'https://graph.facebook.com/'.self::API_VERSION."/{$businessId}/adaccount",
+                [
+                    'name' => $name,
+                    'currency' => $currency,
+                    'timezone_id' => $timezoneId,
+                    // The business advertises for itself: no separate advertiser, agency or partner.
+                    'end_advertiser' => 'NONE',
+                    'media_agency' => 'NONE',
+                    'partner' => 'NONE',
+                ]
+            );
+        } catch (Throwable $e) {
+            throw new RuntimeException('Could not reach Meta to create the ad account. Check Meta Business Suite before trying again — it may have been created.', previous: $e);
+        }
+
+        if ($response->failed()) {
+            $code = (int) $response->json('error.code');
+            $subcode = (int) $response->json('error.error_subcode');
+
+            throw new RuntimeException(match (true) {
+                $code === 3979 || $subcode === 3979 => 'Meta does not allow more ad accounts for this Business portfolio right now (limit reached). Use an existing ad account, or ask Meta support to raise the limit.',
+                $code === 3980 || $subcode === 3980 => 'One of this Business portfolio\'s ad accounts is restricted or under review, so Meta will not create a new one. Resolve it in Meta Business Suite first.',
+                $code === 415 => 'This Business portfolio requires two-factor authentication. Turn it on for your Facebook account, then try again.',
+                self::isPermissionFailure((array) $response->json()) => 'Meta did not allow WapHub to create ad accounts for this business. You must be an admin of the Business portfolio and allow every permission when connecting.',
+                default => 'Meta could not create the ad account: '.mb_substr((string) ($response->json('error.error_user_msg') ?? $response->json('error.message') ?? 'unknown error'), 0, 200),
+            });
+        }
+
+        $id = (string) ($response->json('id') ?? '');
+        if ($id === '') {
+            throw new RuntimeException('Meta did not confirm the new ad account. Check Meta Business Suite before trying again — it may have been created.');
+        }
+        $number = (string) ($response->json('account_id') ?? preg_replace('/^act_/', '', $id));
+
+        return [
+            'asset_type' => 'meta_ad_account',
+            'provider_id' => str_starts_with($id, 'act_') ? $id : "act_{$id}",
+            'name' => $name,
+            'avatar_url' => null,
+            'metadata' => ['ad_account_number' => $number, 'currency' => $currency, 'created_in_waphub' => true],
+        ];
+    }
+
     public function fetchAssets(string $accessToken): array
     {
         $assets = [];

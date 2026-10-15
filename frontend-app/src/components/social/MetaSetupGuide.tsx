@@ -51,10 +51,9 @@ export const META_SETUP_ITEMS: Record<MetaSetupItem, SetupItemContent> = {
     missingTitle: 'No ad account found',
     why: 'Needed only to run paid ads from WapHub. Meta charges your ad spend directly to this account.',
     steps: [
-      'Click “Open Meta Business Suite” below and log in with the same Facebook account.',
-      'Go to Settings → Accounts → Ad accounts → Add → Create a new ad account.',
-      'Give it a name, choose your time zone and currency, and give yourself full control.',
-      'Open Billing & payments and add a payment method.',
+      'Click “Connect Meta Account”. After Facebook, choose “Create a new ad account” — WapHub creates it for you in INR (India time) and connects it.',
+      'Add a payment method to it in Meta billing (Meta does not let apps add cards). Then you can launch ads here.',
+      'Prefer Meta? In Meta Business Suite go to Settings → Accounts → Ad accounts → Add → Create a new ad account, then connect again.',
     ],
     link: { label: 'Open Meta Business Suite', href: 'https://business.facebook.com/' },
     optional: true,

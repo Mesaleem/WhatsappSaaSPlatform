@@ -639,6 +639,11 @@ export default function SocialAccountsPage() {
             errorMessage={bindError}
             onCancel={cancelAssetSelection}
             onConfirm={confirmAssetSelection}
+            adAccountCreation={
+              planHasAds && pendingNonce
+                ? { nonce: pendingNonce, onCreated: (asset) => setOfferedAssets((prev) => (prev ? [...prev, asset] : [asset])) }
+                : null
+            }
           />
         )}
 

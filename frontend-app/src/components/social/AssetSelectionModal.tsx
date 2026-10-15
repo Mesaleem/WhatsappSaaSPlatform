@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Camera, CheckCircle2, Globe, Link2, Megaphone, Rss, X } from 'lucide-react';
 import { indigo, activeGradient } from '../../theme/signalIndigo';
 import { SOCIAL_ASSET_TYPE_LABELS, type OfferedAsset, type SocialAssetType } from '../../types/social';
+import CreateAdAccountPanel from './CreateAdAccountPanel';
 
 const ASSET_ICON: Record<SocialAssetType, typeof Globe> = {
   facebook_page: Globe,
@@ -17,6 +18,8 @@ interface AssetSelectionModalProps {
   errorMessage: string | null;
   onCancel: () => void;
   onConfirm: (selected: OfferedAsset[]) => void;
+  /** Ads Phase C — when set, an ad account can be created here inside this connect attempt. */
+  adAccountCreation?: { nonce: string; onCreated: (asset: OfferedAsset) => void } | null;
 }
 
 /**
@@ -34,10 +37,18 @@ export default function AssetSelectionModal({
   errorMessage,
   onCancel,
   onConfirm,
+  adAccountCreation = null,
 }: AssetSelectionModalProps) {
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
 
   const keyFor = (asset: OfferedAsset) => `${asset.asset_type}:${asset.provider_id}`;
+  const hasAdAccount = assets.some((a) => a.asset_type === 'meta_ad_account');
+  const firstPage = assets.find((a) => a.asset_type === 'facebook_page');
+
+  const adAccountCreated = (asset: OfferedAsset) => {
+    setSelectedKeys((prev) => new Set(prev).add(keyFor(asset)));
+    adAccountCreation?.onCreated(asset);
+  };
 
   const toggle = (asset: OfferedAsset) => {
     setSelectedKeys((prev) => {
@@ -111,6 +122,15 @@ export default function AssetSelectionModal({
               );
             })}
           </div>
+        )}
+
+        {adAccountCreation && (
+          <CreateAdAccountPanel
+            nonce={adAccountCreation.nonce}
+            defaultName={`${firstPage?.name ?? 'My business'} Ads`}
+            startOpen={!hasAdAccount}
+            onCreated={adAccountCreated}
+          />
         )}
 
         {errorMessage && (

@@ -1401,7 +1401,7 @@ export default function MetaAdsPage() {
               <>
                 <p>{`A paid campaign is created in a Meta Ad Account, and none is connected for this account yet. Connect your Meta account and select the Ad Account (and the Facebook Page) to use; the launcher reopens afterwards.${askAdmin}`}</p>
                 <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3" data-testid="ads-create-ad-account-help">
-                  <p className="font-medium text-slate-800">No Ad Account yet? Create one on Meta first:</p>
+                  <p className="font-medium text-slate-800">No Ad Account yet? WapHub can create one for you:</p>
                   <ol className="mt-1 list-decimal space-y-0.5 pl-5">
                     {META_SETUP_ITEMS.meta_ad_account.steps.map((step) => (
                       <li key={step}>{step}</li>

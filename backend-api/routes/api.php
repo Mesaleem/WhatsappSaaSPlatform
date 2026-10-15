@@ -748,6 +748,9 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::post('/accounts/{id}/check', [SocialAuthController::class, 'check'])->whereNumber('id');
             Route::get('/oauth/{provider}/redirect', [SocialAuthController::class, 'redirect']);
             Route::get('/oauth/{provider}/result/{nonce}', [SocialAuthController::class, 'result']);
+            // Ads Phase C — create a Meta ad account inside the open connect attempt.
+            Route::get('/oauth/meta/businesses', [\App\Http\Controllers\Api\MetaAdAccountController::class, 'businesses']);
+            Route::middleware('throttle:10,1')->post('/oauth/meta/ad-accounts', [\App\Http\Controllers\Api\MetaAdAccountController::class, 'store']);
         });
 
         // Phase 11 Task 1 — Industry Modules foundation (read-only). See config/industries.php and

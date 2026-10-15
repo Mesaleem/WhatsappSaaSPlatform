@@ -4,6 +4,7 @@ import type {
   BindAccountsResponse,
   OAuthRedirectResponse,
   OAuthResultResponse,
+  OfferedAsset,
   SocialAccount,
   SocialConnectionCheckResponse,
   SocialProvider,
@@ -57,6 +58,18 @@ const socialService = {
   /** Phase 9 Task 1 — ask the provider whether a stored connection still works. */
   checkConnection(id: number) {
     return axiosInstance.post<SocialConnectionCheckResponse>(`${BASE}/accounts/${id}/check`).then((res) => res.data);
+  },
+
+  /** Ads Phase C — the connecting Facebook user's Business portfolios (open connect attempt). */
+  listMetaBusinesses(nonce: string) {
+    return axiosInstance.get<{ data: { id: string; name: string }[] }>(`${BASE}/oauth/meta/businesses`, { params: { nonce } }).then((res) => res.data.data);
+  },
+
+  /** Ads Phase C — create an ad account (INR, India time) and offer it in the open connect attempt. */
+  createMetaAdAccount(nonce: string, businessId: string, name: string) {
+    return axiosInstance
+      .post<{ message: string; data: OfferedAsset }>(`${BASE}/oauth/meta/ad-accounts`, { nonce, business_id: businessId, name })
+      .then((res) => res.data.data);
   },
 
   bindAccounts(payload: BindAccountsPayload) {
