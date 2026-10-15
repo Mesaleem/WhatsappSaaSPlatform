@@ -243,6 +243,10 @@ class RolePermissionSeeder extends Seeder
             'send-messages',
             // QA fixes (2026-10-14): connecting a sub-client's WhatsApp (manage-whatsapp-setup).
             'manage-whatsapp-setup',
+            // Owner decision (2026-10-15): chatbot rules and WhatsApp journeys — including "Generate with AI" — for
+            // the agent's own account and its sub-clients. Which client is decided by tenant.isolation / AiAuthorizer
+            // (own agent_id tree only), not by this permission.
+            'manage-chatbot',
         ],
         // Social Media Marketing & Meta Ads Automation Expansion (Phase 1).
         // Deliberately restricted to ONLY these four permissions — this

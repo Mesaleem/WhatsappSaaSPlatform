@@ -987,6 +987,12 @@ Production showed a Page flipping connected → revoked on every Social Inbox vi
 - Header "needs reconnecting" banner (`SocialConnectionWarningBanner.tsx`) used to load the account list once per app load, so it stayed after a reconnect/Check. `socialService.listAccounts()` now fires `social-accounts-loaded` with the fresh list; the banner listens to it and also reloads on every route change. Test: `SocialConnectionWarningBanner.test.tsx`.
 - `docs/WapHub-Social-Media-Connection-Guide.docx`: new 2.3.1 (permissions to "+ Add" inside each Meta use case), a Troubleshooting row for "Access revoked after connecting", a Checklist item.
 
+### Pre-existing suite failures fixed (2026-10-15)
+
+- **Batch sends slept (P5-9 violation)**: `MessageBatchService::dispatchDue()` waited with `usleep()` for each number due later in its 55 s window (`BlockingWaitRemovalTest` failed). Now it never waits: a number due now is sent inline; one due later in the window is claimed (`sending`, `attempted_at` null) and sent by **`SendMessageBatchItemJob`** delayed to its time (default queue). The job re-checks the sending number's 25 s gap (re-queues itself for the remainder if early) and takes an atomic start (`attempted_at` set once per claim), so a late or duplicate job never breaks the gap or sends twice; the stuck sweep clears `attempted_at`. Under `QUEUE_CONNECTION=sync` later numbers simply wait for the next run. Planning (sender rotation, `stepSeconds()` = ceil(25 / senders)) is unchanged. **Deployment**: with cron-only workers a delayed job can run up to ~1 min late (never early); a persistent `default` worker keeps exact timing. Tests: `MessageBatchTest` +4 (incl. 5 senders A-E-A at 0/5/10/15/20/25 s).
+- **Agents can build chatbot / journeys (owner decision)**: `RolePermissionSeeder` agent role + `manage-chatbot` (scoped to its own sub-clients by tenant.isolation / AiAuthorizer). `JourneyAiGenerateTest` passes. **Run `php artisan db:seed --class=RolePermissionSeeder` on the server** (it uses syncPermissions).
+- Local XAMPP `php.ini`: `extension=gd` enabled (the 6 `SocialMediaDiskTest` failures were the missing extension only).
+
 ### Ads — review fixes, payment steps, INR everywhere (2026-10-15)
 
 Independent review of `bfb3b90..` found and fixed:

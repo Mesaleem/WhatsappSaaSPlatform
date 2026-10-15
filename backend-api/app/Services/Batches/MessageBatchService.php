@@ -2,6 +2,7 @@
 
 namespace App\Services\Batches;
 
+use App\Jobs\SendMessageBatchItemJob;
 use App\Models\Account;
 use App\Models\MessageBatch;
 use App\Models\MessageBatchItem;
@@ -10,6 +11,7 @@ use App\Models\User;
 use App\Services\Templates\BulkMessageCooldown;
 use App\Services\Templates\TemplateMessageDispatcher;
 use App\Services\WhatsApp\DirectMessageDispatcher;
+use App\Support\QueueDelay;
 use App\Support\WhatsAppMediaPayloadBuilder;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\Cache;
@@ -188,16 +190,19 @@ class MessageBatchService
             ]);
 
         $attempted = 0;
-
-        // The runner's own clock: waits are measured from it, and it moves forward as numbers are sent.
-        $clock = $now->copy();
+        // Without a real queue a delay cannot be honoured: numbers due later in the window wait for the next run.
+        $canDelay = config('queue.default') !== 'sync';
+        // Within this run, the time each sending number is next free (numbers queued for later count too).
+        $nextFree = [];
 
         foreach ($due as $row) {
+            $key = $this->senderKey((int) $row->account_id, $row->sender_number_id);
+
             // Never closer than the gap to the same sending number's previous message, even when the runner was late.
-            $sendAt = $this->earliestFor(
-                $this->senderKey((int) $row->account_id, $row->sender_number_id),
-                Carbon::parse($row->send_at, 'UTC'),
-            );
+            $sendAt = $this->earliestFor($key, Carbon::parse($row->send_at, 'UTC'));
+            if (isset($nextFree[$key]) && $nextFree[$key]->gt($sendAt)) {
+                $sendAt = $nextFree[$key]->copy();
+            }
 
             if ($sendAt->gt($windowEnd)) {
                 // Not this run: record the moved time, so the next run keeps the same order.
@@ -206,32 +211,90 @@ class MessageBatchService
                 break;
             }
 
-            $clock = $this->waitUntil($sendAt, $clock);
+            $later = $sendAt->gt($now);
+            if ($later && ! $canDelay) {
+                $nextFree[$key] = $sendAt->copy()->addSeconds(self::GAP_SECONDS);
+
+                continue;
+            }
 
             $claimed = MessageBatchItem::query()
                 ->whereKey($row->id)
                 ->where('status', MessageBatchItem::PENDING)
-                ->update(['status' => MessageBatchItem::SENDING, 'send_at' => $sendAt, 'updated_at' => now()]);
+                ->update(['status' => MessageBatchItem::SENDING, 'send_at' => $sendAt, 'attempted_at' => null, 'updated_at' => now()]);
 
             if ($claimed === 0) {
                 continue;
             }
 
-            $item = MessageBatchItem::query()->findOrFail($row->id);
-            $batch = MessageBatch::query()->find($item->message_batch_id);
+            $nextFree[$key] = $sendAt->copy()->addSeconds(self::GAP_SECONDS);
+            $attempted++;
 
-            // The batch was paused or stopped after this number was planned: give the number back, unchanged.
-            if (! $batch || $batch->status !== MessageBatch::RUNNING) {
-                $item->forceFill(['status' => MessageBatchItem::PENDING])->save();
+            if ($later) {
+                // Sent at its time by a delayed job, not by waiting here.
+                SendMessageBatchItemJob::dispatch((int) $row->id)->delay($sendAt);
 
                 continue;
             }
 
-            $attempted++;
-            $this->sendItem($batch, $item);
+            $this->sendClaimed((int) $row->id);
         }
 
         return $attempted;
+    }
+
+    /**
+     * SendMessageBatchItemJob: sends a number the runner claimed and queued for later. Too early for its sending
+     * number's gap (a job that ran late, or right after another one) → queued again for the remaining seconds.
+     */
+    public function sendQueuedItem(int $itemId): void
+    {
+        $item = MessageBatchItem::query()->find($itemId);
+        if (! $item || $item->status !== MessageBatchItem::SENDING) {
+            return;
+        }
+
+        $batch = MessageBatch::query()->find($item->message_batch_id);
+        if ($batch) {
+            $earliest = $this->earliestFor($this->senderKey((int) $batch->account_id, $item->sender_number_id), now()->utc());
+            $wait = (int) ceil(($earliest->getTimestampMs() - now()->getTimestampMs()) / 1000);
+            if ($wait > 0) {
+                SendMessageBatchItemJob::dispatch($itemId)->delay(QueueDelay::after($wait));
+
+                return;
+            }
+        }
+
+        $this->sendClaimed($itemId);
+    }
+
+    /**
+     * Sends one claimed number. The start is taken atomically (attempted_at, set only once per claim), so of two
+     * jobs for the same claim — a lost job's retry after the stuck sweep, say — only one ever sends.
+     */
+    private function sendClaimed(int $itemId): void
+    {
+        $started = MessageBatchItem::query()
+            ->whereKey($itemId)
+            ->where('status', MessageBatchItem::SENDING)
+            ->whereNull('attempted_at')
+            ->update(['attempted_at' => now()->utc(), 'updated_at' => now()]);
+
+        if ($started === 0) {
+            return;
+        }
+
+        $item = MessageBatchItem::query()->findOrFail($itemId);
+        $batch = MessageBatch::query()->find($item->message_batch_id);
+
+        // The batch was paused or stopped after this number was planned: give the number back, unchanged.
+        if (! $batch || $batch->status !== MessageBatch::RUNNING) {
+            $item->forceFill(['status' => MessageBatchItem::PENDING, 'attempted_at' => null])->save();
+
+            return;
+        }
+
+        $this->sendItem($batch, $item);
     }
 
     /** Sends one claimed number from its own sending number; a quota or connection problem pauses the batch instead. */
@@ -349,27 +412,13 @@ class MessageBatchService
         Cache::put($key, $at, now()->addDay());
     }
 
-    /** Sleeps from the runner's clock until $at (no sleep when $at has passed), and returns the clock at $at. */
-    private function waitUntil(Carbon $at, Carbon $clock): Carbon
-    {
-        $milliseconds = $at->getTimestampMs() - $clock->getTimestampMs();
-
-        if ($milliseconds > 0) {
-            usleep($milliseconds * 1000);
-
-            return $at->copy();
-        }
-
-        return $clock;
-    }
-
     /** Puts numbers left in "sending" by a process that died back to pending. */
     private function releaseStuck(Carbon $now): void
     {
         MessageBatchItem::query()
             ->where('status', MessageBatchItem::SENDING)
             ->where('updated_at', '<', $now->copy()->subMinutes(self::STUCK_MINUTES))
-            ->update(['status' => MessageBatchItem::PENDING, 'updated_at' => now()]);
+            ->update(['status' => MessageBatchItem::PENDING, 'attempted_at' => null, 'updated_at' => now()]);
     }
 
     public function pause(Account $account, int $batchId): MessageBatch

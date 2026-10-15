@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Jobs\SendMessageBatchItemJob;
 use App\Models\Account;
 use App\Models\MessageBatch;
 use App\Models\MessageBatchItem;
@@ -17,6 +18,7 @@ use Database\Seeders\RolePermissionSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Str;
 use Tests\TestCase;
@@ -323,6 +325,96 @@ class MessageBatchTest extends TestCase
         $last = Cache::get('message_batch_last_send:'.$account->id.':'.$default->id);
         $this->assertNotNull($last);
         $this->assertSame('10:00:00', $last->format('H:i:s'));
+    }
+
+    public function test_the_runner_never_waits_a_later_number_is_a_delayed_job(): void
+    {
+        config(['queue.default' => 'database']);
+        Queue::fake();
+        [, $user, $template] = $this->client();
+        Carbon::setTestNow(Carbon::parse('2026-10-08 10:00:00', 'UTC'));
+        $this->store($user, $template, $this->csv("phone\n919876543210\n919876543211\n"));
+        [$first, $second] = MessageBatch::query()->firstOrFail()->items()->orderBy('sequence')->get()->all();
+
+        $started = microtime(true);
+        $this->assertSame(2, app(MessageBatchService::class)->dispatchDue(Carbon::parse('2026-10-08 10:00:00', 'UTC')));
+        $this->assertLessThan(5, microtime(true) - $started, 'the runner used to sleep 25 s here');
+
+        $this->assertNotSame(MessageBatchItem::PENDING, $first->fresh()->status, 'the due number is sent now');
+        $this->assertNotNull($first->fresh()->attempted_at);
+        $this->assertSame(MessageBatchItem::SENDING, $second->fresh()->status, 'the later number is claimed for its job');
+        $this->assertNull($second->fresh()->attempted_at);
+        Queue::assertPushed(SendMessageBatchItemJob::class, fn (SendMessageBatchItemJob $job) => $job->itemId === $second->id
+            && $job->delay instanceof \DateTimeInterface && Carbon::instance($job->delay)->equalTo(Carbon::parse('2026-10-08 10:00:25', 'UTC')));
+    }
+
+    public function test_five_senders_take_turns_and_each_number_still_waits_25_seconds(): void
+    {
+        config(['queue.default' => 'database']);
+        Queue::fake();
+        [$account, $user, $template, $a] = $this->client();
+        $senders = [$a->id];
+        foreach (['919800000002', '919800000003', '919800000004', '919800000005'] as $phone) {
+            $senders[] = $this->number($account, $phone)->id;
+        }
+        Carbon::setTestNow(Carbon::parse('2026-10-08 10:00:00', 'UTC'));
+        $phones = implode("\n", array_map(fn ($i) => '9199'.str_pad((string) $i, 8, '0', STR_PAD_LEFT), range(1, 6)));
+        $this->store($user, $template, $this->csv("phone\n{$phones}\n"), [], $senders)->assertCreated();
+        $items = MessageBatch::query()->firstOrFail()->items()->orderBy('sequence')->get();
+
+        // Message 1 from A, 2 from B, ... 5 from E, then 6 from A again; numbers 5 s apart, so A waits 25 s.
+        $this->assertSame([...$senders, $senders[0]], $items->pluck('sender_number_id')->map(fn ($id) => (int) $id)->all());
+
+        app(MessageBatchService::class)->dispatchDue(Carbon::parse('2026-10-08 10:00:00', 'UTC'));
+
+        $delays = [];
+        Queue::assertPushed(SendMessageBatchItemJob::class, function (SendMessageBatchItemJob $job) use (&$delays) {
+            $delays[$job->itemId] = (int) Carbon::parse('2026-10-08 10:00:00', 'UTC')->diffInSeconds(Carbon::instance($job->delay));
+
+            return true;
+        });
+        ksort($delays);
+        // Message 1 went now; 2-5 at 5, 10, 15, 20 s from B-E; message 6 from A exactly 25 s after A's first.
+        $this->assertSame([5, 10, 15, 20, 25], array_values($delays));
+    }
+
+    public function test_without_a_queue_a_later_number_waits_for_the_next_run(): void
+    {
+        config(['queue.default' => 'sync']);
+        Queue::fake();
+        [, $user, $template] = $this->client();
+        Carbon::setTestNow(Carbon::parse('2026-10-08 10:00:00', 'UTC'));
+        $this->store($user, $template, $this->csv("phone\n919876543210\n919876543211\n"));
+        $second = MessageBatch::query()->firstOrFail()->items()->orderBy('sequence')->get()[1];
+
+        $this->assertSame(1, app(MessageBatchService::class)->dispatchDue(Carbon::parse('2026-10-08 10:00:00', 'UTC')));
+
+        $this->assertSame(MessageBatchItem::PENDING, $second->fresh()->status);
+        Queue::assertNothingPushed();
+    }
+
+    public function test_a_job_that_runs_too_early_for_the_gap_is_queued_again_and_a_started_claim_never_sends_twice(): void
+    {
+        Queue::fake();
+        [$account, $user, $template, $default] = $this->client();
+        Carbon::setTestNow(Carbon::parse('2026-10-08 10:00:10', 'UTC'));
+        $this->store($user, $template, $this->csv("phone\n919876543210\n"));
+        $item = MessageBatch::query()->firstOrFail()->items()->firstOrFail();
+        $item->forceFill(['status' => MessageBatchItem::SENDING, 'attempted_at' => null])->save();
+        // This number sent 10 s ago: 15 s of its 25 s gap are left.
+        Cache::put('message_batch_last_send:'.$account->id.':'.$default->id, Carbon::parse('2026-10-08 10:00:00', 'UTC'), now()->addDay());
+
+        app(MessageBatchService::class)->sendQueuedItem($item->id);
+
+        $this->assertSame(MessageBatchItem::SENDING, $item->fresh()->status, 'nothing was sent inside the gap');
+        Queue::assertPushed(SendMessageBatchItemJob::class, fn (SendMessageBatchItemJob $job) => $job->itemId === $item->id
+            && Carbon::instance($job->delay)->equalTo(Carbon::parse('2026-10-08 10:00:25', 'UTC')));
+
+        // Another job for the same claim already started it: this one does nothing.
+        Carbon::setTestNow(Carbon::parse('2026-10-08 10:01:00', 'UTC'));
+        $item->forceFill(['attempted_at' => now()])->save();
+        app(MessageBatchService::class)->sendQueuedItem($item->id);
+        $this->assertSame(MessageBatchItem::SENDING, $item->fresh()->status);
     }
 
     public function test_batches_are_not_part_of_the_developer_api(): void
