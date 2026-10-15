@@ -174,6 +174,10 @@ class CrmReminderService
             throw ValidationException::withMessages(['invoice' => ['This invoice has nothing left to pay.']]);
         }
         $channel ??= $this->settingsFor($invoice->account_id)->channel;
+        // QA fixes (2026-10-14): without WhatsApp in the plan, reminders go by email.
+        if (! \App\Services\Crm\Sales\CrmDeliveryService::canUseWhatsApp((int) $invoice->account_id)) {
+            $channel = 'email';
+        }
         $message = $this->delivery->defaultMessage($invoice, true);
         $out = [];
         if (in_array($channel, ['whatsapp', 'both'], true)) {
@@ -197,6 +201,11 @@ class CrmReminderService
             'both' => ['whatsapp', 'email'],
             default => $settings->email_fallback ? ['whatsapp', 'email_fallback'] : ['whatsapp'],
         };
+        // QA fixes (2026-10-14): without WhatsApp in the plan (CRM plan), reminders go by email
+        // — they used to fail every attempt with the engine's internal error.
+        if (! \App\Services\Crm\Sales\CrmDeliveryService::canUseWhatsApp((int) $invoice->account_id)) {
+            $channels = ['email'];
+        }
 
         foreach ($channels as $channel) {
             if ($channel === 'email_fallback' && $sent) {

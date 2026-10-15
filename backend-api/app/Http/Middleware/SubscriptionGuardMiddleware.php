@@ -61,7 +61,38 @@ class SubscriptionGuardMiddleware
             ], 403);
         }
 
-        $subscriptionActive = $account && $account->hasActiveSubscription();
+        // QA fixes (2026-10-14): an agent acting inside one of its sub-clients
+        // (?account_id=, resolved by tenant.isolation) is held to THAT client's
+        // state — a suspended or lapsed sub-client stays read-only for its agent
+        // too — and not to the agent's own subscription.
+        $targetId = $request->attributes->get('account_id');
+        $target = $account;
+        $actingForClient = $account && $targetId !== null && (int) $targetId !== (int) $account->id;
+        // CRM routes check the selected client themselves (crm.target, with its own audit entry).
+        if ($actingForClient && in_array('crm.target', (array) $request->route()?->gatherMiddleware(), true)) {
+            return $next($request);
+        }
+        if ($actingForClient) {
+            $target = \App\Models\Account::query()->with('currentSubscription')->find((int) $targetId) ?? $account;
+            if (! in_array($request->method(), self::SAFE_METHODS, true)) {
+                [$category, $errorCode, $message] = match (true) {
+                    ! $target->isAdministrativelyActive() => ['account_suspended', 'CLIENT_ACCOUNT_SUSPENDED', 'This client account is suspended. Its data can be viewed but not changed.'],
+                    ! $target->hasActiveSubscription() => ['no_active_subscription', 'SUBSCRIPTION_EXPIRED', "This client's subscription is not active. Its data can be viewed but not changed until it is renewed."],
+                    default => [null, null, null],
+                };
+                if ($category !== null) {
+                    app(\App\Services\Access\EntitlementAuditLogger::class)->record($target, false, [
+                        'action' => 'account.target', 'resource_type' => 'route', 'source' => 'api',
+                        'category' => $category, 'actor_account_id' => (int) $account->id, 'target_account_id' => (int) $target->id,
+                        'error_code' => $errorCode, 'http_status' => 403,
+                    ]);
+
+                    return response()->json(['message' => $message, 'error_code' => $errorCode], 403);
+                }
+            }
+        }
+
+        $subscriptionActive = $target && $target->hasActiveSubscription();
 
         if (! $subscriptionActive && ! in_array($request->method(), self::SAFE_METHODS, true)) {
             return response()->json([

@@ -30,6 +30,9 @@ use Illuminate\Support\Facades\Log;
  */
 class InvoiceCreditService
 {
+    /** Invoices issued for an approved quota top-up (QuotaRequestController::approve). */
+    public const QUOTA_TOPUP_KEY = 'quota_topup';
+
     public function __construct(
         private readonly ProviderCapabilityService $providerCapabilities,
         // Phase 5 Task 10 — the one canonical plan reconciliation.
@@ -89,6 +92,12 @@ class InvoiceCreditService
                 return true;
             }
 
+            // QA fixes (2026-10-14): an approved quota top-up is credited when it is
+            // PAID (it used to be credited at approval and could then be cancelled).
+            if ($invoice->plan_key === self::QUOTA_TOPUP_KEY) {
+                return $this->fulfilQuotaTopUp($invoice, $gatewayPaymentId, $rawResponse);
+            }
+
             $terms = $invoice->purchasedPlanTerms();
 
             if ($terms === null) {
@@ -121,6 +130,10 @@ class InvoiceCreditService
                     'duration_days' => (int) $plan->duration_days,
                 ];
             }
+
+            // Plan restructure (2026-10-15) — the limits this order bought; an order without
+            // captured terms falls back to the plan row, like the message terms above.
+            $limits = $invoice->purchasedPlanLimits() ?? (isset($plan) ? $plan->limits() : []);
 
             /*
              * Phase 5 fix P5-5 — one fulfilment at a time PER ACCOUNT.
@@ -191,8 +204,16 @@ class InvoiceCreditService
             $isUpgrade = $invoice->plan_change === 'upgrade';
             if ($isUpgrade) {
                 $baseExpiry = now();
+            }
+            // QA fixes (2026-10-14): a NEW term (upgrade, or the old plan had already
+            // lapsed) starts clean — the old term's usage and leftover quota do not
+            // carry over (20,000 old sends made a fresh 5,000 plan "exhausted").
+            // Only a renewal of a still-running plan stacks on top.
+            $isNewTerm = $isUpgrade || ! $isRunning;
+            if ($isNewTerm) {
                 $subscription->total_allocated_messages = null;
                 $subscription->used_messages = 0;
+                $subscription->used_marketing_messages = 0;
                 $subscription->price_paid = 0;
             }
 
@@ -202,6 +223,7 @@ class InvoiceCreditService
             // architectural call in the Module 8 report; a "replace on
             // upgrade" model is equally defensible and would be a one-line
             // change here if that's what's actually wanted.]
+            $previousEngine = $subscription->engine_type;
             $subscription->engine_type = $terms['engine_type'];
             $subscription->billing_model = $terms['billing_model'];
             $subscription->rate_per_message = $terms['rate_per_message'];
@@ -210,10 +232,54 @@ class InvoiceCreditService
                 : ($subscription->total_allocated_messages ?? 0) + (int) $terms['total_allocated_messages'];
             $subscription->price_paid = (float) ($subscription->price_paid ?? 0) + (float) $invoice->total_amount;
             $subscription->payment_mode = $invoice->payment_gateway;
-            $subscription->starts_at = $isUpgrade ? now() : (($periodStart && ! $isRunning) ? $periodStart : ($subscription->starts_at ?? now()));
+            $subscription->starts_at = $isUpgrade ? now() : (! $isRunning ? ($periodStart ?? now()) : ($subscription->starts_at ?? now()));
             $subscription->expires_at = $baseExpiry->copy()->addDays($terms['duration_days']);
             $subscription->status = 'active';
+            // The plan limits are the purchased plan's own (never stacked): a renewal, upgrade or
+            // downgrade replaces them. An upgrade restarts the marketing counter with the period.
+            foreach (array_keys(\App\Models\Plan::LIMITS) as $column) {
+                $subscription->{$column} = $limits[$column] ?? null;
+            }
             $subscription->save();
+
+            // QA fixes (2026-10-14): leads captured while the client had no CRM (ads, journeys,
+            // website) are linked into the CRM as soon as a plan with the CRM is paid for.
+            $accountIdForCrm = $account->id;
+            DB::afterCommit(function () use ($accountIdForCrm): void {
+                $target = Account::query()->find($accountIdForCrm);
+                if ($target === null || ! app(\App\Services\Access\AccessControlService::class)->canTenant($target, 'crm')) {
+                    return;
+                }
+                $linker = app(\App\Services\Crm\CaptureLeadLinker::class);
+                \App\Models\CrmCaptureLinkFailure::query()->forAccount($accountIdForCrm)->open()
+                    ->where('reason', \App\Models\CrmCaptureLinkFailure::REASON_NOT_ENTITLED)
+                    ->limit(1000)->get()
+                    ->each(fn ($failure) => $linker->retry($failure));
+            });
+
+            // QA fixes (2026-10-14): the new plan's limits are applied to what exists (journeys
+            // above the limit switched off, the client told about users / templates over it).
+            $accountIdForLimits = $account->id;
+            DB::afterCommit(function () use ($accountIdForLimits): void {
+                $target = Account::query()->find($accountIdForLimits);
+                if ($target !== null) {
+                    app(PlanLimits::class)->applyAfterPlanChange($target);
+                }
+            });
+
+            // QA fixes (2026-10-14): leaving the QR engine (e.g. Starter -> CRM or Meta)
+            // logs the QR numbers out at once — after commit, never inside the payment.
+            if ($previousEngine === 'qr' && $terms['engine_type'] !== 'qr') {
+                $accountIdForEngine = $account->id;
+                DB::afterCommit(fn () => app(\App\Services\WhatsApp\WhatsAppAddonService::class)->enforceFor($accountIdForEngine));
+            }
+
+            // A client that pays for a plan gets its menu from that plan from now on (PlanModules).
+            // The old hand-made module checklist is dropped with it (QA fixes, 2026-10-14):
+            // it would otherwise narrow the plan and hide modules the client just paid for.
+            if ($account->account_type === 'client' && ! $account->modules_from_plan) {
+                $account->forceFill(['modules_from_plan' => true, 'legacy_allowed_modules' => $account->allowed_modules, 'allowed_modules' => null])->save();
+            }
 
             // Phase 8 Task 2 — the plan's AI credits for the period this
             // invoice bought ([the expiry it extended, the new expiry)),
@@ -246,8 +312,65 @@ class InvoiceCreditService
             // customer actually belongs to an Agent.
             $this->grantAgentCommission($account, $invoice);
 
+            // "Payment received — plan active" email; sent only after this transaction commits.
+            app(BillingRequestNotifier::class)->planActivated($account, $invoice, $subscription);
+
             return true;
         });
+    }
+
+    /**
+     * A paid quota top-up invoice (QA fixes, 2026-10-14): credits what the
+     * approved request asked for — extra messages on a flat quota, or money on
+     * a per-message wallet — and marks the invoice paid. Runs inside
+     * markPaidAndCreditQuota()'s transaction and invoice lock, so it happens
+     * exactly once per invoice.
+     *
+     * @param array<string, mixed>|null $rawResponse
+     */
+    private function fulfilQuotaTopUp(Invoice $invoice, string $gatewayPaymentId, ?array $rawResponse): bool
+    {
+        $quotaRequest = \App\Models\QuotaRequest::query()->where('invoice_id', $invoice->id)->first();
+
+        $invoice->forceFill([
+            'status' => 'paid',
+            'gateway_payment_id' => $gatewayPaymentId,
+            'paid_at' => now(),
+            'gateway_raw_response' => $rawResponse,
+        ])->save();
+
+        if ($quotaRequest === null) {
+            Log::error("InvoiceCreditService: quota top-up invoice #{$invoice->id} has no quota request.");
+
+            return true; // the money was real; nothing to credit.
+        }
+
+        $subscription = Subscription::query()
+            ->where('account_id', $invoice->account_id)
+            ->orderByDesc('starts_at')
+            ->orderByDesc('id')
+            ->lockForUpdate()
+            ->first();
+
+        if ($subscription === null) {
+            Log::error("InvoiceCreditService: no subscription to credit for quota top-up invoice #{$invoice->id}.");
+
+            return true;
+        }
+
+        if ($quotaRequest->isWalletTopUp()) {
+            $rate = (float) $subscription->rate_per_message;
+            $subscription->price_paid = round((float) $subscription->price_paid + (float) $quotaRequest->requested_topup_amount, 2);
+            if ($rate > 0) {
+                $subscription->total_allocated_messages = (int) floor((float) $subscription->price_paid / $rate);
+            }
+        } elseif ($subscription->total_allocated_messages !== null) {
+            $subscription->total_allocated_messages += (int) $quotaRequest->requested_extra_messages;
+        }
+        $subscription->save();
+        $subscription->refreshStatus();
+
+        return true;
     }
 
     /**

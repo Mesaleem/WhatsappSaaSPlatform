@@ -170,6 +170,9 @@ export interface SubmitTemplateRequestPayload {
   /** Media Templates (QR/Baileys-only) -- e.g. requesting a bill/invoice sent as a PDF. Omit both for a plain text request -- unchanged, existing behavior. */
   header_type?: TemplateHeaderType;
   header_media_url?: string | null;
+  /** QA fixes (2026-10-14): Meta accounts — what Meta reviews the template as, and its language. */
+  category?: 'MARKETING' | 'UTILITY' | 'AUTHENTICATION';
+  language?: string;
 }
 
 /**

@@ -262,6 +262,20 @@ class CrmLead extends Model
      */
     protected static function booted(): void
     {
+        // QA fixes (2026-10-14): every new lead — whatever created it — is routed
+        // (auto-assigned by the account's setting) and the right person told.
+        // After commit, so a rolled-back create never notifies anyone.
+        static::created(function (CrmLead $lead): void {
+            \Illuminate\Support\Facades\DB::afterCommit(fn () => app(\App\Services\Crm\CrmLeadRouter::class)->leadCreated($lead));
+        });
+        // QA fixes (2026-10-14): developer webhook crm.lead.status_changed.
+        static::updated(function (CrmLead $lead): void {
+            if ($lead->wasChanged('status')) {
+                $payload = \App\Services\Crm\CrmLeadRouter::webhookPayload($lead) + ['previous_status' => $lead->getOriginal('status')];
+                \Illuminate\Support\Facades\DB::afterCommit(fn () => \App\Services\Webhooks\WebhookDispatcher::fire((int) $lead->account_id, 'crm.lead.status_changed', $payload));
+            }
+        });
+
         // Phase 10 Task 1 — keep ad attribution's conversion in step with the
         // lead's status, whichever path (manual, bulk, API, automation) changed it.
         static::saved(function (CrmLead $lead): void {
@@ -788,5 +802,11 @@ class CrmLead extends Model
     public function scopeForAccount(Builder $query, int $accountId): Builder
     {
         return $query->where('account_id', $accountId);
+    }
+
+    /** Own records only for a CRM user without view-all-crm (QA fixes, 2026-10-14). */
+    public function scopeVisibleTo(Builder $query, ?\App\Models\User $user): Builder
+    {
+        return \App\Support\CrmVisibility::apply($query, $user, ['assigned_user_id']);
     }
 }

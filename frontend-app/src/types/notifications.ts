@@ -11,6 +11,15 @@ export type NotificationTemplateType = 'rich_text' | 'raw_html';
 
 export interface NotificationTemplate {
   id: number;
+  /** Set on master (system) templates only — the automatic email this row is, e.g. "auth.password_reset". */
+  slug: string | null;
+  /** Master template: the content of an automatic email. Super Admin only; cannot be deleted. */
+  is_system: boolean;
+  /** Off = the built-in default is sent instead (system templates only). */
+  is_active: boolean;
+  description: string | null;
+  /** variable name -> what it holds (system templates only). */
+  variables: Record<string, string> | null;
   name: string;
   type: NotificationTemplateType;
   category: string | null;
@@ -29,7 +38,11 @@ export interface SaveNotificationTemplatePayload {
   category?: string | null;
   subject: string;
   body: string;
+  is_active?: boolean;
 }
+
+/** Mail Templates tab filter (Super Admin): every template, the automatic (system) emails, or broadcast templates. */
+export type NotificationTemplateKind = '' | 'system' | 'custom';
 
 export type BroadcastChannel = 'email' | 'in_app';
 
@@ -40,7 +53,14 @@ export type BroadcastChannel = 'email' | 'in_app';
  * an Admin so the UI doesn't promise a targeting option that will be
  * silently downgraded.
  */
-export type BroadcastTargetType = 'account_users' | 'specific_clients' | 'all_users' | 'custom_emails';
+export type BroadcastTargetType =
+  | 'account_users'
+  | 'specific_clients'
+  | 'all_clients'
+  | 'all_agents'
+  | 'role'
+  | 'all_users'
+  | 'custom_emails';
 
 export interface NotificationBroadcast {
   id: number;
@@ -72,6 +92,8 @@ export interface SendBroadcastPayload {
   channels: BroadcastChannel[];
   target_type: BroadcastTargetType;
   account_ids?: number[];
+  /** target_type 'role' only. */
+  role_name?: string;
   emails?: string[];
 }
 

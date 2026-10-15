@@ -179,6 +179,15 @@ class CommentAutomationService
             return;
         }
 
+        // QA fixes (2026-10-14): auto-replies only while the plan still includes comment
+        // automation and social media — after a downgrade (e.g. Meta Pro -> CRM) a still-
+        // connected Page kept replying publicly.
+        $owner = \App\Models\Account::findCached((int) $socialAccount->account_id);
+        if ($owner === null || ! $owner->hasModuleEnabled('comment_automation')
+            || ($owner->modules_from_plan && ! app(\App\Services\Access\AccessControlService::class)->canTenant($owner, 'social'))) {
+            return;
+        }
+
         $rule = $this->findMatchingRule($socialAccount->account_id, $message);
 
         if (! $rule) {

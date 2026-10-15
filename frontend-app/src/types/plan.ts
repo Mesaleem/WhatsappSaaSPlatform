@@ -11,7 +11,10 @@
  * the administrative view and is reachable by Super Admin alone.
  */
 
-export type PlanEngineType = 'qr' | 'meta';
+import type { PlanLimits } from './account';
+
+/** 'none' = no WhatsApp engine (e.g. the CRM-only plan). */
+export type PlanEngineType = 'qr' | 'meta' | 'none';
 
 export type PlanBillingModel = 'flat_quota' | 'per_message' | 'unlimited';
 
@@ -44,6 +47,11 @@ export interface ManagedPlan {
   capability_limits: Record<string, number | null>;
   /** How many accounts have ever paid for this plan — server-computed. */
   accounts: number;
+  /** Plan restructure (2026-10-15): listed on the website and Billing page. */
+  is_public?: boolean;
+  limits?: PlanLimits;
+  /** Set for a custom plan: the one client that sees and buys it. */
+  account?: { id: number; company_name: string | null } | null;
 }
 
 export interface PlanCapabilityOption {
@@ -86,6 +94,15 @@ export interface CreatePlanPayload {
    * backend rejects the save otherwise.
    */
   capability_limits?: Record<string, number | null>;
+  /** Plan restructure (2026-10-15): null = unlimited, 0 = not included. */
+  max_users?: number | null;
+  max_meta_templates?: number | null;
+  max_flows?: number | null;
+  max_broadcasts_per_month?: number | null;
+  marketing_message_limit?: number | null;
+  is_public?: boolean;
+  /** Create only: makes this a custom plan for that client (never public). */
+  account_id?: number | null;
 }
 
 /**
@@ -106,4 +123,30 @@ export interface UpdatePlanResult {
     added: string[];
     removed: string[];
   };
+}
+
+/**
+ * Custom-plan price list (GET/PUT /api/admin/custom-plan-pricing, 2026-10-15) —
+ * what each feature and limit unit adds to a plan's suggested price, and
+ * Meta's per-message cost for the margin line. Amounts in ₹ per 30 days,
+ * except the per-message prices/costs.
+ */
+export interface CustomPlanPriceList {
+  base_fee: number;
+  base_users_included: number;
+  per_user: number;
+  unlimited_users: number;
+  engine: Record<PlanEngineType, number>;
+  per_message: number;
+  per_marketing_message: number;
+  features: Record<string, number>;
+  per_template: number;
+  unlimited_templates: number;
+  per_journey: number;
+  unlimited_journeys: number;
+  per_broadcast: number;
+  unlimited_broadcasts: number;
+  meta_marketing_cost: number;
+  meta_utility_cost: number;
+  gst_percent: number;
 }

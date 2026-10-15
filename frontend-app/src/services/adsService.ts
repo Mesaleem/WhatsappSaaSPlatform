@@ -37,6 +37,11 @@ const adsService = {
     return axiosInstance.get<{ data: AdAccountInfo }>(`${BASE}/account`).then((res) => res.data.data);
   },
 
+  /** QA fixes (2026-10-14): the connected Page's instant (lead) forms. */
+  leadForms() {
+    return axiosInstance.get<{ data: import('../types/ads').AdLeadForm[] }>(`${BASE}/lead-forms`).then((res) => res.data.data);
+  },
+
   /** Meta location search (countries, regions, cities) for the launch form. */
   locations(q: string) {
     return axiosInstance.get<{ data: AdLocation[] }>(`${BASE}/locations`, { params: { q } }).then((res) => res.data.data);

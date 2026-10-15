@@ -28,9 +28,14 @@ class ManualPaymentService
     ) {
     }
 
-    /** 'plan' | 'whatsapp_addon' | 'module_addon' */
+    /** 'plan' | 'whatsapp_addon' | 'module_addon' | 'quota_topup' */
     public function kindOf(Invoice $invoice): string
     {
+        // QA fixes (2026-10-14): a quota top-up is its own kind — it is not a plan
+        // request (so it never blocks buying a plan and cannot be cancelled).
+        if ($invoice->plan_key === InvoiceCreditService::QUOTA_TOPUP_KEY) {
+            return 'quota_topup';
+        }
         if ($this->moduleAddons->isModuleInvoice($invoice)) {
             return 'module_addon';
         }

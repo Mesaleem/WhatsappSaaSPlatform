@@ -44,9 +44,23 @@ class CrmDeliveryService
         return rtrim((string) (config('services.frontend.url') ?: config('app.url')), '/').'/d/'.$doc->public_token;
     }
 
+    /** QA fixes (2026-10-14): whether the account's plan can send WhatsApp at all (the CRM-only plan cannot). */
+    public static function canUseWhatsApp(int $accountId): bool
+    {
+        $account = \App\Models\Account::query()->with('currentSubscription')->find($accountId);
+        $engine = $account?->currentSubscription?->engine_type;
+
+        return $account !== null && in_array($engine, ['qr', 'meta'], true);
+    }
+
     public function sendWhatsApp(CrmDocument $doc, ?string $phone, ?string $message, ?int $actorUserId, string $purpose = 'document', ?int $reminderId = null): CrmDocumentDelivery
     {
         $this->assertSendable($doc);
+        // QA fixes (2026-10-14): a plan without WhatsApp sending gets a plain answer, not the
+        // engine's internal "no WhatsApp engine configured" text.
+        if (! self::canUseWhatsApp((int) $doc->account_id)) {
+            throw ValidationException::withMessages(['channel' => ['Your plan does not include WhatsApp sending. Send it by email instead.']]);
+        }
         $phone = $phone ?: ($doc->customer_snapshot['phone'] ?? $doc->contact?->phone_number);
         if (! $phone) {
             throw ValidationException::withMessages(['recipient' => ['This customer has no phone number. Enter one to send on WhatsApp.']]);

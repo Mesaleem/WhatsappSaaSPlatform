@@ -28,10 +28,23 @@ class PaymentAlertDispatcher
      * every Meta Cloud API account from ever sending. Meta-engine readiness
      * is validated separately, inside WhatsAppEngineFactory::makeMetaDriver().
      */
-    public static function isWhatsAppDisconnected(Account $account): bool
+    public static function isWhatsAppDisconnected(Account $account, ?int $senderNumberId = null): bool
     {
-        return $account->currentSubscription?->engine_type === 'qr'
-            && $account->whatsAppSession?->status !== 'connected';
+        if ($account->currentSubscription?->engine_type !== 'qr') {
+            return false;
+        }
+
+        // QA fixes (2026-10-14): a send from a chosen number is judged by THAT number's own
+        // status — the account-level row mirrors only the default number, so a linked
+        // add-on number was refused while the default was offline.
+        if ($senderNumberId !== null) {
+            $status = \App\Models\WhatsAppNumber::query()->where('account_id', $account->id)->whereKey($senderNumberId)->value('status');
+            if ($status !== null) {
+                return $status !== \App\Models\WhatsAppNumber::STATUS_LINKED;
+            }
+        }
+
+        return $account->whatsAppSession?->status !== 'connected';
     }
 
     /**

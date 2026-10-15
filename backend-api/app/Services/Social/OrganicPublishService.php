@@ -122,7 +122,14 @@ class OrganicPublishService
         }
 
         $publisher = $this->publishers->forPlatform($platform);
-        $request = new PublishRequest($platform, (string) $payload['caption'], $payload['media_url'] ?? null, $payload['media_type'] ?? null);
+        $request = new PublishRequest(
+            $platform,
+            (string) $payload['caption'],
+            $payload['media_url'] ?? null,
+            $payload['media_type'] ?? null,
+            (string) ($payload['post_format'] ?? 'post'),
+            array_values($payload['media_items'] ?? []),
+        );
 
         if ($error = $publisher->validationError($request)) {
             throw new RuntimeException($error);
@@ -163,6 +170,8 @@ class OrganicPublishService
                 'caption' => $request->caption,
                 'media_url' => $request->mediaUrl,
                 'media_type' => $request->mediaType,
+                'post_format' => $request->format,
+                'media_items' => $request->mediaItems ?: null,
                 'status' => $scheduledAt ? OrganicPost::STATUS_SCHEDULED : OrganicPost::STATUS_PUBLISHING,
                 'scheduled_at' => $scheduledAt,
                 'origin' => $scheduledAt ? OrganicPost::ORIGIN_SCHEDULED : OrganicPost::ORIGIN_MANUAL,
@@ -240,7 +249,7 @@ class OrganicPublishService
         }
 
         try {
-            $outcome = $publisher->publish($socialAccount, new PublishRequest($post->platform, (string) $post->caption, $post->media_url, $post->media_type));
+            $outcome = $publisher->publish($socialAccount, $this->requestFor($post));
         } catch (ProviderRequestFailed $e) {
             return $this->providerFailed($post, $token, $publisher, $socialAccount, $e, $viaWorker);
         } catch (PublishUnreachable $e) {
@@ -284,7 +293,7 @@ class OrganicPublishService
         }
 
         try {
-            $outcome = $publisher->checkProcessing($ig, $creationId);
+            $outcome = $publisher->checkProcessing($ig, $creationId, $this->requestFor($post));
         } catch (ProviderRequestFailed $e) {
             if ($result = $this->connections->observe($ig, $e, 'organic.instagram_video')) {
                 $message = SocialConnectionException::for($ig, $result->status, $result->reason)->getMessage();
@@ -683,10 +692,26 @@ class OrganicPublishService
         return $existing;
     }
 
+    /** The stored post as a publish request (format and carousel items included). */
+    private function requestFor(OrganicPost $post): PublishRequest
+    {
+        return new PublishRequest(
+            $post->platform,
+            (string) $post->caption,
+            $post->media_url,
+            $post->media_type,
+            (string) ($post->post_format ?: 'post'),
+            array_values($post->media_items ?? []),
+        );
+    }
+
     private function fingerprint(string $platform, PublishRequest $request, mixed $socialAccountId, ?CarbonInterface $scheduledAt): string
     {
+        // A normal post keeps its pre-2026-10-15 fingerprint (format/items appended only otherwise).
+        $formatPart = $request->format === 'post' && $request->mediaItems === [] ? [] : [$request->format, $request->mediaItems];
+
         return hash('sha256', json_encode([
-            $platform, $request->caption, $request->mediaUrl, $request->mediaType,
+            $platform, $request->caption, $request->mediaUrl, $request->mediaType, ...$formatPart,
             $socialAccountId ? (int) $socialAccountId : null,
             $scheduledAt?->copy()->utc()->format('Y-m-d H:i'),
         ]));

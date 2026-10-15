@@ -538,7 +538,7 @@ class GeminiProviderTest extends TestCase
     {
         $variants = array_map(fn ($i) => ['hook' => "Hook {$i}", 'caption' => "Caption {$i}", 'cta' => "CTA {$i}"], range(1, 5));
         $this->geminiReturns($this->answer([['text' => json_encode(['variants' => $variants])]], ['promptTokenCount' => 700, 'candidatesTokenCount' => 600]));
-        $account = $this->tenant(100);
+        $account = $this->tenant(100, 'business'); // Meta Ads (and its copywriter) needs a plan selling `ads` (plan restructure, 2026-10-15).
         $user = User::factory()->create(['account_id' => $account->id, 'is_active' => true]);
         $user->assignRole('admin');
 

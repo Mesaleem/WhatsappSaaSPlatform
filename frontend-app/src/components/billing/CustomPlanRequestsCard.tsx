@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Headset } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import billingService from '../../services/billingService';
 import { describeApiError } from '../../utils/apiError';
 import type { CustomPlanRequest } from '../../types/billing';
@@ -74,7 +75,16 @@ export default function CustomPlanRequestsCard() {
                   </p>
                 </div>
                 {r.status !== 'closed' && (
-                  <div className="flex gap-2">
+                  <div className="flex flex-wrap gap-2">
+                    {/* Plan restructure (2026-10-15): build this client's custom plan (features, limits, price). */}
+                    {r.account && (
+                      <Link
+                        to={'/admin/plans?custom_for=' + r.account.id}
+                        className="rounded-lg border border-emerald-600 px-2.5 py-1 text-xs font-semibold text-emerald-700 hover:bg-emerald-50"
+                      >
+                        Build custom plan
+                      </Link>
+                    )}
                     {r.status === 'new' && (
                       <button type="button" disabled={busyId === r.id} onClick={() => mark(r, 'contacted')} className="rounded-lg bg-emerald-600 px-2.5 py-1 text-xs font-semibold text-white disabled:opacity-50">
                         Mark contacted

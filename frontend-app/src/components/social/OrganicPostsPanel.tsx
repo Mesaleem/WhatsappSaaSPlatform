@@ -9,7 +9,7 @@ import SocialReconnectNotice from './SocialReconnectNotice';
 import OrganicPostInsights from './OrganicPostInsights';
 import { formatInsightValue } from '../../types/organicInsights';
 import type { InsightMetricKey, InsightsSummary, PostInsights } from '../../types/organicInsights';
-import { formatScheduledAt, ORGANIC_PLATFORM_LABELS, ORGANIC_STATUS_LABELS } from '../../types/organic';
+import { formatScheduledAt, ORGANIC_FORMAT_LABELS, ORGANIC_PLATFORM_LABELS, ORGANIC_STATUS_LABELS } from '../../types/organic';
 import type { OrganicPost, OrganicPostStatus } from '../../types/organic';
 import DismissibleAlert from '../common/DismissibleAlert';
 
@@ -203,7 +203,14 @@ export default function OrganicPostsPanel({
                 return (
                 <Fragment key={post.id}>
                 <tr data-testid={`organic-post-${post.id}`}>
-                  <td className="px-4 py-3 text-slate-700">{ORGANIC_PLATFORM_LABELS[post.platform] ?? post.platform}</td>
+                  <td className="px-4 py-3 text-slate-700">
+                    {ORGANIC_PLATFORM_LABELS[post.platform] ?? post.platform}
+                    {post.post_format && post.post_format !== 'post' && (
+                      <span className="ml-1.5 rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600">
+                        {ORGANIC_FORMAT_LABELS[post.post_format]}
+                      </span>
+                    )}
+                  </td>
                   <td className="max-w-xs truncate px-4 py-3 text-slate-700" title={post.caption}>
                     {post.caption}
                   </td>

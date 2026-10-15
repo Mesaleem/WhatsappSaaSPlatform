@@ -85,6 +85,22 @@ describe('Create Client — plan', () => {
     expect(screen.getByText('Billing Model')).toBeTruthy();
   });
 
+  it('shows the plan modules and limits read-only instead of a module checklist', async () => {
+    (accountService.planOptions as Mock).mockResolvedValue({
+      data: [{ ...starter, limits: { max_users: 2, max_meta_templates: null, max_flows: null, max_broadcasts_per_month: 0, marketing_message_limit: null } }],
+      tax_rate: 0,
+    });
+    render(<CreateAccountModal account={null} onClose={vi.fn()} onSaved={vi.fn()} />);
+
+    const modules = await screen.findByTestId('plan-modules');
+    expect(within(modules).getByText('Modules from the plan')).toBeTruthy();
+    expect(within(modules).getAllByText(/./).length).toBeGreaterThan(3);
+    expect(screen.getByTestId('plan-limits').textContent).toContain('2 team users');
+    expect(screen.getByTestId('plan-limits').textContent).toContain('No broadcasts / month');
+    // No per-client checklist (Route Master) in plan mode.
+    expect(screen.queryByText('Module & Feature Access')).toBeNull();
+  });
+
   it('does not offer Custom terms to an Agent', async () => {
     auth.superAdmin = false;
     render(<CreateAccountModal account={null} onClose={vi.fn()} onSaved={vi.fn()} />);

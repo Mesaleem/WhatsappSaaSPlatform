@@ -4,7 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\User;
-use App\Services\Auth\AccountMailer;
+use App\Services\Mail\SystemMailer;
 use Illuminate\Auth\Events\PasswordReset;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -13,12 +13,12 @@ use Illuminate\Support\Facades\Password;
 /**
  * Self-service "Forgot password". Tokens come from Laravel's password broker
  * (hashed in password_reset_tokens, expiring after auth.passwords.users.expire
- * minutes, default 60). Emails go through the platform's Mail Settings
- * (AccountMailer).
+ * minutes, default 60). The email is the "auth.password_reset" master
+ * template (SystemMailer), sent through the platform's Mail Settings.
  */
 class PasswordResetController extends Controller
 {
-    public function __construct(private readonly AccountMailer $mailer)
+    public function __construct(private readonly SystemMailer $mailer)
     {
     }
 
@@ -71,18 +71,13 @@ class PasswordResetController extends Controller
 
     private function email(User $user, string $token): void
     {
-        $link = $this->mailer->frontendUrl('/reset-password?'.http_build_query(['token' => $token, 'email' => $user->email]));
+        $link = $this->mailer->url('/reset-password?'.http_build_query(['token' => $token, 'email' => $user->email]));
         $minutes = (int) config('auth.passwords.users.expire', 60);
 
-        $this->mailer->send(
-            $user->email,
-            "Reset your {$this->mailer->brand()} password",
-            'Reset your password',
-            '<p>Hi '.e($user->name).',</p>'
-            .'<p>We received a request to reset the password for your account. Click the button below to choose a new one.</p>'
-            .'<p style="color:#64748b;font-size:13px">This link expires in '.$minutes.' minutes. If you did not ask for this, ignore this email — your password stays the same.</p>'
-            .'<p style="color:#94a3b8;font-size:12px;word-break:break-all">'.e($link).'</p>',
-            ['label' => 'Reset password', 'url' => $link],
-        );
+        $this->mailer->send('auth.password_reset', $user->email, [
+            'name' => $user->name,
+            'reset_url' => $link,
+            'minutes' => $minutes,
+        ], [], $user->account_id, $user->name);
     }
 }

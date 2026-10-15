@@ -109,6 +109,24 @@ class PaymentWebhookController extends Controller
             // is left exactly as it is on a duplicate refund webhook.
             app(InvoiceCreditService::class)->reverseAgentCommission($invoice->id, $event['reference']);
 
+            // QA fixes (2026-10-14): the invoice shows the refund, and the Super Admin (and
+            // the client's agent) are told. Whether to end the plan early is a person's
+            // decision, so the subscription itself is left as it is.
+            if ($invoice->status === 'paid') {
+                $invoice->forceFill(['status' => 'refunded'])->save();
+                $account = $invoice->account;
+                if ($account !== null) {
+                    $mailer = app(\App\Services\Mail\SystemMailer::class);
+                    $mailer->notifyUsers(
+                        $mailer->reviewersFor($account),
+                        'Payment refunded: '.$account->company_name,
+                        "Invoice {$invoice->invoice_number} ({$invoice->plan_label}) was refunded through {$gateway}. The plan is still active — end or change it from Manage Clients if needed.",
+                        'billing',
+                        '/admin/accounts',
+                    );
+                }
+            }
+
             return response()->json(['received' => true]);
         }
 

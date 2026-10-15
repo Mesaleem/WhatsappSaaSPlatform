@@ -1,10 +1,12 @@
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 
 import PlanManagementPage from './PlanManagementPage';
 import planService from '../../services/planService';
 import type { ManagedPlansResponse } from '../../types/plan';
+import { DEFAULT_PRICES } from './planPricing.fixtures';
 
 /**
  * Phase 5 Task 12 — Super Admin Plan Management UI.
@@ -28,10 +30,10 @@ import type { ManagedPlansResponse } from '../../types/plan';
  */
 
 vi.mock('../../services/planService', () => ({
-  default: { list: vi.fn(), create: vi.fn(), update: vi.fn() },
+  default: { list: vi.fn(), create: vi.fn(), update: vi.fn(), getPricing: vi.fn(), updatePricing: vi.fn() },
 }));
 
-const plans = planService as unknown as { list: Mock; create: Mock; update: Mock };
+const plans = planService as unknown as { list: Mock; create: Mock; update: Mock; getPricing: Mock; updatePricing: Mock };
 
 const response: ManagedPlansResponse = {
   data: [
@@ -84,6 +86,7 @@ const response: ManagedPlansResponse = {
 beforeEach(() => {
   vi.clearAllMocks();
   plans.list.mockResolvedValue(structuredClone(response));
+  plans.getPricing.mockResolvedValue(structuredClone(DEFAULT_PRICES));
   plans.create.mockResolvedValue({ message: 'Plan created.' });
   plans.update.mockResolvedValue({
     message: 'Plan updated.',
@@ -92,7 +95,7 @@ beforeEach(() => {
 });
 
 async function open() {
-  render(<PlanManagementPage />);
+  render(<MemoryRouter><PlanManagementPage /></MemoryRouter>);
   await screen.findByTestId('plan-row-starter');
 }
 
@@ -139,7 +142,7 @@ describe('listing', () => {
   it('surfaces a load failure instead of rendering an empty table silently', async () => {
     plans.list.mockRejectedValue({ response: { status: 500, data: { message: 'Server exploded.' } } });
 
-    render(<PlanManagementPage />);
+    render(<MemoryRouter><PlanManagementPage /></MemoryRouter>);
 
     expect(await screen.findByTestId('plan-page-error')).toBeTruthy();
   });
@@ -150,7 +153,7 @@ describe('listing', () => {
       response: { status: 403, data: { message: 'Only Super Admin can manage plans.' } },
     });
 
-    render(<PlanManagementPage />);
+    render(<MemoryRouter><PlanManagementPage /></MemoryRouter>);
 
     expect((await screen.findByTestId('plan-page-error')).textContent).toContain('Only Super Admin');
   });
@@ -193,10 +196,14 @@ describe('create', () => {
       capabilities: ['crm'],
     });
     // No invented fields reach the API.
+    // Plan restructure (2026-10-15): + the plan limits, is_public and account_id (custom plans).
     expect(Object.keys(payload).sort()).toEqual([
-      'billing_model', 'capabilities', 'description', 'duration_days', 'engine_type',
-      'included_credits', 'is_active', 'label', 'price', 'rate_per_message', 'slug', 'total_allocated_messages',
+      'account_id', 'billing_model', 'capabilities', 'description', 'duration_days', 'engine_type',
+      'included_credits', 'is_active', 'is_public', 'label', 'marketing_message_limit', 'max_broadcasts_per_month',
+      'max_flows', 'max_meta_templates', 'max_users', 'price', 'rate_per_message', 'slug', 'total_allocated_messages',
     ]);
+    // Untouched limits are unlimited (null); a normal plan is public and belongs to no client.
+    expect([payload.max_users, payload.max_flows, payload.is_public, payload.account_id]).toEqual([null, null, true, null]);
     // Phase 8 Task 2 — untouched, the allowance is an explicit 0.
     expect(payload.included_credits).toBe(0);
   });
@@ -521,7 +528,7 @@ describe('no hardcoded plan data', () => {
       available_capabilities: [],
     });
 
-    render(<PlanManagementPage />);
+    render(<MemoryRouter><PlanManagementPage /></MemoryRouter>);
 
     expect(await screen.findByTestId('plan-row-mystery')).toBeTruthy();
     // And none of the seeded ones, because the API did not return them.

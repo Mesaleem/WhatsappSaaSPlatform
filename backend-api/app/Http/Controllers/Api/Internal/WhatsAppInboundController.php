@@ -4,29 +4,29 @@ namespace App\Http\Controllers\Api\Internal;
 
 use App\Http\Controllers\Controller;
 use App\Models\InboundMessageEvent;
+use App\Models\WhatsAppNumber;
 use App\Services\Chatbot\ChatbotEngineService;
+use App\Services\Crm\InboundWhatsAppLeads;
+use App\Services\WhatsApp\InboundReplyContext;
+use App\Services\WhatsApp\WhatsAppInbox;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
 /**
  * Module 10 — the Baileys-side counterpart to MetaWebhookController's
- * inbound-message handling. Where Meta pushes inbound messages directly
- * to our public /api/webhooks/meta endpoint, Baileys sessions run inside
- * qr-engine-service (a separate Node.js process — see the platform's
- * Structural Context), which has no direct database access of its own.
- * This endpoint is the receiving side of that gap: qr-engine-service is
- * expected to POST here whenever its Baileys socket emits an inbound
- * message event, using the SAME account_id it already reports to
- * /api/internal/whatsapp-status.
+ * inbound-message handling. qr-engine-service POSTs here whenever its
+ * Baileys socket receives a direct message (see its sessionManager's
+ * messages.upsert listener).
  *
- * KNOWN GAP (disclosed): qr-engine-service does not yet have an inbound
- * message listener wired to actually call this endpoint — building that
- * listener is Node.js/Baileys work inside qr-engine-service, which is
- * explicitly OUT of this module's Structural Context (the same
- * disclosed boundary drawn for BaileysDriver::sendMessage() since
- * Module 5, and for the Baileys delivery-status callback in Module 9).
- * This controller exists so that, once that listener is added, there is
- * already a correct, secured, tested receiving endpoint for it to call.
+ * QA fixes (2026-10-14):
+ *  - every message (text, and media / location / contact as a short label)
+ *    is kept in the WhatsApp inbox; only text goes on to the chatbot and
+ *    journeys, as before;
+ *  - session_id (the number slot that RECEIVED the message) is honoured:
+ *    the chatbot / journey reply goes out from that same number
+ *    (InboundReplyContext), not from the account's default number;
+ *  - a first message from an unknown number can open a CRM lead, when the
+ *    account switched that on (CRM Sales Settings → New leads).
  */
 class WhatsAppInboundController extends Controller
 {
@@ -46,16 +46,43 @@ class WhatsAppInboundController extends Controller
             // Optional so an older qr-engine build keeps working (without
             // durable de-duplication — see InboundEventGate).
             'message_id' => ['nullable', 'string', 'max:128'],
+            'session_id' => ['nullable', 'integer'],
+            'message_type' => ['nullable', 'string', 'max:20'],
+            'sender_name' => ['nullable', 'string', 'max:255'],
         ]);
 
-        $log = app(ChatbotEngineService::class)->handleInboundMessage(
-            (int) $data['account_id'],
+        $accountId = (int) $data['account_id'];
+        // The receiving slot must belong to this account; anything else is ignored.
+        $numberId = isset($data['session_id'])
+            ? WhatsAppNumber::query()->where('account_id', $accountId)->whereKey((int) $data['session_id'])->value('id')
+            : null;
+        $type = $data['message_type'] ?? 'text';
+
+        $recorded = app(WhatsAppInbox::class)->recordInbound(
+            $accountId,
+            $data['sender_phone'],
+            $data['message'],
+            $type,
+            $data['sender_name'] ?? null,
+            ! empty($data['message_id']) ? 'wamsg:'.$data['message_id'] : null,
+            $numberId !== null ? (int) $numberId : null,
+        );
+        if ($recorded !== null) {
+            app(InboundWhatsAppLeads::class)->maybeCreate($accountId, $data['sender_phone'], $data['sender_name'] ?? null);
+        }
+
+        if ($type !== 'text') {
+            return response()->json(['received' => true, 'chatbot_log' => null]);
+        }
+
+        $log = InboundReplyContext::run($accountId, $numberId !== null ? (int) $numberId : null, fn () => app(ChatbotEngineService::class)->handleInboundMessage(
+            $accountId,
             $data['sender_phone'],
             $data['message'],
             null,
             InboundMessageEvent::PROVIDER_QR,
             ! empty($data['message_id']) ? 'wamsg:'.$data['message_id'] : null,
-        );
+        ));
 
         return response()->json(['received' => true, 'chatbot_log' => $log]);
     }

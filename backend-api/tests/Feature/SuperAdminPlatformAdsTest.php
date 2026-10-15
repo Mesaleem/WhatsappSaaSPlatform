@@ -115,7 +115,8 @@ class SuperAdminPlatformAdsTest extends TestCase
         return array_replace_recursive([
             'campaign_name' => 'Diwali', 'objective' => 'LEAD_GENERATION', 'daily_budget' => 500,
             'targeting_specs' => ['countries' => ['IN'], 'age_min' => 18, 'age_max' => 45],
-            'creative' => ['image_url' => null, 'headline' => 'Hi', 'primary_text' => 'Buy'],
+            // A lead ad opens an instant form (required since the 2026-10-14 QA fixes).
+            'creative' => ['image_url' => null, 'headline' => 'Hi', 'primary_text' => 'Buy', 'lead_gen_form_id' => '777000111'],
         ], $overrides);
     }
 

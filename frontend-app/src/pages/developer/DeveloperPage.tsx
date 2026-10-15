@@ -829,6 +829,9 @@ const EVENT_LABELS: Record<WebhookEvent, string> = {
   'message.sent': 'Message Sent',
   'message.failed': 'Message Failed',
   'message.delivered': 'Message Delivered',
+  'crm.lead.created': 'CRM: New lead',
+  'crm.lead.status_changed': 'CRM: Lead status changed',
+  'crm.deal.won': 'CRM: Deal won',
 };
 
 function CreateWebhookModal({

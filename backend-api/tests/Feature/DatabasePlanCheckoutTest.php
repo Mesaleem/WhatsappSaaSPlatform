@@ -141,7 +141,8 @@ class DatabasePlanCheckoutTest extends TestCase
 
         $slugs = $this->repository()->purchasable()->pluck('slug')->all();
 
-        $this->assertSame(['starter', 'business'], $slugs);
+        // Plan restructure (2026-10-15): the seeded line-up includes crm, meta_growth and meta_pro.
+        $this->assertSame(['starter', 'crm', 'meta_growth', 'business', 'meta_pro'], $slugs);
     }
 
     // =================================================================

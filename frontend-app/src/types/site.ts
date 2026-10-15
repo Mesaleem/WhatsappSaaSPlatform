@@ -129,6 +129,8 @@ export interface PublicPlan {
   tax_amount: string;
   total_amount: string;
   features: string[];
+  /** Plan restructure (2026-10-15): users / templates / journeys / broadcasts / marketing caps (null = unlimited). */
+  limits?: import('./account').PlanLimits;
 }
 
 export interface ContactPayload {

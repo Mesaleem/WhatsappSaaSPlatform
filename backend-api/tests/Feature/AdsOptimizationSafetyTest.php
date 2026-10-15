@@ -263,7 +263,8 @@ class AdsOptimizationSafetyTest extends TestCase
         $this->runRules();
 
         $this->assertSame(AdCampaign::STATUS_PAUSED, $over->fresh()->status);
-        $this->assertStringContainsString('CPL $4.00', $over->fresh()->auto_pause_reason);
+        // In the ad account's currency since the 2026-10-14 QA fixes (INR when Meta did not say).
+        $this->assertStringContainsString('CPL ₹4.00', $over->fresh()->auto_pause_reason);
         $this->assertSame(AdCampaign::STATUS_ACTIVE, $under->fresh()->status);
         $this->assertSame(AdCampaign::STATUS_ACTIVE, $none->fresh()->status);
     }

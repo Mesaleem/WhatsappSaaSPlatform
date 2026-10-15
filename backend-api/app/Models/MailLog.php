@@ -9,6 +9,7 @@ class MailLog extends Model
 {
     protected $fillable = [
         'broadcast_id',
+        'template_slug',
         'account_id',
         'recipient_email',
         'recipient_name',

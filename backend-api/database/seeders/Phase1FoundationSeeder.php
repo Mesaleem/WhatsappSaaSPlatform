@@ -140,6 +140,7 @@ class Phase1FoundationSeeder extends Seeder
         ['meta', 'journey_automation', true, 'Meta-tier customers may be entitled to Journey automation.'],
         ['meta', 'ads', true, 'CTWA ad-lead capture is Meta-webhook-native.'],
         ['none', 'social', true, 'Social/AI do not require any WhatsApp engine.'],
+        ['none', 'crm', true, 'CRM is engine-agnostic: the CRM plan sells it without any WhatsApp engine.'],
         ['none', 'ai', true, 'Social/AI do not require any WhatsApp engine.'],
         /*
          * Phase 5 Task 7. Every pairing below is STATED rather than left
@@ -218,6 +219,15 @@ class Phase1FoundationSeeder extends Seeder
             'custom_code',
             'email',
         ],
+        // Plan restructure (owner, 2026-10-15) — see migration 2026_10_15_100000. Growth and
+        // Business stay seeded and active here (test fixtures); production retires them.
+        // QA fixes (2026-10-14): the Developer API, so leads can come from a website / another system.
+        'crm' => ['crm', 'external_api'],
+        'meta_growth' => ['whatsapp_send', 'journey_automation', 'external_api'],
+        // QA fixes (2026-10-14, owner): AI is part of Meta Pro.
+        'meta_pro' => ['whatsapp_send', 'journey_automation', 'crm', 'ads', 'social', 'external_api', 'ai'],
+        // The hidden website-signup trial: Starter's features (see migration 2026_10_16_100200).
+        'trial' => ['whatsapp_send', 'whatsapp_groups', 'social', 'external_api'],
     ];
 
     /**
@@ -257,9 +267,20 @@ class Phase1FoundationSeeder extends Seeder
      * cutover from PlanCatalog to `plans` is behaviour-preserving.
      */
     private const PLANS = [
-        'starter' => ['label' => 'Starter', 'price' => 599.00, 'duration_days' => 30, 'description' => '500 messages/month over the QR (Baileys) engine.', 'capability' => 'whatsapp_send', 'usage_limit' => 500, 'engine_type' => 'qr', 'billing_model' => 'flat_quota', 'rate_per_message' => null, 'total_allocated_messages' => 500, 'included_credits' => 0],
+        'starter' => ['label' => 'Starter', 'price' => 599.00, 'duration_days' => 30, 'description' => '500 messages/month over the QR (Baileys) engine.', 'capability' => 'whatsapp_send', 'usage_limit' => 500, 'engine_type' => 'qr', 'billing_model' => 'flat_quota', 'rate_per_message' => null, 'total_allocated_messages' => 500, 'included_credits' => 0,
+            // QA fixes (2026-10-14): Starter's 2-user limit on a fresh install too (only the
+            // 2026-10-15 migration set it, on installations that already had the plan).
+            'limits' => ['max_users' => 2]],
         'growth' => ['label' => 'Growth', 'price' => 1999.00, 'duration_days' => 30, 'description' => '2,500 messages/month over the QR (Baileys) engine.', 'capability' => 'whatsapp_send', 'usage_limit' => 2500, 'engine_type' => 'qr', 'billing_model' => 'flat_quota', 'rate_per_message' => null, 'total_allocated_messages' => 2500, 'included_credits' => 0],
         'business' => ['label' => 'Business', 'price' => 7999.00, 'duration_days' => 30, 'description' => '10,000 messages/month over the official Meta Cloud API.', 'capability' => 'whatsapp_send', 'usage_limit' => 10000, 'engine_type' => 'meta', 'billing_model' => 'flat_quota', 'rate_per_message' => null, 'total_allocated_messages' => 10000, 'included_credits' => 0],
+        'crm' => ['label' => 'CRM', 'price' => 899.00, 'duration_days' => 30, 'description' => 'CRM only: leads, contacts, pipeline, deals, companies and tasks. No WhatsApp sending.', 'capability' => 'crm', 'usage_limit' => null, 'engine_type' => 'none', 'billing_model' => 'unlimited', 'rate_per_message' => null, 'total_allocated_messages' => null, 'included_credits' => 0,
+            'limits' => ['max_users' => 3, 'max_meta_templates' => 0, 'max_flows' => 0, 'max_broadcasts_per_month' => 0, 'marketing_message_limit' => 0]],
+        'meta_growth' => ['label' => 'Meta Growth', 'price' => 4999.00, 'duration_days' => 30, 'description' => '5,000 messages a month on the official Meta WhatsApp API (up to 2,500 marketing), journey builder, WhatsApp Flows and Meta templates.', 'capability' => 'whatsapp_send', 'usage_limit' => 5000, 'engine_type' => 'meta', 'billing_model' => 'flat_quota', 'rate_per_message' => null, 'total_allocated_messages' => 5000, 'included_credits' => 0,
+            'limits' => ['max_users' => 3, 'max_meta_templates' => 10, 'max_flows' => 3, 'max_broadcasts_per_month' => 10, 'marketing_message_limit' => 2500]],
+        'meta_pro' => ['label' => 'Meta Pro', 'price' => 7999.00, 'duration_days' => 30, 'description' => '10,000 messages a month on the official Meta WhatsApp API (up to 4,000 marketing), CRM, Meta Ads, journey builder, WhatsApp Flows, templates and broadcasts.', 'capability' => 'whatsapp_send', 'usage_limit' => 10000, 'engine_type' => 'meta', 'billing_model' => 'flat_quota', 'rate_per_message' => null, 'total_allocated_messages' => 10000, 'included_credits' => 0,
+            'limits' => ['max_users' => 5, 'max_meta_templates' => 30, 'max_flows' => 10, 'max_broadcasts_per_month' => 20, 'marketing_message_limit' => 4000]],
+        'trial' => ['label' => 'Free Trial', 'price' => 0.00, 'duration_days' => 7, 'description' => 'Website signup trial: Starter features, 50 messages, 7 days.', 'capability' => 'whatsapp_send', 'usage_limit' => 50, 'engine_type' => 'qr', 'billing_model' => 'flat_quota', 'rate_per_message' => null, 'total_allocated_messages' => 50, 'included_credits' => 0,
+            'limits' => ['max_users' => 2], 'is_public' => false],
     ];
 
     public function run(): void
@@ -325,6 +346,14 @@ class Phase1FoundationSeeder extends Seeder
              */
             if (Schema::hasColumn('plans', 'included_credits')) {
                 $plan->forceFill(['included_credits' => $attrs['included_credits']])->save();
+            }
+
+            // Plan restructure (2026-10-15) — per-plan limits (NULL = unlimited).
+            if (isset($attrs['limits']) && Schema::hasColumn('plans', 'max_users')) {
+                $plan->forceFill($attrs['limits'])->save();
+            }
+            if (array_key_exists('is_public', $attrs) && Schema::hasColumn('plans', 'is_public')) {
+                $plan->forceFill(['is_public' => $attrs['is_public']])->save();
             }
 
             /*

@@ -48,6 +48,14 @@ class AdCampaignController extends Controller
         return response()->json(['data' => $campaigns->map(fn (AdCampaign $c) => $this->present($c))]);
     }
 
+    /** GET /api/social/ads/lead-forms — QA fixes (2026-10-14): the connected Page's instant forms. */
+    public function leadForms(Request $request): JsonResponse
+    {
+        $account = $this->requireTargetAccount($request);
+
+        return response()->json(['data' => app(MetaAdsService::class)->leadForms($account)]);
+    }
+
     /**
      * POST /api/social/ads/launch
      *
@@ -87,6 +95,8 @@ class AdCampaignController extends Controller
             'creative.headline' => ['required', 'string', 'max:255'],
             'creative.primary_text' => ['required', 'string', 'max:2000'],
             'creative.call_to_action' => ['nullable', 'string', Rule::in(array_unique(array_merge(...array_values(MetaAdsService::CALL_TO_ACTIONS))))],
+            // QA fixes (2026-10-14): the instant form a lead-generation ad opens.
+            'creative.lead_gen_form_id' => ['nullable', 'string', 'max:64', 'regex:/^[0-9]+$/'],
         ]);
 
         if (empty($data['targeting_specs']['countries']) && empty($data['targeting_specs']['locations'])) {

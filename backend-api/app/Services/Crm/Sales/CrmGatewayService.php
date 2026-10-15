@@ -237,6 +237,35 @@ class CrmGatewayService
 
         DB::table('crm_gateway_orders')->where('id', $order->id)->update(['status' => 'paid', 'crm_payment_id' => $payment->id, 'updated_at' => now()]);
 
+        // QA fixes (2026-10-14): after an online payment the customer gets the receipt
+        // automatically (email when we have one, else WhatsApp) and the deal owner / the
+        // account's admins are told — it used to be recorded silently.
+        DB::afterCommit(function () use ($payment, $invoice, $account): void {
+            try {
+                $email = $invoice->customer_snapshot['email'] ?? $invoice->contact?->email;
+                $receipts = app(CrmReceiptService::class);
+                if ($email) {
+                    $receipts->send($payment, 'email', null);
+                } elseif (CrmDeliveryService::canUseWhatsApp((int) $account->id)) {
+                    $receipts->send($payment, 'whatsapp', null);
+                }
+            } catch (\Throwable $e) {
+                \Illuminate\Support\Facades\Log::warning('CrmGatewayService: automatic receipt not sent.', ['crm_payment_id' => $payment->id, 'error' => $e->getMessage()]);
+            }
+
+            $ownerId = $invoice->crm_deal_id ? \App\Models\CrmDeal::query()->whereKey($invoice->crm_deal_id)->value('owner_user_id') : null;
+            $recipients = $ownerId
+                ? \App\Models\User::query()->whereKey($ownerId)->get()
+                : \App\Models\User::query()->where('account_id', $account->id)->where('is_active', true)->whereHas('roles', fn ($q) => $q->where('name', 'admin'))->get();
+            app(\App\Services\Mail\SystemMailer::class)->notifyUsers(
+                $recipients,
+                'Payment received online',
+                ($invoice->customer_snapshot['name'] ?? 'A customer').' paid '.$invoice->currency.' '.$payment->amount.' for '.$invoice->number.'.',
+                'crm',
+                '/crm/payments',
+            );
+        });
+
         return $payment;
     }
 

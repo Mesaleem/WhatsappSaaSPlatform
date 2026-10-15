@@ -40,13 +40,6 @@ class AccountMailer
      */
     public function send(string $to, string $subject, string $heading, string $body, ?array $button = null): bool
     {
-        $setting = MailSetting::currentCached();
-        if (! $setting || ! $setting->isConfigured()) {
-            Log::warning('Account email not sent: mail settings are not configured.', ['subject' => $subject]);
-
-            return false;
-        }
-
         $brand = $this->brand();
         $html = '<div style="background:#f1f5f9;padding:32px 12px;font-family:Arial,Helvetica,sans-serif">'
             .'<div style="max-width:520px;margin:auto;background:#ffffff;border-radius:16px;overflow:hidden;border:1px solid #e2e8f0">'
@@ -58,6 +51,24 @@ class AccountMailer
             .'</div>'
             .'<div style="padding:16px 28px;border-top:1px solid #e2e8f0;color:#94a3b8;font-size:12px">This is an automatic security email from '.e($brand).'. Please do not reply.</div>'
             .'</div></div>';
+
+        return $this->sendHtml($to, $subject, $html);
+    }
+
+    /**
+     * Send a complete HTML email (System email templates use this). Returns
+     * false when mail is not configured or sending failed; never throws.
+     */
+    public function sendHtml(string $to, string $subject, string $html): bool
+    {
+        $setting = MailSetting::currentCached();
+        if (! $setting || ! $setting->isConfigured()) {
+            Log::warning('Account email not sent: mail settings are not configured.', ['subject' => $subject]);
+
+            return false;
+        }
+
+        $brand = $this->brand();
 
         try {
             Config::set('mail.mailers.'.self::MAILER_NAME, $setting->toMailerConfig());

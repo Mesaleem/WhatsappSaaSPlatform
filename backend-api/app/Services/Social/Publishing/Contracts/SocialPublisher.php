@@ -41,11 +41,12 @@ interface SocialPublisher
 
     /**
      * One check of a post the provider is still processing (e.g. an
-     * Instagram video container); publishes it once ready.
+     * Instagram video container); publishes it once ready. $request is the
+     * post itself (a carousel needs its caption once its items are ready).
      *
      * @throws ProviderRequestFailed|PublishUnreachable
      */
-    public function checkProcessing(SocialAccount $target, string $containerId): PublishOutcome;
+    public function checkProcessing(SocialAccount $target, string $containerId, ?PublishRequest $request = null): PublishOutcome;
 
     /** Is this provider error worth retrying later (rate limit, outage), as opposed to permanent? */
     public function isTransient(ProviderRequestFailed $failure): bool;

@@ -119,6 +119,15 @@ class PaymentAlertController extends Controller
             ], 422);
         }
 
+        // Plan restructure (2026-10-15): a CSV upload is one broadcast of the plan's monthly allowance.
+        try {
+            app(\App\Services\Billing\PlanLimits::class)->consumeBroadcast($account, 'payment_alert_csv', $request->user());
+        } catch (\App\Services\Billing\PlanLimitException $e) {
+            fclose($handle);
+
+            throw $e;
+        }
+
         $columnIndex = array_flip($normalizedHeader);
 
         $queued = [];
@@ -323,6 +332,13 @@ class PaymentAlertController extends Controller
             }
         }
 
+        // QA fixes (2026-10-14): a free-text group send is a broadcast too (one per group),
+        // like a template group send — it used to bypass the plan's monthly limit.
+        $limits = app(\App\Services\Billing\PlanLimits::class);
+        foreach ($data['group_ids'] as $_) {
+            $limits->consumeBroadcast($account, 'group_text', $request->user());
+        }
+
         if ($sendAt !== null) {
             $scheduled = [];
             foreach ($data['group_ids'] as $groupId) {
@@ -362,6 +378,11 @@ class PaymentAlertController extends Controller
         $failed = array_values(array_filter($results, fn (array $r) => $r['status'] !== 'queued'));
 
         if ($failed) {
+            // A group that was not queued does not use up a broadcast.
+            foreach ($failed as $_) {
+                $limits->releaseBroadcast($account, 'group_text');
+            }
+
             return response()->json(['message' => $failed[0]['message'] ?? 'Could not queue this group dispatch.'], 422);
         }
 

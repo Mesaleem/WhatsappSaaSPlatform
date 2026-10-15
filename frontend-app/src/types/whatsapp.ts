@@ -13,6 +13,8 @@ export interface WhatsAppStatusResponse {
   phone_number?: string | null;
   /** The default number slot; the connect modal uses it to receive that slot's events. */
   number_id?: number | null;
+  /** QA fixes (2026-10-14): the engine of the account being looked at. */
+  engine_type?: 'qr' | 'meta' | 'none' | null;
 }
 
 /** One WhatsApp number slot of an account (GET /api/whatsapp/numbers). */

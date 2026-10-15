@@ -3,7 +3,8 @@
  * Mirrors app/Models/Subscription.php + AccountController's JSON shape.
  */
 
-export type EngineType = 'qr' | 'meta';
+/** 'none' = no WhatsApp engine (the CRM-only plan, 2026-10-15). */
+export type EngineType = 'qr' | 'meta' | 'none';
 export type BillingModel = 'flat_quota' | 'per_message' | 'unlimited';
 export type PaymentMode = 'cash' | 'razorpay' | 'stripe';
 export type SubscriptionStatus = 'active' | 'expired' | 'exhausted';

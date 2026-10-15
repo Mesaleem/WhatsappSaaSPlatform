@@ -66,6 +66,8 @@ class CriticalRouteAuthorizationSweepTest extends TestCase
         'GET api/public/crm-documents/{token}/pdf' => 'throttle 60/min + 64-char random link token',
         'POST api/public/crm-documents/{token}/pay' => 'throttle 10/min + link token; opens the tenant gateway order',
         'POST api/public/crm-documents/{token}/confirm' => 'throttle 20/min + link token + gateway signature check',
+        // QA fixes (2026-10-14): the customer accepts a sent quotation from its link.
+        'POST api/public/crm-documents/{token}/accept' => 'throttle 10/min + unguessable link token; sent quotations / proposals only',
         'POST api/webhooks/crm-payments/{webhookToken}' => 'throttle 120/min + per-tenant webhook token + gateway signature',
     ];
 

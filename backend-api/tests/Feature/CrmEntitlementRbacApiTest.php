@@ -181,7 +181,9 @@ class CrmEntitlementRbacApiTest extends TestCase
         // payments, reminders, settings, sales report: 32). Every one carries the full chain asserted below.
         // 90 after the verification follow-up (+ documents/{id}/attachment GET+POST, payments/{id}/receipt, send-receipt).
         // 91 since 2026-10-14: POST /crm/leads/{id}/ai-follow-up (same gate chain as the rest).
-        $this->assertCount(91, $routes, 'a CRM route was added or removed — re-check its gates');
+        // 94 since the 2026-10-14 QA fixes: GET/PUT /crm/lead-settings (full chain + view-all-crm)
+        // and POST /crm/leads/import.
+        $this->assertCount(94, $routes, 'a CRM route was added or removed — re-check its gates');
 
         foreach ($routes as $route) {
             $mw = $route->gatherMiddleware();

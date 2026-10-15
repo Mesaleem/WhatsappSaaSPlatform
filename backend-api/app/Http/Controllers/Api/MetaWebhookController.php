@@ -230,6 +230,11 @@ class MetaWebhookController extends Controller
 
             foreach ($changes as $change) {
                 $value = $change['value'] ?? [];
+                if (($change['field'] ?? null) === 'message_template_status_update') {
+                    $this->handleTemplateStatus($value, (string) ($entry['id'] ?? ''));
+
+                    continue;
+                }
                 $statuses = $value['statuses'] ?? [];
 
                 // [Hardening, Phase 4 Task 4]: the owning tenant is resolved
@@ -352,9 +357,20 @@ class MetaWebhookController extends Controller
             abort(403, 'Missing webhook signature.');
         }
 
-        $appSecret = (string) (SocialProviderConfig::findByProviderCached('meta')?->client_secret ?? '');
+        // QA fixes (2026-10-14): Meta signs with the secret of the app the
+        // number is subscribed through. A tenant that connected through its
+        // OWN Meta app (Embedded Signup / its own credentials) is signed with
+        // that app's secret, which used to be refused (403) — killing the
+        // chatbot, journeys and delivery statuses for that tenant. The
+        // candidates are the platform secret plus the stored app secrets of
+        // the numbers / business accounts this payload names; a payload is
+        // accepted only when one of them produced the signature.
+        $secrets = array_values(array_filter([
+            (string) (SocialProviderConfig::findByProviderCached('meta')?->client_secret ?? ''),
+            ...$this->tenantAppSecretsFor($request),
+        ], fn (string $s) => $s !== ''));
 
-        if ($appSecret === '') {
+        if ($secrets === []) {
             Log::warning('Meta webhook rejected: signature verification could not run — no Meta App Secret configured (social_provider_configs, provider=meta, client_secret is empty).', [
                 'ip' => $request->ip(),
             ]);
@@ -362,9 +378,15 @@ class MetaWebhookController extends Controller
             abort(403, 'Webhook signature verification is misconfigured.');
         }
 
-        $expected = 'sha256=' . hash_hmac('sha256', $request->getContent(), $appSecret);
+        $valid = false;
+        foreach ($secrets as $secret) {
+            if (hash_equals('sha256='.hash_hmac('sha256', $request->getContent(), $secret), $header)) {
+                $valid = true;
+                break;
+            }
+        }
 
-        if (! hash_equals($expected, $header)) {
+        if (! $valid) {
             Log::warning('Meta webhook rejected: X-Hub-Signature-256 signature mismatch.', [
                 'ip' => $request->ip(),
                 'header_present' => true,
@@ -373,6 +395,48 @@ class MetaWebhookController extends Controller
 
             abort(403, 'Invalid webhook signature.');
         }
+    }
+
+    /**
+     * The tenants' own Meta app secrets for the phone numbers / WhatsApp Business
+     * Accounts named in this (not yet verified) payload — candidates only; the
+     * HMAC decides.
+     *
+     * @return list<string>
+     */
+    private function tenantAppSecretsFor(Request $request): array
+    {
+        $payload = json_decode($request->getContent(), true);
+        if (! is_array($payload)) {
+            return [];
+        }
+        $phoneIds = [];
+        $wabaIds = [];
+        foreach ((array) ($payload['entry'] ?? []) as $entry) {
+            if (isset($entry['id'])) {
+                $wabaIds[] = (string) $entry['id'];
+            }
+            foreach ((array) ($entry['changes'] ?? []) as $change) {
+                $id = $change['value']['metadata']['phone_number_id'] ?? null;
+                if ($id !== null) {
+                    $phoneIds[] = (string) $id;
+                }
+            }
+        }
+        if ($phoneIds === [] && $wabaIds === []) {
+            return [];
+        }
+
+        return WhatsAppSession::query()
+            ->where(fn ($q) => $q->whereIn('meta_phone_number_id', array_slice(array_unique($phoneIds), 0, 50))->orWhereIn('meta_waba_id', array_slice(array_unique($wabaIds), 0, 50)))
+            ->whereNotNull('meta_app_secret')
+            ->limit(50)
+            ->get()
+            ->map(fn (WhatsAppSession $s) => (string) $s->meta_app_secret)
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
     }
 
     private function fireDeliveredWebhook(int $accountId, string $wamid): void
@@ -563,6 +627,26 @@ class MetaWebhookController extends Controller
                 default => null,
             };
 
+            // QA fixes (2026-10-14): every customer message is kept in the WhatsApp
+            // inbox — media / location / contacts as a short label with the caption.
+            $wamidForInbox = $message['id'] ?? null;
+            $inboxText = $body ?? self::inboxLabel((string) $type, $message);
+            if ($inboxText !== null && trim($inboxText) !== '') {
+                $senderName = null;
+                foreach ($contacts as $contact) {
+                    if (($contact['wa_id'] ?? null) === $from) {
+                        $senderName = $contact['profile']['name'] ?? null;
+                    }
+                }
+                $recorded = app(\App\Services\WhatsApp\WhatsAppInbox::class)->recordInbound(
+                    $accountId, (string) $from, $inboxText, $body !== null ? 'text' : (string) $type, $senderName,
+                    is_string($wamidForInbox) && $wamidForInbox !== '' ? 'wamid:'.$wamidForInbox : null,
+                );
+                if ($recorded !== null && empty($referral)) {
+                    app(\App\Services\Crm\InboundWhatsAppLeads::class)->maybeCreate($accountId, (string) $from, $senderName);
+                }
+            }
+
             if ($body === null) {
                 Log::debug('Meta webhook: unsupported inbound message type not matched against chatbot rules/journeys.', [
                     'account_id' => $accountId,
@@ -606,6 +690,50 @@ class MetaWebhookController extends Controller
                 InboundMessageEvent::PROVIDER_META,
                 is_string($wamid) && $wamid !== '' ? 'wamid:'.$wamid : null,
             );
+        }
+    }
+
+    /** QA fixes (2026-10-14): a short inbox label for a non-text message, with its caption when it has one. */
+    private static function inboxLabel(string $type, array $message): ?string
+    {
+        $labels = ['image' => '[Image]', 'video' => '[Video]', 'audio' => '[Voice message]', 'document' => '[Document]', 'sticker' => '[Sticker]', 'location' => '[Location]', 'contacts' => '[Contact]', 'button' => null];
+        if ($type === 'button') {
+            return (string) ($message['button']['text'] ?? '') ?: null;
+        }
+        if (! array_key_exists($type, $labels)) {
+            return null;
+        }
+        $caption = (string) ($message[$type]['caption'] ?? $message[$type]['filename'] ?? '');
+
+        return trim($labels[$type].' '.$caption);
+    }
+
+    /**
+     * QA fixes (2026-10-14) — Meta's verdict on a submitted template
+     * (field message_template_status_update): APPROVED makes it sendable,
+     * REJECTED / PAUSED / DISABLED take it out of use, and the client is told.
+     *
+     * @param array<string, mixed> $value
+     */
+    private function handleTemplateStatus(array $value, string $wabaId): void
+    {
+        // Only the templates of the WhatsApp Business Account the event is about.
+        $accountIds = WhatsAppSession::query()->where('meta_waba_id', $wabaId)->pluck('account_id');
+        if ($wabaId === '' || $accountIds->isEmpty()) {
+            return;
+        }
+        $name = (string) ($value['message_template_name'] ?? '');
+        $event = strtoupper((string) ($value['event'] ?? ''));
+        $language = $value['message_template_language'] ?? null;
+        if ($name === '' || ! in_array($event, \App\Models\MessageTemplate::META_STATUSES, true)) {
+            return;
+        }
+
+        $templates = \App\Models\MessageTemplate::query()->where('meta_template_name', $name)->whereIn('account_id', $accountIds)
+            ->when($language, fn ($q) => $q->where(fn ($w) => $w->whereNull('language')->orWhere('language', $language)))
+            ->get();
+        foreach ($templates as $template) {
+            app(\App\Services\Templates\TemplateService::class)->applyMetaStatus($template, $event, (string) ($value['reason'] ?? ''));
         }
     }
 

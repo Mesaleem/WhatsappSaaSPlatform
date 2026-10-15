@@ -67,7 +67,9 @@ class EnsureTargetAccountMiddleware
             return $this->deny('This client account is suspended. Reactivate it before acting on its behalf.', 'CLIENT_ACCOUNT_SUSPENDED');
         }
 
-        if ($module !== null && $module !== '' && ! $account->hasModuleEnabled($module)) {
+        // Owner decision (2026-09-30): the Super Admin is not held to the client's plan — only to
+        // modules explicitly switched off (plan restructure, 2026-10-15: hasModuleSwitchedOn).
+        if ($module !== null && $module !== '' && ! $account->hasModuleSwitchedOn($module)) {
             return $this->deny('This feature is switched off for the selected client account.', 'MODULE_DISABLED');
         }
 

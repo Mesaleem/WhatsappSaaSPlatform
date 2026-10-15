@@ -14,8 +14,19 @@ class WebhookSubscription extends Model
 
     /** IMPLEMENT: Dynamic Route Master with Super-Admin Bypass & Global Audit Tracking — module label shown in the Activity Logs UI. */
     protected string $auditModuleName = 'Developer Webhooks';
-    /** The three events this module supports, per spec. */
-    public const SUPPORTED_EVENTS = ['message.sent', 'message.failed', 'message.delivered'];
+    /**
+     * The events this module supports. QA fixes (2026-10-14): CRM events too, so a
+     * client can push new leads and won deals to its own system.
+     */
+    public const SUPPORTED_EVENTS = ['message.sent', 'message.failed', 'message.delivered', 'crm.lead.created', 'crm.lead.status_changed', 'crm.deal.won'];
+
+    protected static function booted(): void
+    {
+        // WebhookDispatcher remembers for a minute whether an account has webhooks.
+        $forget = fn (self $s) => \Illuminate\Support\Facades\Cache::forget("webhooks:has:{$s->account_id}");
+        static::saved($forget);
+        static::deleted($forget);
+    }
 
     protected $fillable = [
         'account_id',

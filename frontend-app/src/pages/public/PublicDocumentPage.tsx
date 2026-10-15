@@ -19,6 +19,17 @@ export default function PublicDocumentPage() {
   const [error, setError] = useState<string | null>(null);
   const [paying, setPaying] = useState(false);
   const [paid, setPaid] = useState<string | null>(null);
+  const [accepting, setAccepting] = useState(false);
+  const [accepted, setAccepted] = useState<string | null>(null);
+  const accept = () => {
+    setAccepting(true);
+    setError(null);
+    crmDocumentsService
+      .publicAccept(token)
+      .then((res) => setAccepted(res.message))
+      .catch(() => setError('The quotation could not be accepted. Please contact the business.'))
+      .finally(() => setAccepting(false));
+  };
 
   const load = () =>
     crmDocumentsService
@@ -158,11 +169,21 @@ export default function PublicDocumentPage() {
           </div>
         )}
         {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
+        {accepted && (
+          <div role="status" className="flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800">
+            <CheckCircle2 className="h-5 w-5" /> {accepted}
+          </div>
+        )}
 
         <div className="flex flex-wrap gap-3">
           <a href={crmDocumentsService.publicPdfUrl(token)} target="_blank" rel="noreferrer" className="flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
             <Download className="h-4 w-4" /> Download PDF
           </a>
+          {doc.can_accept && !accepted && (
+            <button type="button" onClick={accept} disabled={accepting} className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-60">
+              {accepting ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />} Accept quotation
+            </button>
+          )}
           {payable && doc.payable_online && (
             <button type="button" onClick={() => void pay()} disabled={paying} className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-60">
               {paying && <Loader2 className="h-4 w-4 animate-spin" />} Pay {formatMoney(doc.balance_due)} now

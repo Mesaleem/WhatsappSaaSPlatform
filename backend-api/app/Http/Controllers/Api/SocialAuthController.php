@@ -6,6 +6,7 @@ use App\Http\Controllers\Concerns\ResolvesTenantAccount;
 use App\Http\Controllers\Controller;
 use App\Models\Account;
 use App\Models\SocialAccount;
+use App\Services\Access\AccessControlService;
 use App\Services\Social\SocialTargetGate;
 use App\Services\SocialAuth\Contracts\SocialOAuthProviderInterface;
 use App\Services\SocialAuth\SocialConnectionService;
@@ -200,6 +201,7 @@ class SocialAuthController extends Controller
             'refresh_token' => $grant['refresh_token'],
             'expires_in' => $grant['expires_in'],
             'assets' => $bindableAssets,
+            'summary' => $summary = $this->assetSummary($driver, $account, $assets),
         ], now()->addMinutes(self::STATE_TTL_MINUTES));
 
         return $this->popupResponse([
@@ -207,7 +209,30 @@ class SocialAuthController extends Controller
             'provider' => $provider,
             'nonce' => $nonce,
             'assets' => array_map(fn (array $a) => array_intersect_key($a, array_flip(['asset_type', 'provider_id', 'name', 'avatar_url'])), $bindableAssets),
+            'summary' => $summary,
         ]);
+    }
+
+    /**
+     * What the provider returned, per asset type, BEFORE the per-account platform filter — so the SPA can tell a client
+     * who has no Page / no linked Instagram / no ad account what to set up on the provider's side, instead of a generic
+     * "nothing found". Counts and type keys only (no ids, no names, never a token).
+     *
+     * @param  array<int, array<string, mixed>>  $assets
+     * @return array{found: array<string, int>, enabled: array<int, string>, plan_has_ads: bool}
+     */
+    private function assetSummary(SocialOAuthProviderInterface $driver, Account $account, array $assets): array
+    {
+        $found = [];
+        foreach ($driver->assetTypes() as $type) {
+            $found[$type] = count(array_filter($assets, fn (array $a) => ($a['asset_type'] ?? null) === $type));
+        }
+
+        return [
+            'found' => $found,
+            'enabled' => array_values(array_filter($driver->assetTypes(), fn (string $type) => $account->hasSocialPlatformEnabled($type))),
+            'plan_has_ads' => (bool) (app(AccessControlService::class)->capabilityMapForAccount($account)['ads'] ?? false),
+        ];
     }
 
     /**
@@ -227,6 +252,7 @@ class SocialAuthController extends Controller
                 'provider' => $provider,
                 'nonce' => $nonce,
                 'assets' => array_map(fn (array $a) => array_intersect_key($a, array_flip(['asset_type', 'provider_id', 'name', 'avatar_url'])), $pending['assets'] ?? []),
+                'summary' => $pending['summary'] ?? null,
             ]);
         }
 
@@ -329,7 +355,12 @@ class SocialAuthController extends Controller
                 ]
             );
 
-            $bound[] = $this->present($socialAccount);
+            // QA fixes (2026-10-14): a connected asset is subscribed to this app's webhooks where
+            // the provider needs it (a Meta Page: lead ads, comments, Messenger — they never
+            // arrived without it). The subscriber decides which assets that applies to.
+            app(\App\Services\Social\MetaPageWebhookSubscriber::class)->subscribe($socialAccount);
+
+            $bound[] = $this->present($socialAccount->fresh() ?? $socialAccount);
         }
 
         Cache::forget($cacheKey);

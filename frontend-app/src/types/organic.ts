@@ -51,11 +51,32 @@ export const LINKEDIN_UNAVAILABLE_NOTE =
 /** Local date/time for a scheduled/published timestamp (ISO 8601 from the API). */
 export const formatScheduledAt = (iso: string | null) => (iso ? new Date(iso).toLocaleString() : '—');
 
+/** 2026-10-15 — what is published: a normal post, a Reel, a Story or a carousel (2–10 items). */
+export type OrganicPostFormat = 'post' | 'reel' | 'story' | 'carousel';
+
+export const ORGANIC_FORMAT_LABELS: Record<OrganicPostFormat, string> = {
+  post: 'Post',
+  reel: 'Reel',
+  story: 'Story',
+  carousel: 'Carousel',
+};
+
+export interface OrganicMediaItem {
+  url: string;
+  type: MediaType;
+}
+
+export const CAROUSEL_MIN = 2;
+export const CAROUSEL_MAX = 10;
+
 export interface PublishOrganicPostPayload {
   platform: OrganicPlatform;
   caption: string;
   media_url?: string | null;
   media_type?: MediaType | null;
+  post_format?: OrganicPostFormat;
+  /** Carousel items (2–10). */
+  media_items?: OrganicMediaItem[];
   /** Phase 9 Task 3 — ISO 8601; omitted = publish now. */
   scheduled_at?: string | null;
   /** Phase 9 Task 3 — same key for a resubmission of the same post, so it is never posted twice. */
@@ -70,6 +91,8 @@ export interface OrganicPost {
   caption: string;
   media_url: string | null;
   media_type: MediaType | null;
+  post_format?: OrganicPostFormat;
+  media_items?: OrganicMediaItem[];
   status: OrganicPostStatus;
   external_post_id: string | null;
   error_message: string | null;

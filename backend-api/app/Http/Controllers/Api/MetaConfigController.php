@@ -66,6 +66,9 @@ class MetaConfigController extends Controller
     public function store(Request $request): JsonResponse
     {
         $account = $this->account($request);
+        if ($refusal = $this->refuseUnlessMetaPlan($account)) {
+            return $refusal;
+        }
 
         $data = $request->validate([
             'meta_phone_number_id' => ['required', 'string'],
@@ -135,6 +138,9 @@ class MetaConfigController extends Controller
                 'error_code' => 'META_NUMBER_ALREADY_CONNECTED',
             ], 409);
         }
+
+        // QA fixes (2026-10-14): the Meta number is a sender for bulk sends / batches too.
+        app(\App\Services\WhatsApp\MetaNumberSync::class)->connected($account, $verification['display_phone_number'] ?? null);
 
         return response()->json([
             'message' => 'Meta credentials saved.',
@@ -260,6 +266,9 @@ class MetaConfigController extends Controller
     public function oauthExchange(Request $request): JsonResponse
     {
         $account = $this->account($request);
+        if ($refusal = $this->refuseUnlessMetaPlan($account)) {
+            return $refusal;
+        }
         $session = $account->whatsAppSession;
 
         if (! $session?->hasMetaAppConfigured()) {
@@ -326,6 +335,9 @@ class MetaConfigController extends Controller
         $session->last_connected_at = now();
         $session->save();
 
+        // QA fixes (2026-10-14): the Meta number is a sender for bulk sends / batches too.
+        app(\App\Services\WhatsApp\MetaNumberSync::class)->connected($account);
+
         return response()->json([
             'message' => 'WhatsApp channel connected.',
             'meta_phone_number_id' => $session->meta_phone_number_id,
@@ -334,12 +346,60 @@ class MetaConfigController extends Controller
         ], 201);
     }
 
+    /** QA fixes (2026-10-14): Meta credentials only for a plan on the Meta engine. */
+    private function refuseUnlessMetaPlan(Account $account): ?JsonResponse
+    {
+        $engine = $account->currentSubscription?->engine_type;
+        if ($engine === null || $engine === 'meta') {
+            return null;
+        }
+
+        return response()->json([
+            'message' => $engine === 'qr'
+                ? 'Your plan connects WhatsApp by QR code. The Meta API needs a Meta plan — upgrade first.'
+                : 'Your plan does not include WhatsApp sending.',
+            'error_code' => 'ENGINE_NOT_META',
+        ], 422);
+    }
+
+    /**
+     * The account being configured. QA fixes (2026-10-14): the tenant resolved by
+     * tenant.isolation, so a Super Admin (?account_id=) or an agent acting for its
+     * client can set up that client's Meta connection — it used to be the caller's
+     * own account only (the Super Admin got 422).
+     */
     private function account(Request $request): Account
     {
-        $accountId = $request->user()->account_id;
-        abort_if(! $accountId, 422, 'Super Admin has no tenant account to configure.');
+        $accountId = $request->attributes->get('account_id') ?? $request->user()->account_id;
+        abort_if(! $accountId, 422, 'Select a client account to configure (pass ?account_id=).');
 
-        return Account::findOrFail($accountId);
+        return Account::findOrFail((int) $accountId);
+    }
+
+    /**
+     * DELETE /api/whatsapp/meta-config — QA fixes (2026-10-14): disconnect the Meta
+     * number from this account (the "number already connected elsewhere" message told
+     * people to disconnect it, but there was no way to). Credentials are removed; the
+     * app credentials of Embedded Signup are kept.
+     */
+    public function disconnect(Request $request): JsonResponse
+    {
+        $account = $this->account($request);
+        $session = WhatsAppSession::query()->where('account_id', $account->id)->first();
+        if ($session === null || ! filled($session->meta_phone_number_id)) {
+            return response()->json(['message' => 'No Meta number is connected.'], 404);
+        }
+
+        $session->forceFill([
+            'meta_phone_number_id' => null,
+            'meta_waba_id' => null,
+            'meta_access_token' => null,
+            'status' => 'disconnected',
+            'connected_phone_number' => null,
+        ])->save();
+        app(\App\Services\WhatsApp\MetaNumberSync::class)->disconnected($account);
+
+        return response()->json(['message' => 'Meta WhatsApp number disconnected.']);
     }
 
     private function maskToken(?string $token): ?string

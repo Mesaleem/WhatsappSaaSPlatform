@@ -416,6 +416,11 @@ class TemplateMessageController extends Controller
             return response()->json(['success' => false, 'error_code' => $e->errorCode, 'message' => $e->getMessage()], $e->status);
         }
 
+        // QA fixes (2026-10-14): a group send through the API is a broadcast of the plan's
+        // monthly allowance too (it used to bypass the limit); given back if nothing was queued.
+        $broadcastAccount = Account::findOrFail($accountId);
+        app(\App\Services\Billing\PlanLimits::class)->consumeBroadcast($broadcastAccount, 'api_group');
+
         $result = GroupMessageDispatcher::dispatch(
             $accountId,
             $group->id,
@@ -426,6 +431,10 @@ class TemplateMessageController extends Controller
             senderNumberId: $senderId,
             mediaUrl: $data['media_url'] ?? null,
         );
+        if (($result['status'] ?? null) !== 'queued') {
+            app(\App\Services\Billing\PlanLimits::class)->releaseBroadcast($broadcastAccount, 'api_group');
+        }
+
 
         return match ($result['status']) {
             'queued' => response()->json([
@@ -513,6 +522,11 @@ class TemplateMessageController extends Controller
             return response()->json(['success' => false, 'error_code' => $e->errorCode, 'message' => $e->getMessage()], $e->status);
         }
 
+        // QA fixes (2026-10-14): a group send through the API is a broadcast of the plan's
+        // monthly allowance too (it used to bypass the limit); given back if nothing was queued.
+        $broadcastAccount = Account::findOrFail($accountId);
+        app(\App\Services\Billing\PlanLimits::class)->consumeBroadcast($broadcastAccount, 'api_group');
+
         $result = GroupDirectMessageDispatcher::dispatch(
             $accountId,
             $group->id,
@@ -522,6 +536,10 @@ class TemplateMessageController extends Controller
             apiKeyId: $apiKeyId,
             senderNumberId: $senderId,
         );
+        if (($result['status'] ?? null) !== 'queued') {
+            app(\App\Services\Billing\PlanLimits::class)->releaseBroadcast($broadcastAccount, 'api_group');
+        }
+
 
         return match ($result['status']) {
             'queued' => response()->json([

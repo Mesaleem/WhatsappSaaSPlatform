@@ -7,7 +7,8 @@
 
 import type { AnyJourneyNodeType } from './journeyNodes';
 
-export type FlowTriggerType = 'keyword' | 'ctwa_referral' | 'default';
+// QA fixes (2026-10-14): lead_created — the journey starts when a new CRM lead arrives.
+export type FlowTriggerType = 'keyword' | 'ctwa_referral' | 'default' | 'lead_created';
 
 /**
  * Phase 5 — Journey / Automation: widened to every registered node type.
@@ -32,6 +33,7 @@ export const TRIGGER_TYPE_LABELS: Record<FlowTriggerType, string> = {
   keyword: 'Keyword',
   ctwa_referral: 'Click-to-WhatsApp Ad',
   default: 'Default (catch-all)',
+  lead_created: 'New CRM lead',
 };
 
 /**

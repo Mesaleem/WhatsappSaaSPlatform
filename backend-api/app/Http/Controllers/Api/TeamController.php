@@ -63,6 +63,34 @@ class TeamController extends Controller
         'social_ads.launch',
         'social_ads.edit_budget',
         'social_ads.delete_rules',
+        // QA fixes (2026-10-14): a Client Admin can now open the rest of the
+        // tenant's features to one team member, not only chatbot and ads.
+        'manage-whatsapp-setup',
+        'manage-chatbot',
+        'view-logs',
+        'manage-crm',
+        'view-all-crm',
+        'manage-crm-documents',
+        'manage-crm-payments',
+        'manage-social-accounts',
+        'manage-social-leads',
+        'manage-comment-automation',
+        'view-social-analytics',
+    ];
+
+    /**
+     * Platform permissions (QA fixes, 2026-10-14). A role carrying any of
+     * these is platform staff, never assignable from a tenant's team page —
+     * otherwise a Client Admin could hand a team member e.g. 'agent' and
+     * with it every tenant on the platform.
+     */
+    private const PLATFORM_PERMISSIONS = [
+        'manage-accounts',
+        'manage-billing-settings',
+        'manage-social-settings',
+        'manage-ai-settings',
+        'manage-templates',
+        'view-activity-logs',
     ];
 
     /**
@@ -133,7 +161,10 @@ class TeamController extends Controller
         // should be able to bypass while managing that tenant's team).
         if ($account->hasReachedUserLimit()) {
             return response()->json([
-                'message' => 'User limit reached. Contact Super Admin to upgrade.',
+                'message' => 'User limit reached: your account allows '.$account->userLimit().' users. Upgrade your plan or contact us for more users.',
+                // The same code as every other plan limit (QA fixes, 2026-10-14).
+                'error_code' => 'PLAN_LIMIT_REACHED',
+                'limit' => 'max_users',
             ], 403);
         }
 
@@ -150,18 +181,13 @@ class TeamController extends Controller
         // (account_type 'client') while the caller is still the Agent.
         // Keying off $account instead would wrongly strip 'admin' from
         // an Agent inviting a co-Admin into its own Sub-Client's team.
-        $isAgent = (bool) (! $request->attributes->get('is_super_admin') && $request->user()?->account?->account_type === 'agent');
-        $excludedRoleNames = $isAgent
-            ? ['super_admin', 'agent']
-            : ['super_admin', 'admin', 'agent'];
-
         $data = $request->validate([
             'name' => ['required', 'string', 'max:255'],
             'email' => ['required', 'email', Rule::unique('users', 'email')],
             'phone_number' => ['nullable', 'string', 'max:32'],
             'password' => ['required', 'string', 'min:8'],
             'role_names' => ['required', 'array', 'min:1'],
-            'role_names.*' => ['string', 'distinct', Rule::exists('roles', 'name')->where(fn ($q) => $q->whereNotIn('name', $excludedRoleNames))],
+            'role_names.*' => ['string', 'distinct', Rule::in($this->assignableRoleNames($request))],
         ]);
 
         $user = User::create([
@@ -173,6 +199,17 @@ class TeamController extends Controller
             'is_active' => true,
         ]);
         $user->assignRole($data['role_names']);
+
+        // "team.member_added" master template — tells the new member where to log in (never the password).
+        $mailer = app(\App\Services\Mail\SystemMailer::class);
+        $mailer->sendLater('team.member_added', $user->email, [
+            'name' => $user->name,
+            'company_name' => $account->company_name,
+            'added_by' => $request->user()->name,
+            'email' => $user->email,
+            'login_url' => $mailer->url('/login'),
+            'reset_url' => $mailer->url('/forgot-password'),
+        ], [], $account->id, $user->name);
 
         return response()->json([
             'message' => 'Team member added.',
@@ -206,18 +243,23 @@ class TeamController extends Controller
         $user = User::where('account_id', $account->id)->find($id);
         abort_if(! $user, 404, 'Team member not found.');
         abort_if($account->owner?->id === $user->id, 422, "The account owner's details cannot be edited here.");
+        $this->assertCanManageMember($request, $user);
 
         $data = $request->validate([
             'name' => ['required', 'string', 'max:255'],
             'email' => ['required', 'email', Rule::unique('users', 'email')->ignore($user->id)],
             'phone_number' => ['nullable', 'string', 'max:32'],
             'role_names' => ['required', 'array', 'min:1'],
-            // Admin Role Assignment Restriction — same exclusion as
-            // store(); prevents promoting an existing team member to
-            // 'admin' from the Edit User form, which would otherwise
-            // bypass the invite-time restriction above.
-            'role_names.*' => ['string', 'distinct', Rule::exists('roles', 'name')->where(fn ($q) => $q->whereNotIn('name', ['super_admin', 'admin']))],
+            // Same assignable set as store() (QA fixes, 2026-10-14: 'agent' and
+            // platform roles were assignable here, which let a Client Admin make
+            // a team member a platform-wide agent).
+            'role_names.*' => ['string', 'distinct', Rule::in($this->assignableRoleNames($request))],
         ]);
+
+        // Nobody changes their own roles (self-promotion).
+        $current = $user->getRoleNames()->sort()->values()->all();
+        $wanted = collect($data['role_names'])->sort()->values()->all();
+        abort_if($request->user()->id === $user->id && $current !== $wanted, 403, 'You cannot change your own roles.');
 
         $user->forceFill([
             'name' => $data['name'],
@@ -256,8 +298,13 @@ class TeamController extends Controller
         // so this guard only ever fires for a Client Admin acting on
         // their own row.
         abort_if($request->user()->id === $user->id, 403, 'You cannot deactivate or remove your own account.');
+        $this->assertCanManageMember($request, $user);
 
         $user->forceFill(['is_active' => ! $user->is_active])->save();
+        // A deactivated member is signed out everywhere at once (QA fixes, 2026-10-14).
+        if (! $user->is_active) {
+            $user->tokens()->delete();
+        }
 
         return response()->json(['message' => 'Team member status updated.', 'data' => $user->fresh()->load('roles:id,name')]);
     }
@@ -290,7 +337,9 @@ class TeamController extends Controller
         // toggle()'s new self-guard; a self-lockout attempt is an
         // authorization failure, not a validation error.
         abort_if($request->user()->id === $user->id, 403, 'You cannot deactivate or remove your own account.');
+        $this->assertCanManageMember($request, $user);
 
+        $user->tokens()->delete();
         $user->delete();
 
         return response()->json(['message' => 'Team member removed.']);
@@ -318,14 +367,7 @@ class TeamController extends Controller
      */
     public function roles(Request $request): JsonResponse
     {
-        $user = $request->user();
-        $isAgent = (bool) ($user && ! $user->isSuperAdmin() && $user->account?->account_type === 'agent');
-
-        $excludedRoleNames = $isAgent
-            ? ['super_admin', 'agent']
-            : ['super_admin', 'admin', 'agent'];
-
-        $roles = Role::whereNotIn('name', $excludedRoleNames)->orderBy('name')->get(['id', 'name']);
+        $roles = Role::whereIn('name', $this->assignableRoleNames($request))->orderBy('name')->get(['id', 'name']);
 
         return response()->json(['data' => $roles]);
     }
@@ -415,5 +457,51 @@ class TeamController extends Controller
             'message' => 'Permissions updated.',
             'data' => ['user_id' => $user->id, 'direct' => $direct, 'effective' => $effective],
         ]);
+    }
+
+    /**
+     * Roles the caller may hand out on this team page (QA fixes, 2026-10-14):
+     *  - never 'super_admin' or 'agent', and never a role carrying a platform
+     *    permission (see PLATFORM_PERMISSIONS);
+     *  - 'admin' only for an agent caller (a co-admin for its own client) or
+     *    a Super Admin;
+     *  - a caller who is not an admin (e.g. social_marketer, which holds
+     *    manage-team) may only hand out roles whose permissions it holds itself.
+     *
+     * @return list<string>
+     */
+    private function assignableRoleNames(Request $request): array
+    {
+        $caller = $request->user();
+        $isSuperAdmin = (bool) $request->attributes->get('is_super_admin') || (bool) $caller?->isSuperAdmin();
+        $isAgent = ! $isSuperAdmin && $caller?->account?->account_type === 'agent' && $caller->hasRole('agent');
+        $isAdmin = $isSuperAdmin || $isAgent || (bool) $caller?->hasRole('admin');
+        $callerPermissions = $isAdmin ? null : ($caller?->getAllPermissions()->pluck('name')->all() ?? []);
+
+        return Role::query()
+            ->with('permissions:id,name')
+            ->whereNotIn('name', ($isSuperAdmin || $isAgent) ? ['super_admin', 'agent'] : ['super_admin', 'admin', 'agent'])
+            ->get()
+            ->filter(function (Role $role) use ($callerPermissions): bool {
+                $names = $role->permissions->pluck('name')->all();
+                if (array_intersect($names, self::PLATFORM_PERMISSIONS) !== []) {
+                    return false;
+                }
+
+                return $callerPermissions === null || array_diff($names, $callerPermissions) === [];
+            })
+            ->pluck('name')
+            ->values()
+            ->all();
+    }
+
+    /** A team member holding 'admin' is managed only by an admin, an agent or the Super Admin — never a social_marketer. */
+    private function assertCanManageMember(Request $request, User $member): void
+    {
+        $caller = $request->user();
+        if ($request->attributes->get('is_super_admin') || $caller->isSuperAdmin() || $caller->hasRole('admin') || $caller->hasRole('agent')) {
+            return;
+        }
+        abort_if($member->hasRole('admin'), 403, 'Only an admin can manage another admin.');
     }
 }

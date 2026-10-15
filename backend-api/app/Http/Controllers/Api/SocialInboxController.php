@@ -273,15 +273,29 @@ class SocialInboxController extends Controller
             return response()->json(['message' => 'Could not resolve the recipient for this conversation.'], 422);
         }
 
+        $sendDm = fn (array $type) => Http::asForm()->withToken($socialAccount->access_token)->timeout(15)->post(
+            'https://graph.facebook.com/'.self::API_VERSION."/{$socialAccount->provider_id}/messages",
+            [
+                'recipient' => json_encode(['id' => $participant['id']]),
+                ...$type,
+                'message' => json_encode(['text' => $message]),
+            ]
+        );
+
         try {
-            $response = Http::asForm()->withToken($socialAccount->access_token)->timeout(15)->post(
-                'https://graph.facebook.com/'.self::API_VERSION."/{$socialAccount->provider_id}/messages",
-                [
-                    'recipient' => json_encode(['id' => $participant['id']]),
-                    'messaging_type' => 'RESPONSE',
-                    'message' => json_encode(['text' => $message]),
-                ]
-            );
+            $response = $sendDm(['messaging_type' => 'RESPONSE']);
+
+            // 2026-10-15 — more than 24 hours after the customer's last message Meta refuses a plain
+            // reply; a person answering may still reply for up to 7 days with the HUMAN_AGENT tag.
+            if ($response->failed() && self::outsideMessagingWindow($response)) {
+                $response = $sendDm(['messaging_type' => 'MESSAGE_TAG', 'tag' => 'HUMAN_AGENT']);
+                if ($response->failed() && self::outsideMessagingWindow($response)) {
+                    return response()->json([
+                        'message' => "This conversation is too old to reply to: Meta allows replies only within 7 days of the customer's last message.",
+                        'error_code' => 'MESSAGING_WINDOW_CLOSED',
+                    ], 422);
+                }
+            }
         } catch (Throwable $e) {
             return response()->json(['message' => 'Could not reach Meta to send the message.'], 502);
         }
@@ -291,6 +305,15 @@ class SocialInboxController extends Controller
         }
 
         return response()->json(['message' => 'Message sent.']);
+    }
+
+    /** Meta's "message sent outside the allowed window" refusal (code 10 / 2018278, or code 551). */
+    private static function outsideMessagingWindow(HttpResponse $response): bool
+    {
+        $code = (int) $response->json('error.code');
+        $subcode = (int) $response->json('error.error_subcode');
+
+        return ($code === 10 && $subcode === 2018278) || $code === 551 || $subcode === 2534022;
     }
 
     /**

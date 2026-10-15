@@ -134,6 +134,12 @@ class MessageBatchController extends Controller
         return $this->act($request, $id, fn ($account) => $this->batches->resume($account, $id));
     }
 
+    /** POST /api/alerts/message-batches/{id}/retry-failed — QA fixes (2026-10-14). */
+    public function retryFailed(Request $request, int $id): JsonResponse
+    {
+        return $this->act($request, $id, fn ($account) => $this->batches->retryFailed($account, $id));
+    }
+
     /** POST /api/alerts/message-batches/{id}/stop */
     public function stop(Request $request, int $id): JsonResponse
     {

@@ -136,6 +136,13 @@ export default function SocialReportsPage() {
         {picker}
         {noTenantSelected ? (
           <SelectClientNotice message="Reports belong to a client. Select one to view their report." onSelect={() => openPicker('view the report')} />
+        ) : !isSuperAdmin() && user?.capabilities && user.capabilities.ads !== true ? (
+          // QA fixes (2026-10-14): this report is about Meta ad results — a plan without ads
+          // saw only empty spend / CPL figures. Post performance lives in Social Analytics.
+          <div className="rounded-xl border border-slate-200 bg-white p-5 text-sm text-slate-600" data-testid="reports-no-ads">
+            This monthly report covers Meta ad spend, leads and cost per lead, and your plan does not include Meta Ads.
+            See how your posts perform in Social Analytics, or upgrade to Meta Pro for ads.
+          </div>
         ) : (
           <>
             {downloadError && (

@@ -36,7 +36,7 @@ class BillingPaymentController extends Controller
         $account = $this->requireAccount($request, 'Select a client account first (pass ?account_id=).');
         $data = $request->validate(['plan_key' => ['required', 'string']]);
 
-        $plan = $this->plans->findPurchasable($data['plan_key']);
+        $plan = $this->plans->findPurchasable($data['plan_key'], $account);
         if ($plan === null) {
             return response()->json(['message' => 'Unknown plan.', 'error_code' => 'unknown_plan'], 422);
         }
@@ -72,6 +72,8 @@ class BillingPaymentController extends Controller
         $invoice->plan_change = \App\Services\Billing\PlanChangePolicy::invoiceChange($decision['action']);
         $invoice->capturePlanTerms($plan)->save();
 
+        app(\App\Services\Billing\BillingRequestNotifier::class)->planRequested($account, $request->user(), $invoice, $decision['action']);
+
         return response()->json([
             'message' => 'Invoice created. Pay it by bank transfer, UPI or cash. Your Super Admin or agent will record the payment and start the plan.',
             'invoice' => $invoice->fresh(),
@@ -88,7 +90,8 @@ class BillingPaymentController extends Controller
         $data = $request->validate(['gateway' => ['required', Rule::in(PaymentGatewayFactory::SUPPORTED_GATEWAYS)]]);
 
         $invoice = Invoice::query()->where('account_id', $account->id)->whereKey($id)->first();
-        if ($invoice === null || $this->payments->kindOf($invoice) !== 'plan') {
+        // A quota top-up invoice is paid online the same way (QA fixes, 2026-10-14).
+        if ($invoice === null || ! in_array($this->payments->kindOf($invoice), ['plan', 'quota_topup'], true)) {
             return response()->json(['message' => 'Invoice not found.', 'error_code' => 'not_found'], 404);
         }
         if ($invoice->status !== 'pending') {
@@ -141,6 +144,10 @@ class BillingPaymentController extends Controller
     {
         $account = $this->requireAccount($request, 'Select a client account first (pass ?account_id=).');
         $invoice = Invoice::query()->where('account_id', $account->id)->whereKey($id)->first();
+        if ($invoice !== null && $this->payments->kindOf($invoice) === 'quota_topup') {
+            // QA fixes (2026-10-14): an approved top-up is paid, not withdrawn.
+            return response()->json(['message' => 'An approved message top-up cannot be cancelled. Pay the invoice to receive the messages.', 'error_code' => 'topup_not_cancellable'], 409);
+        }
         if ($invoice === null || $this->payments->kindOf($invoice) !== 'plan') {
             return response()->json(['message' => 'Invoice not found.', 'error_code' => 'not_found'], 404);
         }

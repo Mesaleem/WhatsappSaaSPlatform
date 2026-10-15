@@ -48,7 +48,10 @@ class PlanChangePolicy
         // The last plan paid for: the running plan when one runs, else the one that ended
         // (so buying it again is a renewal).
         $current = $planInvoices->first(fn (Invoice $i) => $i->status === 'paid');
-        $pending = $planInvoices->first(fn (Invoice $i) => $i->status === 'pending');
+        // QA fixes (2026-10-14): an online checkout the customer closed leaves a pending
+        // invoice behind; after 30 minutes it no longer blocks a new plan request.
+        $pending = $planInvoices->first(fn (Invoice $i) => $i->status === 'pending'
+            && ($i->payment_gateway === 'manual' || $i->created_at === null || $i->created_at->gt(now()->subMinutes(30))));
 
         return [
             'running' => $running,
@@ -80,7 +83,8 @@ class PlanChangePolicy
             return ['action' => 'renew_after_expiry', 'allowed' => false, 'message' => "This plan is already running until {$until}. You can renew it after it ends."];
         }
 
-        $currentPlan = $state['plan_key'] ? $this->plans->findPurchasable($state['plan_key']) : null;
+        // The running plan's own row, even when it has since been retired (e.g. Growth): its price decides upgrade vs downgrade.
+        $currentPlan = $state['plan_key'] ? $this->plans->findForFulfilment($state['plan_key']) : null;
         if ($currentPlan !== null && (float) $plan->price <= (float) $currentPlan->price) {
             return ['action' => 'downgrade_after_expiry', 'allowed' => false, 'message' => "Your current plan runs until {$until}. A smaller plan can be chosen after it ends."];
         }
@@ -103,6 +107,6 @@ class PlanChangePolicy
     {
         $state = $this->state($account);
 
-        return $this->plans->purchasable()->map(fn (Plan $p) => ['key' => $p->slug] + $this->decide($account, $p, $state))->values();
+        return $this->plans->purchasable($account)->map(fn (Plan $p) => ['key' => $p->slug] + $this->decide($account, $p, $state))->values();
     }
 }

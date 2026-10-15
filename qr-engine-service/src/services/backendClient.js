@@ -35,8 +35,13 @@ export async function fetchNumberOwner(sessionId) {
       timeout: AUTH_STATE_TIMEOUT_MS,
     });
     return data?.account_id != null ? { accountId: Number(data.account_id) } : null;
-  } catch {
-    return null;
+  } catch (err) {
+    // QA fixes (2026-10-14): "this is not a slot" (404) and "the backend could not
+    // answer" are different. Only a 404 may fall back to the legacy account-keyed
+    // session; an outage must never make a slot's events go to the account whose
+    // id happens to equal the slot id (cross-tenant).
+    if (err?.response?.status === 404) return null;
+    return { error: true };
   }
 }
 
@@ -120,14 +125,15 @@ export async function notifyBackend(sessionKey, status, extra = {}) {
  * /api/internal/whatsapp-inbound endpoint (WhatsAppInboundController),
  * which was built for this call and previously had no caller.
  */
-export async function notifyInboundMessage(accountId, senderPhone, message, messageId = null) {
+export async function notifyInboundMessage(accountId, senderPhone, message, messageId = null, extra = {}) {
   try {
     await backendHttp.post(
       '/api/internal/whatsapp-inbound',
       // Phase 7 Task 3 — message_id: the Baileys message key id (msg.key.id),
       // the message's stable WhatsApp identity. backend-api uses it to
       // process each inbound message at most once (durable de-duplication).
-      { ...ownerFields(accountId), sender_phone: senderPhone, message, message_id: messageId },
+      // QA fixes (2026-10-14): extra = { message_type, sender_name } for the WhatsApp inbox.
+      { ...ownerFields(accountId), sender_phone: senderPhone, message, message_id: messageId, ...extra },
       { headers: { 'X-Internal-Secret': INTERNAL_API_SECRET } },
     );
   } catch (err) {

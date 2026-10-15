@@ -63,6 +63,7 @@ Schedule::command('ads:check-performance-rules')
 // depends on, not a new one introduced here.
 Schedule::command('queue:work database --queue=whatsapp-bulk --stop-when-empty --max-time=55')
     ->everyMinute()
+    ->runInBackground()
     ->withoutOverlapping();
 
 // Phase 7 Task 1 — Journey temporal backbone. journeys:resume-due finds
@@ -80,6 +81,7 @@ Schedule::command('journeys:resume-due')
 
 Schedule::command('queue:work database --queue=journeys --stop-when-empty --max-time=55')
     ->everyMinute()
+    ->runInBackground()
     ->withoutOverlapping();
 
 // Phase 5 fix P5-3 — settles (and refunds) group message batches whose job
@@ -119,6 +121,7 @@ Schedule::command('ai:settle-operations')
 // worker died. Every job claims its document row atomically.
 Schedule::command('queue:work '.ProcessKnowledgeDocumentJob::CONNECTION.' --queue=knowledge --stop-when-empty --max-time=55')
     ->everyMinute()
+    ->runInBackground()
     ->withoutOverlapping();
 
 Schedule::command('knowledge:recover-documents')
@@ -159,6 +162,7 @@ Schedule::command('social:refresh-insights')
 
 Schedule::command('queue:work '.PublishScheduledPostJob::CONNECTION.' --queue=social --stop-when-empty --max-time=55')
     ->everyMinute()
+    ->runInBackground()
     ->withoutOverlapping();
 
 // F-5.1 — plan-bundle reconciliation. PlanManagementService::modify()
@@ -171,6 +175,7 @@ Schedule::command('queue:work '.PublishScheduledPostJob::CONNECTION.' --queue=so
 // and there is nothing to drain.
 Schedule::command('queue:work '.ReconcilePlanAccountsJob::resolveConnection().' --queue=plan-reconciliation --stop-when-empty --max-time=55')
     ->everyMinute()
+    ->runInBackground()
     ->withoutOverlapping()
     ->when(fn (): bool => config('queue.default') !== 'sync');
 
@@ -220,6 +225,7 @@ Schedule::command('subscriptions:send-expiry-reminders')
 // Send Notification batches (Excel/CSV): every minute, one server only, never overlapping.
 Schedule::command('batches:dispatch-due')
     ->everyMinute()
+    ->runInBackground()
     ->onOneServer()
     ->withoutOverlapping();
 
@@ -248,3 +254,34 @@ Schedule::command('crm:expire-quotations')
     ->dailyAt('00:30')
     ->onOneServer()
     ->withoutOverlapping();
+
+// QA fixes (2026-10-14) — C14: the queue drains above and batches:dispatch-due run in the
+// background (runInBackground), so a slow drain no longer delays scheduled messages and the
+// heartbeat of the same tick.
+
+// QA fixes (2026-10-14) — C15: the `default` queue (payment alerts, CSV alerts, contact-group
+// sends, native group creation, developer webhooks) is drained too. Without a persistent
+// worker those jobs used to sit in `queued` forever. Skipped under `sync` (jobs ran inline).
+Schedule::command('queue:work '.config('queue.default').' --queue=default --stop-when-empty --max-time=55')
+    ->everyMinute()
+    ->runInBackground()
+    ->withoutOverlapping()
+    ->when(fn (): bool => config('queue.default') !== 'sync');
+
+// QA fixes (2026-10-14) — CRM task / follow-up reminders to the assignee (once per due time).
+Schedule::command('crm:send-task-reminders')
+    ->everyFiveMinutes()
+    ->onOneServer()
+    ->withoutOverlapping(10);
+
+// QA fixes (2026-10-14) — Meta lead-ad leads that could not be read when they arrived.
+Schedule::command('leads:retry-pending')
+    ->everyTenMinutes()
+    ->onOneServer()
+    ->withoutOverlapping(30);
+
+// QA fixes (2026-10-14) — Meta's verdict on submitted WhatsApp templates (fallback for the webhook).
+Schedule::command('templates:sync-meta')
+    ->everyFifteenMinutes()
+    ->onOneServer()
+    ->withoutOverlapping(30);

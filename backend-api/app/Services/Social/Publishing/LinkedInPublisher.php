@@ -36,7 +36,7 @@ class LinkedInPublisher implements SocialPublisher
 
     public function validationError(PublishRequest $request): ?string
     {
-        return null;
+        return $request->format === 'post' ? null : 'LinkedIn supports normal posts only (no Reels, Stories or carousels).';
     }
 
     public function publish(SocialAccount $target, PublishRequest $request): PublishOutcome
@@ -87,7 +87,7 @@ class LinkedInPublisher implements SocialPublisher
         return PublishOutcome::published($response->header('X-RestLi-Id') ?: (string) ($response->json('id') ?? ''));
     }
 
-    public function checkProcessing(SocialAccount $target, string $containerId): PublishOutcome
+    public function checkProcessing(SocialAccount $target, string $containerId, ?PublishRequest $request = null): PublishOutcome
     {
         return PublishOutcome::failed('LinkedIn posts have no processing step.');
     }

@@ -212,6 +212,26 @@ class SocialConnectionService
             'applied' => $applied,
             'request_id' => request()?->header('X-Request-Id'),
         ]);
+
+        // QA fixes (2026-10-14): a connection that just stopped working is announced
+        // (posts, comment replies, lead sync and the ads guard stop with it).
+        $now = $applied ? $socialAccount->connectionStatus() : $previous;
+        if ($applied && $now !== $previous && in_array($now, [SocialConnectionStatus::EXPIRED, SocialConnectionStatus::REVOKED], true)) {
+            $account = \App\Models\Account::query()->find($socialAccount->account_id);
+            if ($account !== null) {
+                $label = str_replace('_', ' ', (string) $socialAccount->asset_type);
+                app(\App\Services\Notifications\AccountAlerts::class)->notify(
+                    $account,
+                    'social-'.$socialAccount->id.'-'.$now,
+                    'Reconnect your '.$label,
+                    'Your '.$label.($socialAccount->name ? ' "'.$socialAccount->name.'"' : '').' connection '.($now === SocialConnectionStatus::REVOKED ? 'was revoked' : 'has expired').'. Scheduled posts, comment replies, lead sync and ad checks for it are paused until you reconnect it in Social Accounts.',
+                    'social',
+                    '/social/accounts',
+                    'Reconnect',
+                    24,
+                );
+            }
+        }
     }
 
     private function locallyExpired(SocialAccount $socialAccount): ConnectionCheck

@@ -139,12 +139,38 @@ class PlanManagementController extends Controller
         abort_unless($request->user()?->isSuperAdmin(), 403, 'Only Super Admin can manage plans.');
     }
 
+    /** GET /api/admin/custom-plan-pricing — the custom-plan price list (CustomPlanPricing). */
+    public function pricing(Request $request): JsonResponse
+    {
+        $this->assertSuperAdmin($request);
+
+        return response()->json(['data' => \App\Services\Billing\CustomPlanPricing::get()]);
+    }
+
+    /** PUT /api/admin/custom-plan-pricing — change the price list (any subset of keys). */
+    public function updatePricing(Request $request): JsonResponse
+    {
+        $this->assertSuperAdmin($request);
+
+        $number = ['sometimes', 'numeric', 'min:0', 'max:10000000'];
+        $data = $request->validate([
+            ...array_fill_keys(array_keys(array_filter(\App\Services\Billing\CustomPlanPricing::DEFAULTS, fn ($v) => ! is_array($v))), $number),
+            'engine' => ['sometimes', 'array'],
+            'engine.*' => ['numeric', 'min:0', 'max:10000000'],
+            'features' => ['sometimes', 'array'],
+            'features.*' => ['numeric', 'min:0', 'max:10000000'],
+            'gst_percent' => ['sometimes', 'numeric', 'min:0', 'max:100'],
+        ]);
+
+        return response()->json(['message' => 'Price list saved.', 'data' => \App\Services\Billing\CustomPlanPricing::put($data)]);
+    }
+
     /** GET /api/admin/plans-management — plans with their capability bundles. */
     public function index(Request $request): JsonResponse
     {
         $this->assertSuperAdmin($request);
 
-        $plans = Plan::with('capabilities')->orderBy('price')->get()->map(fn (Plan $plan) => [
+        $plans = Plan::with(['capabilities', 'account:id,company_name'])->orderBy('price')->get()->map(fn (Plan $plan) => [
             'slug' => $plan->slug,
             'label' => $plan->label,
             'price' => (float) $plan->price,
@@ -158,6 +184,9 @@ class PlanManagementController extends Controller
             // Phase 8 Task 2 — AI credits allocated per purchased period.
             'included_credits' => (int) $plan->included_credits,
             'is_active' => $plan->is_active,
+            'is_public' => (bool) $plan->is_public,
+            'limits' => $plan->limits(),
+            'account' => $plan->account_id ? ['id' => $plan->account_id, 'company_name' => $plan->account?->company_name] : null,
             'capabilities' => $plan->capabilities->pluck('slug')->sort()->values()->all(),
             // Phase 4 Task 2 — the pivot usage_limit per capability, so an
             // admin UI (or this task's tests) can see what each bundled
@@ -214,17 +243,26 @@ class PlanManagementController extends Controller
 
         $data = $request->validate([
             'slug' => ['required', 'string', 'max:64', 'regex:/^[a-z0-9_\-]+$/', Rule::unique('plans', 'slug')],
+            // A custom plan for one client: only that client sees and buys it (never public).
+            'account_id' => ['sometimes', 'nullable', 'integer', Rule::exists('accounts', 'id')->where('account_type', 'client')],
             'label' => ['required', 'string', 'max:255'],
             'price' => ['required', 'numeric', 'min:0'],
             'duration_days' => ['required', 'integer', 'min:1'],
             'description' => ['nullable', 'string', 'max:1000'],
-            'engine_type' => ['required', 'string', Rule::in(['qr', 'meta'])],
+            'engine_type' => ['required', 'string', Rule::in(['qr', 'meta', 'none'])],
             'billing_model' => ['required', 'string', Rule::in(['flat_quota', 'per_message', 'unlimited'])],
             'rate_per_message' => ['sometimes', 'nullable', 'numeric', 'min:0'],
             'total_allocated_messages' => ['sometimes', 'nullable', 'integer', 'min:1'],
             // Phase 8 Task 2 — 0 = the plan includes no credits.
             'included_credits' => ['sometimes', 'integer', 'min:0', 'max:'.self::MAX_INCLUDED_CREDITS],
             'is_active' => ['sometimes', 'boolean'],
+            // Plan restructure (2026-10-15): limits (null = unlimited, 0 = not included), visibility, custom plan owner.
+            'max_users' => ['sometimes', 'nullable', 'integer', 'min:1'],
+            'max_meta_templates' => ['sometimes', 'nullable', 'integer', 'min:0'],
+            'max_flows' => ['sometimes', 'nullable', 'integer', 'min:0'],
+            'max_broadcasts_per_month' => ['sometimes', 'nullable', 'integer', 'min:0'],
+            'marketing_message_limit' => ['sometimes', 'nullable', 'integer', 'min:0'],
+            'is_public' => ['sometimes', 'boolean'],
             'capabilities' => ['sometimes', 'array'],
             // distinct stops a payload listing the same capability twice;
             // exists stops an invented slug reaching the service.
@@ -235,6 +273,11 @@ class PlanManagementController extends Controller
             'capability_limits' => ['sometimes', 'array'],
             'capability_limits.*' => ['nullable', 'integer', 'min:0'],
         ]);
+
+        // A custom plan belongs to one client: never on the website or anyone else's Billing page.
+        if (! empty($data['account_id'])) {
+            $data['is_public'] = false;
+        }
 
         $finalCapabilities = $data['capabilities'] ?? [];
         $finalCapabilityLimits = $data['capability_limits'] ?? [];
@@ -276,13 +319,20 @@ class PlanManagementController extends Controller
             'price' => ['sometimes', 'numeric', 'min:0'],
             'duration_days' => ['sometimes', 'integer', 'min:1'],
             'description' => ['sometimes', 'nullable', 'string', 'max:1000'],
-            'engine_type' => ['sometimes', 'string', Rule::in(['qr', 'meta'])],
+            'engine_type' => ['sometimes', 'string', Rule::in(['qr', 'meta', 'none'])],
             'billing_model' => ['sometimes', 'string', Rule::in(['flat_quota', 'per_message', 'unlimited'])],
             'rate_per_message' => ['sometimes', 'nullable', 'numeric', 'min:0'],
             'total_allocated_messages' => ['sometimes', 'nullable', 'integer', 'min:1'],
             // Phase 8 Task 2 — 0 = the plan includes no credits.
             'included_credits' => ['sometimes', 'integer', 'min:0', 'max:'.self::MAX_INCLUDED_CREDITS],
             'is_active' => ['sometimes', 'boolean'],
+            // Plan restructure (2026-10-15): limits (null = unlimited, 0 = not included), visibility, custom plan owner.
+            'max_users' => ['sometimes', 'nullable', 'integer', 'min:1'],
+            'max_meta_templates' => ['sometimes', 'nullable', 'integer', 'min:0'],
+            'max_flows' => ['sometimes', 'nullable', 'integer', 'min:0'],
+            'max_broadcasts_per_month' => ['sometimes', 'nullable', 'integer', 'min:0'],
+            'marketing_message_limit' => ['sometimes', 'nullable', 'integer', 'min:0'],
+            'is_public' => ['sometimes', 'boolean'],
             'capabilities' => ['sometimes', 'array'],
             'capabilities.*' => ['string', 'distinct', Rule::exists('capabilities', 'slug')],
             // Phase 4 Task 2 — see store().

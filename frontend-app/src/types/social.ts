@@ -87,7 +87,7 @@ export interface OAuthRedirectResponse {
 /** GET /api/social/oauth/{provider}/result/{nonce} */
 export type OAuthResultResponse =
   | { status: 'pending' }
-  | { status: 'success'; provider: SocialProvider; nonce: string; assets: OfferedAsset[] }
+  | { status: 'success'; provider: SocialProvider; nonce: string; assets: OfferedAsset[]; summary?: OAuthAssetSummary | null }
   | { status: 'error' | 'cancelled'; message: string };
 
 /** One asset offered by the provider after a successful code exchange, not yet bound. */
@@ -98,12 +98,25 @@ export interface OfferedAsset {
   avatar_url: string | null;
 }
 
+/**
+ * What the provider returned per asset type BEFORE the per-account platform filter (SocialAuthController::assetSummary()),
+ * so the page can tell a client which thing they still have to set up on Facebook / Instagram. Absent on older payloads.
+ */
+export interface OAuthAssetSummary {
+  found: Partial<Record<SocialAssetType, number>>;
+  /** Asset types the Super Admin enabled for this account. */
+  enabled: SocialAssetType[];
+  /** The account's plan includes the `ads` capability. */
+  plan_has_ads: boolean;
+}
+
 /** postMessage payload the OAuth popup (SocialAuthController::callback()) sends back. */
 export interface OAuthPopupSuccessMessage {
   type: 'social-oauth-success';
   provider: SocialProvider;
   nonce: string;
   assets: OfferedAsset[];
+  summary?: OAuthAssetSummary | null;
 }
 
 export interface OAuthPopupErrorMessage {

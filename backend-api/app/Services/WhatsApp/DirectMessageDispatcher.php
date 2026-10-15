@@ -57,7 +57,7 @@ class DirectMessageDispatcher
             return ['status' => 'quota_exhausted', 'message' => $account->quotaExhaustedMessage()];
         }
 
-        if (PaymentAlertDispatcher::isWhatsAppDisconnected($account)) {
+        if (PaymentAlertDispatcher::isWhatsAppDisconnected($account, $senderNumberId)) {
             MessageDispatchLog::record($accountId, $source, $recipientPhone, success: false, errorReason: 'WhatsApp account is disconnected.', apiKeyId: $apiKeyId, referenceType: $messageType);
 
             return ['status' => 'disconnected', 'message' => 'WhatsApp account is disconnected. Please connect your device first.'];

@@ -17,7 +17,12 @@ const STATUS_META: Record<WhatsAppStatus, { label: string; dot: string }> = {
 
 export default function WhatsAppSetupPage() {
   const { user } = useAuth();
-  const engineType = user?.account?.current_subscription?.engine_type ?? null;
+  // QA fixes (2026-10-14): the engine of the account this page is for — an agent acting for
+  // a client saw its own (often empty) engine. The status endpoint answers for the selected
+  // account; the logged-in account's own engine is only the first guess.
+  const ownEngine = user?.account?.current_subscription?.engine_type ?? null;
+  const [targetEngine, setTargetEngine] = useState<string | null | undefined>(undefined);
+  const engineType = targetEngine === undefined ? ownEngine : targetEngine;
 
   const [status, setStatus] = useState<WhatsAppStatus>('disconnected');
   const [phoneNumber, setPhoneNumber] = useState<string | null>(null);
@@ -33,6 +38,7 @@ export default function WhatsAppSetupPage() {
     setIsLoadingStatus(true);
     try {
       const res = await whatsappService.status();
+      if (res.engine_type !== undefined) setTargetEngine(res.engine_type);
       setStatus(res.status);
       setPhoneNumber(res.phone_number ?? null);
       setNumberId(res.number_id ?? null);
@@ -44,12 +50,9 @@ export default function WhatsAppSetupPage() {
   }, []);
 
   useEffect(() => {
-    if (engineType === 'qr') {
-      void loadStatus();
-    } else {
-      setIsLoadingStatus(false);
-    }
-  }, [engineType, loadStatus]);
+    // Always asked once: it also tells which engine the selected account uses.
+    void loadStatus();
+  }, [loadStatus]);
 
   const showToast = (message: string) => {
     setToast(message);

@@ -1,7 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, Check, Loader2, Pencil, Plus, Power, PowerOff, RefreshCw, X } from 'lucide-react';
+import { AlertTriangle, Check, Loader2, Pencil, Plus, Power, PowerOff, RefreshCw, Send, X } from 'lucide-react';
+import { useSearchParams } from 'react-router-dom';
 
 import planService from '../../services/planService';
+import accountService from '../../services/accountService';
+import axiosInstance from '../../core/api/axiosInstance';
+import { PLAN_LIMIT_LABELS, describePlanLimit, type PlanLimits } from '../../types/account';
+import PlanPriceCalculator from './PlanPriceCalculator';
+import PriceListModal from './PriceListModal';
 import { TableCard, inputClass } from '../../components/common/Card';
 import ConfirmModal from '../../components/common/ConfirmModal';
 import ModuleOfferAdminCard from '../../components/billing/ModuleOfferAdminCard';
@@ -10,6 +16,7 @@ import { extractErrorMessage } from '../../utils/apiError';
 import { indigo, activeGradient } from '../../theme/signalIndigo';
 import type {
   CreatePlanPayload,
+  CustomPlanPriceList,
   ManagedPlan,
   PlanBillingModel,
   PlanCapabilityOption,
@@ -47,7 +54,11 @@ import type {
 const ENGINE_OPTIONS: { value: PlanEngineType; label: string }[] = [
   { value: 'qr', label: 'QR (Baileys)' },
   { value: 'meta', label: 'Meta Cloud API' },
+  { value: 'none', label: 'No WhatsApp (e.g. CRM only)' },
 ];
+
+/** Plan restructure (2026-10-15) — the per-plan limits, in form order. */
+const LIMIT_KEYS: (keyof PlanLimits)[] = ['max_users', 'max_meta_templates', 'max_flows', 'max_broadcasts_per_month', 'marketing_message_limit'];
 
 const BILLING_OPTIONS: { value: PlanBillingModel; label: string }[] = [
   { value: 'flat_quota', label: 'Flat quota' },
@@ -90,7 +101,16 @@ interface PlanFormState {
    * string means "no limit" (null), not zero.
    */
   api_installations_limit: string;
+  /** Plan restructure (2026-10-15): '' = unlimited, '0' = not included. */
+  limits: Record<keyof PlanLimits, string>;
+  /** Listed on the website and every client's Billing page. */
+  is_public: boolean;
+  /** Create only: '' = a normal plan, else the client this custom plan is for. */
+  account_id: string;
 }
+
+const limitStrings = (limits?: PlanLimits): Record<keyof PlanLimits, string> =>
+  Object.fromEntries(LIMIT_KEYS.map((k) => [k, limits?.[k] == null ? '' : String(limits[k])])) as Record<keyof PlanLimits, string>;
 
 function emptyForm(): PlanFormState {
   return {
@@ -107,6 +127,9 @@ function emptyForm(): PlanFormState {
     is_active: true,
     capabilities: [],
     api_installations_limit: '',
+    limits: limitStrings(),
+    is_public: true,
+    account_id: '',
   };
 }
 
@@ -126,6 +149,9 @@ function formFromPlan(plan: ManagedPlan): PlanFormState {
     capabilities: [...plan.capabilities],
     api_installations_limit:
       plan.capability_limits?.api_installations == null ? '' : String(plan.capability_limits.api_installations),
+    limits: limitStrings(plan.limits),
+    is_public: plan.is_public ?? true,
+    account_id: plan.account ? String(plan.account.id) : '',
   };
 }
 
@@ -225,15 +251,39 @@ function PlanFormModal({
   capabilityOptions,
   onClose,
   onSaved,
+  customForAccountId = null,
+  prices = null,
+  onEditRates = () => undefined,
 }: {
   /** null = create. */
   plan: ManagedPlan | null;
   capabilityOptions: PlanCapabilityOption[];
   onClose: () => void;
   onSaved: (message: string) => void;
+  /** Create a custom plan for this client (e.g. from a Contact sales request). */
+  customForAccountId?: number | null;
+  /** The custom-plan price list for the calculator (null while loading). */
+  prices?: CustomPlanPriceList | null;
+  onEditRates?: () => void;
 }) {
   const isEdit = plan !== null;
-  const [form, setForm] = useState<PlanFormState>(plan ? formFromPlan(plan) : emptyForm());
+  const [form, setForm] = useState<PlanFormState>(() => {
+    if (plan) return formFromPlan(plan);
+    const blank = emptyForm();
+    return customForAccountId
+      ? { ...blank, account_id: String(customForAccountId), is_public: false, slug: 'custom-' + customForAccountId + '-' + Date.now().toString(36) }
+      : blank;
+  });
+  const [clients, setClients] = useState<{ id: number; company_name: string }[]>([]);
+
+  // Create only: the clients a custom plan can be built for.
+  useEffect(() => {
+    if (isEdit) return;
+    void accountService
+      .list({ per_page: 100, account_type: 'client' })
+      .then((res) => setClients(res.data.map((a) => ({ id: a.id, company_name: a.company_name }))))
+      .catch(() => undefined);
+  }, [isEdit]);
   const [errors, setErrors] = useState<FieldErrors>({});
   const [formError, setFormError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
@@ -296,6 +346,11 @@ function PlanFormModal({
     if (credits !== (plan.included_credits ?? 0)) patch.included_credits = credits;
 
     if (form.is_active !== plan.is_active) patch.is_active = form.is_active;
+    if (form.is_public !== (plan.is_public ?? true)) patch.is_public = form.is_public;
+    for (const key of LIMIT_KEYS) {
+      const value = numberOrNull(form.limits[key]);
+      if (value !== (plan.limits?.[key] ?? null)) patch[key] = value;
+    }
 
     // Absent unless genuinely changed — see this function's docblock.
     if (bundleChanged) patch.capabilities = form.capabilities;
@@ -341,6 +396,9 @@ function PlanFormModal({
           total_allocated_messages: numberOrNull(form.total_allocated_messages),
           included_credits: Number(form.included_credits || 0),
           is_active: form.is_active,
+          is_public: form.account_id ? false : form.is_public,
+          account_id: form.account_id ? Number(form.account_id) : null,
+          ...Object.fromEntries(LIMIT_KEYS.map((k) => [k, numberOrNull(form.limits[k])])),
           capabilities: form.capabilities,
           // Phase 4 Task 2 / Task 10 FIX — only meaningful (and only
           // accepted by the backend) when the capability is part of
@@ -577,6 +635,95 @@ function PlanFormModal({
               Available for purchase
             </label>
 
+            {/* ---- Who sees it (plan restructure, 2026-10-15) ---- */}
+            {!isEdit && (
+              <label className="block text-xs font-medium text-slate-700 sm:col-span-2">
+                Custom plan for a client
+                <select
+                  data-testid="plan-account"
+                  className={inputClass}
+                  value={form.account_id}
+                  onChange={(e) => setForm((f) => ({ ...f, account_id: e.target.value, is_public: e.target.value ? false : f.is_public }))}
+                >
+                  <option value="">No — a plan for everyone</option>
+                  {form.account_id && !clients.some((c) => String(c.id) === form.account_id) && (
+                    <option value={form.account_id}>Client #{form.account_id}</option>
+                  )}
+                  {clients.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.company_name}
+                    </option>
+                  ))}
+                </select>
+                <span className="mt-1 block text-[11px] font-normal text-slate-400">
+                  A custom plan is seen and bought only by that client (on their Billing page). Pick only the features they
+                  need below — e.g. only CRM, only journeys, or CRM + ads — and set its own price and limits.
+                </span>
+                <FieldError errors={errors} name="account_id" />
+              </label>
+            )}
+            {isEdit && plan.account && (
+              <p className="text-xs text-slate-600 sm:col-span-2">
+                Custom plan for <strong>{plan.account.company_name ?? 'client #' + plan.account.id}</strong> — only they see it.
+              </p>
+            )}
+            <label className="flex items-center gap-2 text-xs font-medium text-slate-700 sm:col-span-2">
+              <input
+                type="checkbox"
+                data-testid="plan-public"
+                checked={form.is_public && !form.account_id}
+                disabled={!!form.account_id || (isEdit && !!plan.account)}
+                onChange={(e) => set('is_public', e.target.checked)}
+                className="h-4 w-4 rounded border-slate-300 text-emerald-700"
+              />
+              Show on the website and the Billing page
+            </label>
+
+            {/* ---- Limits (plan restructure, 2026-10-15) ---- */}
+            <div className="sm:col-span-2 border-t border-slate-200 pt-4">
+              <h3 className="text-xs font-bold uppercase tracking-wide" style={{ color: indigo.muted }}>
+                Limits
+              </h3>
+              <p className="text-[11px]" style={{ color: indigo.muted }}>
+                Empty = unlimited, 0 = not included. Applies to purchases from now on.
+              </p>
+            </div>
+            {LIMIT_KEYS.map((key) => (
+              <label key={key} className="block text-xs font-medium text-slate-700">
+                {PLAN_LIMIT_LABELS[key]}
+                <input
+                  type="number"
+                  min={key === 'max_users' ? 1 : 0}
+                  step={1}
+                  data-testid={'plan-limit-' + key}
+                  className={inputClass}
+                  value={form.limits[key]}
+                  onChange={(e) => setForm((f) => ({ ...f, limits: { ...f.limits, [key]: e.target.value } }))}
+                  placeholder="Unlimited"
+                />
+                <FieldError errors={errors} name={key} />
+              </label>
+            ))}
+
+            {/* ---- Price calculator (owner, 2026-10-15): what these features and limits add up to ---- */}
+            <div className="sm:col-span-2">
+              <PlanPriceCalculator
+                prices={prices}
+                currentPrice={form.price.trim() === '' ? null : Number(form.price)}
+                onUsePrice={(price) => set('price', String(price))}
+                onEditRates={onEditRates}
+                input={{
+                  engine_type: form.engine_type,
+                  billing_model: form.billing_model,
+                  total_allocated_messages: numberOrNull(form.total_allocated_messages),
+                  duration_days: Number(form.duration_days) || 30,
+                  capabilities: form.capabilities,
+                  limits: Object.fromEntries(LIMIT_KEYS.map((k) => [k, numberOrNull(form.limits[k])])) as unknown as PlanLimits,
+                  capabilityLabels: Object.fromEntries(capabilityOptions.map((c) => [c.slug, c.label])),
+                }}
+              />
+            </div>
+
             {/* ---- Capability bundle ---- */}
             <div className="sm:col-span-2 border-t border-slate-200 pt-4">
               <h3 className="text-xs font-bold uppercase tracking-wide" style={{ color: indigo.muted }}>
@@ -668,9 +815,33 @@ export default function PlanManagementPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [pageError, setPageError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [editing, setEditing] = useState<ManagedPlan | 'new' | null>(null);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const customFor = Number(searchParams.get('custom_for')) || null;
+  // "Build a custom plan" from a Contact sales request (/admin/plans?custom_for=<client id>) opens the form at once.
+  const [editing, setEditing] = useState<ManagedPlan | 'new' | null>(() => (customFor ? 'new' : null));
   const [pendingToggle, setPendingToggle] = useState<ManagedPlan | null>(null);
   const [busySlug, setBusySlug] = useState<string | null>(null);
+  const [prices, setPrices] = useState<CustomPlanPriceList | null>(null);
+  const [editingRates, setEditingRates] = useState(false);
+
+  useEffect(() => {
+    void planService.getPricing().then(setPrices).catch(() => undefined);
+  }, []);
+
+  /** Custom plan: create the client's invoice for it (they pay it, or you record the payment). */
+  const sendInvoice = async (plan: ManagedPlan) => {
+    if (!plan.account) return;
+    setBusySlug(plan.slug);
+    setPageError(null);
+    try {
+      const res = await axiosInstance.post<{ message: string }>('/billing/manual-checkout', { plan_key: plan.slug }, { params: { account_id: plan.account.id } });
+      setNotice(res.data.message + ' (' + (plan.account.company_name ?? 'client') + ')');
+    } catch (err) {
+      setPageError(extractErrorMessage(err, 'Could not create the invoice.'));
+    } finally {
+      setBusySlug(null);
+    }
+  };
 
   const load = useCallback(async () => {
     setIsLoading(true);
@@ -785,6 +956,19 @@ export default function PlanManagementPage() {
                   <td className="px-4 py-2.5">
                     <span className="font-medium text-slate-800">{plan.label}</span>
                     <span className="ml-1.5 text-[11px] text-slate-400">{plan.slug}</span>
+                    {plan.account && (
+                      <span className="ml-1.5 rounded-full bg-teal-50 px-2 py-0.5 text-[11px] font-semibold text-teal-700 ring-1 ring-teal-200">
+                        Custom: {plan.account.company_name ?? '#' + plan.account.id}
+                      </span>
+                    )}
+                    {!plan.account && plan.is_public === false && (
+                      <span className="ml-1.5 rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-500 ring-1 ring-slate-200">Hidden</span>
+                    )}
+                    {plan.limits && (
+                      <span className="mt-0.5 block text-[11px] text-slate-400">
+                        {LIMIT_KEYS.map((k) => describePlanLimit(k, plan.limits![k])).filter(Boolean).join(' · ')}
+                      </span>
+                    )}
                   </td>
                   <td className="px-4 py-2.5 text-slate-600">{plan.engine_type}</td>
                   <td className="px-4 py-2.5 text-slate-600">{plan.billing_model}</td>
@@ -823,6 +1007,18 @@ export default function PlanManagementPage() {
                   </td>
                   <td className="px-4 py-2.5 text-right">
                     <div className="flex items-center justify-end gap-1">
+                      {plan.account && plan.is_active && (
+                        <button
+                          onClick={() => void sendInvoice(plan)}
+                          disabled={busySlug === plan.slug}
+                          data-testid={'invoice-plan-' + plan.slug}
+                          className="rounded-md p-1.5 text-teal-700 hover:bg-slate-100 disabled:opacity-50"
+                          aria-label={'Send invoice for ' + plan.label}
+                          title="Create the client's invoice for this plan"
+                        >
+                          <Send className="h-4 w-4" />
+                        </button>
+                      )}
                       <button
                         onClick={() => setEditing(plan)}
                         data-testid={`edit-plan-${plan.slug}`}
@@ -867,8 +1063,29 @@ export default function PlanManagementPage() {
         <PlanFormModal
           plan={editing === 'new' ? null : editing}
           capabilityOptions={capabilityOptions}
-          onClose={() => setEditing(null)}
-          onSaved={handleSaved}
+          customForAccountId={editing === 'new' ? customFor : null}
+          prices={prices}
+          onEditRates={() => setEditingRates(true)}
+          onClose={() => {
+            setEditing(null);
+            if (customFor) setSearchParams({});
+          }}
+          onSaved={(message) => {
+            handleSaved(message);
+            if (customFor) setSearchParams({});
+          }}
+        />
+      )}
+
+      {editingRates && prices && (
+        <PriceListModal
+          prices={prices}
+          capabilityOptions={capabilityOptions}
+          onClose={() => setEditingRates(false)}
+          onSaved={(saved) => {
+            setPrices(saved);
+            setEditingRates(false);
+          }}
         />
       )}
 

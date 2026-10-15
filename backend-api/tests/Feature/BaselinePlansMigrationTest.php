@@ -37,7 +37,7 @@ class BaselinePlansMigrationTest extends TestCase
             $growth->capabilities->pluck('slug')->all(),
         );
         $this->assertEqualsWithDelta(777.00, (float) Plan::where('slug', 'starter')->value('price'), 0.001);
-        $this->assertSame(3, Plan::count());
+        $this->assertSame(7, Plan::count()); // 3 baseline plans + the 2026-10-15 line-up (crm, meta_growth, meta_pro) + the hidden trial (2026-10-14 QA fixes).
     }
 
     public function test_on_a_fresh_database_it_does_nothing(): void

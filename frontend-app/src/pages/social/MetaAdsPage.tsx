@@ -127,10 +127,13 @@ interface WizardState {
   placements: AdPlacement[];
   /** The ad's button (owner request 2026-09-30). */
   call_to_action: AdCallToAction;
+  /** QA fixes (2026-10-14): the instant form a lead ad opens. */
+  lead_gen_form_id: string;
 }
 
 const WIZARD_DEFAULTS: WizardState = {
   objective: 'LEAD_GENERATION',
+  lead_gen_form_id: '',
   daily_budget: '',
   cpl_threshold: '',
   locations: [{ key: 'IN', name: 'India', type: 'country', country_code: 'IN', country_name: 'India' }],
@@ -232,6 +235,16 @@ function LaunchWizardModal({
   const [isUploadingMedia, setIsUploadingMedia] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [mediaError, setMediaError] = useState<string | null>(null);
+
+  // QA fixes (2026-10-14): the Page's instant forms for a lead-generation ad.
+  const [leadForms, setLeadForms] = useState<{ id: string; name: string }[] | null>(null);
+  useEffect(() => {
+    if (form.objective !== 'LEAD_GENERATION' || leadForms !== null) return;
+    Promise.resolve()
+      .then(() => adsService.leadForms())
+      .then((rows) => setLeadForms(rows))
+      .catch(() => setLeadForms([]));
+  }, [form.objective, leadForms]);
 
   const update = (patch: Partial<WizardState>) => setForm((prev) => {
     const next = { ...prev, ...patch };
@@ -361,8 +374,9 @@ function LaunchWizardModal({
         headline: form.headline.trim(),
         primary_text: form.primary_text.trim(),
         call_to_action: form.call_to_action,
+        lead_gen_form_id: form.objective === 'LEAD_GENERATION' ? form.lead_gen_form_id || null : null,
       },
-      placements: form.placement_mode === 'manual' ? form.placements : [],
+      placements: form.placement_mode === 'manual' ? form.placements.filter((p) => p !== 'whatsapp_status' || form.objective === 'CLICK_TO_WHATSAPP') : [],
     };
 
     setSubmitError(null);
@@ -603,17 +617,28 @@ function LaunchWizardModal({
                 </div>
                 {form.placement_mode === 'manual' && (
                   <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-3">
-                    {(Object.keys(AD_PLACEMENT_LABELS) as AdPlacement[]).map((placement) => (
-                      <label key={placement} className="flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2">
-                        <input
-                          type="checkbox"
-                          checked={form.placements.includes(placement)}
-                          onChange={(e) => update({ placements: e.target.checked ? [...form.placements, placement] : form.placements.filter((p) => p !== placement) })}
-                        />
-                        {AD_PLACEMENT_LABELS[placement]}
-                      </label>
-                    ))}
+                    {(Object.keys(AD_PLACEMENT_LABELS) as AdPlacement[])
+                      // WhatsApp Status runs only on Click-to-WhatsApp ads (Meta Placement targeting).
+                      .filter((placement) => placement !== 'whatsapp_status' || form.objective === 'CLICK_TO_WHATSAPP')
+                      .map((placement) => (
+                        <label key={placement} className="flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2">
+                          <input
+                            type="checkbox"
+                            checked={form.placements.includes(placement)}
+                            onChange={(e) => {
+                              const next = e.target.checked ? [...form.placements, placement] : form.placements.filter((p) => p !== placement);
+                              // Meta never runs WhatsApp Status on its own: Instagram Stories comes with it.
+                              if (e.target.checked && placement === 'whatsapp_status' && !next.includes('instagram_stories')) next.push('instagram_stories');
+                              update({ placements: next });
+                            }}
+                          />
+                          {AD_PLACEMENT_LABELS[placement]}
+                        </label>
+                      ))}
                   </div>
+                )}
+                {form.placement_mode === 'manual' && form.placements.includes('whatsapp_status') && (
+                  <p className="mt-1 text-xs text-slate-500">WhatsApp Status ads always run together with Instagram Stories (Meta&apos;s rule). Use a 9:16 image.</p>
                 )}
                 <p className="mt-1 text-xs text-slate-500">Stories and Reels show vertical (9:16) media best.</p>
                 {fieldError('placements') && <p className="mt-1 text-xs font-medium text-red-600">{fieldError('placements')}</p>}
@@ -742,7 +767,7 @@ function LaunchWizardModal({
                   <input
                     ref={fileInputRef}
                     type="file"
-                    accept="image/jpeg,image/png,image/webp,image/gif,video/mp4,video/quicktime,video/webm"
+                    accept="image/jpeg,image/png,image/webp,image/gif"
                     className="hidden"
                     onChange={(e) => handleFileSelected(e.target.files?.[0])}
                   />
@@ -789,8 +814,8 @@ function LaunchWizardModal({
                       ) : (
                         <>
                           <UploadCloud className="h-5 w-5" style={{ color: indigo.muted }} />
-                          <span className="text-xs font-medium text-slate-600">Click to upload an image or video</span>
-                          <span className="text-[11px] text-slate-400">JPG, PNG, WEBP, GIF, MP4, MOV, WEBM — up to 50MB</span>
+                          <span className="text-xs font-medium text-slate-600">Click to upload an image</span>
+                          <span className="text-[11px] text-slate-400">JPG, PNG, WEBP, GIF. Video ads are not supported yet — post videos as Reels.</span>
                         </>
                       )}
                     </button>
@@ -827,6 +852,29 @@ function LaunchWizardModal({
                   {AD_CTAS_BY_OBJECTIVE[form.objective].length === 1 && <span className="mt-1 block text-xs font-normal text-slate-500">Click-to-WhatsApp ads always use this button.</span>}
                   {fieldError('creative.call_to_action') && <p className="mt-1 text-xs font-medium text-red-600">{fieldError('creative.call_to_action')}</p>}
                 </label>
+                {form.objective === 'LEAD_GENERATION' && (
+                  <label className="block text-sm font-medium text-slate-700">
+                    Instant form <span className="text-red-500">*</span>
+                    <select
+                      aria-label="Instant form"
+                      className={inputClass}
+                      value={form.lead_gen_form_id}
+                      onChange={(e) => update({ lead_gen_form_id: e.target.value })}
+                      disabled={leadForms === null || leadForms.length === 0}
+                    >
+                      <option value="">{leadForms === null ? 'Loading forms…' : leadForms.length === 0 ? 'No instant forms on your Page' : 'Choose the form people fill in'}</option>
+                      {(leadForms ?? []).map((f) => (
+                        <option key={f.id} value={f.id}>
+                          {f.name}
+                        </option>
+                      ))}
+                    </select>
+                    {leadForms !== null && leadForms.length === 0 && (
+                      <span className="mt-1 block text-xs font-normal text-slate-500">Create an instant form in Meta Business Suite (Forms library) first, then reopen this page.</span>
+                    )}
+                    {fieldError('creative.lead_gen_form_id') && <p className="mt-1 text-xs font-medium text-red-600">{fieldError('creative.lead_gen_form_id')}</p>}
+                  </label>
+                )}
                 <label className="block text-sm font-medium text-slate-700">
                   Primary Text <span className="text-red-500">*</span>
                   <textarea

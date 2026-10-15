@@ -44,6 +44,11 @@ const messageBatchService = {
   stop(id: number) {
     return axiosInstance.post<{ data: MessageBatch }>(`${BASE}/${id}/stop`).then((res) => res.data.data);
   },
+
+  /** QA fixes (2026-10-14): send a finished / paused batch's failed numbers again. */
+  retryFailed(id: number) {
+    return axiosInstance.post<{ data: MessageBatch }>(`${BASE}/${id}/retry-failed`).then((res) => res.data.data);
+  },
 };
 
 export default messageBatchService;

@@ -501,11 +501,14 @@ class BillingController extends Controller
         return response()->json(AgentCommissionPayout::with('items')->findOrFail($id));
     }
 
+    /**
+     * The account whose invoices are shown. QA fixes (2026-10-14): the tenant
+     * resolved by tenant.isolation, so a Super Admin (?account_id=) and an agent
+     * acting for a sub-client see THAT client's invoices — the Super Admin used to
+     * get 422 and an agent only its own.
+     */
     private function account(Request $request): Account
     {
-        $accountId = $request->user()->account_id;
-        abort_if(! $accountId, 422, 'Super Admin has no tenant account to bill.');
-
-        return Account::findOrFail($accountId);
+        return $this->requireAccount($request, 'Select a client account to see its invoices (pass ?account_id=).');
     }
 }

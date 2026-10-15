@@ -93,6 +93,9 @@ class PlanManagementService
                 // Phase 8 Task 2 — explicit 0 unless supplied.
                 'included_credits' => (int) ($attributes['included_credits'] ?? 0),
                 'is_active' => $attributes['is_active'] ?? true,
+                // Plan restructure (2026-10-15) — limits (null = unlimited), visibility and the
+                // client a custom plan belongs to.
+                ...array_intersect_key($attributes, array_flip([...array_keys(Plan::LIMITS), 'is_public', 'account_id'])),
             ]);
 
             if ($idsBySlug->isNotEmpty()) {
@@ -137,6 +140,8 @@ class PlanManagementService
                 // Phase 8 Task 2 — applies to orders placed from now on
                 // (invoices capture it); never re-allocates past periods.
                 'included_credits',
+                // Plan restructure (2026-10-15) — applies to orders placed from now on (invoices capture them).
+                ...array_keys(Plan::LIMITS), 'is_public',
             ]));
 
             if ($core !== []) {
@@ -243,6 +248,12 @@ class PlanManagementService
     private function resolveCapabilityIdsBySlug(array $slugs): Collection
     {
         $slugs = array_values(array_unique(array_filter($slugs)));
+        // QA fixes (2026-10-14): Ads need the connected Facebook Page / ad account, which is
+        // the Social feature — a plan with Ads but not Social opened the Ad Launcher but could
+        // never connect the ad account. Choosing Ads brings Social with it.
+        if (in_array('ads', $slugs, true) && ! in_array('social', $slugs, true)) {
+            $slugs[] = 'social';
+        }
 
         if ($slugs === []) {
             return collect();

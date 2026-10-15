@@ -1,6 +1,7 @@
 import axiosInstance from '../core/api/axiosInstance';
 import type {
   CreatePlanPayload,
+  CustomPlanPriceList,
   ManagedPlansResponse,
   UpdatePlanPayload,
   UpdatePlanResult,
@@ -35,6 +36,15 @@ const planService = {
    * leaves every omitted key untouched, and omitting `capabilities`
    * is how a price edit avoids disturbing the bundle.
    */
+  /** The custom-plan price list behind the Plans price calculator. */
+  getPricing() {
+    return axiosInstance.get<{ data: CustomPlanPriceList }>('/admin/custom-plan-pricing').then((res) => res.data.data);
+  },
+
+  updatePricing(prices: Partial<CustomPlanPriceList>) {
+    return axiosInstance.put<{ message: string; data: CustomPlanPriceList }>('/admin/custom-plan-pricing', prices).then((res) => res.data);
+  },
+
   update(slug: string, payload: UpdatePlanPayload) {
     return axiosInstance.put<UpdatePlanResult>(`${BASE}/${slug}`, payload).then((res) => res.data);
   },

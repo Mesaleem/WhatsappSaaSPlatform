@@ -69,7 +69,13 @@ class QuotaRequestController extends Controller
             return null;
         }
 
-        return $user->account?->account_type === 'agent' ? $user->account_id : null;
+        // QA fixes (2026-10-14): only the Super Admin or a real agent (an agent
+        // account AND the agent role) reaches here. Anyone else holding the
+        // permission by some other role used to fall through to null, which
+        // means "platform-wide" — refuse instead.
+        abort_unless($user->account?->account_type === 'agent', 403, 'Only the Super Admin or an agent can do this.');
+
+        return $user->account_id;
     }
 
     /**
@@ -97,6 +103,14 @@ class QuotaRequestController extends Controller
         $account = $this->requireAccount($request, 'Select a client/tenant account to request quota for.');
         $subscription = $account->currentSubscription;
         abort_if(! $subscription, 422, 'This account has no subscription to top up.');
+
+        // QA fixes (2026-10-14): one open request at a time (each one emails every reviewer).
+        if (QuotaRequest::query()->where('account_id', $account->id)->where('status', 'pending')->exists()) {
+            return response()->json([
+                'message' => 'You already have a top-up request waiting for review. You will be told when it is decided.',
+                'error_code' => 'QUOTA_REQUEST_PENDING',
+            ], 409);
+        }
 
         // Conditional Quota Top-Up — server-side mirror of the frontend's
         // plan-type gate. 'flat_quota' has a finite total_allocated_messages
@@ -148,6 +162,8 @@ class QuotaRequestController extends Controller
         // ever see or approve that request. Same routing for both
         // request shapes.
         $reviewerLabel = $account->agent_id !== null ? 'Your Agent' : 'The Super Admin';
+
+        app(\App\Services\Billing\BillingRequestNotifier::class)->quotaRequested($account, $request->user(), $quotaRequest);
 
         return response()->json([
             'message' => "Top-up request submitted. {$reviewerLabel} will review it shortly.",
@@ -216,16 +232,26 @@ class QuotaRequestController extends Controller
 
         $subscription = $account->currentSubscription;
 
+        // QA fixes (2026-10-14): extra messages on a plan that has ended cannot be used
+        // (the term is not extended) — the client should renew instead.
+        abort_if(
+            $subscription !== null && $subscription->expires_at !== null && $subscription->expires_at->isPast(),
+            422,
+            'This client\'s plan has ended. Extra messages cannot be used until the plan is renewed — reject this request and ask them to renew.'
+        );
+
         if ($quotaRequest->isWalletTopUp()) {
             [$freshSubscription, $invoice] = $this->approveWalletTopUp($quotaRequest, $account, $subscription, $request);
         } else {
             [$freshSubscription, $invoice] = $this->approveExtraMessages($quotaRequest, $account, $subscription, $agentScopeId, $request);
         }
 
+        $this->notifyDecision($quotaRequest, true, $invoice?->invoice_number);
+
         return response()->json([
             'message' => $quotaRequest->isWalletTopUp()
-                ? 'Top-up approved. Balance added and invoice generated.'
-                : 'Quota request approved. Extra quota added and invoice generated.',
+                ? 'Top-up approved. The invoice is ready; the balance is added when it is paid.'
+                : 'Quota request approved. The invoice is ready; the extra messages are added when it is paid.',
             'data' => [
                 'quota_request' => $quotaRequest->fresh(['account:id,company_name', 'requestedBy:id,name,email']),
                 'subscription' => $freshSubscription,
@@ -268,7 +294,8 @@ class QuotaRequestController extends Controller
         }
 
         return DB::transaction(function () use ($quotaRequest, $account, $subscription, $request) {
-            $subscription->increment('total_allocated_messages', $quotaRequest->requested_extra_messages);
+            // QA fixes (2026-10-14): nothing is credited here any more — the extra
+            // messages are added when this invoice is PAID (InvoiceCreditService).
 
             $amount = round($quotaRequest->requested_extra_messages * self::RATE_PER_EXTRA_MESSAGE, 2);
             $tax = round($amount * self::TAX_RATE, 2);
@@ -332,13 +359,8 @@ class QuotaRequestController extends Controller
         );
 
         return DB::transaction(function () use ($quotaRequest, $account, $subscription, $request) {
-            $rate = (float) $subscription->rate_per_message;
+            // QA fixes (2026-10-14): the wallet is credited when this invoice is PAID.
             $amount = round((float) $quotaRequest->requested_topup_amount, 2);
-            $newPricePaid = round((float) $subscription->price_paid + $amount, 2);
-
-            $subscription->price_paid = $newPricePaid;
-            $subscription->total_allocated_messages = $rate > 0 ? (int) floor($newPricePaid / $rate) : $subscription->total_allocated_messages;
-            $subscription->save();
 
             $tax = round($amount * self::TAX_RATE, 2);
             $total = round($amount + $tax, 2);
@@ -366,6 +388,64 @@ class QuotaRequestController extends Controller
 
             return [$subscription->fresh(), $invoice];
         });
+    }
+
+    /**
+     * POST /api/admin/quota-requests/{id}/reject — QA fixes (2026-10-14).
+     * Same reviewers and scope as approve(); the client is told why.
+     */
+    public function reject(Request $request, int $id): JsonResponse
+    {
+        $quotaRequest = QuotaRequest::find($id);
+        abort_if(! $quotaRequest, 404, 'Quota request not found.');
+        abort_if($quotaRequest->status !== 'pending', 422, 'This request has already been reviewed.');
+
+        $account = $quotaRequest->account;
+        abort_if(! $account, 404, 'The requesting account no longer exists.');
+        $agentScopeId = $this->callerAgentScopeId($request);
+        abort_if($agentScopeId !== null && $account->agent_id !== $agentScopeId, 404);
+
+        $data = $request->validate(['reason' => ['nullable', 'string', 'max:500']]);
+
+        $quotaRequest->forceFill([
+            'status' => 'rejected',
+            'reviewed_by' => $request->user()->id,
+            'reviewed_at' => now(),
+        ])->save();
+
+        $this->notifyDecision($quotaRequest, false, null, $data['reason'] ?? null);
+
+        return response()->json(['message' => 'Request rejected.', 'data' => $quotaRequest->fresh()]);
+    }
+
+    /** QA fixes (2026-10-14): the person who asked hears the decision (in-app + email). */
+    private function notifyDecision(QuotaRequest $quotaRequest, bool $approved, ?string $invoiceNumber, ?string $reason = null): void
+    {
+        $user = $quotaRequest->requestedBy;
+        if ($user === null) {
+            return;
+        }
+        $what = $quotaRequest->isWalletTopUp()
+            ? 'Your ₹'.number_format((float) $quotaRequest->requested_topup_amount, 2).' wallet top-up'
+            : 'Your request for '.number_format((int) $quotaRequest->requested_extra_messages).' extra messages';
+        $title = $approved ? 'Top-up approved' : 'Top-up not approved';
+        $body = $approved
+            ? "{$what} was approved. Pay invoice {$invoiceNumber} on the Billing page; the messages are added as soon as it is paid."
+            : "{$what} was not approved.".($reason ? " Reason: {$reason}" : '');
+
+        \App\Models\InAppNotification::query()->create([
+            'user_id' => $user->id, 'title' => $title, 'body' => $body,
+            'category' => 'billing', 'link' => '/billing', 'is_read' => false,
+        ]);
+        $mailer = app(\App\Services\Mail\SystemMailer::class);
+        $mailer->sendLater('account.alert', $user->email, [
+            'name' => $user->name,
+            'company_name' => (string) ($quotaRequest->account?->company_name ?? ''),
+            'alert_title' => $title,
+            'alert_message' => $body,
+            'action_label' => 'Open billing',
+            'action_url' => $mailer->url('/billing'),
+        ], [], $quotaRequest->account_id, $user->name);
     }
 
     /**

@@ -42,7 +42,7 @@ class CrmActivityController extends Controller
             'per_page' => ['nullable', 'integer', 'min:1'],
         ]);
 
-        $query = CrmActivity::query()->forAccount($account->id)->with($this->activityRelations());
+        $query = CrmActivity::query()->forAccount($account->id)->visibleTo($request->user())->with($this->activityRelations());
 
         foreach (CrmActivity::LINKS as $link) {
             if (! empty($f[$link])) {
@@ -127,7 +127,7 @@ class CrmActivityController extends Controller
 
     private function findOrFail(int $accountId, int $id): CrmActivity
     {
-        $activity = CrmActivity::query()->forAccount($accountId)->find($id);
+        $activity = CrmActivity::query()->forAccount($accountId)->visibleTo(request()->user())->find($id);
         abort_if(! $activity, 404, 'Activity not found.');
 
         return $activity;

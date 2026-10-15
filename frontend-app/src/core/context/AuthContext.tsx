@@ -28,6 +28,8 @@ interface AuthContextValue {
   logout: () => Promise<void>;
   /** Re-fetches /auth/me and updates the cached user — e.g. after a profile edit. */
   refreshUser: () => Promise<void>;
+  /** Product tours: replace the user's finished-tours list locally (after the API saved it). */
+  setCompletedTours: (tours: string[]) => void;
   hasPermission: (permission: string) => boolean;
   hasRole: (roleName: string) => boolean;
   isSuperAdmin: () => boolean;
@@ -185,8 +187,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (!user || isSuperAdmin()) return false;
     const account = user.account;
     if (!account) return false;
-    return account.status !== 'active' || account.current_subscription?.status !== 'active';
+    if (account.status !== 'active') return true;
+    // An agent's own account normally has no subscription: that is not "expired" (QA fixes, 2026-10-14).
+    if (!account.current_subscription) return account.account_type !== 'agent';
+    return account.current_subscription.status !== 'active';
   }, [user, isSuperAdmin]);
+
+  const setCompletedTours = useCallback((tours: string[]) => {
+    setUser((prev) => (prev ? { ...prev, completed_tours: tours } : prev));
+  }, []);
 
   const value = useMemo<AuthContextValue>(
     () => ({
@@ -196,13 +205,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       login,
       logout,
       refreshUser: hydrate,
+      setCompletedTours,
       hasPermission,
       hasRole,
       isSuperAdmin,
       hasModule,
       isReadOnly,
     }),
-    [user, isLoading, login, logout, hydrate, hasPermission, hasRole, isSuperAdmin, hasModule, isReadOnly],
+    [user, isLoading, login, logout, hydrate, setCompletedTours, hasPermission, hasRole, isSuperAdmin, hasModule, isReadOnly],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

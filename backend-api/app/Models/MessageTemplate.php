@@ -159,7 +159,10 @@ class MessageTemplate extends Model
      */
     public function scopeApprovedFor(Builder $query, ?int $accountId): Builder
     {
+        // QA fixes (2026-10-14): a Meta template Meta has not approved (pending,
+        // rejected, paused, disabled) is not sendable, whatever this platform said.
         return $query->where('status', 'approved')
+            ->where(fn (Builder $q) => $q->whereNull('meta_template_status')->orWhere('meta_template_status', 'APPROVED'))
             ->where(function (Builder $q) use ($accountId) {
                 $q->whereNull('account_id');
                 if ($accountId) {

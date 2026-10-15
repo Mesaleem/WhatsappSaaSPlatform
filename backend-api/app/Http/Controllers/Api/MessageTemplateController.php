@@ -315,6 +315,9 @@ class MessageTemplateController extends Controller
             return response()->json(['message' => $e->getMessage(), 'error_code' => $e->errorCode], $e->status);
         }
 
+        // Plan restructure (2026-10-15): a bulk template send is one broadcast of the plan's monthly allowance.
+        app(\App\Services\Billing\PlanLimits::class)->consumeBroadcast($account, 'template_bulk', $request->user());
+
         $sendAt = ScheduledMessageService::parseSendAt($data['scheduled_at'] ?? null);
         if ($sendAt !== null) {
             $service = app(ScheduledMessageService::class);
@@ -421,8 +424,17 @@ class MessageTemplateController extends Controller
             // approving via update() above.
             'header_type' => ['sometimes', 'string', Rule::in(MessageTemplate::HEADER_TYPES)],
             'header_media_url' => ['sometimes', 'nullable', 'string', 'max:2048', 'url'],
+            // QA fixes (2026-10-14): what Meta needs to review it (Meta accounts).
+            'category' => ['sometimes', 'nullable', Rule::in(MessageTemplate::META_CATEGORIES)],
+            'language' => ['sometimes', 'nullable', 'string', 'max:15', 'regex:/^[a-z]{2,3}(_[A-Z]{2})?$/'],
             ...$this->variablesSchemaRules(),
         ]);
+        if ($account->currentSubscription?->engine_type !== 'meta') {
+            unset($data['category'], $data['language']);
+        } else {
+            $data['category'] = $data['category'] ?? 'UTILITY';
+            $data['language'] = $data['language'] ?? 'en_US';
+        }
 
         // Phase 4 Task 8 -- the same component-structure invariant store()
         // and update() enforce. Applied here too so the rule holds on
@@ -438,6 +450,9 @@ class MessageTemplateController extends Controller
         // account. Per explicit product decision, a client may now hold
         // several templates (e.g. one per use case) — 1-template-per-
         // client is no longer enforced anywhere in this controller.
+        // Plan restructure (2026-10-15): the plan's template limit.
+        app(\App\Services\Billing\PlanLimits::class)->assertCanAddTemplate($account, $request->user());
+
         $status = $this->templateService->resolveCreationStatus($request->user(), $account);
 
         $template = MessageTemplate::create([
@@ -703,6 +718,12 @@ class MessageTemplateController extends Controller
         // (the Agent guard above requires targetAccount), so this matches
         // resolveCreationStatus()'s own Super-Admin branch — 'approved'
         // immediately, not 'pending'.
+        // QA fixes (2026-10-14): the client's plan template limit applies to a
+        // template an agent creates for it too (Super Admin is exempt inside).
+        if ($targetAccount && $targetAccount->account_type === 'client') {
+            app(\App\Services\Billing\PlanLimits::class)->assertCanAddTemplate($targetAccount, $user);
+        }
+
         $status = $targetAccount
             ? $this->templateService->resolveCreationStatus($user, $targetAccount)
             : 'approved'; // global -- Super Admin only, per the Agent guard above.
@@ -849,7 +870,35 @@ class MessageTemplateController extends Controller
             // Multiple approved templates per client are now allowed —
             // see submitRequest()'s own note; the Testing Gate above
             // (is_super_admin_tested) is unaffected and still enforced.
+            // QA fixes (2026-10-14): a Meta (Cloud API) client's template must be a real
+            // Meta template — it is submitted to the client's WhatsApp Business Account
+            // and becomes sendable when Meta approves it (webhook / templates:sync-meta).
+            $account = $template->account;
+            if ($account && $account->currentSubscription?->engine_type === 'meta' && $template->meta_template_status !== 'APPROVED') {
+                try {
+                    $submitted = app(\App\Services\Templates\MetaTemplateSubmitter::class)->submit($template, $account);
+                } catch (\RuntimeException $e) {
+                    return response()->json(['message' => $e->getMessage(), 'error_code' => 'META_TEMPLATE_SUBMIT_FAILED'], 422);
+                }
+                $template->forceFill([
+                    'meta_template_name' => $submitted['name'],
+                    'language' => $template->language ?: 'en_US',
+                    'category' => $template->category ?: 'UTILITY',
+                    'meta_template_status' => $submitted['status'],
+                    'status' => $submitted['status'] === 'APPROVED' ? 'approved' : 'pending_meta_approval',
+                ])->save();
+                if ($submitted['status'] === 'APPROVED') {
+                    $this->templateService->notifyApproved($template->fresh());
+                }
+
+                return response()->json([
+                    'message' => $submitted['status'] === 'APPROVED' ? 'Template approved by Meta.' : 'Template sent to Meta for approval. It can be used once Meta approves it.',
+                    'data' => $template->fresh(),
+                ]);
+            }
+
             $template->forceFill(['status' => 'approved'])->save();
+            $this->templateService->notifyApproved($template->fresh());
 
             return response()->json(['message' => 'Template approved.', 'data' => $template->fresh()]);
         }
@@ -931,8 +980,10 @@ class MessageTemplateController extends Controller
         }
 
         $account = $user->account;
+        // QA fixes (2026-10-14): see AccountController::callerAgentScopeId().
+        abort_unless($account?->account_type === 'agent', 403, 'Only the Super Admin or an agent can do this.');
 
-        return $account?->account_type === 'agent' ? $account : null;
+        return $account;
     }
 
     /**

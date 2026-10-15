@@ -120,7 +120,10 @@ class ModuleAddonPriceTest extends TestCase
 
         $this->artisan('modules:enforce-addons')->assertSuccessful();
 
-        $this->assertNotContains('contact_groups', $account->fresh()->allowed_modules);
+        // QA fixes (2026-10-14): contact_groups is a free baseline module — its paid part is the
+        // native-group allowance of the term — so paying never rewrites the module checklist
+        // (writing it there used to narrow a plan client's whole menu to this one module).
+        $this->assertSame(ModuleAddonRequest::EXPIRED, $ended->fresh()->status);
         $renewal = ModuleAddonRequest::where('account_id', $account->id)->where('status', ModuleAddonRequest::INVOICED)->firstOrFail();
         $this->assertNotSame($ended->id, $renewal->id);
         $this->assertSame(110.0, (float) Invoice::find($renewal->invoice_id)->total_amount);

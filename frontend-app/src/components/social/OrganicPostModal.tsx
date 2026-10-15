@@ -7,8 +7,15 @@ import organicPostService from '../../services/organicPostService';
 import { extractErrorMessage } from '../../utils/apiError';
 import { socialConnectionError, type SocialConnectionErrorInfo } from '../../utils/socialConnectionError';
 import SocialReconnectNotice from './SocialReconnectNotice';
-import { formatScheduledAt, LINKEDIN_UNAVAILABLE_NOTE, ORGANIC_PLATFORM_LABELS } from '../../types/organic';
-import type { OrganicPlatform, OrganicPost } from '../../types/organic';
+import {
+  CAROUSEL_MAX,
+  CAROUSEL_MIN,
+  formatScheduledAt,
+  LINKEDIN_UNAVAILABLE_NOTE,
+  ORGANIC_FORMAT_LABELS,
+  ORGANIC_PLATFORM_LABELS,
+} from '../../types/organic';
+import type { OrganicMediaItem, OrganicPlatform, OrganicPost, OrganicPostFormat } from '../../types/organic';
 import type { MediaType } from '../../types/media';
 import DismissibleAlert from '../common/DismissibleAlert';
 
@@ -16,6 +23,40 @@ import DismissibleAlert from '../common/DismissibleAlert';
 const PENDING_PUBLISH_NOTE = 'Processing — Instagram is still preparing the video; it will be published automatically.';
 
 const PLATFORMS: OrganicPlatform[] = ['facebook', 'instagram', 'linkedin'];
+
+const FORMATS: OrganicPostFormat[] = ['post', 'reel', 'story', 'carousel'];
+
+/** 2026-10-15 — what each format needs (the backend checks the same). */
+const FORMAT_HINTS: Record<OrganicPostFormat, string> = {
+  post: 'A normal post: text, an image or a video (Instagram needs an image or video).',
+  reel: 'A short vertical video, published as a Reel on Facebook and Instagram.',
+  story: 'An image or video shown for 24 hours. Stories have no caption.',
+  carousel: `${CAROUSEL_MIN}–${CAROUSEL_MAX} images (Instagram also takes videos), swiped through in one post.`,
+};
+
+/** Why this form cannot be published yet for its format, or null. */
+function formatProblem(
+  format: OrganicPostFormat,
+  platforms: OrganicPlatform[],
+  media: { url: string | null; type: string | null },
+  items: OrganicMediaItem[],
+): string | null {
+  if (format !== 'post' && platforms.includes('linkedin')) {
+    return 'LinkedIn supports normal posts only — deselect LinkedIn for a ' + ORGANIC_FORMAT_LABELS[format] + '.';
+  }
+  if (format === 'reel' && (!media.url || media.type !== 'video')) return 'A Reel needs a video — upload one above.';
+  if (format === 'story' && !media.url) return 'A Story needs an image or a video — upload one above.';
+  if (format === 'carousel') {
+    if (items.length < CAROUSEL_MIN || items.length > CAROUSEL_MAX) return `A carousel needs ${CAROUSEL_MIN} to ${CAROUSEL_MAX} images or videos.`;
+    if (platforms.includes('facebook') && items.some((i) => i.type === 'video')) {
+      return 'A Facebook carousel can hold images only — remove the videos or deselect Facebook.';
+    }
+  }
+  if (format === 'post' && platforms.includes('instagram') && !media.url) {
+    return 'Instagram requires an image or video — add media above, or deselect Instagram.';
+  }
+  return null;
+}
 
 /** Phase 9 Task 3 — one key per submitted form content; a resubmission of the same post reuses it. */
 const newSubmissionKey = () => `org-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
@@ -67,6 +108,9 @@ export default function OrganicPostModal({
   const [caption, setCaption] = useState('');
   const [mediaUrl, setMediaUrl] = useState<string | null>(null);
   const [mediaType, setMediaType] = useState<MediaType | null>(null);
+  // 2026-10-15 — Post / Reel / Story / Carousel; a carousel has its own list of items.
+  const [format, setFormat] = useState<OrganicPostFormat>('post');
+  const [items, setItems] = useState<OrganicMediaItem[]>([]);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isUploadingMedia, setIsUploadingMedia] = useState(false);
@@ -87,7 +131,7 @@ export default function OrganicPostModal({
   const submissionKey = useRef<string | null>(null);
   useEffect(() => {
     submissionKey.current = null;
-  }, [caption, mediaUrl, mediaType, selectedPlatforms, when, scheduledAt]);
+  }, [caption, mediaUrl, mediaType, selectedPlatforms, when, scheduledAt, format, items]);
 
   const togglePlatform = (platform: OrganicPlatform) => {
     setSelectedPlatforms((prev) => (prev.includes(platform) ? prev.filter((p) => p !== platform) : [...prev, platform]));
@@ -108,6 +152,31 @@ export default function OrganicPostModal({
       .finally(() => setIsUploadingMedia(false));
   };
 
+  /** Carousel: upload the chosen files one after another, keeping their order. */
+  const handleCarouselFiles = async (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    const room = CAROUSEL_MAX - items.length;
+    const chosen = Array.from(files).slice(0, Math.max(0, room));
+    if (chosen.length === 0) {
+      setMediaError(`A carousel holds up to ${CAROUSEL_MAX} items.`);
+      return;
+    }
+    setMediaError(null);
+    setIsUploadingMedia(true);
+    try {
+      for (const file of chosen) {
+        setUploadProgress(0);
+        const uploaded = await mediaService.upload(file, setUploadProgress);
+        setItems((prev) => [...prev, { url: uploaded.url, type: uploaded.type }]);
+      }
+    } catch (err) {
+      setMediaError(extractErrorMessage(err, 'Failed to upload media.'));
+    } finally {
+      setIsUploadingMedia(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
   const handleRemoveMedia = () => {
     setMediaUrl(null);
     setMediaType(null);
@@ -120,14 +189,14 @@ export default function OrganicPostModal({
       setFormError('Select at least one platform.');
       return;
     }
-    if (!caption.trim()) {
+    // A Story has no caption on Facebook or Instagram.
+    if (format !== 'story' && !caption.trim()) {
       setFormError('Caption is required.');
       return;
     }
-    // Instagram has no text-only post type (see OrganicPublishService::publishToInstagram()'s
-    // own guard) — checked client-side too so the tenant sees a clear reason before submitting.
-    if (selectedPlatforms.includes('instagram') && !mediaUrl) {
-      setFormError('Instagram requires an image or video — add media above, or deselect Instagram.');
+    const problem = formatProblem(format, selectedPlatforms, { url: mediaUrl, type: mediaType }, items);
+    if (problem) {
+      setFormError(problem);
       return;
     }
 
@@ -160,8 +229,10 @@ export default function OrganicPostModal({
         organicPostService.publish({
           platform,
           caption: caption.trim(),
-          media_url: mediaUrl,
-          media_type: mediaType,
+          media_url: format === 'carousel' ? null : mediaUrl,
+          media_type: format === 'carousel' ? null : mediaType,
+          post_format: format,
+          ...(format === 'carousel' ? { media_items: items } : {}),
           scheduled_at: scheduledIso,
           idempotency_key: `${key}-${platform}`,
         }),
@@ -263,8 +334,32 @@ export default function OrganicPostModal({
                 )}
               </div>
 
+              <div>
+                <label className="block text-sm font-medium text-slate-700">Format</label>
+                <div className="mt-1.5 flex flex-wrap gap-2" role="radiogroup" aria-label="Post format">
+                  {FORMATS.map((f) => (
+                    <button
+                      key={f}
+                      type="button"
+                      role="radio"
+                      aria-checked={format === f}
+                      onClick={() => setFormat(f)}
+                      className={`rounded-lg border px-3 py-1.5 text-xs font-semibold ${
+                        format === f ? 'border-transparent text-white' : 'border-slate-200 text-slate-600 hover:border-emerald-300'
+                      }`}
+                      style={format === f ? { background: activeGradient } : undefined}
+                    >
+                      {ORGANIC_FORMAT_LABELS[f]}
+                    </button>
+                  ))}
+                </div>
+                <p className="mt-1.5 text-[11px]" style={{ color: indigo.muted }}>
+                  {FORMAT_HINTS[format]}
+                </p>
+              </div>
+
               <label className="block text-sm font-medium text-slate-700">
-                Caption <span className="text-red-500">*</span>
+                Caption {format === 'story' ? <span className="font-normal text-slate-400">(not shown on a Story)</span> : <span className="text-red-500">*</span>}
                 <textarea
                   className={inputClass}
                   rows={4}
@@ -275,15 +370,55 @@ export default function OrganicPostModal({
               </label>
 
               <div>
-                <label className="block text-sm font-medium text-slate-700">Media (optional)</label>
+                <label className="block text-sm font-medium text-slate-700">
+                  {format === 'carousel' ? `Media (${items.length}/${CAROUSEL_MAX})` : format === 'post' ? 'Media (optional)' : 'Media'}
+                </label>
                 <input
                   ref={fileInputRef}
                   type="file"
-                  accept="image/jpeg,image/png,image/webp,image/gif,video/mp4,video/quicktime,video/webm"
+                  multiple={format === 'carousel'}
+                  accept={format === 'reel' ? 'video/mp4,video/quicktime,video/webm' : 'image/jpeg,image/png,image/webp,image/gif,video/mp4,video/quicktime,video/webm'}
                   className="hidden"
-                  onChange={(e) => handleFileSelected(e.target.files?.[0])}
+                  data-testid="organic-media-input"
+                  onChange={(e) => (format === 'carousel' ? void handleCarouselFiles(e.target.files) : handleFileSelected(e.target.files?.[0]))}
                 />
-                {mediaUrl ? (
+                {format === 'carousel' ? (
+                  <div className="mt-1 space-y-2" data-testid="carousel-items">
+                    {items.length > 0 && (
+                      <div className="grid grid-cols-5 gap-2">
+                        {items.map((item, index) => (
+                          <div key={item.url + index} className="relative">
+                            {item.type === 'video' ? (
+                              // eslint-disable-next-line jsx-a11y/media-has-caption
+                              <video src={item.url} className="h-16 w-full rounded-lg bg-black object-cover" muted />
+                            ) : (
+                              <img src={item.url} alt={'Item ' + (index + 1)} className="h-16 w-full rounded-lg object-cover" />
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => setItems((prev) => prev.filter((_, i) => i !== index))}
+                              className="absolute -right-1.5 -top-1.5 rounded-full bg-white p-0.5 text-slate-500 shadow ring-1 ring-slate-200 hover:text-red-600"
+                              aria-label={'Remove item ' + (index + 1)}
+                            >
+                              <X className="h-3 w-3" />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {items.length < CAROUSEL_MAX && (
+                      <button
+                        type="button"
+                        onClick={() => fileInputRef.current?.click()}
+                        disabled={isUploadingMedia}
+                        className="flex w-full items-center justify-center gap-2 rounded-xl border-2 border-dashed border-slate-200 px-4 py-4 text-xs font-medium text-slate-600 hover:border-emerald-300 disabled:opacity-60"
+                      >
+                        {isUploadingMedia ? <Loader2 className="h-4 w-4 animate-spin" /> : <UploadCloud className="h-4 w-4" />}
+                        {isUploadingMedia ? `Uploading… ${uploadProgress}%` : 'Add images or videos (select several at once)'}
+                      </button>
+                    )}
+                  </div>
+                ) : mediaUrl ? (
                   <div className="mt-1 flex items-center gap-3 rounded-xl border border-slate-200 p-2">
                     {mediaType === 'video' ? (
                       // eslint-disable-next-line jsx-a11y/media-has-caption

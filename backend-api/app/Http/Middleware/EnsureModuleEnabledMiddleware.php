@@ -71,10 +71,21 @@ class EnsureModuleEnabledMiddleware
         if ($account && ! $account->hasModuleEnabled($module)) {
             $custom = self::CUSTOM_RESPONSES[$module] ?? null;
 
+            // Plan restructure (2026-10-15): a client whose menu follows its plan is missing this
+            // module because the plan does not include it — say so (upgrade), not "disabled by
+            // the Super Admin". Same code the capability guard uses for "not in your plan".
+            if ($custom === null && $account->moduleDenial($module) === 'not_in_plan') {
+                $custom = [
+                    'error_code' => 'CAPABILITY_NOT_ENTITLED',
+                    'message' => 'Your plan does not include this feature. Upgrade your plan to use it.',
+                ];
+            }
+
             // P5-8 — the denial is audited on the RESOLVED tenant (never a request value).
             app(EntitlementAuditLogger::class)->record($account, false, [
                 'action' => 'route.access', 'resource_type' => 'route', 'source' => 'api',
-                'category' => 'module_disabled', 'module' => $module,
+                'category' => ($custom['error_code'] ?? null) === 'CAPABILITY_NOT_ENTITLED' ? 'capability_not_entitled' : 'module_disabled', 'module' => $module,
+                ...(($custom['error_code'] ?? null) === 'CAPABILITY_NOT_ENTITLED' ? ['capability' => \App\Services\Access\PlanModules::capabilityFor($module)] : []),
                 'error_code' => $custom['error_code'] ?? 'MODULE_DISABLED', 'http_status' => 403,
             ]);
 

@@ -218,6 +218,11 @@ const whatsappService = {
     return axiosInstance.get<MetaConfigResponse>(`${BASE}/meta-config`).then((res) => res.data);
   },
 
+  /** QA fixes (2026-10-14): disconnect the Meta number from this account. */
+  disconnectMeta() {
+    return axiosInstance.delete<{ message: string }>(`${BASE}/meta-config`).then((res) => res.data);
+  },
+
   saveMetaConfig(payload: SaveMetaConfigPayload) {
     return axiosInstance
       .post<SaveMetaConfigResponse>(`${BASE}/meta-config`, payload)

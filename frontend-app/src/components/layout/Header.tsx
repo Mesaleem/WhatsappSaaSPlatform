@@ -1,3 +1,4 @@
+import TourButton from './TourButton';
 import { useState } from 'react';
 import { Building2, Menu, RefreshCw, Zap } from 'lucide-react';
 import { useAuth } from '../../core/context/AuthContext';
@@ -201,6 +202,7 @@ export default function Header({
           </button>
         )}
         {theme && <ThemePicker />}
+        <TourButton />
         <NotificationBell />
         <AvatarMenu />
       </div>

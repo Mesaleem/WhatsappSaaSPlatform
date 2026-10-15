@@ -252,7 +252,9 @@ class AiAgentRegistryTest extends TestCase
         $noAi = $this->tenant('starter', grants: []);
         $this->actingAs($this->user($noAi))->postJson(self::API, $this->body())->assertForbidden()->assertJsonPath('error_code', 'AI_CAPABILITY_UNAVAILABLE');
 
-        $noModule = $this->tenant(attributes: ['allowed_modules' => array_values(array_diff(Account::MODULES, ['chatbot']))]);
+        // Switched off after the plan purchase (paying resets an earlier checklist — QA fixes, 2026-10-14).
+        $noModule = $this->tenant();
+        $noModule->forceFill(['allowed_modules' => array_values(array_diff(Account::MODULES, ['chatbot']))])->save();
         $this->actingAs($this->user($noModule))->postJson(self::API, $this->body())->assertForbidden();
 
         $expired = $this->tenant();

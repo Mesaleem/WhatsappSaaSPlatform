@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { BadgeCheck, Check, Info, Loader2, ShieldCheck, Sparkles, Zap } from 'lucide-react';
+import { BadgeCheck, Check, Info, Loader2, ShieldCheck, Sparkles, SlidersHorizontal, Zap } from 'lucide-react';
+import { describePlanLimit, type PlanLimits } from '../../types/account';
 import { useAuth } from '../../core/context/AuthContext';
 import { cachedPlans, loadPlans } from '../siteData';
 import type { PublicPlan } from '../../types/site';
@@ -9,6 +10,7 @@ import { ButtonLink, Container, FaqList, PageHero, SectionHeading, list } from '
 const ENGINE_LABELS: Record<string, string> = {
   qr: 'WhatsApp via QR scan',
   meta: 'Official Meta Cloud API',
+  none: 'CRM only (no WhatsApp sending)',
 };
 
 export function periodLabel(days: number): string {
@@ -35,8 +37,21 @@ function messagesLine(plan: PublicPlan): string | null {
 function featuresFor(plan: PublicPlan, configured: { plan: string; features: string[] }[]): string[] {
   const custom = configured.find((p) => p.plan === plan.key);
   if (custom && list(custom.features).length > 0) return list(custom.features);
-  const messages = messagesLine(plan);
-  return [...(messages ? [messages] : []), ENGINE_LABELS[plan.engine_type] ?? plan.engine_type, '1 WhatsApp number included', ...plan.features];
+  const messages = plan.engine_type === 'none' ? null : messagesLine(plan);
+  // Plan restructure (2026-10-15): the plan's limits (team users, templates, journeys, broadcasts, marketing).
+  const limits = plan.limits
+    ? (Object.keys(plan.limits) as (keyof PlanLimits)[])
+        .map((k) => describePlanLimit(k, plan.limits![k]))
+        .filter((t): t is string => t !== null && !t.startsWith('No '))
+        .map((t) => t.charAt(0).toUpperCase() + t.slice(1))
+    : [];
+  return [
+    ...(messages ? [messages] : []),
+    ENGINE_LABELS[plan.engine_type] ?? plan.engine_type,
+    ...(plan.engine_type === 'none' ? [] : ['1 WhatsApp number included']),
+    ...limits,
+    ...plan.features,
+  ];
 }
 
 function PriceBlock({ plan, taxRate, large }: { plan: PublicPlan; taxRate: number; large?: boolean }) {
@@ -110,7 +125,7 @@ export default function PricingPage() {
           ) : plans.length === 1 ? (
             <Spotlight plan={plans[0]} features={featuresFor(plans[0], configured)} taxRate={taxRate} cta={ctaFor(plans[0])} ctaLabel={ctaLabel} />
           ) : (
-            <div className={`grid gap-6 ${plans.length === 2 ? 'mx-auto max-w-4xl sm:grid-cols-2' : 'sm:grid-cols-2 lg:grid-cols-3'}`}>
+            <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
               {plans.map((plan) => {
                 const featured = pricing.featured_plan === plan.key;
                 return (
@@ -142,6 +157,7 @@ export default function PricingPage() {
                   </div>
                 );
               })}
+              <CustomPlanCard />
             </div>
           )}
 
@@ -168,6 +184,34 @@ export default function PricingPage() {
         </section>
       )}
     </>
+  );
+}
+
+/**
+ * Plan restructure (2026-10-15) — "Custom": a plan built for one business by
+ * the sales team, with only the features it needs (e.g. only CRM, only the
+ * journey builder, CRM + ads) and its own users / templates / broadcasts
+ * limits and price.
+ */
+function CustomPlanCard() {
+  return (
+    <div data-testid="plan-custom" className="relative flex flex-col rounded-3xl border border-dashed border-emerald-300 bg-emerald-50/40 p-7">
+      <h3 className="flex items-center gap-2 font-display text-xl font-bold text-slate-900">
+        <SlidersHorizontal className="h-5 w-5 text-emerald-700" /> Custom
+      </h3>
+      <p className="mt-2 text-sm text-slate-600">Need only some features, or more users, templates or broadcasts? We build a plan just for you.</p>
+      <p className="mt-6 font-display text-3xl font-extrabold tracking-tight text-slate-900">Your price</p>
+      <ButtonLink to="/contact" variant="secondary" className="mt-6 w-full">
+        Contact sales
+      </ButtonLink>
+      <ul className="mt-7 space-y-2.5 border-t border-emerald-100 pt-6">
+        {['Pick only the features you need — CRM, journeys, ads, broadcasts', 'Your own number of users, templates and journeys', 'Meta API or WhatsApp by QR', 'One simple price, no hidden charges'].map((f) => (
+          <li key={f} className="flex items-start gap-2.5 text-sm text-slate-600">
+            <Check className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" strokeWidth={3} /> {f}
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 

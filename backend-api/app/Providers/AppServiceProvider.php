@@ -53,6 +53,21 @@ class AppServiceProvider extends ServiceProvider
         \App\Support\Observability\JobLogging::register();
         \App\Support\Observability\SlowQueryLogger::register();
 
+        // QA fixes (2026-10-14): a token stops working the moment its user is
+        // deactivated or its account suspended — not only at the next login.
+        // (An expired plan is NOT a reason: that client must still reach Billing.)
+        \Laravel\Sanctum\Sanctum::authenticateAccessTokensUsing(function ($token, bool $isValid): bool {
+            if (! $isValid) {
+                return false;
+            }
+            $user = $token->tokenable;
+            if (! $user instanceof \App\Models\User || ! $user->is_active) {
+                return false;
+            }
+
+            return $user->account_id === null || $user->account?->status !== 'suspended';
+        });
+
         /**
          * Module 9 — "Enforce rate limiting based on the tenant account's
          * rate limit setting" (spec, requirement 1). Applied to the

@@ -58,7 +58,7 @@ class SocialAccountFoundationTest extends TestCase
         config(['services.frontend.url' => 'https://app.example.test']);
         SocialProviderConfig::create(['provider' => 'meta', 'client_id' => 'app-id', 'client_secret' => 'app-secret', 'redirect_uri' => 'https://api.example.test/api/social/callback/meta', 'is_active' => true]);
 
-        $this->graph = ['me' => [200, ['id' => '1']], 'code_fails' => false, 'long_fails' => false, 'ig_expansion_fails' => false, 'pages_fail' => false];
+        $this->graph = ['me' => [200, ['id' => '1']], 'code_fails' => false, 'long_fails' => false, 'ig_expansion_fails' => false, 'pages_fail' => false, 'pages' => true, 'instagram' => true, 'ad_accounts' => true];
         Http::fake(function (HttpRequest $request) {
             $url = $request->url();
             parse_str((string) parse_url($url, PHP_URL_QUERY), $query);
@@ -78,8 +78,12 @@ class SocialAccountFoundationTest extends TestCase
                     return Http::response(['error' => ['message' => '(#10) This endpoint requires the permission.', 'code' => 10]], 400);
                 }
 
+                if (! $this->graph['pages']) {
+                    return Http::response(['data' => []]);
+                }
+
                 $page = ['id' => 'page-1', 'name' => 'Acme Page'];
-                if (str_contains($url, 'instagram_business_account')) {
+                if ($this->graph['instagram'] && str_contains($url, 'instagram_business_account')) {
                     $page['instagram_business_account'] = ['id' => 'ig-1', 'username' => 'acme'];
                 }
 
@@ -87,7 +91,7 @@ class SocialAccountFoundationTest extends TestCase
             }
 
             if (str_contains($url, '/me/adaccounts')) {
-                return Http::response(['data' => [['id' => 'act_1', 'name' => 'Acme Ads', 'account_id' => '1']]]);
+                return Http::response(['data' => $this->graph['ad_accounts'] ? [['id' => 'act_1', 'name' => 'Acme Ads', 'account_id' => '1']] : []]);
             }
 
             if (str_contains($url, '/page-1')) {
@@ -322,7 +326,10 @@ class SocialAccountFoundationTest extends TestCase
     {
         $this->actingAs($this->user($this->tenant(), 'user'))->getJson('/api/social/oauth/meta/redirect')->assertForbidden();
 
-        $noModule = $this->tenant(['allowed_modules' => array_values(array_diff(Account::MODULES, ['social_accounts']))]);
+        $noModule = $this->tenant();
+        // QA fixes (2026-10-14): paying for a plan resets an earlier checklist, so the
+        // switch-off is made after the purchase, as a Super Admin would.
+        $noModule->forceFill(['allowed_modules' => array_values(array_diff(Account::MODULES, ['social_accounts']))])->save();
         $this->actingAs($this->user($noModule))->getJson('/api/social/oauth/meta/redirect')->assertForbidden();
 
         $noCapability = $this->tenant();
@@ -577,5 +584,52 @@ class SocialAccountFoundationTest extends TestCase
 
         $this->assertSame('social-oauth-error', $payload['type']);
         $this->assertNull(Cache::get('social_oauth_pending:'.$flow['state']['nonce']));
+    }
+
+    // ================================================================== guided setup: what is missing on Meta's side
+
+    public function test_the_popup_and_the_polled_result_summarise_what_meta_returned_per_asset_type(): void
+    {
+        $admin = $this->user($this->tenant([], 'business'));
+        $flow = $this->startConnect($admin);
+
+        $payload = $this->popup(['code' => 'auth-code', 'state' => $flow['raw']]);
+
+        $this->assertSame(['facebook_page' => 1, 'instagram' => 1, 'meta_ad_account' => 1], $payload['summary']['found']);
+        $this->assertSame(['facebook_page', 'instagram', 'meta_ad_account'], $payload['summary']['enabled']);
+        $this->assertTrue($payload['summary']['plan_has_ads']);
+
+        $result = $this->actingAs($admin)->getJson('/api/social/oauth/meta/result/'.$payload['nonce'])->assertOk();
+        $this->assertSame('success', $result->json('status'));
+        $this->assertSame($payload['summary'], $result->json('summary'), 'the polled result carries the same summary');
+    }
+
+    public function test_a_personal_profile_without_a_page_gets_an_empty_success_with_zero_counts(): void
+    {
+        $admin = $this->user($this->tenant());
+        $this->graph['pages'] = false;
+        $this->graph['ad_accounts'] = false;
+        $flow = $this->startConnect($admin);
+
+        $payload = $this->popup(['code' => 'auth-code', 'state' => $flow['raw']]);
+
+        $this->assertSame('social-oauth-success', $payload['type']);
+        $this->assertSame([], $payload['assets']);
+        $this->assertSame(['facebook_page' => 0, 'instagram' => 0, 'meta_ad_account' => 0], $payload['summary']['found']);
+        $this->assertFalse($payload['summary']['plan_has_ads'], 'the QR Growth plan has no ads capability');
+        $this->assertStringNotContainsString('EAA', json_encode($payload));
+    }
+
+    public function test_a_page_without_a_linked_instagram_is_counted_and_a_disabled_platform_is_reported(): void
+    {
+        $admin = $this->user($this->tenant(['allow_instagram' => false]));
+        $this->graph['instagram'] = false;
+        $flow = $this->startConnect($admin);
+
+        $payload = $this->popup(['code' => 'auth-code', 'state' => $flow['raw']]);
+
+        $this->assertSame(['facebook_page', 'meta_ad_account'], array_column($payload['assets'], 'asset_type'));
+        $this->assertSame(['facebook_page' => 1, 'instagram' => 0, 'meta_ad_account' => 1], $payload['summary']['found']);
+        $this->assertSame(['facebook_page', 'meta_ad_account'], $payload['summary']['enabled']);
     }
 }

@@ -24,6 +24,8 @@ import PendingInvoicesCard from '../../components/billing/PendingInvoicesCard';
 import AmountsDueCard from '../../components/billing/AmountsDueCard';
 import ContactSalesModal from '../../components/billing/ContactSalesModal';
 import CustomPlanRequestsCard from '../../components/billing/CustomPlanRequestsCard';
+import PlanUsageCard from '../../components/billing/PlanUsageCard';
+import { describePlanLimit, type PlanLimits } from '../../types/account';
 import ConfirmModal from '../../components/common/ConfirmModal';
 import { PageHeader, PageShell } from '../../components/common/PageShell';
 import { TableSkeletonRows } from '../../components/common/Skeleton';
@@ -60,8 +62,10 @@ function StatusBadge({ status }: { status: string }) {
 }
 
 function formatMoney(amount: string, currency = 'INR'): string {
-  const symbol = currency === 'INR' ? 'Rs.' : currency;
-  return `${symbol} ${Number(amount).toFixed(2)}`;
+  // ₹4,999 (QA fixes, 2026-10-14) — paise only when there are any.
+  const value = Number(amount);
+  const text = value.toLocaleString('en-IN', { minimumFractionDigits: Number.isInteger(value) ? 0 : 2, maximumFractionDigits: 2 });
+  return currency === 'INR' ? `₹${text}` : `${currency} ${text}`;
 }
 
 function formatDate(value: string | null): string {
@@ -110,6 +114,8 @@ export default function BillingPage() {
   useEffect(() => {
     setSubscription(account?.current_subscription ?? null);
   }, [account?.current_subscription]);
+
+  const currentEngine = subscription?.engine_type ?? null;
 
   const [plansData, setPlansData] = useState<PlansResponse | null>(null);
   const [isLoadingPlans, setIsLoadingPlans] = useState(true);
@@ -523,6 +529,8 @@ export default function BillingPage() {
           </DismissibleAlert>
         )}
 
+        {plansData?.plan_usage && <PlanUsageCard usage={plansData.plan_usage} />}
+
         {/* Plan purchase rules: one request at a time — pay it or cancel it. */}
         {plansData?.plan_status?.pending_invoice && (
           <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3" data-testid="pending-plan-request">
@@ -601,12 +609,15 @@ export default function BillingPage() {
               Loading plans…
             </div>
           ) : (
-            <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-3">
+            <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
               {plansData?.plans.map((plan) => (
                 <div key={plan.key} className="flex flex-col rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
                   <div className="flex items-center gap-2">
                     <Zap className="h-4 w-4 text-emerald-700" />
                     <h3 className="text-base font-semibold text-slate-900">{plan.label}</h3>
+                    {plan.is_custom && (
+                      <span className="rounded-full bg-teal-50 px-2 py-0.5 text-xs font-semibold text-teal-700 ring-1 ring-inset ring-teal-200">Your custom plan</span>
+                    )}
                     {plansData?.plan_status?.running && plansData.plan_status.plan_key === plan.key && (
                       <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-700 ring-1 ring-inset ring-emerald-200">Current plan</span>
                     )}
@@ -617,8 +628,20 @@ export default function BillingPage() {
                     <span className="text-sm font-normal text-slate-500"> / {plan.duration_days === 30 ? 'month' : `${plan.duration_days} days`}</span>
                   </p>
                   <ul className="mt-4 space-y-1 text-sm text-slate-600">
-                    <li>{plan.total_allocated_messages?.toLocaleString() ?? 'Unlimited'} messages</li>
-                    <li className="uppercase">{plan.engine_type} engine</li>
+                    {plan.engine_type !== 'none' && (
+                      <li>{plan.total_allocated_messages?.toLocaleString('en-IN') ?? 'Unlimited'} messages</li>
+                    )}
+                    <li>{plan.engine_type === 'meta' ? 'Official Meta WhatsApp API' : plan.engine_type === 'qr' ? 'WhatsApp by QR scan' : 'No WhatsApp sending'}</li>
+                    {plan.limits &&
+                      (Object.keys(plan.limits) as (keyof PlanLimits)[]).map((k) => {
+                        // The card lists what the plan gives; a limit of 0 ("No …") is noise here (QA fixes, 2026-10-14).
+                        if (plan.limits![k] === 0) return null;
+                        const text = describePlanLimit(k, plan.limits![k]);
+                        return text ? <li key={k}>{text.charAt(0).toUpperCase() + text.slice(1)}</li> : null;
+                      })}
+                    {plan.features?.map((f) => (
+                      <li key={f}>{f}</li>
+                    ))}
                   </ul>
                   {plan.purchase && !plan.purchase.allowed ? (
                     <>
@@ -647,7 +670,10 @@ export default function BillingPage() {
                     >
                       {checkoutPlanKey === plan.key ? <Loader2 className="h-4 w-4 animate-spin" /> : <CreditCard className="h-4 w-4" />}
                       {plan.purchase?.action === 'upgrade'
-                        ? 'Upgrade'
+                        ? // Moving to a plan without WhatsApp sending is a switch, not an upgrade (QA fixes, 2026-10-14).
+                          plan.engine_type === 'none' && currentEngine !== 'none'
+                          ? 'Switch to this plan'
+                          : 'Upgrade'
                         : plan.purchase?.action === 'renew'
                           ? gatewayReady ? 'Renew plan' : 'Request renewal invoice'
                           : gatewayReady ? 'Buy plan' : 'Request invoice'}

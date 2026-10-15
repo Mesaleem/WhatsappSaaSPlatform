@@ -18,7 +18,9 @@ class WhatsAppEngineFactory
         $engineType = $account->currentSubscription?->engine_type;
 
         return match ($engineType) {
-            'qr' => new BaileysDriver($account->id, $senderNumberId),
+            // QA fixes (2026-10-14): a reply to an inbound message goes out from the number
+            // the customer wrote to (InboundReplyContext), unless the caller chose one.
+            'qr' => new BaileysDriver($account->id, $senderNumberId ?? InboundReplyContext::numberFor($account->id)),
             'meta' => self::makeMetaDriver($account),
             default => throw new RuntimeException(
                 "Account {$account->id} has no WhatsApp engine configured (engine_type={$engineType})."

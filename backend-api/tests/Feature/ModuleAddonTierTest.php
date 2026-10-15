@@ -141,7 +141,10 @@ class ModuleAddonTierTest extends TestCase
         $row = ModuleAddonRequest::query()->findOrFail($id);
         $this->assertSame(ModuleAddonRequest::PAID, $row->status, 'a free add-on is on at once');
         $this->assertNotNull($row->term_ends_at);
-        $this->assertContains('contact_groups', $account->fresh()->allowed_modules);
+        // QA fixes (2026-10-14): contact_groups is a free baseline module — its paid part is the
+        // native-group allowance of the term — so paying never rewrites the module checklist
+        // (writing it there used to narrow a plan client's whole menu to this one module).
+        $this->assertContains('contact_groups', $account->fresh()->effectiveModules());
         $this->assertSame('paid', Invoice::query()->findOrFail($row->invoice_id)->status);
     }
 

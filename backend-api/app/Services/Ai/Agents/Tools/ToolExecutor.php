@@ -108,11 +108,13 @@ class ToolExecutor
 
         $account = Account::query()->findOrFail($accountId);
 
-        if ($tool->module() !== null && ! $account->hasModuleEnabled($tool->module())) {
+        // Plan restructure (2026-10-15): a module the plan lacks is the plan refusal (capability check below).
+        if ($tool->module() !== null && $account->moduleDenial($tool->module()) === 'disabled') {
             return $this->deny($context, $invocationKey, $toolName, $hash, 'module_disabled', 'The feature this tool needs is not enabled for this account.', true, 'module_disabled', $tool);
         }
 
-        if ($tool->capability() !== null && ! $this->access->canTenant($account, $tool->capability())) {
+        if (($tool->capability() !== null && ! $this->access->canTenant($account, $tool->capability()))
+            || ($tool->module() !== null && $account->moduleDenial($tool->module()) === 'not_in_plan')) {
             return $this->deny($context, $invocationKey, $toolName, $hash, 'capability_not_entitled', "This account's plan does not include the feature this tool needs.", true, 'capability_not_entitled', $tool);
         }
 

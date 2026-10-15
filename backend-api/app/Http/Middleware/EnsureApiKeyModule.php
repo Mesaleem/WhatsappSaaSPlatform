@@ -37,18 +37,25 @@ class EnsureApiKeyModule
             return response()->json(['status' => false, 'message' => 'Unauthenticated.'], 401);
         }
 
-        if (! $account->hasModuleEnabled($module)) {
+        if (($denial = $account->moduleDenial($module)) !== null) {
+            // Plan restructure (2026-10-15): missing because the plan lacks it = the plan refusal.
+            $notInPlan = $denial === 'not_in_plan';
+            $code = $notInPlan ? 'CAPABILITY_NOT_ENTITLED' : 'MODULE_DISABLED';
+
             // P5-8 — audited like the UI module guard; the key's own account.
             app(EntitlementAuditLogger::class)->record($account, false, [
                 'action' => 'route.access', 'resource_type' => 'route', 'source' => 'api_key',
-                'category' => 'module_disabled', 'module' => $module,
-                'error_code' => 'MODULE_DISABLED', 'http_status' => 403,
+                'category' => $notInPlan ? 'capability_not_entitled' : 'module_disabled', 'module' => $module,
+                ...($notInPlan ? ['capability' => \App\Services\Access\PlanModules::capabilityFor($module)] : []),
+                'error_code' => $code, 'http_status' => 403,
             ]);
 
             return response()->json([
                 'success' => false,
-                'message' => 'This feature has been disabled for your account by the Super Admin.',
-                'error_code' => 'MODULE_DISABLED',
+                'message' => $notInPlan
+                    ? 'Your plan does not include this feature. Upgrade your plan to use it.'
+                    : 'This feature has been disabled for your account by the Super Admin.',
+                'error_code' => $code,
             ], 403);
         }
 

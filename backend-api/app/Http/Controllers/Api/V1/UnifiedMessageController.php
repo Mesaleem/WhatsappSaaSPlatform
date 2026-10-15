@@ -129,10 +129,17 @@ class UnifiedMessageController extends Controller
             return response()->json(['success' => false, 'error_code' => 'NOT_FOUND', 'message' => 'Contact group not found.'], 404);
         }
 
+        // QA fixes (2026-10-14): a group send through the API is a broadcast of the plan's
+        // monthly allowance too; given back if nothing was queued.
+        $broadcastAccount = \App\Models\Account::findOrFail($accountId);
+        app(\App\Services\Billing\PlanLimits::class)->consumeBroadcast($broadcastAccount, 'api_group');
+
         if ($data['message_type'] === 'template') {
             $resolved = $this->resolveTemplate($accountId, $data['template']);
 
             if ($resolved instanceof JsonResponse) {
+                app(\App\Services\Billing\PlanLimits::class)->releaseBroadcast($broadcastAccount, 'api_group');
+
                 return $resolved;
             }
 
@@ -157,6 +164,10 @@ class UnifiedMessageController extends Controller
                 source: 'api',
                 apiKeyId: $apiKeyId,
             );
+        }
+
+        if (($result['status'] ?? null) !== 'queued') {
+            app(\App\Services\Billing\PlanLimits::class)->releaseBroadcast($broadcastAccount, 'api_group');
         }
 
         return match ($result['status']) {

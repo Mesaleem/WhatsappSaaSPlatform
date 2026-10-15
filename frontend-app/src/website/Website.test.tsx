@@ -120,6 +120,34 @@ describe('Public website', () => {
     expect(within(card).getByRole('link', { name: 'Choose plan' }).getAttribute('href')).toBe('/signup?plan=starter');
   });
 
+  it('shows plan limits, a CRM-only plan without WhatsApp lines, and the Custom card', async () => {
+    const base = { description: null, billing_model: 'flat_quota', duration_days: 30, tax_amount: '0.00', features: [] };
+    (publicSiteService.plans as Mock).mockResolvedValue({
+      tax_rate: 0,
+      data: [
+        { ...base, key: 'crm', label: 'CRM', engine_type: 'none', billing_model: 'unlimited', total_allocated_messages: null, price: '899.00', total_amount: '899.00',
+          limits: { max_users: 3, max_meta_templates: 0, max_flows: 0, max_broadcasts_per_month: 0, marketing_message_limit: 0 } },
+        { ...base, key: 'meta_pro', label: 'Meta Pro', engine_type: 'meta', total_allocated_messages: 10000, price: '7999.00', total_amount: '7999.00',
+          limits: { max_users: 5, max_meta_templates: 30, max_flows: 10, max_broadcasts_per_month: 20, marketing_message_limit: 4000 } },
+      ],
+    });
+    renderAt('/pricing');
+
+    const crm = await screen.findByTestId('plan-crm');
+    expect(within(crm).getByText('₹899')).toBeTruthy();
+    expect(within(crm).queryByText(/GST/)).toBeNull();
+    expect(within(crm).getByText('CRM only (no WhatsApp sending)')).toBeTruthy();
+    expect(within(crm).queryByText('1 WhatsApp number included')).toBeNull();
+    expect(within(crm).getByText('3 team users')).toBeTruthy();
+
+    const pro = screen.getByTestId('plan-meta_pro');
+    expect(within(pro).getByText('20 broadcasts / month')).toBeTruthy();
+    expect(within(pro).getByText('4,000 marketing messages / month')).toBeTruthy();
+
+    const custom = screen.getByTestId('plan-custom');
+    expect(within(custom).getByRole('link', { name: 'Contact sales' }).getAttribute('href')).toBe('/contact');
+  });
+
   it('uses the feature list set in Website Content and marks the featured plan', async () => {
     (publicSiteService.site as Mock).mockResolvedValue({
       ...site,

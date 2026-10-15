@@ -20,7 +20,9 @@ import ModulePermissionMatrix from './ModulePermissionMatrix';
 import { useAuth } from '../../core/context/AuthContext';
 import {
   ACCOUNT_MODULES,
+  ACCOUNT_MODULE_LABELS,
   CORE_COMMON_MODULES,
+  describePlanLimit,
   MANUAL_PAYMENT_METHODS,
   MANUAL_PAYMENT_METHOD_LABELS,
   MODULE_ASSIGNMENTS,
@@ -35,6 +37,7 @@ import {
   type CreateAccountPayload,
   type ManualPaymentMethod,
   type ModuleAssignment,
+  type PlanLimits,
   type UpdateAccountPayload,
 } from '../../types/account';
 import type { BillingModel, EngineType, PaymentMode, UpdateSubscriptionPayload } from '../../types/subscription';
@@ -197,6 +200,28 @@ export default function CreateAccountModal({ account, onClose, onSaved }: Create
   const [plansError, setPlansError] = useState<string | null>(null);
   const planMode = !isEditMode && planKey !== 'custom';
   const selectedPlan = planOptions?.find((p) => p.key === planKey) ?? null;
+  // Plan restructure (2026-10-15): a client on a plan gets its menu from the plan — no
+  // module checklist. The checklist stays only for Custom (manual terms), agents and
+  // clients that have not bought a plan yet.
+  const planDecidesModules = planMode || (isEditMode && account?.account_type === 'client' && account?.modules_from_plan === true);
+
+  const [planEffectiveModules, setPlanEffectiveModules] = useState<AccountModule[]>(account?.effective_modules ?? []);
+
+  /** Edit mode: drop explicit switch-offs so the client gets every module of its plan. */
+  const clearSwitchOffs = async () => {
+    if (!account) return;
+    setModulesBulkBusy(true);
+    setModulesError(null);
+    try {
+      const updated = await accountService.updatePermissions(account.id, { allowed_modules: null });
+      setAllowedModules(updated.allowed_modules);
+      if (updated.effective_modules) setPlanEffectiveModules(updated.effective_modules);
+    } catch (err) {
+      setModulesError(extractErrorMessage(err, 'Could not update modules.'));
+    } finally {
+      setModulesBulkBusy(false);
+    }
+  };
 
   const applyPlan = (key: string, options: ClientPlanOption[] | null = planOptions) => {
     setPlanKey(key);
@@ -311,7 +336,8 @@ export default function CreateAccountModal({ account, onClose, onSaved }: Create
           status,
           logo_url: logoUrl.trim() || null,
           brand_accent_color: brandAccentColor.trim() || null,
-          max_users_limit: maxUsersLimit.trim() ? Number(maxUsersLimit) : null,
+          // Seats are a Super Admin decision (QA fixes, 2026-10-14); an agent's client follows its plan.
+          ...(superAdmin ? { max_users_limit: maxUsersLimit.trim() ? Number(maxUsersLimit) : null } : {}),
           module_assignment: moduleAssignment,
           // Existing-Account Conversion — Super Admin only (the fields
           // are simply absent from the rendered form otherwise, so
@@ -338,16 +364,18 @@ export default function CreateAccountModal({ account, onClose, onSaved }: Create
           starts_at: startsAt,
           expires_at: expiresAt,
         };
+        // The subscription editor is Super Admin only (QA fixes, 2026-10-14): an
+        // agent's client changes its term through Billing (renew / upgrade).
         await Promise.all([
           accountService.update(account.id, accountPayload),
-          accountService.updateSubscription(account.id, subscriptionPayload),
+          ...(superAdmin ? [accountService.updateSubscription(account.id, subscriptionPayload)] : []),
         ]);
       } else {
         const payload: CreateAccountPayload = {
           company_name: companyName.trim(),
           primary_phone: primaryPhone.trim() || undefined,
           status,
-          max_users_limit: maxUsersLimit.trim() ? Number(maxUsersLimit) : undefined,
+          max_users_limit: superAdmin && maxUsersLimit.trim() ? Number(maxUsersLimit) : undefined,
           module_assignment: moduleAssignment,
           // 3-Tier Hierarchy (Phase 3 UI) — Super Admin only; see the
           // accountType/parentAgentId state declarations above.
@@ -365,7 +393,7 @@ export default function CreateAccountModal({ account, onClose, onSaved }: Create
           ...(planMode && selectedPlan
             ? {
                 plan_key: selectedPlan.key,
-                plan_total: Number(planTotal),
+                ...(superAdmin ? { plan_total: Number(planTotal) } : {}),
                 payment_method: payMethod,
                 transaction_id: txnId.trim() || undefined,
                 starts_at: startsAt,
@@ -656,16 +684,18 @@ export default function CreateAccountModal({ account, onClose, onSaved }: Create
                   ))}
                 </select>
               </Field>
-              <Field label="Max Users Limit" hint="Total users allowed on this account, owner included. Leave blank for unlimited.">
-                <input
-                  type="number"
-                  min="1"
-                  value={maxUsersLimit}
-                  onChange={(e) => setMaxUsersLimit(e.target.value)}
-                  className={inputClass}
-                  placeholder="Unlimited"
-                />
-              </Field>
+              {superAdmin && (
+                <Field label="Max Users Limit" hint="Total users allowed on this account, owner included. Leave blank to follow the plan.">
+                  <input
+                    type="number"
+                    min="1"
+                    value={maxUsersLimit}
+                    onChange={(e) => setMaxUsersLimit(e.target.value)}
+                    className={inputClass}
+                    placeholder="From the plan"
+                  />
+                </Field>
+              )}
             </div>
           </section>
 
@@ -818,7 +848,7 @@ export default function CreateAccountModal({ account, onClose, onSaved }: Create
                       <div className="flex flex-wrap items-center gap-2 text-sm">
                         <span className="font-semibold text-slate-900">{selectedPlan.label}</span>
                         <span className="rounded-full bg-white px-2 py-0.5 text-xs font-medium text-emerald-800 ring-1 ring-emerald-200">
-                          {selectedPlan.engine_type === 'meta' ? 'Meta Cloud API' : 'QR (Baileys)'}
+                          {selectedPlan.engine_type === 'meta' ? 'Meta Cloud API' : selectedPlan.engine_type === 'none' ? 'No WhatsApp' : 'QR (Baileys)'}
                         </span>
                         <span className="rounded-full bg-white px-2 py-0.5 text-xs font-medium text-slate-700 ring-1 ring-slate-200">
                           {selectedPlan.billing_model === 'unlimited'
@@ -834,6 +864,15 @@ export default function CreateAccountModal({ account, onClose, onSaved }: Create
                           <span className="font-semibold">Features:</span> {selectedPlan.capabilities.map((c) => c.label).join(', ')}
                         </p>
                       )}
+                      {selectedPlan.limits && (
+                        <p className="mt-1 text-xs text-slate-600" data-testid="plan-limits">
+                          <span className="font-semibold">Limits:</span>{' '}
+                          {(Object.keys(selectedPlan.limits) as (keyof PlanLimits)[])
+                            .map((k) => describePlanLimit(k, selectedPlan.limits![k]))
+                            .filter(Boolean)
+                            .join(' · ') || 'No limits'}
+                        </p>
+                      )}
                       <p className="mt-1 text-xs text-slate-500">
                         Plan price ₹{selectedPlan.total_amount.toLocaleString('en-IN')}
                         {planEndsOn ? ` · runs until ${planEndsOn}` : ''}
@@ -841,17 +880,25 @@ export default function CreateAccountModal({ account, onClose, onSaved }: Create
                     </div>
 
                     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                      <Field label="Amount paid" required hint="Pre-filled from the plan. Change it for a discount.">
-                        <input
-                          type="number"
-                          step="0.01"
-                          min="0"
-                          value={planTotal}
-                          onChange={(e) => setPlanTotal(e.target.value)}
-                          className={inputClass}
-                          aria-label="Amount paid"
-                        />
-                      </Field>
+                      {superAdmin ? (
+                        <Field label="Amount paid" required hint="Pre-filled from the plan. Change it for a discount.">
+                          <input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            value={planTotal}
+                            onChange={(e) => setPlanTotal(e.target.value)}
+                            className={inputClass}
+                            aria-label="Amount paid"
+                          />
+                        </Field>
+                      ) : (
+                        <Field label="Amount to collect" hint="The plan price. Ask the Super Admin for a discount.">
+                          <p className="py-2 text-sm font-semibold text-slate-900" aria-label="Amount to collect">
+                            ₹{selectedPlan.total_amount.toLocaleString('en-IN')}
+                          </p>
+                        </Field>
+                      )}
                       <Field label="Payment method" required>
                         <select
                           value={payMethod}
@@ -876,7 +923,13 @@ export default function CreateAccountModal({ account, onClose, onSaved }: Create
               </div>
             )}
 
-            {(isEditMode || planKey === 'custom') && (
+            {isEditMode && !superAdmin && (
+              <p className="mt-3 text-sm text-slate-500" data-testid="subscription-readonly-note">
+                The subscription follows the client&apos;s plan. Renew, upgrade or record a payment from Billing.
+              </p>
+            )}
+
+            {((isEditMode && superAdmin) || planKey === 'custom') && (
             <>
             <div className="mt-4">
               <label className="block text-sm font-medium text-slate-700">Engine</label>
@@ -997,6 +1050,15 @@ export default function CreateAccountModal({ account, onClose, onSaved }: Create
               checkbox, plus Quick Plan presets. Renders in BOTH modes now
               (previously edit-mode only) — see commitModules' docblock
               above for how the two modes differ. */}
+          {planDecidesModules ? (
+            <PlanModulesSection
+              modules={planMode ? (selectedPlan?.modules ?? []) : planEffectiveModules}
+              switchedOff={isEditMode && allowedModules != null}
+              busy={modulesBulkBusy}
+              onClearSwitchOffs={() => void clearSwitchOffs()}
+              error={modulesError}
+            />
+          ) : (
           <section>
             <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
               <ShieldCheck className="h-4 w-4 text-emerald-700" />
@@ -1095,6 +1157,7 @@ export default function CreateAccountModal({ account, onClose, onSaved }: Create
               </p>
             )}
           </section>
+          )}
 
           <div className="flex items-center justify-end gap-3 border-t border-slate-200 pt-4">
             <button
@@ -1171,3 +1234,54 @@ function EngineOption({
   );
 }
 
+/** Read-only list of the menu modules a plan opens (plan restructure, 2026-10-15). */
+function PlanModulesSection({
+  modules,
+  switchedOff,
+  busy,
+  onClearSwitchOffs,
+  error,
+}: {
+  modules: AccountModule[];
+  switchedOff: boolean;
+  busy: boolean;
+  onClearSwitchOffs: () => void;
+  error: string | null;
+}) {
+  return (
+    <section data-testid="plan-modules">
+      <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
+        <ShieldCheck className="h-4 w-4 text-emerald-700" />
+        Modules from the plan
+      </div>
+      <p className="mt-1 text-xs text-slate-500">
+        The plan decides which features this client gets. Change the plan (or build a custom plan) to change them.
+      </p>
+      <div className="mt-3 flex flex-wrap gap-1.5">
+        {modules.length === 0 ? (
+          <span className="text-xs text-slate-400">Choose a plan to see its modules.</span>
+        ) : (
+          modules.map((m) => (
+            <span key={m} className="rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-800 ring-1 ring-inset ring-emerald-600/20">
+              {ACCOUNT_MODULE_LABELS[m] ?? m}
+            </span>
+          ))
+        )}
+      </div>
+      {switchedOff && (
+        <div role="note" className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          <span>Some of this plan's modules are switched off for this client (an older module list).</span>
+          <button
+            type="button"
+            onClick={onClearSwitchOffs}
+            disabled={busy}
+            className="rounded-md border border-amber-300 bg-white px-2.5 py-1 font-medium text-amber-800 hover:bg-amber-100 disabled:opacity-50"
+          >
+            {busy ? 'Updating…' : 'Give every plan module'}
+          </button>
+        </div>
+      )}
+      {error && <p className="mt-2 text-xs text-red-600">{error}</p>}
+    </section>
+  );
+}

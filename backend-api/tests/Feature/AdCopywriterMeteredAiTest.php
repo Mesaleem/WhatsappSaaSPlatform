@@ -54,7 +54,9 @@ class AdCopywriterMeteredAiTest extends TestCase
 
     // ------------------------------------------------------------------ fixtures
 
-    private function tenant(string $planKey = 'growth', array $attributes = [], int $credits = 100): Account
+    // Plan restructure (2026-10-15): the copywriter lives in Meta Ads, which a client's menu opens only when its plan
+    // sells `ads` — Business (ads + ai) is the plan these tests buy.
+    private function tenant(string $planKey = 'business', array $attributes = [], int $credits = 100): Account
     {
         $account = Account::factory()->create($attributes);
         $plan = PlanCatalog::find($planKey);
@@ -218,7 +220,10 @@ class AdCopywriterMeteredAiTest extends TestCase
     public function test_the_meta_ads_module_is_enforced(): void
     {
         Http::fake();
-        $account = $this->tenant('growth', ['allowed_modules' => ['dashboard', 'lead_crm']]);
+        $account = $this->tenant('business');
+        // QA fixes (2026-10-14): paying for a plan resets an earlier checklist, so the
+        // switch-off is made after the purchase, as a Super Admin would.
+        $account->forceFill(['allowed_modules' => ['dashboard', 'lead_crm']])->save();
 
         $this->generate($this->user($account))->assertStatus(403)->assertJsonPath('error_code', 'MODULE_DISABLED');
         Http::assertNothingSent();
@@ -244,7 +249,7 @@ class AdCopywriterMeteredAiTest extends TestCase
     {
         $this->openAiAnswers();
         $client = $this->tenant();
-        $platform = $this->tenant('growth', ['account_type' => 'super_admin']);
+        $platform = $this->tenant('business', ['account_type' => 'super_admin']);
         $superAdmin = $this->user(null, 'super_admin');
 
         $this->generate($superAdmin)->assertOk();
@@ -261,8 +266,8 @@ class AdCopywriterMeteredAiTest extends TestCase
     public function test_an_agent_acting_for_its_sub_client_bills_the_sub_client_only(): void
     {
         $this->openAiAnswers();
-        $agent = $this->tenant('growth', ['account_type' => 'agent']);
-        $sub = $this->tenant('growth', ['agent_id' => $agent->id]);
+        $agent = $this->tenant('business', ['account_type' => 'agent']);
+        $sub = $this->tenant('business', ['agent_id' => $agent->id]);
         $stranger = $this->tenant();
         $agentUser = $this->user($agent);
 
@@ -292,7 +297,7 @@ class AdCopywriterMeteredAiTest extends TestCase
     public function test_insufficient_credits_stop_the_vendor_call(): void
     {
         $this->openAiAnswers();
-        $account = $this->tenant('growth', [], 1); // the hold for this prompt is several credits
+        $account = $this->tenant('business', [], 1); // the hold for this prompt is several credits
         $ledger = CreditLedgerEntry::count();
 
         $this->generate($this->user($account))->assertStatus(422)->assertJsonPath('error_code', 'INSUFFICIENT_CREDITS')->assertJsonPath('success', false);

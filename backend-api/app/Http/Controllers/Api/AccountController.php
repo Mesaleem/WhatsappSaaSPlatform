@@ -64,7 +64,13 @@ class AccountController extends Controller
             return null;
         }
 
-        return $user->account?->account_type === 'agent' ? $user->account_id : null;
+        // QA fixes (2026-10-14): only the Super Admin or a real agent (an agent
+        // account AND the agent role) reaches here. Anyone else holding the
+        // permission by some other role used to fall through to null, which
+        // means "platform-wide" — refuse instead.
+        abort_unless($user->account?->account_type === 'agent', 403, 'Only the Super Admin or an agent can do this.');
+
+        return $user->account_id;
     }
 
     /**
@@ -447,14 +453,31 @@ class AccountController extends Controller
                 unset($rules[$field]);
             }
             $rules['starts_at'] = ['nullable', 'date'];
-            $rules['plan_key'] = ['required', 'string', Rule::exists('plans', 'slug')->where('is_active', true)];
-            // What the client actually paid, including GST; defaults to the plan's total.
-            $rules['plan_total'] = ['nullable', 'numeric', 'min:0'];
+            // QA fixes (2026-10-14): a public plan only — never another client's
+            // custom plan, and never the hidden website trial.
+            $rules['plan_key'] = ['required', 'string', Rule::exists('plans', 'slug')->where('is_active', true)->whereNull('account_id')->where('slug', '!=', Plan::TRIAL_SLUG)];
+            // What the client actually paid; defaults to the plan's total. Super Admin
+            // only (QA fixes, 2026-10-14) — an agent could otherwise give a plan away for 0.
+            if ($isSuperAdmin) {
+                $rules['plan_total'] = ['nullable', 'numeric', 'min:0'];
+            }
             $rules['payment_method'] = ['required', Rule::in(ManualPayment::METHODS)];
             $rules['transaction_id'] = ['nullable', 'string', 'max:100', Rule::unique('manual_payments', 'transaction_id')];
         }
 
+        if (! $isSuperAdmin) {
+            // QA fixes (2026-10-14): seats come from the plan for an agent's client.
+            unset($rules['max_users_limit']);
+        }
+
         $data = $request->validate($rules);
+
+        // QA fixes (2026-10-14): an agent sells only the plans whose features the
+        // Super Admin allowed it to sell. An agent with no selling rules at all
+        // keeps today's behaviour (every public plan), so nobody is locked out.
+        if ($planMode && $agentScopeId !== null) {
+            $this->assertAgentMaySellPlan($agentScopeId, (string) $data['plan_key']);
+        }
 
         // Who is allowed to set account_type/agent_id, and what an Agent
         // caller is forced to regardless of what it submitted.
@@ -510,6 +533,13 @@ class AccountController extends Controller
             $agentScopeId !== null ? $request->user()->account : null,
             $data['allowed_modules'] ?? null,
         );
+
+        // Plan restructure (2026-10-15): a client created on a plan gets its menu from the plan
+        // (Account::effectiveModules / PlanModules) — no module checklist is stored. An Agent's
+        // own modules still cap its Sub-Client there.
+        if ($planMode && $data['account_type'] === 'client') {
+            $data['allowed_modules'] = null;
+        }
 
         $account = DB::transaction(function () use ($data, $planMode, $request) {
             $account = Account::create([
@@ -602,6 +632,22 @@ class AccountController extends Controller
             return $account;
         });
 
+        // QA fixes (2026-10-14): the new client admin is told the account exists and how
+        // to log in (never the password). Self-signups get onboarding.welcome instead.
+        $owner = $account->owner;
+        if ($owner?->email) {
+            $mailer = app(\App\Services\Mail\SystemMailer::class);
+            $creator = $request->user();
+            $mailer->sendLater('onboarding.client_created', $owner->email, [
+                'name' => $owner->name,
+                'company_name' => $account->company_name,
+                'email' => $owner->email,
+                'created_by' => $creator?->isSuperAdmin() ? 'Our team' : trim(($creator?->account?->company_name ?? 'Your agent').' (your agent)'),
+                'login_url' => $mailer->url('/login'),
+                'reset_url' => $mailer->url('/forgot-password'),
+            ], [], $account->id, $owner->name);
+        }
+
         // Module 5 Fix (2026-09-16) - index()/show() already eager-load
         // the agent relation; this create response didn't, so a Super
         // Admin creating a client under an Agent had to issue a
@@ -613,22 +659,6 @@ class AccountController extends Controller
         );
     }
 
-    /**
-     * Menu modules each plan capability opens (for the Create Client form's
-     * pre-ticked checklist). Core Common modules are always on; the paid
-     * Custom Contact Groups add-on and Super-Admin-only Device Settings are
-     * never switched on by a plan.
-     */
-    private const CAPABILITY_MODULES = [
-        'whatsapp_send' => ['whatsapp_setup', 'send_alert', 'chatbot', 'templates', 'message_logs'],
-        'journey_automation' => ['chatbot'],
-        'social' => ['social_accounts', 'social_inbox', 'comment_automation', 'reports'],
-        'ads' => ['meta_ads', 'lead_crm'],
-        'crm' => ['lead_crm'],
-        'external_api' => ['developer_api'],
-    ];
-
-    private const BASE_MODULES = ['dashboard', 'analytics', 'billing', 'team_management', 'notifications'];
 
     /**
      * GET /api/admin/accounts/plan-options — active plans for the Create
@@ -639,13 +669,10 @@ class AccountController extends Controller
     {
         $tax = PaymentGatewayController::TAX_RATE;
 
-        $plans = Plan::query()->where('is_active', true)->with('capabilities:id,slug,label')->orderBy('price')->get()
+        $plans = Plan::query()->where('is_active', true)->whereNull('account_id')->where('slug', '!=', Plan::TRIAL_SLUG)->with('capabilities:id,slug,label')->orderBy('price')->get()
             ->map(function (Plan $plan) use ($tax) {
-                $slugs = $plan->capabilities->pluck('slug')->all();
-                $modules = self::BASE_MODULES;
-                foreach ($slugs as $slug) {
-                    $modules = array_merge($modules, self::CAPABILITY_MODULES[$slug] ?? []);
-                }
+                // The menu modules the plan opens (PlanModules) — shown read-only on the form.
+                $modules = \App\Services\Access\PlanModules::forCapabilities($plan->capabilities->pluck('slug'));
                 $price = (float) $plan->price;
                 $taxAmount = round($price * $tax, 2);
 
@@ -661,7 +688,8 @@ class AccountController extends Controller
                     'tax_amount' => $taxAmount,
                     'total_amount' => round($price + $taxAmount, 2),
                     'capabilities' => $plan->capabilities->map(fn ($c) => ['slug' => $c->slug, 'label' => $c->label])->values(),
-                    'modules' => array_values(array_unique($modules)),
+                    'modules' => $modules,
+                    'limits' => $plan->limits(),
                 ];
             })->values();
 
@@ -675,6 +703,20 @@ class AccountController extends Controller
      * commission). Runs inside store()'s transaction, so a failure leaves no
      * half-created client behind.
      */
+    /** QA fixes (2026-10-14): see store(). */
+    private function assertAgentMaySellPlan(int $agentAccountId, string $planKey): void
+    {
+        $rules = AgentSellingEntitlement::query()->where('agent_account_id', $agentAccountId)->get(['capability_id', 'sellable']);
+        if ($rules->isEmpty()) {
+            return;
+        }
+        $sellable = $rules->where('sellable', true)->pluck('capability_id')->all();
+        $plan = Plan::where('slug', $planKey)->with('capabilities:id,slug')->firstOrFail();
+        $blocked = $plan->capabilities->reject(fn ($c) => in_array($c->id, $sellable, true))->pluck('slug')->all();
+
+        abort_if($blocked !== [], 403, 'You are not allowed to sell this plan ('.implode(', ', $blocked).'). Ask the Super Admin.');
+    }
+
     private function provisionPlan(Account $account, array $data, User $actor): void
     {
         $plan = Plan::where('slug', $data['plan_key'])->where('is_active', true)->firstOrFail();
@@ -783,6 +825,10 @@ class AccountController extends Controller
         if ($isSuperAdmin) {
             $rules['account_type'] = ['sometimes', Rule::in(['agent', 'client'])];
             $rules['agent_id'] = ['sometimes', 'nullable', 'integer', Rule::exists('accounts', 'id')->where('account_type', 'agent')];
+        } else {
+            // QA fixes (2026-10-14): seats, API rate and the AI key are Super Admin
+            // decisions. An agent overriding max_users_limit gave a 2-seat plan 999 seats.
+            unset($rules['api_rate_limit_per_minute'], $rules['max_users_limit'], $rules['gemini_api_key']);
         }
 
         $data = $request->validate($rules);
@@ -875,6 +921,11 @@ class AccountController extends Controller
      */
     public function updateSubscription(Request $request, int $id): JsonResponse
     {
+        // QA fixes (2026-10-14): Super Admin only. An agent could set any expiry,
+        // "unlimited" or any quota here with no invoice and no pool check; its
+        // clients change terms through Billing (renew / upgrade / top-up).
+        abort_unless((bool) $request->user()?->isSuperAdmin(), 403, 'Only the Super Admin can edit a subscription directly. Use Billing to renew or upgrade.');
+
         $account = Account::findOrFail($id);
         $this->assertCallerCanAccessAccount($request, $account);
 

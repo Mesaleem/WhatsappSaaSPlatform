@@ -111,6 +111,8 @@ Route::prefix('public')->group(function () {
     Route::get('/crm-documents/{token}/pdf', [\App\Http\Controllers\Api\CrmPublicDocumentController::class, 'pdf'])->middleware('throttle:60,1');
     Route::post('/crm-documents/{token}/pay', [\App\Http\Controllers\Api\CrmPublicDocumentController::class, 'pay'])->middleware('throttle:10,1');
     Route::post('/crm-documents/{token}/confirm', [\App\Http\Controllers\Api\CrmPublicDocumentController::class, 'confirm'])->middleware('throttle:20,1');
+    // QA fixes (2026-10-14): the customer accepts a quotation from its link.
+    Route::post('/crm-documents/{token}/accept', [\App\Http\Controllers\Api\CrmPublicDocumentController::class, 'accept'])->middleware('throttle:10,1');
 });
 
 // Social/Ads Launcher Overhaul — Step 2. Publicly fetchable ad-creative
@@ -271,6 +273,8 @@ Route::middleware(['log.apirequest', 'auth.apisecret', 'throttle:external-api', 
 
 Route::middleware('auth:sanctum')->group(function () {
     Route::get('/auth/me', [AuthController::class, 'me']);
+    // Product tours (2026-10-15): mark one finished, or reset (all / one) to see it again.
+    Route::post('/auth/tours', [AuthController::class, 'tours'])->middleware('throttle:60,1');
     Route::patch('/auth/profile', [AuthController::class, 'updateProfile']);
     Route::post('/auth/logout', [AuthController::class, 'logout']);
 
@@ -512,20 +516,33 @@ Route::middleware('auth:sanctum')->group(function () {
         // user server-side; never accepted from the client.
         Route::middleware('module.guard:whatsapp_setup')->prefix('whatsapp')->group(function () {
             Route::get('/status', [WhatsAppController::class, 'status']);
-            Route::post('/start-session', [WhatsAppController::class, 'startSession']);
-            Route::post('/logout', [WhatsAppController::class, 'logout']);
-
-            // WhatsApp number slots: the included number plus paid add-ons.
-            // Uniqueness and the lock rules live in WhatsAppNumberService.
             Route::get('/numbers', [WhatsAppNumberController::class, 'index']);
-            Route::post('/numbers', [WhatsAppNumberController::class, 'store']);
-            // Self-service number change on a disconnected slot -- no approval needed.
-            Route::put('/numbers/{id}', [WhatsAppNumberController::class, 'update'])->whereNumber('id');
-            Route::put('/numbers/{id}/default', [WhatsAppNumberController::class, 'setDefault'])->whereNumber('id');
-            Route::delete('/numbers/{id}', [WhatsAppNumberController::class, 'destroy'])->whereNumber('id');
-            // A slot holding a wrongly entered number: the client asks for a change; a Super Admin or agent decides.
+
+            // QA fixes (2026-10-14) — the WhatsApp inbox: customers' conversations and replies.
+            Route::middleware(['permission:send-messages', 'module.guard:send_alert'])->prefix('inbox')->group(function () {
+                Route::get('/threads', [\App\Http\Controllers\Api\WhatsAppInboxController::class, 'threads']);
+                Route::get('/threads/{id}/messages', [\App\Http\Controllers\Api\WhatsAppInboxController::class, 'messages'])->whereNumber('id');
+                Route::post('/threads/{id}/reply', [\App\Http\Controllers\Api\WhatsAppInboxController::class, 'reply'])->whereNumber('id');
+            });
             Route::get('/numbers/change-requests', [WhatsAppNumberChangeController::class, 'index']);
-            Route::post('/numbers/{id}/change-requests', [WhatsAppNumberChangeController::class, 'store'])->whereNumber('id');
+
+            // Connecting, disconnecting and changing numbers (QA fixes, 2026-10-14):
+            // admin-level (manage-whatsapp-setup). Reading the status stays open, since
+            // Send Notification shows it to everyone who sends.
+            Route::middleware('permission:manage-whatsapp-setup')->group(function () {
+                Route::post('/start-session', [WhatsAppController::class, 'startSession']);
+                Route::post('/logout', [WhatsAppController::class, 'logout']);
+
+                // WhatsApp number slots: the included number plus paid add-ons.
+                // Uniqueness and the lock rules live in WhatsAppNumberService.
+                Route::post('/numbers', [WhatsAppNumberController::class, 'store']);
+                // Self-service number change on a disconnected slot -- no approval needed.
+                Route::put('/numbers/{id}', [WhatsAppNumberController::class, 'update'])->whereNumber('id');
+                Route::put('/numbers/{id}/default', [WhatsAppNumberController::class, 'setDefault'])->whereNumber('id');
+                Route::delete('/numbers/{id}', [WhatsAppNumberController::class, 'destroy'])->whereNumber('id');
+                // A slot holding a wrongly entered number: the client asks for a change; a Super Admin or agent decides.
+                Route::post('/numbers/{id}/change-requests', [WhatsAppNumberChangeController::class, 'store'])->whereNumber('id');
+            });
 
             // Paid extra numbers (one-month term each). Buying and cancelling need the
             // same permission as the rest of billing.
@@ -540,9 +557,12 @@ Route::middleware('auth:sanctum')->group(function () {
         // Module 5: Meta Cloud API credential vault. Admin-only (not
         // manage-accounts) — this is per-tenant configuration, distinct
         // from platform-level account provisioning.
-        Route::middleware(['role:admin', 'module.guard:whatsapp_setup'])->prefix('whatsapp/meta-config')->group(function () {
+        // QA fixes (2026-10-14): the Super Admin and an agent may set up Meta for a selected
+        // client (it was the client admin only); same manage-whatsapp-setup permission.
+        Route::middleware(['permission:manage-whatsapp-setup', 'module.guard:whatsapp_setup'])->prefix('whatsapp/meta-config')->group(function () {
             Route::get('/', [MetaConfigController::class, 'show']);
             Route::post('/', [MetaConfigController::class, 'store']);
+            Route::delete('/', [MetaConfigController::class, 'disconnect']);
             Route::post('/test-connection', [MetaConfigController::class, 'testConnection']);
 
             // Phase 1 — Meta Channel Creation / Embedded Signup (per-tenant
@@ -598,7 +618,9 @@ Route::middleware('auth:sanctum')->group(function () {
         // matching granular permission (so a user granted ONLY
         // 'whatsapp.view' via the new per-user matrix can view rules
         // without also being able to create/edit/delete them).
-        Route::prefix('chatbot')->group(function () {
+        // QA fixes (2026-10-14): module.guard:chatbot — a plan without the chatbot (the
+        // CRM-only plan) could manage rules through the API although its menu hid them.
+        Route::prefix('chatbot')->middleware('module.guard:chatbot')->group(function () {
             Route::middleware('permission:manage-chatbot|whatsapp.view')->group(function () {
                 Route::get('/rules', [ChatbotRuleController::class, 'index']);
                 Route::get('/logs', [ChatbotLogController::class, 'index']);
@@ -649,6 +671,8 @@ Route::middleware('auth:sanctum')->group(function () {
                 Route::put('/{id}', [WhatsAppFlowController::class, 'update']);
                 Route::post('/{id}/toggle', [WhatsAppFlowController::class, 'toggle']);
                 Route::post('/{id}/test', [WhatsAppFlowController::class, 'test']);
+                // QA fixes (2026-10-14): start the journey for a customer's number (no incoming message needed).
+                Route::post('/{id}/start', [WhatsAppFlowController::class, 'start'])->whereNumber('id');
                 // Phase 7 Task 1 — stop one open (awaiting-reply or delayed) run.
                 Route::post('/{id}/sessions/{sessionId}/cancel', [WhatsAppFlowController::class, 'cancelSession']);
                 Route::post('/{id}/versions/{versionId}/publish', [WhatsAppFlowController::class, 'publishVersion'])->whereNumber(['id', 'versionId']);
@@ -822,6 +846,8 @@ Route::middleware('auth:sanctum')->group(function () {
             // Owner request (2026-09-30): ad account currency / balance, and Meta location search for the launch form (reads).
             Route::middleware('permission:launch-meta-ads|social_ads.view')->get('/account', [AdCampaignController::class, 'account']);
             Route::middleware('permission:launch-meta-ads|social_ads.launch')->get('/locations', [AdCampaignController::class, 'locations']);
+            // QA fixes (2026-10-14): the Page's instant forms, for a lead-generation ad.
+            Route::middleware('permission:launch-meta-ads|social_ads.launch')->get('/lead-forms', [AdCampaignController::class, 'leadForms']);
             Route::middleware('permission:launch-meta-ads|social_ads.launch')->post('/launch', [AdCampaignController::class, 'launch']);
             Route::middleware('permission:launch-meta-ads')->post('/{id}/pause', [AdCampaignController::class, 'pause']);
             Route::middleware('permission:launch-meta-ads')->post('/{id}/resume', [AdCampaignController::class, 'resume']);
@@ -929,6 +955,8 @@ Route::middleware('auth:sanctum')->group(function () {
                 Route::prefix('leads')->group(function () {
                     Route::get('/', [CrmLeadController::class, 'index']);
                     Route::post('/', [CrmLeadController::class, 'store']);
+                    // QA fixes (2026-10-14): leads from a CSV / Excel file.
+                    Route::post('/import', \App\Http\Controllers\Api\CrmLeadImportController::class);
                     Route::get('/{id}', [CrmLeadController::class, 'show'])->whereNumber('id');
                     Route::match(['put', 'patch'], '/{id}', [CrmLeadController::class, 'update'])->whereNumber('id');
                     // Phase 10 Task 5 — manual conversion value for a converted, ad-attributed lead. CRM gates
@@ -1070,6 +1098,12 @@ Route::middleware('auth:sanctum')->group(function () {
                     Route::put('settings/profile', [\App\Http\Controllers\Api\CrmSalesSettingsController::class, 'saveProfile']);
                     Route::get('reports/sales', \App\Http\Controllers\Api\CrmSalesReportController::class);
                 });
+                // QA fixes (2026-10-14) — lead routing (who gets a new lead, who is told,
+                // leads from new WhatsApp numbers). Account-wide: members who see every lead.
+                Route::middleware('permission:view-all-crm')->group(function () {
+                    Route::get('lead-settings', [\App\Http\Controllers\Api\CrmLeadSettingController::class, 'show']);
+                    Route::put('lead-settings', [\App\Http\Controllers\Api\CrmLeadSettingController::class, 'update']);
+                });
                 Route::middleware('permission:manage-crm-payments')->group(function () {
                     Route::get('payments', [\App\Http\Controllers\Api\CrmPaymentController::class, 'index']);
                     Route::post('payments', [\App\Http\Controllers\Api\CrmPaymentController::class, 'store']);
@@ -1167,7 +1201,10 @@ Route::middleware('auth:sanctum')->group(function () {
         // for the Ad Creation Wizard's creative step — same permission
         // tier as the AI Copywriter and the launcher itself, since all
         // three are steps of the one wizard. See SocialMediaController.
-        Route::middleware(['permission:launch-meta-ads', 'target.account'])->prefix('social/media')->group(function () {
+        // QA fixes (2026-10-14): the upload serves both the ads wizard and the organic post
+        // composer — either permission (manage-social-accounts could not attach media). The
+        // plan check lives in the menu / composer (a plan client's modules follow its plan).
+        Route::middleware(['permission:launch-meta-ads|manage-social-accounts', 'target.account'])->prefix('social/media')->group(function () {
             Route::post('/upload', [SocialMediaController::class, 'upload']);
         });
 
@@ -1286,6 +1323,8 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::post('/message-batches/{id}/pause', [\App\Http\Controllers\Api\MessageBatchController::class, 'pause'])->whereNumber('id');
             Route::post('/message-batches/{id}/resume', [\App\Http\Controllers\Api\MessageBatchController::class, 'resume'])->whereNumber('id');
             Route::post('/message-batches/{id}/stop', [\App\Http\Controllers\Api\MessageBatchController::class, 'stop'])->whereNumber('id');
+            // QA fixes (2026-10-14): send a batch's failed numbers again.
+            Route::post('/message-batches/{id}/retry-failed', [\App\Http\Controllers\Api\MessageBatchController::class, 'retryFailed'])->whereNumber('id');
             // Tiered Template Approval Workflow for 3-Tier Hierarchy --
             // the entry point rules 1/2 assume exists: a plain Client
             // Admin/User submitting a template REQUEST for their own
@@ -1413,12 +1452,16 @@ Route::middleware('auth:sanctum')->group(function () {
         // (phone numbers, names) rather than aggregates. Not granted to
         // the 'user' role by default — see RolePermissionSeeder.
         Route::middleware('permission:view-logs')->group(function () {
-            Route::get('/alerts/logs', [MessageLogController::class, 'index']);
-            Route::get('/alerts/logs/{id}', [MessageLogController::class, 'show']);
+            // QA fixes (2026-10-14): module.guard:message_logs here too — a plan without
+            // message logs (the CRM-only plan) could still read them through the API.
+            Route::middleware('module.guard:message_logs')->group(function () {
+                Route::get('/alerts/logs', [MessageLogController::class, 'index']);
+                Route::get('/alerts/logs/{id}', [MessageLogController::class, 'show']);
 
-            Route::prefix('exports')->group(function () {
-                Route::get('/csv', [ExportController::class, 'csv']);
-                Route::get('/pdf', [ExportController::class, 'pdf']);
+                Route::prefix('exports')->group(function () {
+                    Route::get('/csv', [ExportController::class, 'csv']);
+                    Route::get('/pdf', [ExportController::class, 'pdf']);
+                });
             });
 
             // [New feature, disclosed]: Message Logs / Audit Trail — the
@@ -1466,7 +1509,11 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::middleware(['permission:manage-notifications', 'module.guard:notifications'])->group(function () {
             Route::prefix('notification-templates')->group(function () {
                 Route::get('/', [NotificationTemplateController::class, 'index']);
+                // Template editor "Send test email" — to the caller only. Before '/{id}'.
+                Route::post('/test', [NotificationTemplateController::class, 'sendTest'])->middleware('throttle:10,1');
                 Route::get('/{id}', [NotificationTemplateController::class, 'show']);
+                // Master (system) templates: back to the built-in default. Super Admin only (enforced in the controller).
+                Route::post('/{id}/reset', [NotificationTemplateController::class, 'reset']);
                 Route::post('/', [NotificationTemplateController::class, 'store']);
                 Route::put('/{id}', [NotificationTemplateController::class, 'update']);
                 Route::delete('/{id}', [NotificationTemplateController::class, 'destroy']);
@@ -1554,6 +1601,9 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/plans-management', [PlanManagementController::class, 'index']);
         Route::post('/plans-management', [PlanManagementController::class, 'store']);
         Route::put('/plans-management/{slug}', [PlanManagementController::class, 'update']);
+        // Custom-plan price calculator: the Super Admin's price list (2026-10-15).
+        Route::get('/custom-plan-pricing', [PlanManagementController::class, 'pricing']);
+        Route::put('/custom-plan-pricing', [PlanManagementController::class, 'updatePricing']);
 
         // Phase 1 Foundation, Task 12 — Agent Selling Entitlements.
         // Super-Admin-only grant/revoke of which Capabilities an Agent
@@ -1741,6 +1791,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::middleware('permission:manage-accounts')->prefix('admin/quota-requests')->group(function () {
         Route::get('/', [QuotaRequestController::class, 'index']);
         Route::post('/{id}/approve', [QuotaRequestController::class, 'approve']);
+        // QA fixes (2026-10-14): a request can be turned down (it used to stay pending forever).
+        Route::post('/{id}/reject', [QuotaRequestController::class, 'reject'])->whereNumber('id');
     });
 
     // Social Media Marketing & Meta Ads Automation Expansion (Phase 1).

@@ -30,6 +30,13 @@ const quotaRequestService = {
       .post<ApproveQuotaRequestResponse>(`/admin/quota-requests/${id}/approve`)
       .then((res) => res.data);
   },
+
+  /** POST /api/admin/quota-requests/{id}/reject — QA fixes (2026-10-14). */
+  reject(id: number, reason?: string) {
+    return axiosInstance
+      .post<{ message: string }>(`/admin/quota-requests/${id}/reject`, { reason: reason || null })
+      .then((res) => res.data);
+  },
 };
 
 export default quotaRequestService;

@@ -205,7 +205,7 @@ export default function BatchSendPanel({ senders, disabled = false }: BatchSendP
     }
   };
 
-  const act = async (batch: MessageBatch, action: 'pause' | 'resume' | 'stop') => {
+  const act = async (batch: MessageBatch, action: 'pause' | 'resume' | 'stop' | 'retry') => {
     setBusyId(batch.id);
     setError(null);
     try {
@@ -214,7 +214,9 @@ export default function BatchSendPanel({ senders, disabled = false }: BatchSendP
           ? await messageBatchService.pause(batch.id)
           : action === 'resume'
             ? await messageBatchService.resume(batch.id)
-            : await messageBatchService.stop(batch.id);
+            : action === 'retry'
+              ? await messageBatchService.retryFailed(batch.id)
+              : await messageBatchService.stop(batch.id);
       setBatches((list) => list.map((b) => (b.id === updated.id ? updated : b)));
     } catch (err) {
       setError(extractErrorMessage(err, 'This action could not be completed. Please try again.'));
@@ -289,6 +291,16 @@ export default function BatchSendPanel({ senders, disabled = false }: BatchSendP
               className="flex items-center gap-1 rounded-md border border-red-300 px-2.5 py-1 text-xs font-medium text-red-700 hover:bg-red-50 disabled:opacity-60"
             >
               <Square className="h-3.5 w-3.5" /> Stop
+            </button>
+          )}
+          {(batch.status === 'completed' || batch.status === 'paused') && batch.failed_count > 0 && (
+            <button
+              type="button"
+              onClick={() => void act(batch, 'retry')}
+              disabled={busy}
+              className="flex items-center gap-1 rounded-md border border-emerald-300 px-2.5 py-1 text-xs font-medium text-emerald-800 hover:bg-emerald-50 disabled:opacity-60"
+            >
+              <Play className="h-3.5 w-3.5" /> Retry {batch.failed_count} failed
             </button>
           )}
         </div>

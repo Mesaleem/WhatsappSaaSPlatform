@@ -473,6 +473,60 @@ class WhatsAppJourneyEngine
     }
 
     /**
+     * QA fixes (2026-10-14) — start a journey FOR a contact, without an incoming
+     * message (journeys could only start from one). Used by the "New CRM lead"
+     * trigger and POST /api/whatsapp/flows/{id}/start.
+     *
+     * Runs the PUBLISHED version of an active journey, with the same runtime
+     * entitlement, quota and send gates as live traffic. A contact already in an
+     * open conversation is NOT interrupted (returns false). On the Meta API the
+     * first message must be a template node (free text is refused outside the
+     * 24-hour window).
+     *
+     * @param  array<string, scalar|null>  $context  starting variables (e.g. name, lead_id)
+     */
+    public function startForContact(Account $account, WhatsAppFlow $flow, string $phone, array $context = [], string $source = 'api'): bool
+    {
+        $phone = PhoneNumberNormalizer::normalize($phone);
+        if ($phone === '' || ! $flow->is_active || (int) $flow->account_id !== (int) $account->id || ! $this->runtimeAllowed((int) $account->id)) {
+            return false;
+        }
+        $version = $flow->publishedVersion;
+        $triggerNode = $version?->triggerNode();
+        $firstEdge = $triggerNode ? Collection::make($version->outgoingEdges($triggerNode['id']))->first() : null;
+        if (! $version || ! $triggerNode || ! $firstEdge) {
+            return false;
+        }
+
+        $this->beginTrace($source);
+        $gate = app(InboundEventGate::class)->run($account->id, $phone, $source, null, function () use ($account, $flow, $version, $triggerNode, $firstEdge, $phone, $context, $source) {
+            $open = WhatsAppFlowSession::query()->forAccount($account->id)->where('phone_number', $phone)
+                ->whereIn('status', WhatsAppFlowSession::OPEN_STATUSES)->exists();
+            if ($open) {
+                return false;
+            }
+
+            $session = WhatsAppFlowSession::create([
+                'account_id' => $account->id,
+                'flow_id' => $flow->id,
+                'flow_version_id' => $version->id,
+                'phone_number' => $phone,
+                'status' => WhatsAppFlowSession::STATUS_ACTIVE,
+                'context_data' => array_filter($context, fn ($v) => is_scalar($v) || $v === null),
+                'last_interaction_at' => now(),
+                'wait_until' => $this->runLease(),
+                'current_node_id' => (string) $triggerNode['id'],
+            ]);
+            $this->trace($session, Ev::SESSION_STARTED, ['node_id' => (string) $triggerNode['id'], 'node_type' => 'trigger', 'result' => $source]);
+            $this->runImmediate($account, $flow, $session, (string) $firstEdge['target']);
+
+            return true;
+        });
+
+        return (bool) ($gate['handled'] ?? false) && ($gate['result'] ?? false) === true;
+    }
+
+    /**
      * Phase 7 Task 1 — continue ONE session parked on a delay, once due.
      * Called by ResumeJourneySessionJob; safe to call any number of times,
      * from any number of workers, for the same id.
@@ -2520,7 +2574,22 @@ class WhatsAppJourneyEngine
          * failure: the capture is kept and recorded as `not_entitled`
          * (Task 10 contract, unchanged), and the journey continues.
          */
-        $crmLead = app(CaptureLeadLinker::class)->linkQuietly($lead);
+        // QA fixes (2026-10-14): a journey started by a click-to-WhatsApp ad already has its
+        // ad-attributed CRM lead — the journey's answers go onto THAT lead instead of a second,
+        // unattributed one (which also lost the ad's conversion when staff worked on it).
+        $attributedLeadId = \App\Models\AdAttribution::query()->forAccount((int) $account->id)
+            ->where('flow_session_id', $session->id)->whereNotNull('crm_lead_id')->value('crm_lead_id');
+        $attributedLead = $attributedLeadId ? \App\Models\CrmLead::query()->where('account_id', $account->id)->find($attributedLeadId) : null;
+        if ($attributedLead !== null) {
+            $answers = collect($context)->filter(fn ($v, $k) => is_scalar($v) && $v !== '' && ! str_starts_with((string) $k, '_'))
+                ->map(fn ($v, $k) => "{$k}: {$v}")->implode("\n");
+            if ($answers !== '' && blank($attributedLead->requirement)) {
+                $attributedLead->forceFill(['requirement' => mb_substr($answers, 0, 2000)])->save();
+            }
+            $crmLead = $attributedLead;
+        } else {
+            $crmLead = app(CaptureLeadLinker::class)->linkQuietly($lead);
+        }
         $this->lastLeadRefs = ['lead_id' => (int) $lead->id, 'crm_lead_id' => $crmLead ? (int) $crmLead->id : null];
 
         // Phase 10 Task 1 — a lead saved inside an ad-attributed journey session. Best-effort.

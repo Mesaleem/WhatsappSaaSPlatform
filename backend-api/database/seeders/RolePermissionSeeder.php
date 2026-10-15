@@ -140,6 +140,11 @@ class RolePermissionSeeder extends Seeder
         // array in DEFAULT_ROLES lists it, matching this feature's
         // literal "Super-Admin Audit Trail UI" scope.
         'view-activity-logs',
+        // QA fixes (2026-10-14) — see migration 2026_10_16_100100_add_team_permissions_and_sales_role.
+        // Connect / disconnect WhatsApp and change numbers (admin-level).
+        'manage-whatsapp-setup',
+        // Every lead / deal / task of the account; without it, own (assigned) records only.
+        'view-all-crm',
     ];
 
     /**
@@ -181,6 +186,8 @@ class RolePermissionSeeder extends Seeder
             // CRM Sales Phases 2–3 — the tenant owner manages documents and payments.
             'manage-crm-documents',
             'manage-crm-payments',
+            'view-all-crm',
+            'manage-whatsapp-setup',
             'view-social-analytics',
             'manage-comment-automation',
             'view-industry-modules',
@@ -234,6 +241,8 @@ class RolePermissionSeeder extends Seeder
             'manage-developer-settings',
             // Send Notification (individual, group, bulk and batch) for the agent's own account and its sub-clients.
             'send-messages',
+            // QA fixes (2026-10-14): connecting a sub-client's WhatsApp (manage-whatsapp-setup).
+            'manage-whatsapp-setup',
         ],
         // Social Media Marketing & Meta Ads Automation Expansion (Phase 1).
         // Deliberately restricted to ONLY these four permissions — this
@@ -256,6 +265,7 @@ class RolePermissionSeeder extends Seeder
             // to exactly the roles that already had access keeps
             // effective authorization identical.
             'manage-crm',
+            'view-all-crm',
             'view-social-analytics',
             // Phase 4 — see PERMISSIONS' comment for why this is separate
             // from manage-social-leads.
@@ -268,6 +278,15 @@ class RolePermissionSeeder extends Seeder
             // with this role's existing "restricted access" scope (see
             // this array's own comment above re: view-audit-logs).
             'manage-team',
+        ],
+        // QA fixes (2026-10-14): a salesperson — CRM, quotes / invoices and payments,
+        // own (assigned) leads only (no view-all-crm). Assignable from the Team page.
+        'sales' => [
+            'manage-crm',
+            'manage-crm-documents',
+            'manage-crm-payments',
+            'view-analytics',
+            'view-audit-logs',
         ],
     ];
 

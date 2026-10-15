@@ -69,13 +69,41 @@ class SocialTargetGate
         // passes it explicitly (e.g. who created a scheduled post).
         $superAdmin ??= (bool) auth()->user()?->isSuperAdmin();
         $platform = $target?->isPlatformAccount() ?? false;
+        // Plan restructure (2026-10-15): why the module is unavailable — '' = open, 'not_in_plan',
+        // 'disabled' (a Super Admin is held only to switch-offs). The scope memoizes booleans, so the
+        // reason is kept as two flags: open, and (when closed) missing only from the plan.
+        $moduleDenial = '';
+        if ($target !== null) {
+            $sa = (int) $superAdmin;
+            $open = $scope
+                ? $scope->remember("mod:{$target->id}:{$module}:{$sa}", fn () => $this->moduleDenial($target, $module, $superAdmin) === '')
+                : $this->moduleDenial($target, $module, $superAdmin) === '';
+            if (! $open) {
+                $notInPlan = $scope
+                    ? $scope->remember("modplan:{$target->id}:{$module}:{$sa}", fn () => $this->moduleDenial($target, $module, $superAdmin) === 'not_in_plan')
+                    : $this->moduleDenial($target, $module, $superAdmin) === 'not_in_plan';
+                $moduleDenial = $notInPlan ? 'not_in_plan' : 'disabled';
+            }
+        }
 
         return match (true) {
             ! $target || ! $target->isAdministrativelyActive() => ['code' => 'CLIENT_ACCOUNT_SUSPENDED', 'message' => "This account is suspended. It cannot {$action}."],
             ! $read && ! $platform && ! $superAdmin && ! $target->hasActiveSubscription() => ['code' => 'SUBSCRIPTION_EXPIRED', 'message' => "This account's subscription is not active. Renew it to {$action}."],
-            ! ($scope ? $scope->remember("mod:{$target->id}:{$module}", fn () => $target->hasModuleEnabled($module)) : $target->hasModuleEnabled($module)) => ['code' => 'MODULE_DISABLED', 'message' => $messages['MODULE_DISABLED'] ?? 'This feature is switched off for this account.'],
+            // A module the client's plan lacks is the plan refusal (below), not MODULE_DISABLED.
+            $moduleDenial === 'disabled' => ['code' => 'MODULE_DISABLED', 'message' => $messages['MODULE_DISABLED'] ?? 'This feature is switched off for this account.'],
+            ! $platform && ! $superAdmin && $moduleDenial === 'not_in_plan' => ['code' => 'CAPABILITY_NOT_ENTITLED', 'message' => $messages['CAPABILITY_NOT_ENTITLED'] ?? 'Your current plan does not include this feature. Please upgrade your subscription to unlock it.'],
             ! $platform && ! $superAdmin && ! ($scope ? $scope->remember("cap:{$target->id}:{$capability}", fn () => $this->access->canTenant($target, $capability)) : $this->access->canTenant($target, $capability)) => ['code' => 'CAPABILITY_NOT_ENTITLED', 'message' => $messages['CAPABILITY_NOT_ENTITLED'] ?? 'Your current plan does not include this feature. Please upgrade your subscription to unlock it.'],
             default => null,
         };
+    }
+
+    /** '' = open, 'not_in_plan' or 'disabled' (a Super Admin: only a switch-off counts). */
+    private function moduleDenial(Account $target, string $module, bool $superAdmin): string
+    {
+        if ($superAdmin) {
+            return $target->hasModuleSwitchedOn($module) ? '' : 'disabled';
+        }
+
+        return (string) $target->moduleDenial($module);
     }
 }

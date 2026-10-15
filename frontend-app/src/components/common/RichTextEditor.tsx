@@ -22,11 +22,17 @@ export default function RichTextEditor({
   value,
   onChange,
   onModeChange,
+  lockMode = false,
+  rows = 8,
 }: {
   mode: NotificationTemplateType;
   value: string;
   onChange: (html: string) => void;
   onModeChange: (mode: NotificationTemplateType) => void;
+  /** Hide the Rich Text / Raw HTML switch (e.g. a full email document must stay raw HTML). */
+  lockMode?: boolean;
+  /** Raw HTML textarea height. */
+  rows?: number;
 }) {
   const editableRef = useRef<HTMLDivElement>(null);
   // UI-based dialogs only -- no window.prompt() (see PromptModal's own
@@ -71,6 +77,7 @@ export default function RichTextEditor({
             </span>
           )}
         </div>
+        {!lockMode && (
         <div className="flex overflow-hidden rounded-md border border-slate-300 text-xs font-medium">
           <button
             type="button"
@@ -87,6 +94,7 @@ export default function RichTextEditor({
             Raw HTML
           </button>
         </div>
+        )}
       </div>
 
       {mode === 'rich_text' ? (
@@ -101,7 +109,7 @@ export default function RichTextEditor({
         <textarea
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          rows={8}
+          rows={rows}
           spellCheck={false}
           className="w-full resize-y px-3 py-2.5 font-mono text-xs text-slate-900 outline-none"
         />

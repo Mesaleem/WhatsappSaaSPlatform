@@ -702,6 +702,9 @@ class AgentCommissionTest extends TestCase
     // E10. No N+1 regression: query count must not scale with row count.
     public function test_commissions_endpoint_does_not_n_plus_one_regardless_of_row_count(): void
     {
+        // Payments queue "payment received" emails to run after a response (QA fixes,
+        // 2026-10-14); run them at once so they do not land inside a measured request.
+        $this->withoutDefer();
         $agentAccount = Account::factory()->agent()->create();
         AgentCommissionRule::create(['agent_account_id' => $agentAccount->id, 'type' => 'percentage', 'value' => 10]);
         $agentUser = $this->makeAgentAdmin($agentAccount);

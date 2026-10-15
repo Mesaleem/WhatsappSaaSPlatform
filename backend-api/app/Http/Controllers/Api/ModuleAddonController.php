@@ -87,6 +87,8 @@ class ModuleAddonController extends Controller
             return $this->error($e);
         }
 
+        app(\App\Services\Billing\BillingRequestNotifier::class)->addonRequested($account, $request->user(), $row, $this->service->offer($row->module)['label']);
+
         return response()->json(['message' => 'Request sent. Your Super Admin or agent will approve it and send an invoice.', 'data' => $this->present($row)], 201);
     }
 

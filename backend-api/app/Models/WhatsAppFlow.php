@@ -50,7 +50,9 @@ class WhatsAppFlow extends Model
 
     /** IMPLEMENT: Dynamic Route Master with Super-Admin Bypass & Global Audit Tracking — module label shown in the Activity Logs UI. */
     protected string $auditModuleName = 'WhatsApp Flows';
-    public const TRIGGER_TYPES = ['keyword', 'ctwa_referral', 'default'];
+    // QA fixes (2026-10-14): + lead_created — the journey starts when a new CRM lead
+    // arrives (from an ad, the website, the API, ...), not from an incoming message.
+    public const TRIGGER_TYPES = ['keyword', 'ctwa_referral', 'default', 'lead_created'];
 
     /**
      * Channel-binding gate (Connexxa parity) — see the

@@ -42,6 +42,12 @@ class Invoice extends Model
         'plan_duration_days',
         // Phase 8 Task 2 — the plan's AI-credit allowance for the purchased period.
         'plan_included_credits',
+        // Plan restructure (2026-10-15) — the plan limits this order bought.
+        'plan_max_users',
+        'plan_max_meta_templates',
+        'plan_max_flows',
+        'plan_max_broadcasts_per_month',
+        'plan_marketing_message_limit',
         'plan_terms_captured_at',
     ];
 
@@ -95,6 +101,12 @@ class Invoice extends Model
             'plan_total_allocated_messages' => $plan->total_allocated_messages,
             'plan_duration_days' => $plan->duration_days,
             'plan_included_credits' => (int) $plan->included_credits,
+            // Plan restructure (2026-10-15) — the limits this order buys.
+            'plan_max_users' => $plan->max_users,
+            'plan_max_meta_templates' => $plan->max_meta_templates,
+            'plan_max_flows' => $plan->max_flows,
+            'plan_max_broadcasts_per_month' => $plan->max_broadcasts_per_month,
+            'plan_marketing_message_limit' => $plan->marketing_message_limit,
             'plan_terms_captured_at' => now(),
         ]);
     }
@@ -126,6 +138,36 @@ class Invoice extends Model
      * was captured (pre-P5-4 order, top-up invoice) or the terms were
      * captured before credits existed — such an order bought no credits.
      */
+    /**
+     * The plan limits this order bought (column => limit, NULL = unlimited),
+     * or null when no terms were captured — then the fulfilment falls back to
+     * the plan row, like the message terms.
+     *
+     * @return array<string, ?int>|null
+     */
+    public function purchasedPlanLimits(): ?array
+    {
+        if ($this->plan_terms_captured_at === null) {
+            return null;
+        }
+
+        $limits = collect(array_keys(Plan::LIMITS))
+            ->mapWithKeys(fn (string $c) => [$c => $this->{'plan_'.$c} === null ? null : (int) $this->{'plan_'.$c}])
+            ->all();
+
+        // QA fixes (2026-10-14): an order placed before plan limits existed has none captured
+        // (every one NULL), which would grant unlimited users / templates / journeys when paid.
+        // Such an order takes the plan's limits as they are now.
+        if (array_filter($limits, fn ($v) => $v !== null) === []) {
+            $plan = Plan::query()->where('slug', $this->plan_key)->first();
+            if ($plan !== null) {
+                $limits = $plan->limits();
+            }
+        }
+
+        return $limits;
+    }
+
     public function purchasedIncludedCredits(): int
     {
         return $this->plan_terms_captured_at === null ? 0 : (int) ($this->plan_included_credits ?? 0);

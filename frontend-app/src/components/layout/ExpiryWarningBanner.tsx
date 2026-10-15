@@ -15,8 +15,8 @@ export default function ExpiryWarningBanner() {
     return (
       <div className="flex flex-wrap items-center gap-2 border-b border-red-200 bg-red-50 px-3 py-2 text-xs font-medium text-red-800 sm:px-6 sm:text-sm" data-testid="read-only-banner">
         <AlertTriangle className="h-4 w-4 flex-shrink-0" />
-        Your subscription is expired or suspended. You can still view your data — actions are disabled until it's
-        renewed.
+        Your plan has ended or its messages are used up. You can still view your data — actions are disabled until
+        you renew or top up.
         {canRenew ? (
           <Link to="/billing" className="rounded-md border border-red-300 bg-white px-2.5 py-1 text-xs font-semibold text-red-800 hover:bg-red-100">
             Renew subscription

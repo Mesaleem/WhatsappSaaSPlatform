@@ -249,6 +249,8 @@ export interface CrmPublicDocument {
   amount_paid: string;
   balance_due: string;
   payable_online: boolean;
+  /** QA fixes (2026-10-14): a sent quotation / proposal the customer can accept here. */
+  can_accept?: boolean;
   body: string | null;
   terms: string | null;
 }

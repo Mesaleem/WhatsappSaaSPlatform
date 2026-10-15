@@ -112,6 +112,59 @@ class WhatsAppStatusController extends Controller
             $session->save();
         }
 
+        $this->tellTheClient((int) $data['account_id'], $data['status'], $slot);
+
         return response()->json(['message' => 'Status updated.', 'session' => $session ?? $slot?->fresh()]);
+    }
+
+    /**
+     * QA fixes (2026-10-14) — a disconnect is no longer silent: the client's
+     * admins get an in-app notice and the owner an email (once per number per
+     * 6 hours). A reconnect clears it, and Send Notification batches that were
+     * paused because a sending number disconnected carry on by themselves.
+     */
+    private function tellTheClient(int $accountId, string $status, ?WhatsAppNumber $slot): void
+    {
+        $account = \App\Models\Account::query()->find($accountId);
+        if ($account === null || $account->isPlatformAccount()) {
+            return;
+        }
+        $alerts = app(\App\Services\Notifications\AccountAlerts::class);
+        $key = 'wa-disconnected-'.($slot?->id ?? 'default');
+
+        if ($status === 'disconnected') {
+            // A paused number was logged out on purpose (term ended): its own notice says so.
+            if ($slot !== null && $slot->status === WhatsAppNumber::STATUS_PAUSED) {
+                return;
+            }
+            $number = $slot && ! $slot->hasPendingPlaceholderNumber() ? $slot->phone_number : 'your WhatsApp number';
+            $alerts->notify(
+                $account,
+                $key,
+                'WhatsApp disconnected',
+                "{$number} was disconnected from WhatsApp. Messages, the chatbot and journeys cannot send until you reconnect it in WhatsApp Setup.",
+                'whatsapp',
+                '/settings/whatsapp',
+                'Reconnect WhatsApp',
+            );
+
+            return;
+        }
+
+        if ($status === 'connected') {
+            $alerts->reset($account, $key);
+            \App\Models\MessageBatch::query()
+                ->where('account_id', $accountId)
+                ->where('status', \App\Models\MessageBatch::PAUSED)
+                ->where('stop_reason', 'Paused: a sending WhatsApp number is disconnected.')
+                ->pluck('id')
+                ->each(function (int $batchId) use ($account): void {
+                    try {
+                        app(\App\Services\Batches\MessageBatchService::class)->resume($account, $batchId);
+                    } catch (\Throwable) {
+                        // Left paused; the user can resume it from the page.
+                    }
+                });
+        }
     }
 }

@@ -75,6 +75,24 @@ export default function MetaConfigCard() {
   const [saveSuccess, setSaveSuccess] = useState<string | null>(null);
 
   const [copied, setCopied] = useState(false);
+  const [isDisconnecting, setIsDisconnecting] = useState(false);
+
+  // QA fixes (2026-10-14): a connected Meta number can be disconnected (to move it elsewhere).
+  const handleDisconnect = async () => {
+    if (!window.confirm('Disconnect this Meta WhatsApp number? Sending stops until you connect again.')) return;
+    setIsDisconnecting(true);
+    setSaveError(null);
+    try {
+      const res = await whatsappService.disconnectMeta();
+      setSaveSuccess(res.message);
+      setAccessToken('');
+      await loadConfig();
+    } catch (err) {
+      setSaveError(describeApiError(err, 'Could not disconnect. Please try again.').message);
+    } finally {
+      setIsDisconnecting(false);
+    }
+  };
 
   const loadConfig = useCallback(async () => {
     if (!isAdmin) {
@@ -443,6 +461,18 @@ export default function MetaConfigCard() {
             {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <KeyRound className="h-4 w-4" />}
             {config?.configured ? 'Update Credentials' : 'Save Credentials'}
           </button>
+
+          {config?.configured && (
+            <button
+              type="button"
+              onClick={() => void handleDisconnect()}
+              disabled={isDisconnecting || isSaving || isReadOnly()}
+              className="ml-auto flex items-center gap-2 rounded-lg border border-red-200 px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-50 disabled:opacity-60"
+            >
+              {isDisconnecting && <Loader2 className="h-4 w-4 animate-spin" />}
+              Disconnect
+            </button>
+          )}
         </div>
       </form>
     </div>

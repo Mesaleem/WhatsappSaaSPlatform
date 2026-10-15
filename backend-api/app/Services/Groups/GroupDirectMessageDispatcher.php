@@ -105,7 +105,7 @@ class GroupDirectMessageDispatcher
             }
         }
 
-        if (\App\Services\PaymentAlerts\PaymentAlertDispatcher::isWhatsAppDisconnected($account)) {
+        if (\App\Services\PaymentAlerts\PaymentAlertDispatcher::isWhatsAppDisconnected($account, $senderNumberId)) {
             return ['status' => 'disconnected', 'message' => 'WhatsApp account is disconnected. Please connect your device first.'];
         }
 

@@ -51,9 +51,41 @@ class CrmPublicDocumentController extends Controller
             'amount_paid' => (string) $doc->amount_paid,
             'balance_due' => (string) $doc->balance_due,
             'payable_online' => $doc->isPayable() && $this->gatewayReady($doc),
+            // QA fixes (2026-10-14): the customer can accept a sent quotation / proposal here.
+            'can_accept' => in_array($doc->type, ['quotation', 'proposal'], true) && $doc->status === 'sent'
+                && ($doc->valid_until === null || ! $doc->valid_until->isPast()),
             'body' => $doc->body,
             'terms' => $doc->terms,
         ]]);
+    }
+
+    /**
+     * POST /api/public/crm-documents/{token}/accept — QA fixes (2026-10-14). The customer
+     * accepts a sent quotation / proposal from its link; the business is told. (Accepting
+     * does not win the deal by itself — staff convert it to an order as before.)
+     */
+    public function accept(string $token, \App\Services\Crm\Sales\CrmDocumentService $documents): JsonResponse
+    {
+        $doc = $this->find($token);
+        abort_unless(in_array($doc->type, ['quotation', 'proposal'], true) && $doc->status === 'sent', 422, 'This document cannot be accepted.');
+        abort_if($doc->valid_until !== null && $doc->valid_until->isPast(), 422, 'This quotation has expired. Ask for a new one.');
+
+        $documents->transition($doc, 'accepted', 'Accepted by the customer from the link.', null);
+
+        $users = \App\Models\User::query()->where('account_id', $doc->account_id)->where('is_active', true)
+            ->whereHas('roles', fn ($q) => $q->where('name', 'admin'))->get();
+        if ($doc->crm_deal_id && ($ownerId = \App\Models\CrmDeal::query()->whereKey($doc->crm_deal_id)->value('owner_user_id'))) {
+            $users = $users->merge(\App\Models\User::query()->whereKey($ownerId)->get())->unique('id');
+        }
+        app(\App\Services\Mail\SystemMailer::class)->notifyUsers(
+            $users,
+            'Quotation accepted',
+            ($doc->customer_snapshot['name'] ?? 'The customer').' accepted '.$doc->number.'.',
+            'crm',
+            '/crm/documents/'.$doc->id,
+        );
+
+        return response()->json(['message' => 'Thank you — the quotation is accepted. We will be in touch.']);
     }
 
     public function pdf(string $token, CrmDocumentPdf $pdf): Response

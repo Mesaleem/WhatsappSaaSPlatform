@@ -628,6 +628,9 @@ class ContactGroupController extends Controller
             return response()->json(['success' => false, 'message' => $e->getMessage(), 'error_code' => $e->errorCode], $e->status);
         }
 
+        // Plan restructure (2026-10-15): a group send is one broadcast of the plan's monthly allowance.
+        app(\App\Services\Billing\PlanLimits::class)->consumeBroadcast($account, 'contact_group', $request->user());
+
         $sendAt = ScheduledMessageService::parseSendAt($data['scheduled_at'] ?? null);
         if ($sendAt !== null) {
             try {

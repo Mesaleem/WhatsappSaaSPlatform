@@ -27,6 +27,14 @@ class Subscription extends Model
         'starts_at',
         'expires_at',
         'status',
+        // Plan restructure (2026-10-15) — the plan limits this term bought (NULL = unlimited), see Plan::LIMITS.
+        'max_users',
+        'max_meta_templates',
+        'max_flows',
+        'max_broadcasts_per_month',
+        'marketing_message_limit',
+        'used_marketing_messages',
+        'marketing_counted_from',
     ];
 
     /**
@@ -48,6 +56,13 @@ class Subscription extends Model
             'rate_per_message' => 'decimal:4',
             'total_allocated_messages' => 'integer',
             'used_messages' => 'integer',
+            'max_users' => 'integer',
+            'max_meta_templates' => 'integer',
+            'max_flows' => 'integer',
+            'max_broadcasts_per_month' => 'integer',
+            'marketing_message_limit' => 'integer',
+            'used_marketing_messages' => 'integer',
+            'marketing_counted_from' => 'datetime',
             'price_paid' => 'decimal:2',
             'starts_at' => 'datetime',
             'expires_at' => 'datetime',
@@ -108,6 +123,28 @@ class Subscription extends Model
 
         if ($status !== $this->status) {
             $this->forceFill(['status' => $status])->save();
+
+            // QA fixes (2026-10-14): the client is told the moment its messages run out
+            // (sending simply stopped before). After commit, so a rolled-back send says nothing.
+            if ($status === 'exhausted' && $this->account_id) {
+                $accountId = (int) $this->account_id;
+                $subscriptionId = (int) $this->id;
+                \Illuminate\Support\Facades\DB::afterCommit(function () use ($accountId, $subscriptionId): void {
+                    $account = Account::query()->find($accountId);
+                    if ($account !== null && ! $account->isPlatformAccount()) {
+                        app(\App\Services\Notifications\AccountAlerts::class)->notify(
+                            $account,
+                            'quota-exhausted-'.$subscriptionId,
+                            'Your messages are used up',
+                            'All the messages of your plan have been sent, so WhatsApp sending has stopped. Request a top-up or upgrade your plan on the Billing page to continue.',
+                            'subscription',
+                            '/billing',
+                            'Open billing',
+                            24,
+                        );
+                    }
+                });
+            }
         }
 
         return $status;

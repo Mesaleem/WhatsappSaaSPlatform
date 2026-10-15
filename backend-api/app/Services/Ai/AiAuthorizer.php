@@ -166,8 +166,18 @@ class AiAuthorizer
             $this->deny($account, 'no_active_subscription', AiException::subscriptionInactive(), $module, $permission, $source, $actor);
         }
 
-        if (! $account->hasModuleEnabled($module)) {
+        $moduleDenial = $account->moduleDenial($module);
+        if ($moduleDenial === 'disabled') {
             $this->deny($account, 'module_disabled', AiException::moduleDisabled(), $module, $permission, $source, $actor);
+        }
+
+        // Plan restructure (2026-10-15): the plan lacks the module's feature — a plan refusal (AI
+        // missing too reads as the AI one below).
+        if ($moduleDenial === 'not_in_plan' && (! $requireCapability || $this->access->canTenant($account, self::CAPABILITY))) {
+            $this->deny($account, 'capability_not_entitled', AiException::featureNotInPlan(), $module, $permission, $source, $actor);
+        }
+        if ($moduleDenial === 'not_in_plan') {
+            $this->deny($account, 'capability_not_entitled', AiException::capabilityUnavailable(), $module, $permission, $source, $actor);
         }
 
         if ($permissionCheck !== null) {

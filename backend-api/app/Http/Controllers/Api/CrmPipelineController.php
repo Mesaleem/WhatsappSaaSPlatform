@@ -112,6 +112,7 @@ class CrmPipelineController extends Controller
          */
         $totals = CrmLead::query()
             ->forAccount($account->id)
+            ->visibleTo($request->user())
             ->filter(collect($filters)->except('status')->all())
             ->selectRaw('status, COUNT(*) as aggregate')
             ->groupBy('status')
@@ -122,6 +123,7 @@ class CrmPipelineController extends Controller
 
             $leads = CrmLead::query()
                 ->forAccount($account->id)
+                ->visibleTo(request()->user())
                 ->where('status', $column['status'])
                 ->filter(collect($filters)->except('status')->all())
                 // Eager-loaded so serializing N cards costs 3 queries,

@@ -46,7 +46,11 @@ class PaymentGatewayController extends Controller
          * formatting are unchanged from the PlanCatalog version, so the
          * existing pricing page needs no change at all.
          */
-        $plans = $this->plans->purchasable()
+        // A client also sees the custom plan(s) built for it (plan restructure, 2026-10-15).
+        $accountId = $request->user()?->account_id;
+        $account = $accountId ? Account::query()->with('currentSubscription')->find($accountId) : null;
+
+        $plans = $this->plans->purchasable($account)
             ->map(fn ($plan) => $this->plans->toPublicArray($plan, self::TAX_RATE))
             ->values();
 
@@ -57,13 +61,13 @@ class PaymentGatewayController extends Controller
 
         // Plan purchase rules (owner, 2026-10-14): each plan's action for THIS account, and
         // the running plan + any pending request, so the page shows the right buttons.
-        $accountId = $request->user()?->account_id;
-        $account = $accountId ? Account::query()->with('currentSubscription')->find($accountId) : null;
         if ($account) {
             $policy = app(\App\Services\Billing\PlanChangePolicy::class);
             $decisions = $policy->forAllPlans($account)->keyBy('key');
             $plans = $plans->map(fn (array $p) => $p + ['purchase' => $decisions[$p['key']] ?? null])->values();
             $state = $policy->state($account);
+            // Plan restructure (2026-10-15): each plan limit and how much of it is used.
+            $planUsage = app(\App\Services\Billing\PlanLimits::class)->usage($account);
             $planStatus = [
                 'running' => $state['running'],
                 'expires_at' => $state['expires_at'],
@@ -83,6 +87,7 @@ class PaymentGatewayController extends Controller
         return response()->json([
             'plans' => $plans,
             'plan_status' => $planStatus ?? null,
+            'plan_usage' => $planUsage ?? null,
             'available_gateways' => $availableGateways,
             'tax_rate' => self::TAX_RATE,
         ]);
@@ -113,7 +118,7 @@ class PaymentGatewayController extends Controller
         // Unknown slug and deactivated plan are the same 422 on purpose:
         // a retired plan must not be buyable, and the response must not
         // reveal which retired plans exist.
-        $plan = $this->plans->findPurchasable($data['plan_key']);
+        $plan = $this->plans->findPurchasable($data['plan_key'], $account);
         abort_if(! $plan, 422, 'Unknown plan.');
 
         // Plan purchase rules: one request at a time; no re-buying the running plan; a

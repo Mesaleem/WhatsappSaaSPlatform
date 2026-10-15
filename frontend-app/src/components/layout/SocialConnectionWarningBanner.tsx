@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { AlertTriangle } from 'lucide-react';
 import { useAuth } from '../../core/context/AuthContext';
 import socialService from '../../services/socialService';
+import { connectionStatusOf, SOCIAL_ASSET_TYPE_LABELS, type SocialAccount } from '../../types/social';
 
 /**
  * Social Media Marketing & Meta Ads Automation Expansion (Phase 1).
@@ -34,9 +35,14 @@ import socialService from '../../services/socialService';
  * after the module was disabled" report.
  */
 export default function SocialConnectionWarningBanner() {
-  const { hasPermission, hasModule } = useAuth();
-  const canManageSocial = hasPermission('manage-social-accounts') && hasModule('social_accounts');
-  const [hasMetaAssetConnected, setHasMetaAssetConnected] = useState<boolean | null>(null);
+  const { user, hasPermission, hasModule } = useAuth();
+  // QA fixes (2026-10-14): only for a plan that has social media (a Starter / QR client without
+  // ads saw "Ad Launcher and Lead Sync stay locked"), and the ads wording only with the ads feature.
+  const capabilities = user?.capabilities;
+  const hasSocial = !capabilities || capabilities.social === true;
+  const hasAds = !!capabilities && capabilities.ads === true;
+  const canManageSocial = hasPermission('manage-social-accounts') && hasModule('social_accounts') && hasSocial;
+  const [accounts, setAccounts] = useState<SocialAccount[] | null>(null);
 
   useEffect(() => {
     if (!canManageSocial) return;
@@ -45,19 +51,13 @@ export default function SocialConnectionWarningBanner() {
 
     socialService
       .listAccounts()
-      .then((accounts) => {
-        if (cancelled) return;
-        const connected = accounts.some(
-          (a) =>
-            (a.asset_type === 'facebook_page' || a.asset_type === 'meta_ad_account') &&
-            a.health_status === 'connected',
-        );
-        setHasMetaAssetConnected(connected);
+      .then((list) => {
+        if (!cancelled) setAccounts(list);
       })
       .catch(() => {
         // Swallow — same "don't turn a transient fetch failure into a
         // false compliance alarm" reasoning as NotificationBell's poll.
-        if (!cancelled) setHasMetaAssetConnected(null);
+        if (!cancelled) setAccounts(null);
       });
 
     return () => {
@@ -65,13 +65,33 @@ export default function SocialConnectionWarningBanner() {
     };
   }, [canManageSocial]);
 
-  if (!canManageSocial || hasMetaAssetConnected !== false) return null;
+  if (!canManageSocial || accounts === null) return null;
+
+  const meta = accounts.filter((a) => a.asset_type === 'facebook_page' || a.asset_type === 'instagram' || a.asset_type === 'meta_ad_account');
+  const connected = meta.filter((a) => connectionStatusOf(a) === 'connected');
+  // An expired / revoked connection is named even when another one still works (QA fixes, 2026-10-14):
+  // its posts, comment replies, lead sync or ads guard stop silently otherwise.
+  const broken = meta.filter((a) => connectionStatusOf(a) !== 'connected');
+
+  let message: string | null = null;
+  if (connected.length === 0 && broken.length === 0) {
+    message = hasAds
+      ? 'No Facebook Page or Ad Account is connected yet — posting, the inbox, Ad Launcher and Lead Sync start once you connect one in'
+      : 'No Facebook Page is connected yet — posting, the inbox and comment rules start once you connect one in';
+  } else if (broken.length > 0) {
+    const names = broken.map((a) => `${SOCIAL_ASSET_TYPE_LABELS[a.asset_type]}${a.name ? ` “${a.name}”` : ''}`).join(', ');
+    message = `${names} ${broken.length === 1 ? 'needs' : 'need'} reconnecting — until then its posts, replies and lead sync are paused. Reconnect in`;
+  }
+  if (message === null) return null;
 
   return (
-    <div className="flex flex-shrink-0 items-start gap-2 border-b border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800 sm:items-center sm:px-6 sm:text-sm">
+    <div
+      className="flex flex-shrink-0 items-start gap-2 border-b border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800 sm:items-center sm:px-6 sm:text-sm"
+      data-testid="social-connection-warning"
+    >
       <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0 sm:mt-0" />
       <p className="min-w-0">
-        No Meta Page or Ad Account is connected yet — Ad Launcher and Lead Sync stay locked until you connect one in{' '}
+        {message}{' '}
         <Link to="/social/accounts" className="font-semibold underline">
           Social Accounts
         </Link>

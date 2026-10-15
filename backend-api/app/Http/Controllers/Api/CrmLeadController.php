@@ -87,6 +87,7 @@ class CrmLeadController extends Controller
 
         $leads = CrmLead::query()
             ->forAccount($account->id)
+            ->visibleTo($request->user())
             ->with($this->crmLeadRelations())
             ->filter($filters)
             ->orderedForList()
@@ -107,7 +108,12 @@ class CrmLeadController extends Controller
 
         // Manual Add lead is always source=manual — overwritten, not
         // defaulted, so no payload can label it meta_ad/journey/api.
-        $lead = $this->leads->create($account, ['source' => CrmLead::SOURCE_MANUAL] + $request->validated());
+        $data = ['source' => CrmLead::SOURCE_MANUAL] + $request->validated();
+        // QA fixes (2026-10-14): someone who sees only their own leads owns what they add.
+        if (! \App\Support\CrmVisibility::seesAll($request->user()) && empty($data['assigned_user_id'])) {
+            $data['assigned_user_id'] = $request->user()->id;
+        }
+        $lead = $this->leads->create($account, $data);
 
         return response()->json([
             'message' => 'Lead created.',
@@ -447,6 +453,7 @@ class CrmLeadController extends Controller
     {
         $lead = CrmLead::query()
             ->forAccount($accountId)
+            ->visibleTo(request()->user())
             ->with($this->crmLeadRelations())
             ->find($id);
 

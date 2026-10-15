@@ -266,7 +266,10 @@ class JourneyCapabilityGateTest extends TestCase
 
     public function test_the_module_gate_still_applies_with_the_capability(): void
     {
-        $account = $this->tenant('growth', attributes: ['allowed_modules' => array_values(array_diff(Account::MODULES, ['chatbot']))]);
+        $account = $this->tenant('growth');
+        // QA fixes (2026-10-14): paying for a plan resets an earlier checklist, so the
+        // switch-off is made after the purchase, as a Super Admin would.
+        $account->forceFill(['allowed_modules' => array_values(array_diff(Account::MODULES, ['chatbot']))])->save();
         $this->assertTrue($this->holds($account));
 
         $this->actingAs($this->user($account))->getJson(self::BASE)

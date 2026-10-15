@@ -72,6 +72,9 @@ class MessageBatchService
         $this->assertScheduleAllowed($scheduledAt);
 
         return DB::transaction(function () use ($account, $user, $phones, $filename, $data, $scheduledAt, $senders) {
+            // Plan restructure (2026-10-15): one broadcast of the plan's monthly allowance (rolled back with the batch).
+            app(\App\Services\Billing\PlanLimits::class)->consumeBroadcast($account, 'message_batch:'.($data['kind'] ?? 'file'), $user);
+
             $batchSize = (int) $data['batch_size'];
             $interval = (int) $data['interval_minutes'];
             $step = $this->stepSeconds(count($senders));
@@ -411,6 +414,37 @@ class MessageBatchService
         ])->save();
 
         return $batch->refresh();
+    }
+
+    /**
+     * QA fixes (2026-10-14) — send the failed numbers of a finished or paused batch
+     * again (they could not be retried at all). They go back to pending and the batch
+     * runs again with the same pacing; numbers already sent are never sent twice.
+     */
+    public function retryFailed(Account $account, int $batchId): MessageBatch
+    {
+        $batch = $this->owned($account, $batchId);
+        if (! in_array($batch->status, [MessageBatch::COMPLETED, MessageBatch::PAUSED], true)) {
+            throw new BatchException('not_retryable', 'Failed numbers can be retried once the batch has finished or is paused.');
+        }
+
+        $failed = MessageBatchItem::query()->where('message_batch_id', $batch->id)->where('status', MessageBatchItem::FAILED)->count();
+        if ($failed === 0) {
+            throw new BatchException('nothing_to_retry', 'This batch has no failed numbers.');
+        }
+
+        DB::transaction(function () use ($batch, $failed): void {
+            MessageBatchItem::query()->where('message_batch_id', $batch->id)->where('status', MessageBatchItem::FAILED)
+                ->update(['status' => MessageBatchItem::PENDING, 'error' => null, 'updated_at' => now()]);
+            $batch->forceFill([
+                'status' => MessageBatch::PAUSED,
+                'failed_count' => max(0, (int) $batch->failed_count - $failed),
+                'completed_at' => null,
+                'stop_reason' => 'Retrying failed numbers.',
+            ])->save();
+        });
+
+        return $this->resume($account, $batch->id);
     }
 
     /** Stops a batch for good: its unsent numbers are cancelled, and the sent history is kept. */

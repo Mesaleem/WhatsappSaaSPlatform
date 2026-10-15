@@ -163,9 +163,10 @@ export interface RegenerateApiKeySecretResponse {
   api_key: ApiKey;
 }
 
-export type WebhookEvent = 'message.sent' | 'message.failed' | 'message.delivered';
+// QA fixes (2026-10-14): CRM events too.
+export type WebhookEvent = 'message.sent' | 'message.failed' | 'message.delivered' | 'crm.lead.created' | 'crm.lead.status_changed' | 'crm.deal.won';
 
-export const WEBHOOK_EVENTS: WebhookEvent[] = ['message.sent', 'message.failed', 'message.delivered'];
+export const WEBHOOK_EVENTS: WebhookEvent[] = ['message.sent', 'message.failed', 'message.delivered', 'crm.lead.created', 'crm.lead.status_changed', 'crm.deal.won'];
 
 export interface WebhookSubscription {
   id: number;

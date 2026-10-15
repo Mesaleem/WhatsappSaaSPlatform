@@ -105,10 +105,22 @@ class ScheduledMessageService
                 $row->attempts = $row->attempts + 1;
 
                 try {
-                    [$ok, $message] = $this->send($row);
+                    [$ok, $message, $status] = $this->send($row);
                 } catch (\Throwable $e) {
                     Log::error('Scheduled message failed', ['id' => $row->id, 'error' => $e->getMessage()]);
-                    [$ok, $message] = [false, 'The message could not be sent.'];
+                    [$ok, $message, $status] = [false, 'The message could not be sent.', 'failed'];
+                }
+
+                // QA fixes (2026-10-14): a WhatsApp number that is briefly disconnected is
+                // not a reason to lose the message — it is tried again (15, 30, 60 minutes)
+                // before it is marked failed.
+                if (! $ok && $status === 'disconnected' && $row->attempts < self::DISCONNECTED_RETRIES) {
+                    $row->forceFill([
+                        'send_at' => now()->addMinutes(15 * (2 ** ($row->attempts - 1))),
+                        'last_error' => $message.' Retrying automatically.',
+                    ])->save();
+
+                    return;
                 }
 
                 $row->forceFill([
@@ -122,8 +134,11 @@ class ScheduledMessageService
         return $attempted;
     }
 
+    /** QA fixes (2026-10-14): tries for a send refused because the number was disconnected. */
+    private const DISCONNECTED_RETRIES = 4;
+
     /**
-     * @return array{0: bool, 1: string} [success, message]
+     * @return array{0: bool, 1: string, 2: string} [success, message, dispatcher status]
      */
     private function send(ScheduledMessage $row): array
     {
@@ -174,6 +189,6 @@ class ScheduledMessageService
         // A group send is accepted into the queue ("queued"); an individual send is "sent".
         $ok = in_array($result['status'] ?? null, ['sent', 'queued'], true);
 
-        return [$ok, $ok ? 'Sent.' : (string) ($result['message'] ?? 'Could not send this message.')];
+        return [$ok, $ok ? 'Sent.' : (string) ($result['message'] ?? 'Could not send this message.'), (string) ($result['status'] ?? 'failed')];
     }
 }

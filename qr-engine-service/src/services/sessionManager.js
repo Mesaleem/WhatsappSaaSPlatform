@@ -593,8 +593,20 @@ export async function startSession(
   // A slot session that starts without its owner (a boot resume, or a reconnect after
   // a restart) asks the backend which account owns it. Without this its status
   // callbacks would go to the wrong account, and a disconnect would never reach the slot.
-  if (!hasSessionOwner(id)) {
-    const owner = await fetchNumberOwner(id);
+  if (!hasSessionOwner(id) && ownerAccountId == null) {
+    let owner = await fetchNumberOwner(id);
+    // QA fixes (2026-10-14): a backend outage is retried, never guessed (see fetchNumberOwner).
+    for (let attempt = 1; owner?.error && attempt <= 3; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 2000 * attempt));
+      owner = await fetchNumberOwner(id);
+    }
+    if (owner?.error) {
+      console.error(`[qr-engine] OWNER_UNKNOWN session=${id} backend unreachable; not starting it now, retrying in 60s`);
+      setTimeout(() => {
+        startSession(accountId, broadcast, { isReconnect }).catch((err) => console.error(`[qr-engine] OWNER_UNKNOWN retry failed session=${id}:`, err?.message || err));
+      }, 60000);
+      throw new Error('session_owner_unknown');
+    }
     if (owner) {
       registerSessionOwner(id, { accountId: owner.accountId, slotBased: true });
     }
@@ -818,16 +830,39 @@ export async function startSession(
         const m = msg.message;
         if (!m) continue;
 
-        const body =
+        const text =
           m.conversation ??
           m.extendedTextMessage?.text ??
           m.buttonsResponseMessage?.selectedButtonId ??
           m.listResponseMessage?.singleSelectReply?.selectedRowId ??
           null;
 
-        if (!body || !String(body).trim()) continue;
+        // QA fixes (2026-10-14): media, voice notes, locations and contacts are
+        // forwarded too (as a short label + caption), so they appear in the
+        // WhatsApp inbox. backend-api runs chatbot keyword rules on text only.
+        let messageType = 'text';
+        let body = text;
+        if (!body || !String(body).trim()) {
+          const media = [
+            ['image', m.imageMessage, '[Image]'],
+            ['video', m.videoMessage, '[Video]'],
+            ['audio', m.audioMessage, '[Voice message]'],
+            ['document', m.documentMessage, '[Document]'],
+            ['sticker', m.stickerMessage, '[Sticker]'],
+            ['location', m.locationMessage, '[Location]'],
+            ['contacts', m.contactMessage || m.contactsArrayMessage, '[Contact]'],
+          ].find(([, part]) => part);
+          if (!media) continue;
+          const [type, part, label] = media;
+          messageType = type;
+          const caption = part?.caption || part?.fileName || '';
+          body = caption ? `${label} ${caption}` : label;
+        }
 
-        notifyInboundMessage(id, senderPhone, String(body), msg.key?.id ?? null);
+        notifyInboundMessage(id, senderPhone, String(body), msg.key?.id ?? null, {
+          message_type: messageType,
+          sender_name: msg.pushName || null,
+        });
       } catch (err) {
         console.error(`[sessionManager] failed to process inbound message for account_id=${id}:`, err.message);
       }

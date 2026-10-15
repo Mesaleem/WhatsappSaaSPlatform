@@ -78,9 +78,15 @@ class OrganicPostController extends Controller
 
         $data = $request->validate([
             'platform' => ['required', 'string', Rule::in(OrganicPost::PLATFORMS)],
-            'caption' => ['required', 'string', 'max:5000'],
+            // A Story has no caption on Facebook or Instagram.
+            'caption' => ['required_unless:post_format,story', 'nullable', 'string', 'max:5000'],
             'media_url' => ['nullable', 'string', 'max:2048', new \App\Rules\PublicOutboundUrl()],
             'media_type' => ['nullable', 'string', Rule::in(['image', 'video'])],
+            // 2026-10-15 — a Reel, a Story or a carousel (2–10 items) besides a normal post.
+            'post_format' => ['nullable', 'string', Rule::in(OrganicPost::FORMATS)],
+            'media_items' => ['nullable', 'array', 'max:'.OrganicPost::CAROUSEL_MAX],
+            'media_items.*.url' => ['required', 'string', 'max:2048', new \App\Rules\PublicOutboundUrl()],
+            'media_items.*.type' => ['required', 'string', Rule::in(['image', 'video'])],
             'social_account_id' => ['nullable', 'integer', 'min:1'],
             'scheduled_at' => ['nullable', 'date', 'after:now', 'before_or_equal:'.now()->addDays($maxDays)->toIso8601String()],
             'idempotency_key' => ['nullable', 'string', 'min:8', 'max:100', 'regex:/^[A-Za-z0-9._:-]+$/'],
@@ -155,6 +161,8 @@ class OrganicPostController extends Controller
             'caption' => $post->caption,
             'media_url' => $post->media_url,
             'media_type' => $post->media_type,
+            'post_format' => $post->post_format ?: 'post',
+            'media_items' => $post->media_items ?? [],
             'status' => $post->status,
             'origin' => $post->origin ?? OrganicPost::ORIGIN_MANUAL,
             'scheduled_at' => $post->scheduled_at?->toIso8601String(),

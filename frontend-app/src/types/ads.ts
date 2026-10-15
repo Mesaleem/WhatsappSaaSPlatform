@@ -33,7 +33,15 @@ export interface AdLocation {
 }
 
 /** Manual placements (backend MetaAdsService::PLACEMENTS). None selected = automatic placements. */
-export type AdPlacement = 'facebook_feed' | 'facebook_stories' | 'facebook_reels' | 'instagram_feed' | 'instagram_stories' | 'instagram_reels';
+export type AdPlacement =
+  | 'facebook_feed'
+  | 'facebook_stories'
+  | 'facebook_reels'
+  | 'instagram_feed'
+  | 'instagram_stories'
+  | 'instagram_reels'
+  // 2026-10-15 — Click-to-WhatsApp only; Meta always runs it with Instagram Stories.
+  | 'whatsapp_status';
 
 export const AD_PLACEMENT_LABELS: Record<AdPlacement, string> = {
   facebook_feed: 'Facebook Feed',
@@ -42,6 +50,7 @@ export const AD_PLACEMENT_LABELS: Record<AdPlacement, string> = {
   instagram_feed: 'Instagram Feed',
   instagram_stories: 'Instagram Stories',
   instagram_reels: 'Instagram Reels',
+  whatsapp_status: 'WhatsApp Status',
 };
 
 /** The ad's button (Meta call_to_action.type). */
@@ -110,6 +119,15 @@ export interface AdCreative {
   headline: string;
   primary_text: string;
   call_to_action?: AdCallToAction;
+  /** QA fixes (2026-10-14): the instant form a lead-generation ad opens. */
+  lead_gen_form_id?: string | null;
+}
+
+/** GET /api/social/ads/lead-forms — the connected Page's instant forms. */
+export interface AdLeadForm {
+  id: string;
+  name: string;
+  status: string;
 }
 
 /** POST /api/social/ads/launch — account_id is NOT sent; the tenant is resolved server-side (see AdCampaignController's docblock). */

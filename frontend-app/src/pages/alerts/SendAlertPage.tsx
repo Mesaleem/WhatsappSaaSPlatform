@@ -260,7 +260,7 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
   // maps to this app's existing contact_groups module flag (see the
   // backend BulkMessageCooldown class's own docblock for why there's
   // no separate permission by that literal name).
-  const { hasModule } = useAuth();
+  const { hasModule, user } = useAuth();
   const hasGroupMessagingPermission = hasModule('contact_groups');
 
   const [templates, setTemplates] = useState<AvailableTemplate[]>([]);
@@ -1228,6 +1228,11 @@ function TemplateMessageTab({ disabled, readOnly }: { disabled: boolean; readOnl
               <label htmlFor="direct-message" className="text-sm font-medium text-slate-700">Your message</label>
               <span className="text-xs text-slate-400">{directMessage.length} / 4096</span>
             </div>
+            {user?.account?.current_subscription?.engine_type === 'meta' && (
+              <p className="mt-1 rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-800" data-testid="meta-free-text-warning">
+                On the Meta API, plain text reaches only customers who messaged you in the last 24 hours. For everyone else, pick an approved template.
+              </p>
+            )}
             <p className="mt-0.5 text-xs text-slate-500">
               Sent as plain text, exactly as you type it. Required unless a Media URL is attached below.
             </p>

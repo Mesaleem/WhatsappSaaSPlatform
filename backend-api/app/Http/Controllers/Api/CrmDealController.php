@@ -80,6 +80,10 @@ class CrmDealController extends Controller
             'lost_reason' => ['sometimes', 'nullable', 'string', 'max:255'],
         ]);
 
+        // QA fixes (2026-10-14): someone who sees only their own records owns what they add.
+        if (! \App\Support\CrmVisibility::seesAll($request->user()) && empty($data['owner_user_id'])) {
+            $data['owner_user_id'] = $request->user()->id;
+        }
         $deal = $this->deals->create($account, $data, $request->user()?->id);
 
         return response()->json(['message' => 'Deal created.', 'data' => $this->presentDeal($deal->load($this->dealRelations()))], 201);
@@ -127,6 +131,7 @@ class CrmDealController extends Controller
     {
         return CrmDeal::query()
             ->forAccount($accountId)
+            ->visibleTo(request()->user())
             ->with($this->dealRelations())
             ->when($filters['status'] ?? null, fn ($q, $v) => $q->where('status', $v))
             ->when($filters['stage_id'] ?? null, fn ($q, $v) => $q->where('stage_id', $v))
@@ -166,7 +171,7 @@ class CrmDealController extends Controller
 
     private function findOrFail(int $accountId, int $id): CrmDeal
     {
-        $deal = CrmDeal::query()->forAccount($accountId)->with($this->dealRelations())->find($id);
+        $deal = CrmDeal::query()->forAccount($accountId)->visibleTo(request()->user())->with($this->dealRelations())->find($id);
         abort_if(! $deal, 404, 'Deal not found.');
 
         return $deal;

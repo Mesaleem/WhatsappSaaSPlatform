@@ -64,11 +64,13 @@ const SOURCE_BADGE: Record<MessageDispatchSource, { label: string; className: st
 const ENGINE_COLOR: Record<EngineType, string> = {
   qr: '#3b82f6',
   meta: '#10b981',
+  none: '#94a3b8',
 };
 
 const ENGINE_LABEL: Record<EngineType, string> = {
   qr: 'QR (Baileys)',
   meta: 'Meta Cloud API',
+  none: 'No WhatsApp (CRM)',
 };
 
 const inputClass =

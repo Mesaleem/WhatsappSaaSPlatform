@@ -40,6 +40,24 @@ use Throwable;
  * read_insights / instagram_manage_insights were not granted. Rate limits,
  * transient errors and token errors (190) on either call are re-thrown.
  *
+ * 2026-10-15 — formats beyond a normal post (PublishRequest::$format):
+ *
+ *   facebook  reel     POST /{page}/video_reels upload_phase=start → video_id;
+ *                      POST rupload.facebook.com/video-upload/{v}/{video_id} with
+ *                      header file_url (Meta fetches the hosted file);
+ *                      POST /{page}/video_reels upload_phase=finish, video_state=PUBLISHED
+ *             story    image: unpublished /{page}/photos → POST /{page}/photo_stories {photo_id};
+ *                      video: /{page}/video_stories start → rupload → finish
+ *             carousel 2–10 IMAGES: unpublished /{page}/photos each → /{page}/feed with
+ *                      attached_media (a multi-photo post; Pages do not take videos here)
+ *   instagram reel     /{ig}/media media_type=REELS (share_to_feed) → processing → media_publish
+ *             story    /{ig}/media media_type=STORIES (image_url | video_url; Meta takes no
+ *                      caption on a story) → image: publish now, video: processing
+ *             carousel each item /{ig}/media is_carousel_item=true (video: media_type=VIDEO);
+ *                      images only → /{ig}/media media_type=CAROUSEL children=… → publish;
+ *                      with videos → processing "carousel:{ids}" until every item is
+ *                      FINISHED, then the CAROUSEL container (with the caption) → processing → publish
+ *
  * [Hypothesis] — documented Graph API contract, not verified against a
  * live Page (same standing disclosure as before).
  */
@@ -65,8 +83,32 @@ class MetaPublisher implements SocialPublisher, SocialInsightsProvider
 
     public function validationError(PublishRequest $request): ?string
     {
-        if ($request->platform === 'instagram' && ! $request->mediaUrl) {
-            return 'Instagram requires an image or video — text-only posts are not supported by the Content Publishing API.';
+        $isVideo = $request->mediaType === 'video';
+
+        return match ($request->format) {
+            'reel' => $request->mediaUrl && $isVideo ? null : 'A Reel needs a video.',
+            'story' => $request->mediaUrl ? null : 'A Story needs an image or a video.',
+            'carousel' => $this->carouselError($request),
+            'post' => $request->platform === 'instagram' && ! $request->mediaUrl
+                ? 'Instagram requires an image or video — text-only posts are not supported by the Content Publishing API.'
+                : null,
+            default => 'Unknown post format.',
+        };
+    }
+
+    private function carouselError(PublishRequest $request): ?string
+    {
+        $count = count($request->mediaItems);
+        if ($count < 2 || $count > 10) {
+            return 'A carousel needs 2 to 10 images or videos.';
+        }
+        foreach ($request->mediaItems as $item) {
+            if (empty($item['url']) || ! in_array($item['type'] ?? null, ['image', 'video'], true)) {
+                return 'Every carousel item needs a media URL and a type (image or video).';
+            }
+            if ($request->platform === 'facebook' && $item['type'] === 'video') {
+                return 'A Facebook carousel can hold images only. Post videos as a Reel or a separate post.';
+            }
         }
 
         return null;
@@ -75,13 +117,27 @@ class MetaPublisher implements SocialPublisher, SocialInsightsProvider
     public function publish(SocialAccount $target, PublishRequest $request): PublishOutcome
     {
         return match ($request->platform) {
-            'facebook' => $this->publishToFacebookPage($target, $request),
-            'instagram' => $this->publishToInstagram($target, $request),
+            'facebook' => match ($request->format) {
+                'reel' => $this->publishFacebookReel($target, $request),
+                'story' => $this->publishFacebookStory($target, $request),
+                'carousel' => $this->publishFacebookAlbum($target, $request),
+                default => $this->publishToFacebookPage($target, $request),
+            },
+            'instagram' => match ($request->format) {
+                'carousel' => $this->publishInstagramCarousel($target, $request),
+                default => $this->publishToInstagram($target, $request),
+            },
         };
     }
 
-    public function checkProcessing(SocialAccount $target, string $containerId): PublishOutcome
+    public function checkProcessing(SocialAccount $target, string $containerId, ?PublishRequest $request = null): PublishOutcome
     {
+        // An Instagram carousel whose video items are still processing: once every item is
+        // FINISHED, the carousel container is created and then checked like any other container.
+        if (str_starts_with($containerId, 'carousel:')) {
+            return $this->advanceInstagramCarousel($target, substr($containerId, 9), $request);
+        }
+
         $response = $this->send(fn () => Http::withToken((string) $target->access_token)->timeout(15)->get(
             'https://graph.facebook.com/'.self::GRAPH_API_VERSION."/{$containerId}",
             ['fields' => 'status_code']
@@ -396,9 +452,14 @@ class MetaPublisher implements SocialPublisher, SocialInsightsProvider
 
     private function publishToInstagram(SocialAccount $ig, PublishRequest $request): PublishOutcome
     {
-        $containerBody = $request->mediaType === 'video'
-            ? ['video_url' => $request->mediaUrl, 'media_type' => 'REELS', 'caption' => $request->caption]
-            : ['image_url' => $request->mediaUrl, 'caption' => $request->caption];
+        $isVideo = $request->mediaType === 'video';
+        $containerBody = match (true) {
+            // A story takes no caption on Instagram.
+            $request->format === 'story' => ['media_type' => 'STORIES', ($isVideo ? 'video_url' : 'image_url') => $request->mediaUrl],
+            $request->format === 'reel' => ['video_url' => $request->mediaUrl, 'media_type' => 'REELS', 'caption' => $request->caption, 'share_to_feed' => 'true'],
+            $isVideo => ['video_url' => $request->mediaUrl, 'media_type' => 'REELS', 'caption' => $request->caption],
+            default => ['image_url' => $request->mediaUrl, 'caption' => $request->caption],
+        };
 
         $container = $this->graphPost((string) $ig->access_token, "/{$ig->provider_id}/media", $containerBody);
         $creationId = (string) $container['id'];
@@ -408,6 +469,130 @@ class MetaPublisher implements SocialPublisher, SocialInsightsProvider
         }
 
         return PublishOutcome::published($this->publishInstagramContainer($ig, $creationId));
+    }
+
+    /** Instagram carousel: one container per item, then the CAROUSEL container. */
+    private function publishInstagramCarousel(SocialAccount $ig, PublishRequest $request): PublishOutcome
+    {
+        $token = (string) $ig->access_token;
+        $children = [];
+        $hasVideo = false;
+
+        foreach ($request->mediaItems as $item) {
+            $isVideo = $item['type'] === 'video';
+            $hasVideo = $hasVideo || $isVideo;
+            $child = $this->graphPost($token, "/{$ig->provider_id}/media", $isVideo
+                ? ['video_url' => $item['url'], 'media_type' => 'VIDEO', 'is_carousel_item' => 'true']
+                : ['image_url' => $item['url'], 'is_carousel_item' => 'true']);
+            $children[] = (string) $child['id'];
+        }
+
+        // Video items process first; the carousel itself is created once they are ready.
+        if ($hasVideo) {
+            return PublishOutcome::processing('carousel:'.implode(',', $children));
+        }
+
+        $carousel = $this->createInstagramCarousel($ig, $children, $request->caption);
+
+        return PublishOutcome::published($this->publishInstagramContainer($ig, $carousel));
+    }
+
+    private function advanceInstagramCarousel(SocialAccount $ig, string $childList, ?PublishRequest $request): PublishOutcome
+    {
+        $children = array_values(array_filter(explode(',', $childList)));
+
+        foreach ($children as $child) {
+            $status = $this->graphGet((string) $ig->access_token, "/{$child}", ['fields' => 'status_code'])['status_code'] ?? null;
+            if (in_array($status, ['ERROR', 'EXPIRED'], true)) {
+                return PublishOutcome::failed("Instagram rejected a carousel item during processing (status: {$status}).");
+            }
+            if ($status !== 'FINISHED') {
+                return PublishOutcome::processing('carousel:'.$childList);
+            }
+        }
+
+        // Every item is ready: the carousel container, then the usual container check publishes it.
+        return PublishOutcome::processing($this->createInstagramCarousel($ig, $children, $request?->caption ?? ''));
+    }
+
+    /** @param  list<string>  $children */
+    private function createInstagramCarousel(SocialAccount $ig, array $children, string $caption): string
+    {
+        $container = $this->graphPost((string) $ig->access_token, "/{$ig->provider_id}/media", [
+            'media_type' => 'CAROUSEL',
+            'children' => implode(',', $children),
+            'caption' => $caption,
+        ]);
+
+        return (string) $container['id'];
+    }
+
+    // ---------------------------------------------------------------- Facebook formats
+
+    /** Facebook Reel: start an upload session, let Meta fetch the hosted video, then publish. */
+    private function publishFacebookReel(SocialAccount $page, PublishRequest $request): PublishOutcome
+    {
+        $token = (string) $page->access_token;
+        $start = $this->graphPost($token, "/{$page->provider_id}/video_reels", ['upload_phase' => 'start']);
+        $videoId = (string) $start['video_id'];
+
+        $this->uploadHostedVideo($token, $videoId, (string) $request->mediaUrl);
+
+        $this->graphPost($token, "/{$page->provider_id}/video_reels", [
+            'upload_phase' => 'finish',
+            'video_id' => $videoId,
+            'video_state' => 'PUBLISHED',
+            'description' => $request->caption,
+        ]);
+
+        return PublishOutcome::published($videoId);
+    }
+
+    /** Facebook Page Story: an unpublished photo, or a video upload session. */
+    private function publishFacebookStory(SocialAccount $page, PublishRequest $request): PublishOutcome
+    {
+        $token = (string) $page->access_token;
+
+        if ($request->mediaType === 'video') {
+            $start = $this->graphPost($token, "/{$page->provider_id}/video_stories", ['upload_phase' => 'start']);
+            $videoId = (string) $start['video_id'];
+            $this->uploadHostedVideo($token, $videoId, (string) $request->mediaUrl);
+            $finish = $this->graphPost($token, "/{$page->provider_id}/video_stories", ['upload_phase' => 'finish', 'video_id' => $videoId]);
+
+            return PublishOutcome::published((string) ($finish['post_id'] ?? $videoId));
+        }
+
+        $photo = $this->graphPost($token, "/{$page->provider_id}/photos", ['url' => $request->mediaUrl, 'published' => 'false']);
+        $story = $this->graphPost($token, "/{$page->provider_id}/photo_stories", ['photo_id' => (string) $photo['id']]);
+
+        return PublishOutcome::published((string) ($story['post_id'] ?? $photo['id']));
+    }
+
+    /** Facebook multi-photo post: each image uploaded unpublished, then one feed post with all of them. */
+    private function publishFacebookAlbum(SocialAccount $page, PublishRequest $request): PublishOutcome
+    {
+        $token = (string) $page->access_token;
+        $attached = [];
+
+        foreach ($request->mediaItems as $item) {
+            $photo = $this->graphPost($token, "/{$page->provider_id}/photos", ['url' => $item['url'], 'published' => 'false']);
+            $attached[] = ['media_fbid' => (string) $photo['id']];
+        }
+
+        $response = $this->graphPost($token, "/{$page->provider_id}/feed", [
+            'message' => $request->caption,
+            'attached_media' => json_encode($attached),
+        ]);
+
+        return PublishOutcome::published((string) $response['id']);
+    }
+
+    /** Meta's resumable-upload host fetches a hosted video (header file_url) into an upload session. */
+    private function uploadHostedVideo(string $accessToken, string $videoId, string $fileUrl): void
+    {
+        $this->send(fn () => Http::withHeaders(['Authorization' => 'OAuth '.$accessToken, 'file_url' => $fileUrl])
+            ->timeout(60)
+            ->post('https://rupload.facebook.com/video-upload/'.self::GRAPH_API_VERSION."/{$videoId}"), 'Meta could not fetch the video.');
     }
 
     private function publishInstagramContainer(SocialAccount $ig, string $creationId): string

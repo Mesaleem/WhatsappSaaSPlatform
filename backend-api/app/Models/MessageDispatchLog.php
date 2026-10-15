@@ -251,7 +251,7 @@ class MessageDispatchLog extends Model
         // URL, though every current caller supplies both together.
         ?string $mediaUrl = null,
     ): self {
-        return self::create([
+        $log = self::create([
             'account_id' => $accountId,
             'source' => $source,
             'api_key_id' => $apiKeyId,
@@ -275,6 +275,37 @@ class MessageDispatchLog extends Model
             // dispatch_logs_table.php for why this column exists.
             'gateway_message_id' => $success ? $gatewayMessageId : null,
         ]);
+
+        // QA fixes (2026-10-14) — every send, wherever it came from:
+        //  - a successful one appears in the WhatsApp inbox conversation;
+        //  - the account's developer webhooks hear message.sent / message.failed
+        //    (they used to fire for payment alerts only — that job fires its own,
+        //    richer event, so it is skipped here).
+        if ($success) {
+            app(\App\Services\WhatsApp\WhatsAppInbox::class)->recordOutbound(
+                $accountId, $recipientPhone, $messagePreview ?? ($templateName ? "[{$templateName}]" : null), $source, $gatewayMessageId, null, $hasMedia ? 'media' : 'text',
+            );
+        }
+        if ($referenceType !== 'payment_alert') {
+            try {
+                \App\Services\Webhooks\WebhookDispatcher::fire($accountId, $success ? 'message.sent' : 'message.failed', [
+                    'id' => $log->id,
+                    'account_id' => $accountId,
+                    'recipient_phone' => $recipientPhone,
+                    'source' => $source,
+                    'type' => $referenceType,
+                    'template_name' => $templateName,
+                    'status' => $success ? 'sent' : 'failed',
+                    'error_reason' => $errorReason,
+                    'message_id' => $success ? $gatewayMessageId : null,
+                    'sent_at' => $log->sent_at?->toIso8601String(),
+                ]);
+            } catch (\Throwable $e) {
+                \Illuminate\Support\Facades\Log::warning('MessageDispatchLog: developer webhook not queued.', ['error' => $e->getMessage()]);
+            }
+        }
+
+        return $log;
     }
 
     /**

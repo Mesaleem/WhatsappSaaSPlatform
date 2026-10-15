@@ -2,6 +2,7 @@
 
 namespace App\Services\Billing;
 
+use App\Models\Account;
 use App\Models\Plan;
 use Illuminate\Support\Collection;
 
@@ -41,10 +42,15 @@ class PlanRepository
      *
      * @return Collection<int, Plan>
      */
-    public function purchasable(): Collection
+    public function purchasable(?Account $account = null): Collection
     {
+        // Plan restructure (2026-10-15): the public line-up is the active, public plans; a
+        // client also sees the active custom plan(s) built for it.
         return Plan::query()
             ->where('is_active', true)
+            ->where(fn ($q) => $q
+                ->where(fn ($p) => $p->whereNull('account_id')->where('is_public', true))
+                ->when($account !== null, fn ($p) => $p->orWhere('account_id', $account->id)))
             ->orderBy('price')
             ->get();
     }
@@ -57,12 +63,20 @@ class PlanRepository
      * retired" the same way — a 422 — rather than leaking which
      * retired plans exist.
      */
-    public function findPurchasable(string $slug): ?Plan
+    public function findPurchasable(string $slug, ?Account $account = null): ?Plan
     {
-        return Plan::query()
+        $plan = Plan::query()
             ->where('slug', $slug)
             ->where('is_active', true)
             ->first();
+
+        // A custom plan can be bought only by the client it was built for. A hidden (not public)
+        // plan stays purchasable by slug, e.g. for renewals of a plan sold privately.
+        if ($plan !== null && $plan->account_id !== null && $plan->account_id !== $account?->id) {
+            return null;
+        }
+
+        return $plan;
     }
 
     /**
@@ -106,6 +120,16 @@ class PlanRepository
             'price' => number_format($price, 2, '.', ''),
             'tax_amount' => number_format($tax, 2, '.', ''),
             'total_amount' => number_format($price + $tax, 2, '.', ''),
+            // Plan restructure (2026-10-15) — users / templates / flows / broadcasts / marketing caps (null = unlimited).
+            'limits' => $plan->limits(),
+            'is_custom' => $plan->isCustom(),
+            // QA fixes (2026-10-14): what the plan includes besides messages, for the plan cards.
+            'features' => $plan->capabilities()
+                ->whereNotIn('slug', ['whatsapp_send', 'api_installations'])
+                ->orderBy('label')
+                ->pluck('label')
+                ->values()
+                ->all(),
         ];
     }
 }

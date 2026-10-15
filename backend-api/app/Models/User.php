@@ -34,6 +34,8 @@ class User extends Authenticatable
         // Feature Module Checklists refactor — see the creating
         // migration's docblock; nullable, never a login credential.
         'phone_number',
+        // Product tours this user has finished or skipped (2026-10-15).
+        'completed_tours',
     ];
 
     /**
@@ -57,6 +59,7 @@ class User extends Authenticatable
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
             'is_active' => 'boolean',
+            'completed_tours' => 'array',
         ];
     }
 

@@ -25,6 +25,8 @@ export interface User {
   email: string;
   phone_number: string | null;
   is_active: boolean;
+  /** Product tours this user has finished or skipped ("welcome", "page:/crm/leads", …). */
+  completed_tours?: string[];
   account_id: number | null;
   /** null only for Super Admin — global access, not tied to a tenant account. */
   account: Account | null;

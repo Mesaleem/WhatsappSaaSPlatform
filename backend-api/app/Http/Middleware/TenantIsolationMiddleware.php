@@ -72,7 +72,11 @@ class TenantIsolationMiddleware
         // purpose: an Agent is never a Super Admin (the branch below only
         // ever runs for $isSuperAdmin === true), so $accountId here is
         // always this user's own, unoverridden account_id.
-        $isAgent = ! $isSuperAdmin && $user->account?->account_type === 'agent';
+        // QA fixes (2026-10-14): the account type is not enough — a plain team member
+        // of an agent's account (user, social_marketer, sales) must not act on its
+        // sub-clients. The agent itself (agent / admin role) still does.
+        $isAgent = ! $isSuperAdmin && $user->account?->account_type === 'agent'
+            && ($user->hasAnyRole(['agent', 'admin']) || ! $user->hasAnyRole(['user', 'social_marketer', 'sales']));
 
         if ($isSuperAdmin) {
             $requestedAccountId = $request->query('account_id');

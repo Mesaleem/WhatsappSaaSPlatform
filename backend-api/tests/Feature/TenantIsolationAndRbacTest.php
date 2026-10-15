@@ -233,7 +233,8 @@ class TenantIsolationAndRbacTest extends TestCase
             ['total_allocated_messages' => 999999]
         );
 
-        $response->assertNotFound();
+        // The subscription editor is Super Admin only since the 2026-10-14 QA fixes.
+        $response->assertForbidden();
         $this->assertSame(500, $subscription->fresh()->total_allocated_messages);
     }
 
@@ -422,7 +423,10 @@ class TenantIsolationAndRbacTest extends TestCase
     // for this specific endpoint. Reuses the exact same
     // assertCallerCanAccessAccount() guard as every other {id}-addressed
     // mutation in this class; no new authorization logic involved.
-    public function test_agent_updates_its_own_customers_subscription_successfully(): void
+    // QA fixes (2026-10-14): reversed — an agent could set any expiry, "unlimited" or
+    // any quota here with no invoice and no pool check. Its clients change their term
+    // through Billing (renew / upgrade / top-up); only the Super Admin edits it directly.
+    public function test_agent_cannot_edit_even_its_own_customers_subscription_directly(): void
     {
         $agentAccount = Account::factory()->agent()->create();
         $ownClient = Account::factory()->client($agentAccount)->create();
@@ -436,8 +440,8 @@ class TenantIsolationAndRbacTest extends TestCase
             ['total_allocated_messages' => 750]
         );
 
-        $response->assertOk();
-        $this->assertSame(750, $subscription->fresh()->total_allocated_messages);
+        $response->assertForbidden();
+        $this->assertSame(500, $subscription->fresh()->total_allocated_messages);
     }
 
     public function test_super_admin_creates_a_direct_client_and_an_agent_account_successfully(): void

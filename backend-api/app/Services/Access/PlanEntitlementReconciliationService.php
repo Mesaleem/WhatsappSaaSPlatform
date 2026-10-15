@@ -285,12 +285,12 @@ class PlanEntitlementReconciliationService
      */
     public function currentPlanSlug(Account $account): ?string
     {
+        // QA fixes (2026-10-14): plan invoices only (a later add-on or top-up
+        // invoice is not "the plan"), newest by id — a manual payment back-dates
+        // paid_at, which used to let an older invoice win.
         return Invoice::forAccount($account->id)
             ->where('status', 'paid')
-            // id as the tiebreaker: two invoices paid in the same second
-            // must still resolve deterministically, and in tests they
-            // routinely are.
-            ->orderByDesc('paid_at')
+            ->whereIn('plan_key', Plan::query()->select('slug'))
             ->orderByDesc('id')
             ->value('plan_key');
     }

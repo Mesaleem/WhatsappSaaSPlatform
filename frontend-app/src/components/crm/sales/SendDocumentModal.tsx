@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Loader2, XCircle } from 'lucide-react';
 import crmDocumentsService from '../../../services/crmDocumentsService';
+import { useAuth } from '../../../core/context/AuthContext';
 import { describeApiError } from '../../../utils/apiError';
 import type { CrmDelivery, CrmDocDetail } from '../../../types/crmSales';
 import { fieldClass } from './SalesUi';
@@ -14,8 +15,11 @@ type Channel = 'whatsapp' | 'email' | 'manual';
  */
 export default function SendDocumentModal({ doc, onCancel, onDone }: { doc: CrmDocDetail; onCancel: () => void; onDone: (delivery: CrmDelivery | null, message: string) => void }) {
   const customer = (doc.customer_snapshot ?? {}) as { phone?: string; email?: string };
-  const [channel, setChannel] = useState<Channel>('whatsapp');
-  const [recipient, setRecipient] = useState(customer.phone ?? '');
+  // QA fixes (2026-10-14): the CRM-only plan has no WhatsApp sending — email is the default there.
+  const { user } = useAuth();
+  const hasWhatsApp = user?.capabilities?.whatsapp_send !== false;
+  const [channel, setChannel] = useState<Channel>(hasWhatsApp ? 'whatsapp' : 'email');
+  const [recipient, setRecipient] = useState((hasWhatsApp ? customer.phone : customer.email) ?? '');
   const [message, setMessage] = useState('');
   const [how, setHow] = useState('My own WhatsApp');
   const [saving, setSaving] = useState(false);
@@ -57,7 +61,9 @@ export default function SendDocumentModal({ doc, onCancel, onDone }: { doc: CrmD
               ['email', 'Email'],
               ['manual', 'I sent it myself'],
             ] as const
-          ).map(([c, label]) => (
+          )
+            .filter(([c]) => hasWhatsApp || c !== 'whatsapp')
+            .map(([c, label]) => (
             <button
               key={c}
               type="button"

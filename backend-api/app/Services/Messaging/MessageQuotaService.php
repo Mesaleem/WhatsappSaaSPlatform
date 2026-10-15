@@ -190,6 +190,81 @@ class MessageQuotaService
         });
     }
 
+    // ---------------------------------------------------------------- marketing cap
+    //
+    // Plan restructure (2026-10-15), step 3: Meta charges far more for a
+    // MARKETING template than for utility / authentication ones, so a Meta
+    // plan caps marketing messages separately (subscriptions.
+    // marketing_message_limit, counted in used_marketing_messages). When the
+    // cap is reached only MARKETING templates are refused; utility, OTP and
+    // replies keep going until the total quota ends. NULL limit = no cap
+    // (nothing is counted). Same lock-and-recheck shape as reserve().
+
+    /** Is this a marketing template by Meta's category? */
+    public static function isMarketing(?string $category): bool
+    {
+        return strtoupper((string) $category) === 'MARKETING';
+    }
+
+    /**
+     * Claim $amount marketing messages before sending. True when there is no
+     * cap or the cap covers it (then counted); false = refuse the send.
+     */
+    public function reserveMarketing(Subscription $subscription, int $amount): bool
+    {
+        if (! $this->isValidAmount($amount)) {
+            return false;
+        }
+        if ($subscription->marketing_message_limit === null) {
+            return true;
+        }
+
+        return (bool) DB::transaction(function () use ($subscription, $amount) {
+            $locked = $this->lock($subscription);
+            if (! $locked) {
+                return false;
+            }
+            // A new 30-day slice of the term starts the count again.
+            $sliceStart = \App\Services\Billing\PlanLimits::periodStartFor($locked);
+            if ($locked->marketing_counted_from === null || $locked->marketing_counted_from->lt($sliceStart)) {
+                $locked->forceFill(['used_marketing_messages' => 0, 'marketing_counted_from' => $sliceStart]);
+            }
+
+            if ($locked->marketing_message_limit !== null
+                && (int) $locked->used_marketing_messages + $amount > (int) $locked->marketing_message_limit) {
+                $locked->save();
+
+                return false;
+            }
+
+            $locked->forceFill(['used_marketing_messages' => (int) $locked->used_marketing_messages + $amount])->save();
+
+            return true;
+        });
+    }
+
+    /** Give back marketing messages claimed by reserveMarketing() that were not sent (floored at 0). */
+    public function releaseMarketing(Subscription $subscription, int $amount): void
+    {
+        if (! $this->isValidAmount($amount) || $subscription->marketing_message_limit === null) {
+            return;
+        }
+
+        DB::transaction(function () use ($subscription, $amount) {
+            $locked = $this->lock($subscription);
+            if ($locked) {
+                $locked->forceFill(['used_marketing_messages' => max(0, (int) $locked->used_marketing_messages - $amount)])->save();
+            }
+        });
+    }
+
+    /** The refusal shown when the marketing cap is reached. */
+    public static function marketingLimitMessage(Subscription $subscription): string
+    {
+        return "This month's marketing messages on your plan are used (".number_format((int) $subscription->marketing_message_limit)
+            .'). Utility, OTP and reply messages still go out. Upgrade your plan or request more quota to send more marketing messages.';
+    }
+
     /**
      * A quota movement is always a positive whole number of messages.
      * Zero is rejected rather than treated as a silent no-op so a caller

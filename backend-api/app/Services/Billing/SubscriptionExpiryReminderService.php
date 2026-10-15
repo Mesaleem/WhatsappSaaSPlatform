@@ -5,30 +5,33 @@ namespace App\Services\Billing;
 use App\Models\Account;
 use App\Models\InAppNotification;
 use App\Models\Invoice;
-use App\Models\MailSetting;
 use App\Models\Plan;
 use App\Models\Subscription;
 use App\Models\SubscriptionReminder;
 use App\Models\User;
+use App\Services\Mail\SystemMailer;
 use Carbon\Carbon;
 use Illuminate\Database\QueryException;
-use Illuminate\Support\Facades\Config;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\Mail;
 
 /**
  * Renewal reminders for a plan term: one email and one in-app notification 7 days before the term ends, and one more
  * 7 days after it ended (when sending is paused). Each reminder is sent once per term; SubscriptionReminder records it.
  *
- * The email goes out through the Super Admin's saved SMTP settings (MailSetting). Without them the in-app notification
+ * The email (master templates billing.plan_expiring / billing.plan_expired, see SystemMailer) goes out through the
+ * Super Admin's saved SMTP settings (MailSetting). Without them the in-app notification
  * still goes out and the reminder is recorded, so the job never sends the same reminder twice.
  */
 class SubscriptionExpiryReminderService
 {
     public const KIND_EXPIRING = 'expiring_7d';
     public const KIND_EXPIRED = 'expired_7d';
+    /** QA fixes (2026-10-14): the day the plan ends (nothing was sent between 7 days before and 7 days after). */
+    public const KIND_ENDED = 'expired_0d';
 
-    private const MAILER_NAME = 'subscription_expiry';
+    /** A trial is only reminded in its last days (a 7-day trial got "expires soon" right after signup). */
+    private const TRIAL_WINDOW_DAYS = 2;
+
     private const WINDOW_DAYS = 7;
 
     /** The expired reminder is only for a term that ended within this many days; older ones are not chased. */
@@ -46,8 +49,24 @@ class SubscriptionExpiryReminderService
             ->with('currentSubscription')
             ->chunkById(100, function ($accounts) use ($now, &$sent) {
                 foreach ($accounts as $account) {
+                    $isTrial = $this->lastPaidPlanKey($account) === Plan::TRIAL_SLUG;
+                    if ($isTrial && $account->currentSubscription->expires_at->gt($now->copy()->addDays(self::TRIAL_WINDOW_DAYS))) {
+                        continue;
+                    }
                     if ($this->remind($account, self::KIND_EXPIRING, $now)) {
                         $sent['expiring']++;
+                    }
+                }
+            });
+
+        // QA fixes (2026-10-14): accounts whose term ended in the last day — told the same day.
+        Account::query()
+            ->whereHas('currentSubscription', fn ($q) => $q->whereBetween('expires_at', [$now->copy()->subDay(), $now]))
+            ->with('currentSubscription')
+            ->chunkById(100, function ($accounts) use ($now, &$sent) {
+                foreach ($accounts as $account) {
+                    if ($this->remind($account, self::KIND_ENDED, $now)) {
+                        $sent['expired']++;
                     }
                 }
             });
@@ -92,6 +111,18 @@ class SubscriptionExpiryReminderService
         $this->notify($owner, $subscription, $kind);
         $this->email($owner, $account, $subscription, $kind);
 
+        // QA fixes (2026-10-14): the Super Admin (and the client's agent) see who just lapsed.
+        if ($kind === self::KIND_ENDED) {
+            $mailer = app(SystemMailer::class);
+            $mailer->notifyUsers(
+                $mailer->reviewersFor($account),
+                'Plan ended: '.$account->company_name,
+                ($this->planLabel($account) ?? 'The plan').' ended on '.$this->date($subscription->expires_at).'. The client is read-only until it renews.',
+                'subscription',
+                '/admin/accounts',
+            );
+        }
+
         return true;
     }
 
@@ -104,7 +135,7 @@ class SubscriptionExpiryReminderService
             'title' => $kind === self::KIND_EXPIRING ? 'Your plan expires soon' : 'Your plan has expired',
             'body' => $kind === self::KIND_EXPIRING
                 ? "Your plan ends on {$date}. Renew to keep sending without interruption."
-                : "Your plan ended on {$date}. Sending is paused until you renew.",
+                : "Your plan ended on {$date}. Sending is paused until you renew or choose a plan.",
             'category' => 'subscription',
             'link' => '/billing',
             'is_read' => false,
@@ -113,71 +144,50 @@ class SubscriptionExpiryReminderService
 
     private function email(User $owner, Account $account, Subscription $subscription, string $kind): void
     {
-        $mailSetting = MailSetting::currentCached();
-
-        if (! $mailSetting || ! $mailSetting->isConfigured() || ! $owner->email) {
-            Log::info('Subscription reminder email skipped: no configured mail settings or no owner email.', ['account_id' => $account->id, 'kind' => $kind]);
+        if (! $owner->email) {
+            Log::info('Subscription reminder email skipped: the owner has no email.', ['account_id' => $account->id, 'kind' => $kind]);
 
             return;
         }
 
-        [$subject, $html] = $this->render($owner, $account, $subscription, $kind);
-
-        try {
-            Config::set('mail.mailers.'.self::MAILER_NAME, $mailSetting->toMailerConfig());
-
-            Mail::mailer(self::MAILER_NAME)->html($html, function ($message) use ($owner, $mailSetting, $subject) {
-                $message->to($owner->email)
-                    ->from($mailSetting->from_address, $mailSetting->from_name ?: 'WapHub')
-                    ->subject($subject);
-            });
-        } catch (\Throwable $e) {
-            // A failed email does not undo the reminder: the in-app notice is already there and the term is recorded.
-            Log::warning('Subscription reminder email failed.', ['account_id' => $account->id, 'kind' => $kind, 'error' => $e->getMessage()]);
-        }
+        // Best effort: a failed email does not undo the reminder (the in-app notice is already there and the term is recorded).
+        [$slug, $vars] = $this->templateData($owner, $account, $subscription, $kind);
+        app(SystemMailer::class)->send($slug, $owner->email, $vars, [], $account->id, $owner->name);
     }
 
     /**
-     * The subject and HTML body for a reminder. Public so the wording can be checked without sending.
+     * The subject and HTML body for a reminder — the "billing.plan_expiring" / "billing.plan_expired" master
+     * templates. Public so the wording can be checked without sending.
      *
      * @return array{0: string, 1: string}
      */
     public function render(User $owner, Account $account, Subscription $subscription, string $kind): array
     {
-        $expiring = $kind === self::KIND_EXPIRING;
-        $plan = $this->planLabel($account);
-        $date = $this->date($subscription->expires_at);
-        $amount = $this->renewalAmount($account);
-        $renewUrl = rtrim((string) config('services.frontend.url'), '/').'/billing';
+        [$slug, $vars] = $this->templateData($owner, $account, $subscription, $kind);
 
-        $subject = $expiring
-            ? "Your WapHub plan expires on {$date}"
-            : 'Your WapHub plan has expired. Renew to resume sending';
-
-        $lead = $expiring
-            ? "Your plan ends on <strong>{$date}</strong>. Renew before then so your messages keep going out without a break."
-            : "Your plan ended on <strong>{$date}</strong>. Sending is paused until you renew. Renew now to resume.";
-
-        $html = '<div style="font-family:Arial,sans-serif;color:#0f172a;max-width:560px">'
-            .'<h2 style="margin:0 0 12px">'.e($subject).'</h2>'
-            .'<p>Hello '.e($owner->name ?: 'there').',</p>'
-            .'<p>'.$lead.'</p>'
-            .'<table style="border-collapse:collapse;margin:16px 0;font-size:14px">'
-            .$this->row('Account', $account->company_name)
-            .$this->row('Plan', $plan)
-            .$this->row('Term ends', $date.' (IST)')
-            .$this->row('Renewal amount', $amount !== null ? '₹'.number_format($amount, 0) : 'As shown on the billing page')
-            .'</table>'
-            .'<p><a href="'.e($renewUrl).'" style="display:inline-block;background:#dc2626;color:#fff;padding:10px 16px;border-radius:6px;text-decoration:none;font-weight:600">Renew now</a></p>'
-            .'<p style="color:#64748b;font-size:12px">You are receiving this because you are the owner of this WapHub account.</p>'
-            .'</div>';
-
-        return [$subject, $html];
+        return app(SystemMailer::class)->render($slug, $vars);
     }
 
-    private function row(string $label, ?string $value): string
+    /** @return array{0: string, 1: array<string, string>} the template slug and its variables */
+    private function templateData(User $owner, Account $account, Subscription $subscription, string $kind): array
     {
-        return '<tr><td style="padding:4px 16px 4px 0;color:#64748b">'.e($label).'</td><td style="padding:4px 0;font-weight:600">'.e((string) $value).'</td></tr>';
+        $amount = $this->renewalAmount($account);
+        $planKey = $this->lastPaidPlanKey($account);
+        // QA fixes (2026-10-14): a trial or a retired plan cannot be "renewed" — point to the plans instead.
+        $renewable = $planKey !== null && $planKey !== Plan::TRIAL_SLUG
+            && (bool) Plan::query()->where('slug', $planKey)->value('is_active');
+
+        return [
+            $kind === self::KIND_EXPIRING ? 'billing.plan_expiring' : 'billing.plan_expired',
+            [
+                'name' => $owner->name ?: 'there',
+                'company_name' => (string) $account->company_name,
+                'plan_name' => $this->planLabel($account) ?? '-',
+                'expires_at' => $this->date($subscription->expires_at),
+                'renewal_amount' => $renewable && $amount !== null ? '₹'.number_format($amount, 0) : 'Choose a plan on the Billing page',
+                'billing_url' => rtrim((string) config('services.frontend.url'), '/').'/billing',
+            ],
+        ];
     }
 
     private function date(Carbon $at): string
@@ -208,7 +218,8 @@ class SubscriptionExpiryReminderService
             ->where('account_id', $account->id)
             ->where('status', 'paid')
             ->whereIn('plan_key', Plan::query()->pluck('slug'))
-            ->orderByDesc('paid_at')
+            // id, not the (back-datable) paid_at — QA fixes, 2026-10-14.
+            ->orderByDesc('id')
             ->value('plan_key');
     }
 }

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Copy, Loader2 } from 'lucide-react';
 import crmDocumentsService from '../../../services/crmDocumentsService';
+import crmLeadSettingsService, { type CrmLeadSettings } from '../../../services/crmLeadSettingsService';
 import { Card } from '../../../components/common/Card';
 import { ErrorBanner, NoClientSelected, Toast } from '../../../components/crm/CrmUi';
 import { formatDate } from '../../../components/crm/crmFilters';
@@ -18,10 +19,14 @@ import type { CrmBusinessProfile, CrmGatewaySettings, CrmReminderSettings } from
  * approval queue. Secrets are write-only: never shown again, blank keeps the saved one.
  */
 export default function CrmSalesSettingsPage() {
-  const { hasPermission } = useAuth();
+  const { hasPermission, user } = useAuth();
   const { needsClient, readOnly } = useCrmContext();
   const { toast, show } = useCrmToast();
   const canPay = hasPermission('manage-crm-payments');
+  // Lead routing is an account-wide decision: for members who see every lead (QA fixes, 2026-10-14).
+  const canRouteLeads = hasPermission('view-all-crm');
+  // The CRM-only plan has no WhatsApp sending: reminders and documents go by email there.
+  const hasWhatsApp = user?.capabilities?.whatsapp_send !== false;
 
   return (
     <div className="p-6">
@@ -34,9 +39,10 @@ export default function CrmSalesSettingsPage() {
           <NoClientSelected what="sales settings" />
         ) : (
           <>
+            {canRouteLeads && <LeadRoutingCard readOnly={readOnly} hasWhatsApp={hasWhatsApp} onMessage={show} />}
             <ProfileCard readOnly={readOnly} onMessage={show} />
             {canPay && <GatewayCard readOnly={readOnly} onMessage={show} />}
-            {canPay && <RemindersCard readOnly={readOnly} onMessage={show} />}
+            {canPay && <RemindersCard readOnly={readOnly} hasWhatsApp={hasWhatsApp} onMessage={show} />}
           </>
         )}
       </div>
@@ -50,6 +56,61 @@ function SaveButton({ saving, disabled, onClick }: { saving: boolean; disabled?:
     <button type="button" onClick={onClick} disabled={saving || disabled} className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:bg-slate-300">
       {saving && <Loader2 className="h-4 w-4 animate-spin" />} Save
     </button>
+  );
+}
+
+/** QA fixes (2026-10-14) — who a new lead goes to, and who is told. */
+function LeadRoutingCard({ readOnly, hasWhatsApp, onMessage }: { readOnly: boolean; hasWhatsApp: boolean; onMessage: (m: string) => void }) {
+  const [s, setS] = useState<CrmLeadSettings | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  useEffect(() => {
+    crmLeadSettingsService.get().then(setS).catch((e: unknown) => setError(describeApiError(e, 'Failed to load.').message));
+  }, []);
+  if (!s) return error ? <ErrorBanner message={error} /> : null;
+
+  const save = () => {
+    setSaving(true);
+    crmLeadSettingsService
+      .save(s)
+      .then((r) => {
+        setS(r.data);
+        onMessage(r.message);
+      })
+      .catch((e: unknown) => onMessage(describeApiError(e, 'Could not save.').message))
+      .finally(() => setSaving(false));
+  };
+
+  return (
+    <Card className="space-y-4" data-testid="crm-lead-routing">
+      <div>
+        <p className="text-base font-semibold text-slate-900">New leads</p>
+        <p className="text-sm text-slate-500">What happens when a lead arrives from an ad, WhatsApp, a journey, your website or the API.</p>
+      </div>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <label className="text-sm font-medium text-slate-700">
+          Assign new leads to
+          <select value={s.assign_mode} onChange={(e) => setS({ ...s, assign_mode: e.target.value as CrmLeadSettings['assign_mode'] })} disabled={readOnly} className={fieldClass} aria-label="Assign new leads to">
+            <option value="none">Nobody (assign by hand)</option>
+            <option value="owner">The account owner</option>
+            <option value="round_robin">Team members with CRM access, in turn</option>
+          </select>
+        </label>
+        <label className="flex items-center gap-2 text-sm font-medium text-slate-700">
+          <input type="checkbox" checked={s.notify_assignee} onChange={(e) => setS({ ...s, notify_assignee: e.target.checked })} disabled={readOnly} className="h-4 w-4 rounded border-slate-300 text-emerald-600" />
+          Notify the person a lead is assigned to (app + email)
+        </label>
+        {hasWhatsApp && (
+          <label className="flex items-center gap-2 text-sm font-medium text-slate-700 sm:col-span-2">
+            <input type="checkbox" checked={s.whatsapp_inbound_leads} onChange={(e) => setS({ ...s, whatsapp_inbound_leads: e.target.checked })} disabled={readOnly} className="h-4 w-4 rounded border-slate-300 text-emerald-600" />
+            Create a lead when a new number messages us on WhatsApp
+          </label>
+        )}
+      </div>
+      <div className="flex justify-end">
+        <SaveButton saving={saving} disabled={readOnly} onClick={save} />
+      </div>
+    </Card>
   );
 }
 
@@ -214,7 +275,7 @@ function GatewayCard({ readOnly, onMessage }: { readOnly: boolean; onMessage: (m
   );
 }
 
-function RemindersCard({ readOnly, onMessage }: { readOnly: boolean; onMessage: (m: string) => void }) {
+function RemindersCard({ readOnly, hasWhatsApp, onMessage }: { readOnly: boolean; hasWhatsApp: boolean; onMessage: (m: string) => void }) {
   const [s, setS] = useState<CrmReminderSettings | null>(null);
   const [saving, setSaving] = useState(false);
   const [version, setVersion] = useState(0);
@@ -267,17 +328,19 @@ function RemindersCard({ readOnly, onMessage }: { readOnly: boolean; onMessage: 
         </label>
         <label className="text-sm font-medium text-slate-700">
           Channel
-          <select value={s.channel} onChange={(e) => setS({ ...s, channel: e.target.value as CrmReminderSettings['channel'] })} disabled={readOnly} className={fieldClass}>
-            <option value="whatsapp">WhatsApp</option>
+          {/* QA fixes (2026-10-14): without WhatsApp in the plan (CRM plan) only email can work. */}
+          <select value={hasWhatsApp ? s.channel : 'email'} onChange={(e) => setS({ ...s, channel: e.target.value as CrmReminderSettings['channel'] })} disabled={readOnly || !hasWhatsApp} className={fieldClass}>
+            {hasWhatsApp && <option value="whatsapp">WhatsApp</option>}
             <option value="email">Email</option>
-            <option value="both">Both</option>
+            {hasWhatsApp && <option value="both">Both</option>}
           </select>
+          {!hasWhatsApp && <span className="mt-1 block text-xs font-normal text-slate-500">Your plan has no WhatsApp sending, so reminders go by email.</span>}
         </label>
         <label className="flex items-center gap-2 text-sm font-medium text-slate-700">
           <input type="checkbox" checked={!s.auto_send} onChange={(e) => setS({ ...s, auto_send: !e.target.checked })} disabled={readOnly} className="h-4 w-4 rounded border-slate-300 text-emerald-600" />
           I approve each reminder before it is sent
         </label>
-        {s.channel === 'whatsapp' && (
+        {hasWhatsApp && s.channel === 'whatsapp' && (
           <label className="flex items-center gap-2 text-sm font-medium text-slate-700">
             <input type="checkbox" checked={s.email_fallback} onChange={(e) => setS({ ...s, email_fallback: e.target.checked })} disabled={readOnly} className="h-4 w-4 rounded border-slate-300 text-emerald-600" />
             If WhatsApp fails, send an email

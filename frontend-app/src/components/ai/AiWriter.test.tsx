@@ -10,6 +10,7 @@ import aiService from '../../services/aiService';
 
 vi.mock('../../services/aiService', () => ({ default: { requestTemplateDraft: vi.fn(), writeMessage: vi.fn(), leadFollowUp: vi.fn() } }));
 vi.mock('../../services/templateService', () => ({ default: { submitRequest: vi.fn() } }));
+vi.mock('../../core/context/AuthContext', () => ({ useAuth: () => ({ user: { account: { current_subscription: { engine_type: 'qr' } } } }) }));
 const ai = aiService as unknown as Record<string, Mock>;
 
 beforeEach(() => vi.clearAllMocks());

@@ -33,7 +33,7 @@ class NotificationBroadcastController extends Controller
 {
     use ResolvesTenantAccount;
 
-    private const TARGET_TYPES = ['account_users', 'specific_clients', 'all_users', 'custom_emails'];
+    private const TARGET_TYPES = ['account_users', 'specific_clients', 'all_clients', 'all_agents', 'role', 'all_users', 'custom_emails'];
     private const CHANNELS = ['email', 'in_app'];
     private const BROADCAST_MAILER_NAME = 'dynamic_broadcast';
 
@@ -96,6 +96,7 @@ class NotificationBroadcastController extends Controller
             'target_type' => ['required', Rule::in(self::TARGET_TYPES)],
             'account_ids' => ['required_if:target_type,specific_clients', 'array'],
             'account_ids.*' => ['integer', 'exists:accounts,id'],
+            'role_name' => ['required_if:target_type,role', 'nullable', 'string', 'exists:roles,name'],
             'emails' => ['required_if:target_type,custom_emails', 'array'],
             'emails.*' => ['email'],
         ]);
@@ -280,6 +281,40 @@ class NotificationBroadcastController extends Controller
                 'emails' => [],
                 'account_id' => $count === 1 ? $accountIds[0] : null,
                 'target_summary' => $count.' account(s) selected ('.$users->count().' users)',
+            ];
+        }
+
+        // All clients / all agents: every active user (owner and team) of
+        // every account of that type. The Super Admin's own platform account
+        // is neither.
+        if ($targetType === 'all_clients' || $targetType === 'all_agents') {
+            $accountType = $targetType === 'all_clients' ? 'client' : 'agent';
+            $users = User::query()
+                ->where('is_active', true)
+                ->whereHas('account', fn ($q) => $q->where('account_type', $accountType))
+                ->get();
+
+            return [
+                'users' => $users,
+                'emails' => [],
+                'account_id' => null,
+                'target_summary' => ($accountType === 'client' ? 'All clients' : 'All agents').' ('.$users->count().' users)',
+            ];
+        }
+
+        // Everyone holding one role, platform-wide (e.g. every "admin").
+        if ($targetType === 'role') {
+            $roleName = (string) $data['role_name'];
+            $users = User::query()
+                ->where('is_active', true)
+                ->whereHas('roles', fn ($q) => $q->where('name', $roleName))
+                ->get();
+
+            return [
+                'users' => $users,
+                'emails' => [],
+                'account_id' => null,
+                'target_summary' => 'Role "'.$roleName.'" ('.$users->count().' users)',
             ];
         }
 

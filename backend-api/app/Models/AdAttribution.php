@@ -31,6 +31,8 @@ class AdAttribution extends Model
     public const PROVIDER_META = 'meta';
 
     public const CHANNEL_WHATSAPP_CTWA = 'whatsapp_ctwa';
+    /** QA fixes (2026-10-14): a Meta lead-ad (instant form) lead. */
+    public const CHANNEL_META_LEAD_FORM = 'meta_lead_form';
 
     protected $fillable = [
         'account_id', 'provider', 'channel', 'source_type', 'source_id', 'click_id', 'referral_message_id',

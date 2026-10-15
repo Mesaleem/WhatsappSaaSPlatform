@@ -18,11 +18,13 @@ import DismissibleAlert from '../../components/common/DismissibleAlert';
 const ENGINE_BADGE: Record<EngineType, string> = {
   qr: 'bg-blue-50 text-blue-700 ring-blue-600/20',
   meta: 'bg-emerald-50 text-emerald-700 ring-emerald-600/20',
+  none: 'bg-slate-50 text-slate-600 ring-slate-500/20',
 };
 
 const ENGINE_LABEL: Record<EngineType, string> = {
   qr: 'QR',
   meta: 'Meta',
+  none: 'No WhatsApp',
 };
 
 const STATUS_BADGE: Record<AccountStatus, string> = {

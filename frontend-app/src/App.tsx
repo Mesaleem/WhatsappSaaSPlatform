@@ -17,7 +17,6 @@ const ResetPasswordPage = lazy(() => import('./pages/auth/ResetPasswordPage'));
 const DashboardPage = lazy(() => import('./pages/DashboardPage'));
 const AccountsPage = lazy(() => import('./pages/admin/AccountsPage'));
 const TemplateManagerPage = lazy(() => import('./pages/admin/TemplateManagerPage'));
-const RouteMasterPage = lazy(() => import('./pages/admin/RouteMasterPage'));
 const PlanManagementPage = lazy(() => import('./pages/admin/PlanManagementPage'));
 const ActivityLogsPage = lazy(() => import('./pages/admin/ActivityLogsPage'));
 const WhatsAppSetupPage = lazy(() => import('./pages/settings/WhatsAppSetupPage'));
@@ -44,6 +43,7 @@ const AdsDashboardPage = lazy(() => import('./pages/social/AdsDashboardPage'));
 const AdminSocialSettingsPage = lazy(() => import('./pages/admin/AdminSocialSettingsPage'));
 const AdminAiSettingsPage = lazy(() => import('./pages/admin/AdminAiSettingsPage'));
 const SocialInboxPage = lazy(() => import('./pages/social/SocialInboxPage'));
+const WhatsAppInboxPage = lazy(() => import('./pages/whatsapp/WhatsAppInboxPage'));
 const CommentRulesPage = lazy(() => import('./pages/social/CommentRulesPage'));
 const LeadsPage = lazy(() => import('./pages/social/LeadsPage'));
 const SocialReportsPage = lazy(() => import('./pages/social/SocialReportsPage'));
@@ -144,9 +144,17 @@ export default function App() {
           >
             <Route path="/" element={<DashboardPage />} />
             <Route
+              path="/whatsapp/inbox"
+              element={
+                <ProtectedRoute permission="send-messages" module="send_alert">
+                  <WhatsAppInboxPage />
+                </ProtectedRoute>
+              }
+            />
+            <Route
               path="/settings/whatsapp"
               element={
-                <ProtectedRoute module="whatsapp_setup">
+                <ProtectedRoute permission="manage-whatsapp-setup" module="whatsapp_setup">
                   <WhatsAppSetupPage />
                 </ProtectedRoute>
               }
@@ -199,14 +207,7 @@ export default function App() {
                 </ProtectedRoute>
               }
             />
-            <Route
-              path="/admin/route-master"
-              element={
-                <ProtectedRoute role="super_admin">
-                  <RouteMasterPage />
-                </ProtectedRoute>
-              }
-            />
+            {/* Route Master removed (plan restructure, 2026-10-15): a client's menu modules come from its plan. */}
             {/* IMPLEMENT: Dynamic Route Master with Super-Admin Bypass &
                 Global Audit Tracking — requirement 4. permission=
                 "view-activity-logs" (a NEW permission only super_admin
@@ -273,7 +274,7 @@ export default function App() {
             <Route
               path="/add-ons"
               element={
-                <ProtectedRoute module="billing">
+                <ProtectedRoute permission="manage-subscriptions" module="billing">
                   <AddOnsPage />
                 </ProtectedRoute>
               }
@@ -327,7 +328,7 @@ export default function App() {
             <Route
               path="/chatbot"
               element={
-                <ProtectedRoute permission="manage-chatbot" module="chatbot">
+                <ProtectedRoute anyPermission={['manage-chatbot', 'whatsapp.view']} module="chatbot">
                   <ChatbotPage />
                 </ProtectedRoute>
               }
@@ -335,7 +336,7 @@ export default function App() {
             <Route
               path="/chatbot/journeys"
               element={
-                <ProtectedRoute permission="manage-chatbot" module="chatbot">
+                <ProtectedRoute anyPermission={['manage-chatbot', 'whatsapp.view']} module="chatbot" capability="journey_automation">
                   <JourneyBuilderPage />
                 </ProtectedRoute>
               }
@@ -414,7 +415,7 @@ export default function App() {
             <Route
               path="/social/accounts"
               element={
-                <ProtectedRoute permission="manage-social-accounts" module="social_accounts">
+                <ProtectedRoute permission="manage-social-accounts" module="social_accounts" capability="social">
                   <SocialAccountsPage />
                 </ProtectedRoute>
               }
@@ -477,7 +478,7 @@ export default function App() {
             <Route
               path="/social/inbox"
               element={
-                <ProtectedRoute permission="manage-social-leads" module="social_inbox">
+                <ProtectedRoute permission="manage-social-leads" module="social_inbox" capability="social">
                   <SocialInboxPage />
                 </ProtectedRoute>
               }
@@ -485,7 +486,7 @@ export default function App() {
             <Route
               path="/social/comment-rules"
               element={
-                <ProtectedRoute permission="manage-comment-automation" module="comment_automation">
+                <ProtectedRoute permission="manage-comment-automation" module="comment_automation" capability="social">
                   <CommentRulesPage />
                 </ProtectedRoute>
               }
@@ -494,7 +495,7 @@ export default function App() {
             <Route
               path="/social/leads"
               element={
-                <ProtectedRoute permission="manage-social-leads" module="lead_crm">
+                <ProtectedRoute permission="manage-social-leads" module="lead_crm" capability="social">
                   <LeadsPage />
                 </ProtectedRoute>
               }
@@ -513,7 +514,7 @@ export default function App() {
             <Route
               path="/social/reports"
               element={
-                <ProtectedRoute permission="view-social-analytics" module="reports">
+                <ProtectedRoute permission="view-social-analytics" module="reports" capability="social">
                   <SocialReportsPage />
                 </ProtectedRoute>
               }

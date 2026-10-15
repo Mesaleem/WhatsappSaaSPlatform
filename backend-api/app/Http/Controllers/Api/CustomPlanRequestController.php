@@ -6,7 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\CustomPlanRequest;
 use App\Models\InAppNotification;
 use App\Models\User;
-use App\Services\Auth\AccountMailer;
+use App\Services\Mail\SystemMailer;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
@@ -24,7 +24,7 @@ use Illuminate\Validation\Rule;
  */
 class CustomPlanRequestController extends Controller
 {
-    public function store(Request $request, AccountMailer $mailer): JsonResponse
+    public function store(Request $request, SystemMailer $mailer): JsonResponse
     {
         $user = $request->user();
         $data = $request->validate([
@@ -50,36 +50,27 @@ class CustomPlanRequestController extends Controller
 
         $req = CustomPlanRequest::create($data + ['account_id' => $user->account_id, 'user_id' => $user->id, 'status' => 'new']);
 
-        $mailer->send(
-            $data['email'],
-            'We received your custom plan request',
-            'Thank you, '.$data['name'].'!',
-            '<p>We have received your request for a custom plan. Our team will contact you within <strong>24 to 48 hours</strong> to understand your needs.</p>'
-                .'<p style="color:#475569">Your requirement:<br>'.nl2br(e($data['requirement'])).'</p>',
-        );
+        $requirement = nl2br(e($data['requirement']));
+        $mailer->send('sales.custom_plan_received', $data['email'], ['name' => $data['name']], ['requirement' => $requirement], $user->account_id, $data['name']);
 
-        $admins = User::query()->where('is_active', true)->whereHas('roles', fn ($q) => $q->where('name', 'super_admin'))->get();
-        $summary = '<p><strong>'.e($data['name']).'</strong>'.($data['company'] ? ' ('.e($data['company']).')' : '').'</p>'
-            .'<p>Email: '.e($data['email']).($data['phone'] ? '<br>Phone: '.e($data['phone']) : '').'</p>'
-            .'<p>Messages / month: '.e((string) ($data['expected_messages'] ?? '-')).'<br>WhatsApp numbers: '.e((string) ($data['whatsapp_numbers'] ?? '-'))
-            .'<br>Team users: '.e((string) ($data['team_users'] ?? '-')).'</p>'
-            .'<p>'.nl2br(e($data['requirement'])).'</p>';
+        $admins = $mailer->superAdmins();
+        $title = $data['company'] ?: $data['name'];
         foreach ($admins as $admin) {
             if ($admin->email) {
-                $mailer->send($admin->email, 'New custom plan request: '.($data['company'] ?: $data['name']), 'New custom plan request', $summary, [
-                    'label' => 'Open the dashboard',
-                    'url' => $mailer->frontendUrl('/'),
-                ]);
+                $mailer->send('sales.custom_plan_admin', $admin->email, [
+                    'title' => $title,
+                    'name' => $data['name'],
+                    'company' => $data['company'] ?: '-',
+                    'email' => $data['email'],
+                    'phone' => $data['phone'],
+                    'expected_messages' => $data['expected_messages'] ?? '-',
+                    'whatsapp_numbers' => $data['whatsapp_numbers'] ?? '-',
+                    'team_users' => $data['team_users'] ?? '-',
+                    'admin_url' => $mailer->url('/'),
+                ], ['requirement' => $requirement], null, $admin->name);
             }
-            InAppNotification::query()->create([
-                'user_id' => $admin->id,
-                'title' => 'Custom plan request from '.($data['company'] ?: $data['name']),
-                'body' => mb_substr($data['requirement'], 0, 250),
-                'category' => 'billing',
-                'link' => '/',
-                'is_read' => false,
-            ]);
         }
+        $mailer->notifyUsers($admins, 'Custom plan request from '.$title, mb_substr($data['requirement'], 0, 250), 'billing', '/');
 
         return response()->json([
             'message' => 'Thank you! Our team will contact you within 24–48 hours. A confirmation has been sent to '.$data['email'].'.',

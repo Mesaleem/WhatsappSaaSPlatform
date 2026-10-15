@@ -80,19 +80,43 @@ class MetaLeadWebhookHandler
      */
     private function handleLeadgenChange(array $value): void
     {
+        $this->processLeadgen($value, null);
+    }
+
+    /**
+     * QA fixes (2026-10-14) — leads:retry-pending: fetch a kept lead again.
+     * Returns true when it is resolved (captured, a duplicate, or given up).
+     */
+    public function retryPending(\App\Models\PendingLeadgen $pending): bool
+    {
+        if ($pending->created_at !== null && $pending->created_at->lt(now()->subDays(89))) {
+            // Meta keeps a lead for 90 days; past that it cannot be read any more.
+            $pending->forceFill(['resolved_at' => now(), 'last_error' => 'Given up: older than Meta keeps leads (90 days).'])->save();
+
+            return true;
+        }
+
+        return $this->processLeadgen((array) $pending->payload, $pending);
+    }
+
+    /** @param array<string, mixed> $value */
+    private function processLeadgen(array $value, ?\App\Models\PendingLeadgen $pending): bool
+    {
         $leadgenId = $value['leadgen_id'] ?? null;
         $pageId = $value['page_id'] ?? null;
 
         if (! $leadgenId || ! $pageId) {
             Log::warning('MetaLeadWebhookHandler: leadgen change missing leadgen_id/page_id.', ['value' => $value]);
 
-            return;
+            return true;
         }
 
         // Technical redelivery guard — see the leads migration's docblock.
         // Cheap, and runs before any external HTTP call.
         if (Lead::where('provider_lead_id', $leadgenId)->exists()) {
-            return;
+            $pending?->forceFill(['resolved_at' => now()])->save();
+
+            return true;
         }
 
         // Phase 9 Task 2.2 — the Page's owner is resolved without guessing:
@@ -103,7 +127,7 @@ class MetaLeadWebhookHandler
         $socialAccount = $resolution['account'];
 
         if ($resolution['status'] === WebhookAssetResolver::AMBIGUOUS) {
-            return;
+            return false;
         }
 
         if (! $socialAccount) {
@@ -111,7 +135,7 @@ class MetaLeadWebhookHandler
                 'leadgen_id' => $leadgenId,
             ]);
 
-            return;
+            return true;
         }
 
         $account = Account::findCached($socialAccount->account_id);
@@ -119,15 +143,20 @@ class MetaLeadWebhookHandler
         if (! $account) {
             Log::warning("MetaLeadWebhookHandler: SocialAccount#{$socialAccount->id} points at a missing Account.");
 
-            return;
+            return true;
         }
 
         $fieldData = $this->fetchLeadFieldData($leadgenId, $socialAccount);
 
         if ($fieldData === null) {
-            // fetchLeadFieldData() already logged the specific failure.
-            return;
+            // fetchLeadFieldData() already logged the specific failure. QA fixes
+            // (2026-10-14): the lead is KEPT and fetched again (leads:retry-pending)
+            // — the webhook answered 200, so Meta will never send it again.
+            $this->keepForRetry($account, $socialAccount, (string) $leadgenId, $value, $pending);
+
+            return false;
         }
+        $pending?->forceFill(['resolved_at' => now(), 'last_error' => null])->save();
 
         $extracted = $this->extractFields($fieldData);
         $normalizedPhone = $extracted['phone'] !== null ? PhoneNumberNormalizer::normalize($extracted['phone']) : '';
@@ -137,7 +166,7 @@ class MetaLeadWebhookHandler
                 'leadgen_id' => $leadgenId,
             ]);
 
-            return;
+            return true;
         }
 
         $lead = Lead::create([
@@ -169,8 +198,65 @@ class MetaLeadWebhookHandler
          */
         app(CaptureLeadLinker::class)->linkQuietly($lead);
 
+        // QA fixes (2026-10-14): a lead-form lead is attributed to its ad, like a
+        // click-to-WhatsApp referral — it counts in the Ads dashboard's leads and
+        // its conversion value can be set.
+        if (! empty($value['ad_id'])) {
+            \App\Services\Ads\AdAttributionService::quietly('lead_form', $account->id, fn () => app(\App\Services\Ads\AdAttributionService::class)->recordReferral(
+                $account->id,
+                \App\Models\AdAttribution::PROVIDER_META,
+                \App\Models\AdAttribution::CHANNEL_META_LEAD_FORM,
+                'leadgen:'.$leadgenId,
+                $normalizedPhone,
+                ['source_type' => 'ad', 'source_id' => (string) $value['ad_id']],
+                null,
+                $lead,
+                \App\Models\CrmLead::query()->where('capture_lead_id', $lead->id)->first(),
+            ));
+        }
+
+        // QA fixes (2026-10-14): the automatic welcome / tenant alert are part of the
+        // social & ads features — not sent once the plan no longer includes them
+        // (the lead itself is still kept, nothing is lost).
+        // Plan clients only: an account on a module checklist (no plan) keeps its old behaviour.
+        $access = app(\App\Services\Access\AccessControlService::class);
+        if ($account->modules_from_plan && ! $access->canTenant($account, 'social') && ! $access->canTenant($account, 'ads')) {
+            return true;
+        }
+
         $this->notifyTenant($account, $lead, $extracted);
         $this->welcomeLead($account, $lead, $normalizedPhone, $extracted);
+
+        return true;
+    }
+
+    /** @param array<string, mixed> $value */
+    private function keepForRetry(Account $account, SocialAccount $page, string $leadgenId, array $value, ?\App\Models\PendingLeadgen $pending): void
+    {
+        try {
+            $pending ??= \App\Models\PendingLeadgen::query()->firstOrNew(['leadgen_id' => $leadgenId], [
+                'account_id' => $account->id, 'social_account_id' => $page->id, 'payload' => $value,
+            ]);
+            $attempts = (int) $pending->attempts + 1;
+            $pending->forceFill([
+                'attempts' => $attempts,
+                'last_error' => 'Meta did not return the lead (the Page connection may need reconnecting).',
+                // 10 min, 20 min, 40 min ... at most every 6 hours.
+                'next_attempt_at' => now()->addMinutes(min(360, 10 * (2 ** min(6, $attempts - 1)))),
+            ])->save();
+
+            app(\App\Services\Notifications\AccountAlerts::class)->notify(
+                $account,
+                'leadgen-fetch-'.$page->id,
+                'A lead could not be read from Facebook',
+                'A new lead from your Facebook / Instagram lead form arrived, but its details could not be fetched. It is kept and retried automatically. If your Page connection expired, reconnect it in Social Accounts.',
+                'social',
+                '/social/accounts',
+                'Open Social Accounts',
+            );
+        } catch (Throwable $e) {
+            Log::error('MetaLeadWebhookHandler: could not keep a lead for retry.', ['leadgen_id' => $leadgenId, 'error' => $e->getMessage()]);
+        }
     }
 
     /**

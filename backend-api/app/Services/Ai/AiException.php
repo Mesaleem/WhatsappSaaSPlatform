@@ -27,6 +27,8 @@ class AiException extends RuntimeException
 
     public const MODULE_DISABLED = 'MODULE_DISABLED';
 
+    public const FEATURE_NOT_IN_PLAN = 'CAPABILITY_NOT_ENTITLED';
+
     public const PERMISSION_DENIED = 'AI_PERMISSION_DENIED';
 
     public const SUBSCRIPTION_INACTIVE = 'SUBSCRIPTION_EXPIRED';
@@ -66,6 +68,7 @@ class AiException extends RuntimeException
     public const CATEGORIES = [
         self::CAPABILITY_UNAVAILABLE => 'entitlement',
         self::MODULE_DISABLED => 'entitlement',
+        self::FEATURE_NOT_IN_PLAN => 'entitlement',
         self::SUBSCRIPTION_INACTIVE => 'entitlement',
         self::ACCOUNT_SUSPENDED => 'entitlement',
         self::PERMISSION_DENIED => 'authorization',
@@ -121,6 +124,12 @@ class AiException extends RuntimeException
     public static function capabilityUnavailable(): self
     {
         return new self(self::CAPABILITY_UNAVAILABLE, 'Your current plan does not include AI features. Please upgrade your subscription to unlock them.', 403);
+    }
+
+    /** Plan restructure (2026-10-15): the client's plan does not include the feature this AI action belongs to. */
+    public static function featureNotInPlan(): self
+    {
+        return new self(self::FEATURE_NOT_IN_PLAN, 'Your plan does not include this feature. Upgrade your plan to use it.', 403);
     }
 
     public static function moduleDisabled(): self

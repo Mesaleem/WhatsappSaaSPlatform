@@ -46,6 +46,19 @@ class CheckAdPerformanceRules extends Command
                     'meta_campaign_id' => $campaign->meta_campaign_id,
                     'exception' => $e->getMessage(),
                 ]);
+                // QA fixes (2026-10-14): spend protection that stopped is announced, not only logged.
+                if ($campaign->account !== null) {
+                    app(\App\Services\Notifications\AccountAlerts::class)->notify(
+                        $campaign->account,
+                        'ads-guard-'.$campaign->id,
+                        'Ad budget guard paused for '.$campaign->name,
+                        "The campaign \"{$campaign->name}\" could not be checked on Meta (the ad account connection may have expired), so it is not protected by the automatic pause rules. Reconnect the ad account in Social Accounts.",
+                        'ads',
+                        '/social/accounts',
+                        'Open Social Accounts',
+                        24,
+                    );
+                }
             }
         }
 
@@ -54,7 +67,26 @@ class CheckAdPerformanceRules extends Command
 
     private function evaluate(AdCampaign $campaign, MetaAdsService $service): void
     {
+        // QA fixes (2026-10-14): a campaign paused, deleted or rejected in Ads Manager is
+        // followed here (it stayed ACTIVE and was polled forever).
+        $metaStatus = $this->effectiveStatus($campaign);
+        if ($metaStatus !== null && ! in_array($metaStatus, ['ACTIVE', 'IN_PROCESS', 'WITH_ISSUES', 'PENDING_REVIEW', 'PREAPPROVED'], true)) {
+            $campaign->forceFill(['status' => AdCampaign::STATUS_PAUSED, 'last_checked_at' => now()])->save();
+            Log::info("CheckAdPerformanceRules: AdCampaign #{$campaign->id} is {$metaStatus} on Meta — marked paused here.");
+
+            return;
+        }
+
         $insights = $service->fetchInsights($campaign);
+
+        // QA fixes (2026-10-14): a Click-to-WhatsApp / Messages campaign is judged by its
+        // conversations — the stored figures (dashboard, reports) now say the same thing
+        // the rule below uses, instead of 0 leads and no CPL.
+        $isMessaging = in_array($campaign->objective, ['CLICK_TO_WHATSAPP', 'MESSAGES'], true);
+        if ($isMessaging) {
+            $insights['leads'] = max($insights['leads'], $insights['conversations']);
+            $insights['cpl'] = $insights['leads'] > 0 ? round($insights['spend'] / $insights['leads'], 2) : null;
+        }
 
         // Cache is written BEFORE the rule check regardless of outcome —
         // the frontend's performance table must reflect the latest known
@@ -111,16 +143,19 @@ class CheckAdPerformanceRules extends Command
                 ->where('referral_received_at', '>=', now()->subDay())->exists()
             : false;
 
-        $zeroConversionOverBudget = $insights['spend'] > $dailyBudget && $results === 0 && ! $recentReferrals;
+        // QA fixes (2026-10-14): Meta's pacing rarely spends MORE than the daily budget, so
+        // "zero conversions" fires once 90% of it is spent.
+        $zeroConversionOverBudget = $dailyBudget > 0 && $insights['spend'] >= 0.9 * $dailyBudget && $results === 0 && ! $recentReferrals;
         $cplExceeded = $threshold !== null && $cpl !== null && $cpl > $threshold;
 
         if (! $zeroConversionOverBudget && ! $cplExceeded) {
             return;
         }
 
+        $cur = $this->currencySymbol($campaign);
         $reason = $zeroConversionOverBudget
-            ? sprintf('Zero conversions after $%.2f spend (daily budget $%.2f).', $insights['spend'], $dailyBudget)
-            : sprintf('CPL $%.2f exceeded the $%.2f threshold.', (float) $cpl, $threshold);
+            ? sprintf('Zero conversions after %s%.2f spend (daily budget %s%.2f).', $cur, $insights['spend'], $cur, $dailyBudget)
+            : sprintf('CPL %s%.2f exceeded the %s%.2f threshold.', $cur, (float) $cpl, $cur, $threshold);
 
         // Pause on Meta FIRST — only record the local PAUSED status once
         // Meta has actually confirmed it. If this throws, the campaign
@@ -147,6 +182,27 @@ class CheckAdPerformanceRules extends Command
     private function sendAlert(AdCampaign $campaign, array $insights, bool $zeroConversionOverBudget, ?float $threshold): void
     {
         $account = $campaign->account;
+        $cur = $this->currencySymbol($campaign);
+
+        // QA fixes (2026-10-14): in-app + email to the client, always — the WhatsApp text
+        // below needs a primary phone and, on the Meta API, an open 24-hour window.
+        if ($account !== null) {
+            app(\App\Services\Notifications\AccountAlerts::class)->notify(
+                $account,
+                'ads-paused-'.$campaign->id.'-'.now()->toDateString(),
+                'Campaign paused: '.$campaign->name,
+                $zeroConversionOverBudget
+                    ? sprintf('"%s" was paused automatically: no conversions after %s%.2f spend today.', $campaign->name, $cur, $insights['spend'])
+                    : sprintf('"%s" was paused automatically: cost per lead %s%.2f is above your %s%.2f limit.', $campaign->name, $cur, (float) $insights['cpl'], $cur, (float) $threshold),
+                'ads',
+                '/social/ads/dashboard',
+                'Open Ads Dashboard',
+                24,
+            );
+            if ($account->currentSubscription?->engine_type !== 'qr') {
+                return;
+            }
+        }
 
         if (! $account || ! $account->primary_phone) {
             Log::warning("CheckAdPerformanceRules: no primary_phone on Account for AdCampaign #{$campaign->id} — alert not sent.");
@@ -164,13 +220,15 @@ class CheckAdPerformanceRules extends Command
 
         $message = $zeroConversionOverBudget
             ? sprintf(
-                "\xE2\x9A\xA0\xEF\xB8\x8F Campaign %s was automatically paused due to Zero Conversions after $%.2f Spend.",
+                "\xE2\x9A\xA0\xEF\xB8\x8F Campaign %s was automatically paused due to Zero Conversions after %s%.2f Spend.",
                 $campaign->name,
+                $cur,
                 $insights['spend']
             )
             : sprintf(
-                "\xE2\x9A\xA0\xEF\xB8\x8F Campaign %s was automatically paused due to high CPL ($%.2f).",
+                "\xE2\x9A\xA0\xEF\xB8\x8F Campaign %s was automatically paused due to high CPL (%s%.2f).",
                 $campaign->name,
+                $cur,
                 (float) $insights['cpl']
             );
 
@@ -198,5 +256,41 @@ class CheckAdPerformanceRules extends Command
                 'exception' => $e->getMessage(),
             ]);
         }
+    }
+
+    /**
+     * QA fixes (2026-10-14) — the campaign's own status on Meta (effective_status), or
+     * null when it cannot be read (then the guard carries on as before).
+     */
+    private function effectiveStatus(AdCampaign $campaign): ?string
+    {
+        $token = $campaign->socialAccount?->access_token;
+        if (! $token || ! $campaign->meta_campaign_id) {
+            return null;
+        }
+        try {
+            $response = \Illuminate\Support\Facades\Http::withToken((string) $token)->timeout(10)
+                ->get('https://graph.facebook.com/v19.0/'.$campaign->meta_campaign_id, ['fields' => 'effective_status']);
+        } catch (Throwable) {
+            return null;
+        }
+        $status = $response->successful() ? $response->json('effective_status') : null;
+
+        return is_string($status) && $status !== '' ? strtoupper($status) : null;
+    }
+
+    /** QA fixes (2026-10-14): the ad account's currency (it was always "$"). */
+    private function currencySymbol(AdCampaign $campaign): string
+    {
+        $metadata = $campaign->socialAccount?->metadata;
+        $currency = strtoupper((string) (is_array($metadata) ? ($metadata['currency'] ?? 'INR') : 'INR'));
+
+        return match ($currency) {
+            'INR' => '₹',
+            'USD' => '$',
+            'EUR' => '€',
+            'GBP' => '£',
+            default => $currency.' ',
+        };
     }
 }

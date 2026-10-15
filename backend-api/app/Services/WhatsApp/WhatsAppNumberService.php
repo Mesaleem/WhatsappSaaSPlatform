@@ -144,6 +144,13 @@ class WhatsAppNumberService
             WhatsAppNumber::query()->where('account_id', $account->id)->update(['is_default' => false]);
             $target->forceFill(['is_default' => true])->save();
 
+            // QA fixes (2026-10-14): the account-level status row mirrors the default
+            // number — the status page showed the old number after a change.
+            \App\Models\WhatsAppSession::query()->where('account_id', $account->id)->update([
+                'connected_phone_number' => $target->hasPendingPlaceholderNumber() ? null : $target->phone_number,
+                'status' => $target->status === WhatsAppNumber::STATUS_LINKED ? 'connected' : 'disconnected',
+            ]);
+
             return $target->refresh();
         });
     }

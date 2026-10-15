@@ -120,7 +120,7 @@ class TemplateMessageDispatcher
             return ['status' => 'failed', 'message' => $msg];
         }
 
-        if (PaymentAlertDispatcher::isWhatsAppDisconnected($account)) {
+        if (PaymentAlertDispatcher::isWhatsAppDisconnected($account, $senderNumberId)) {
             MessageDispatchLog::record($accountId, $source, $recipientPhone, success: false, errorReason: 'WhatsApp account is disconnected.', apiKeyId: $apiKeyId, referenceType: 'template', referenceId: $template->id, templateName: $template->title);
 
             return ['status' => 'disconnected', 'message' => 'WhatsApp account is disconnected. Please connect your device first.'];
@@ -257,9 +257,22 @@ class TemplateMessageDispatcher
             ];
         }
 
+        // Plan restructure (2026-10-15), step 3: a MARKETING template counts against the plan's
+        // marketing cap — claimed before the send (locked re-check), given back if it fails.
+        $marketingSubscription = MessageQuotaService::isMarketing($template->category) ? $account->currentSubscription : null;
+        if ($marketingSubscription !== null && ! app(MessageQuotaService::class)->reserveMarketing($marketingSubscription, 1)) {
+            $msg = MessageQuotaService::marketingLimitMessage($marketingSubscription);
+            MessageDispatchLog::record($accountId, $source, $normalizedPhone, success: false, errorReason: $msg, apiKeyId: $apiKeyId, referenceType: 'template', referenceId: $template->id, templateName: $template->title, messagePreview: $renderedMessage);
+
+            return ['status' => 'quota_exhausted', 'message' => $msg];
+        }
+
         $result = $driver->sendMessage($normalizedPhone, $renderedMessage, $metaData);
 
         if (empty($result['success'])) {
+            if ($marketingSubscription !== null) {
+                app(MessageQuotaService::class)->releaseMarketing($marketingSubscription, 1);
+            }
             $msg = $result['error'] ?? 'The WhatsApp engine rejected the message.';
             MessageDispatchLog::record($accountId, $source, $normalizedPhone, success: false, errorReason: $msg, apiKeyId: $apiKeyId, referenceType: 'template', referenceId: $template->id, templateName: $template->title, messagePreview: $renderedMessage);
 

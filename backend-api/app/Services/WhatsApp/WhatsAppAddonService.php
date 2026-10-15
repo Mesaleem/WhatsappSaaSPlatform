@@ -388,26 +388,89 @@ class WhatsAppAddonService
                 $paused++;
             });
 
-        // The included number follows the plan: paused while the subscription is not active.
+        // The included number follows the plan, and QR numbers follow the engine.
         WhatsAppNumber::query()
-            ->where('is_included', true)
             ->where('status', '!=', WhatsAppNumber::STATUS_PAUSED)
             ->get()
-            ->each(function (WhatsAppNumber $slot) use (&$paused): void {
-                $account = Account::query()->find($slot->account_id);
-                if ($account !== null && ! $account->hasActiveSubscription()) {
-                    $this->pause($slot);
-                    $paused++;
-                }
+            ->groupBy('account_id')
+            ->each(function ($slots, $accountId) use (&$paused): void {
+                $paused += $this->enforceFor((int) $accountId, $slots);
             });
 
         return $paused;
     }
 
+    /**
+     * QA fixes (2026-10-14) — one account's numbers against its plan:
+     *  - a QR number is paused (and logged out of the QR engine) once the plan has
+     *    no QR engine any more (e.g. Starter -> CRM / Meta): the QR session used
+     *    to stay live and keep answering through the chatbot;
+     *  - the included number is paused while the plan has ENDED or the account
+     *    is suspended — no longer when only the message quota ran out (that
+     *    logged the phone out, and after a top-up the client had to scan again).
+     * The Meta number (Cloud API) is never logged out here.
+     *
+     * @param  \Illuminate\Support\Collection<int, WhatsAppNumber>|null  $slots
+     */
+    public function enforceFor(int $accountId, $slots = null): int
+    {
+        $account = Account::query()->with('currentSubscription')->find($accountId);
+        if ($account === null) {
+            return 0;
+        }
+        $slots ??= WhatsAppNumber::query()->where('account_id', $accountId)->where('status', '!=', WhatsAppNumber::STATUS_PAUSED)->get();
+
+        $subscription = $account->currentSubscription;
+        $engine = $subscription?->engine_type;
+        if ($engine === 'meta') {
+            // The Cloud API number is managed by MetaNumberSync; QR add-ons cannot be used on Meta.
+            $count = 0;
+            foreach ($slots as $slot) {
+                if (! $slot->is_included && $slot->status !== WhatsAppNumber::STATUS_PAUSED) {
+                    $this->pause($slot);
+                    $count++;
+                }
+            }
+
+            return $count;
+        }
+
+        $planEnded = $subscription === null || ($subscription->expires_at !== null && $subscription->expires_at->isPast());
+        // Only a plan that is known not to be QR logs QR numbers out (an agent's own account
+        // or the platform device often has no subscription at all).
+        $noQr = $subscription !== null && $engine !== 'qr' && ! $account->isPlatformAccount();
+
+        $count = 0;
+        foreach ($slots as $slot) {
+            $pause = $noQr || ($slot->is_included && ($planEnded || ! $account->isAdministrativelyActive()));
+            if ($pause) {
+                $this->pause($slot);
+                $count++;
+            }
+        }
+
+        return $count;
+    }
+
     private function pause(WhatsAppNumber $slot): void
     {
+        $wasLinked = $slot->status === WhatsAppNumber::STATUS_LINKED;
         $slot->forceFill(['status' => WhatsAppNumber::STATUS_PAUSED])->save();
         $this->disconnectEngine($slot);
+
+        // QA fixes (2026-10-14): the client is told (it used to happen silently).
+        if ($wasLinked && ($account = Account::query()->find($slot->account_id)) !== null) {
+            app(\App\Services\Notifications\AccountAlerts::class)->notify(
+                $account,
+                'number-paused-'.$slot->id,
+                'WhatsApp number paused',
+                "The WhatsApp number {$slot->phone_number} was paused because its plan or add-on term has ended. Renew it on the Billing page to send from it again.",
+                'whatsapp',
+                '/billing',
+                'Open billing',
+                24,
+            );
+        }
     }
 
     public function disconnectEngine(WhatsAppNumber $slot): void

@@ -190,6 +190,12 @@ class ChatbotEngineService
             return null;
         }
 
+        // QA fixes (2026-10-14): auto-replies only while the plan includes the chatbot
+        // (journeys already re-check their own capability at runtime).
+        if (! $account->hasModuleEnabled('chatbot')) {
+            return null;
+        }
+
         $rule = $this->findMatchingRule($accountId, $incomingMessage);
 
         if (! $rule) {

@@ -11,6 +11,8 @@ import templateService from '../../services/templateService';
  */
 
 vi.mock('../../services/templateService', () => ({ default: { submitRequest: vi.fn() } }));
+// The form asks Meta clients for a category / language (QA fixes, 2026-10-14); a QR client here.
+vi.mock('../../core/context/AuthContext', () => ({ useAuth: () => ({ user: { account: { current_subscription: { engine_type: 'qr' } } } }) }));
 const svc = templateService as unknown as Record<string, Mock>;
 
 beforeEach(() => {

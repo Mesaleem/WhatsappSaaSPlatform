@@ -6,6 +6,7 @@ import { useAuth } from '../../core/context/AuthContext';
 import { useTenant } from '../../core/context/TenantContext';
 import socialService from '../../services/socialService';
 import AssetSelectionModal from '../../components/social/AssetSelectionModal';
+import { MetaSetupChecklist, MetaSetupDiagnosis, diagnoseConnect, type ConnectDiagnosis } from '../../components/social/MetaSetupGuide';
 import ConfirmModal from '../../components/common/ConfirmModal';
 import { GateNoticeModal, SelectClientNotice, type GateNoticeAction } from '../../components/common/ActionGate';
 import { safeReturnTo, useClientGate, useUpgradePath } from '../../components/common/actionGateHooks';
@@ -112,6 +113,8 @@ export default function SocialAccountsPage() {
   const [phaseMessage, setPhaseMessage] = useState<string | null>(null);
   const [notice, setNotice] = useState<{ title: string; message: string; action: GateNoticeAction | null } | null>(null);
   const [justConnected, setJustConnected] = useState(false);
+  // Guided setup: what the last connect showed is missing on Facebook / Instagram (blocking, or a hint after binding).
+  const [diagnosis, setDiagnosis] = useState<ConnectDiagnosis | null>(null);
 
   const [pendingNonce, setPendingNonce] = useState<string | null>(null);
   const [pollNonce, setPollNonce] = useState<string | null>(null);
@@ -129,6 +132,8 @@ export default function SocialAccountsPage() {
   pollNonceRef.current = pollNonce;
   const isConnecting = phase === 'connecting';
   const lastLoadedAt = useRef(0);
+  // Absent capability map (older /auth/me) = no invented denial; a Super Admin may act for any client's plan.
+  const planHasAds = superAdmin || !user?.capabilities || Boolean(user.capabilities.ads);
 
   const loadAccounts = useCallback(() => {
     // Super Admin without a client: an expected, actionable state (below), not an error.
@@ -208,17 +213,16 @@ export default function SocialAccountsPage() {
       return;
     }
 
-    if (data.assets.length === 0) {
-      setPhase('failed');
-      setPhaseMessage('The provider returned no Page, Instagram account or Ad Account that this account may connect. Check the assets you granted, or ask a Super Admin which platforms are enabled for this account.');
-      return;
-    }
-
+    // Say which setup step is missing instead of a generic "nothing found" (no Page, no linked Instagram, no ad account).
+    const found = diagnoseConnect(data.assets, data.summary, planHasAds);
     setPhase('idle');
     setPhaseMessage(null);
+    setDiagnosis(found.blocking || found.missing.length > 0 ? found : null);
+    if (found.blocking) return;
+
     setPendingNonce(data.nonce);
     setOfferedAssets(data.assets);
-  }, []);
+  }, [planHasAds]);
 
   useEffect(() => {
     const onMessage = (event: MessageEvent<OAuthPopupMessage>) => {
@@ -248,7 +252,7 @@ export default function SocialAccountsPage() {
           stopped = true;
           window.clearInterval(timer);
           setPollNonce(null);
-          if (result.status === 'success') applyOutcome({ type: 'social-oauth-success', provider: result.provider, nonce: result.nonce, assets: result.assets });
+          if (result.status === 'success') applyOutcome({ type: 'social-oauth-success', provider: result.provider, nonce: result.nonce, assets: result.assets, summary: result.summary });
           else applyOutcome({ type: result.status === 'cancelled' ? 'social-oauth-cancelled' : 'social-oauth-error', message: result.message });
         })
         .catch(() => undefined);
@@ -291,6 +295,7 @@ export default function SocialAccountsPage() {
     setPhase('connecting');
     setPhaseMessage(null);
     setJustConnected(false);
+    setDiagnosis(null);
 
     socialService
       .getOAuthRedirectUrl('meta')
@@ -493,6 +498,10 @@ export default function SocialAccountsPage() {
               </div>
             )}
 
+            {diagnosis?.blocking && (
+              <MetaSetupDiagnosis diagnosis={diagnosis} connecting={isConnecting} onCheckAgain={startConnect} isSuperAdmin={superAdmin} />
+            )}
+
             {justConnected && (
               <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800" data-testid="social-connected">
                 <span className="flex items-center gap-2">
@@ -505,6 +514,15 @@ export default function SocialAccountsPage() {
                   </Link>
                 )}
               </div>
+            )}
+
+            {/* Partial result (e.g. a Page but no linked Instagram): a non-blocking hint once the choice is connected. */}
+            {justConnected && diagnosis && !diagnosis.blocking && (
+              <MetaSetupDiagnosis diagnosis={diagnosis} connecting={isConnecting} onCheckAgain={startConnect} isSuperAdmin={superAdmin} />
+            )}
+
+            {!isLoading && !diagnosis?.blocking && !accounts.some((a) => a.provider === 'meta') && (
+              <MetaSetupChecklist showAds={planHasAds} connecting={isConnecting} onConnect={startConnect} />
             )}
 
             <div className="rounded-2xl bg-white p-4" style={{ boxShadow: cardShadow, border: `1px solid ${indigo.border}` }}>

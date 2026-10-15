@@ -201,6 +201,10 @@ const crmDocumentsService = {
   publicPay(token: string) {
     return publicApi.post<{ data: CrmCheckoutOrder }>(`/public/crm-documents/${encodeURIComponent(token)}/pay`).then((r) => r.data.data);
   },
+  /** QA fixes (2026-10-14): the customer accepts a quotation / proposal from its link. */
+  publicAccept(token: string) {
+    return publicApi.post<{ message: string }>(`/public/crm-documents/${encodeURIComponent(token)}/accept`).then((r) => r.data);
+  },
   publicConfirm(token: string, payload: Record<string, string>) {
     return publicApi.post<{ message: string; data: { receipt: string | null } }>(`/public/crm-documents/${encodeURIComponent(token)}/confirm`, payload).then((r) => r.data);
   },

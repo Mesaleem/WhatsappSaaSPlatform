@@ -40,6 +40,9 @@ class WhatsAppController extends Controller
             // qr-engine-service, or the QR never reaches the browser (see
             // ensureDefaultSlot()'s own docblock).
             'number_id' => $this->ensureDefaultSlot($account)->id,
+            // QA fixes (2026-10-14): the engine of the account being looked at (an agent or the
+            // Super Admin acting for a client saw their OWN engine on WhatsApp Setup).
+            'engine_type' => $account->currentSubscription?->engine_type,
         ]);
     }
 
@@ -190,6 +193,19 @@ class WhatsAppController extends Controller
     public function startSession(Request $request): JsonResponse
     {
         $account = $this->requireAccount($request, 'A WhatsApp session requires a selected tenant account (pass ?account_id=).');
+
+        // QA fixes (2026-10-14): a QR session only for a plan on the QR engine. A Meta or
+        // CRM-only plan used to be able to link a phone, which kept the chatbot replying
+        // through a channel the plan does not include.
+        $engine = $account->currentSubscription?->engine_type;
+        if ($engine !== null && $engine !== 'qr' && ! $account->isPlatformAccount()) {
+            return response()->json([
+                'message' => $engine === 'meta'
+                    ? 'Your plan uses the official Meta WhatsApp API. Connect your number with Meta in WhatsApp Setup instead of a QR code.'
+                    : 'Your plan does not include WhatsApp sending.',
+                'error_code' => 'ENGINE_NOT_QR',
+            ], 422);
+        }
 
         // Optional phone_number switches this session to pairing-code login:
         // WhatsApp shows an 8-character code for the user to enter on the phone

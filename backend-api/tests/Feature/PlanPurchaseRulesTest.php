@@ -57,7 +57,8 @@ class PlanPurchaseRulesTest extends TestCase
 
     private function plans(): array
     {
-        $byPrice = Plan::query()->where('is_active', true)->orderBy('price')->pluck('slug')->all();
+        // Purchasable plans only: the hidden website trial is never bought (QA fixes, 2026-10-14).
+        $byPrice = Plan::query()->where('is_active', true)->where('is_public', true)->whereNull('account_id')->orderBy('price')->pluck('slug')->all();
         $this->assertGreaterThanOrEqual(2, count($byPrice));
 
         return [$byPrice[0], $byPrice[count($byPrice) - 1]];

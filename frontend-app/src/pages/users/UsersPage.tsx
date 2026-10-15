@@ -704,8 +704,10 @@ export default function UsersPage() {
   // account to compare against (the Invite modal's own 403 from the
   // server — see TeamController::store() — is the backstop there).
   const ownAccount = currentUser?.account ?? null;
-  const reachedUserLimit =
-    scope === 'account' && ownAccount?.max_users_limit != null && users.length >= ownAccount.max_users_limit;
+  // Plan restructure (2026-10-15): user_limit = the account override, else the plan's team-user limit.
+  const userLimit = ownAccount?.user_limit ?? ownAccount?.max_users_limit ?? null;
+  const reachedUserLimit = scope === 'account' && userLimit != null && users.length >= userLimit;
+  const userLimitMessage = `User limit reached: your plan allows ${userLimit ?? 0} users. Upgrade your plan or contact us for more users.`;
 
   const total = filteredUsers.length;
   const lastPage = Math.max(1, Math.ceil(total / perPage));
@@ -742,7 +744,7 @@ export default function UsersPage() {
                 isReadOnly()
                   ? 'Action disabled: Subscription expired.'
                   : reachedUserLimit
-                    ? 'User limit reached. Contact Super Admin to upgrade.'
+                    ? userLimitMessage
                     : roles.length === 0 && !isLoading
                       ? 'No roles can be assigned from this account, so no member can be invited. Contact Super Admin.'
                       : undefined
@@ -765,7 +767,7 @@ export default function UsersPage() {
         {reachedUserLimit && (
           <div className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
             <XCircle className="h-4 w-4 flex-shrink-0" />
-            User limit reached. Contact Super Admin to upgrade.
+            {userLimitMessage}
           </div>
         )}
 

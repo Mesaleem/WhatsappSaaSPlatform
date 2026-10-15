@@ -1,6 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Plus } from 'lucide-react';
+import { FileUp, Loader2, Plus } from 'lucide-react';
+import axiosInstance from '../../core/api/axiosInstance';
+import { extractErrorMessage } from '../../utils/apiError';
 import crmService from '../../services/crmService';
 import { TableCard } from '../../components/common/Card';
 import { ClientPickerModal, GateNoticeModal } from '../../components/common/ActionGate';
@@ -47,6 +49,25 @@ export default function CrmLeadsPage() {
   const { toast, show } = useCrmToast();
 
   const [creating, setCreating] = useState(false);
+  // QA fixes (2026-10-14): leads from a CSV / Excel file (POST /crm/leads/import).
+  const fileInput = useRef<HTMLInputElement>(null);
+  const [importing, setImporting] = useState(false);
+  const importFile = (file: File) => {
+    const body = new FormData();
+    body.append('file', file);
+    setImporting(true);
+    axiosInstance
+      .post<{ message: string }>('/crm/leads/import', body, { headers: { 'Content-Type': 'multipart/form-data' } })
+      .then((res) => {
+        show(res.data.message);
+        query.reload();
+      })
+      .catch((err: unknown) => show(extractErrorMessage(err, 'The file could not be imported.')))
+      .finally(() => {
+        setImporting(false);
+        if (fileInput.current) fileInput.current.value = '';
+      });
+  };
   // Final hardening §23 — "Add lead" is clickable whenever the reason is
   // something the user can act on: no client selected (pick one, then the
   // form opens) or a target without CRM (explained, with the upgrade path).
@@ -154,6 +175,29 @@ export default function CrmLeadsPage() {
             target that failed the CRM gates → the click explains why.
             Needs no Meta / social / WhatsApp connection.
           */}
+          <div className="flex flex-wrap items-center gap-2">
+          <input
+            ref={fileInput}
+            type="file"
+            accept=".csv,.xlsx"
+            className="hidden"
+            aria-label="Import leads file"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) importFile(file);
+            }}
+          />
+          <button
+            type="button"
+            onClick={() => fileInput.current?.click()}
+            disabled={readOnly || needsClient || targetDenied || importing}
+            title="Import leads from a CSV or Excel file. The first row names the columns: name, phone, email, company, requirement."
+            data-testid="crm-import-leads"
+            className="flex items-center gap-2 rounded-lg border border-emerald-600 px-4 py-2 text-sm font-semibold text-emerald-800 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {importing ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileUp className="h-4 w-4" />}
+            Import
+          </button>
           <button
             type="button"
             onClick={() => {
@@ -169,6 +213,7 @@ export default function CrmLeadsPage() {
             <Plus className="h-4 w-4" />
             Add lead
           </button>
+          </div>
         </div>
 
         {needsClient ? (

@@ -22,6 +22,13 @@ class OrganicPost extends Model
     protected string $auditModuleName = 'Social Organic Posts';
     public const PLATFORMS = ['facebook', 'instagram', 'linkedin'];
 
+    /** 2026-10-15 — what is published: a normal post, a Reel, a Story or a carousel (2–10 media_items). */
+    public const FORMATS = ['post', 'reel', 'story', 'carousel'];
+
+    public const CAROUSEL_MIN = 2;
+
+    public const CAROUSEL_MAX = 10;
+
     public const STATUS_PENDING = 'pending';
 
     public const STATUS_PUBLISHED = 'published';
@@ -69,6 +76,8 @@ class OrganicPost extends Model
         'caption',
         'media_url',
         'media_type',
+        'post_format',
+        'media_items',
         'status',
         'external_post_id',
         'error_message',
@@ -102,6 +111,7 @@ class OrganicPost extends Model
             'cancelled_at' => 'datetime',
             'attempts' => 'integer',
             'metadata' => 'array',
+            'media_items' => 'array',
         ];
     }
 

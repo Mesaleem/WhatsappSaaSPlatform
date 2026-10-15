@@ -2,6 +2,7 @@ import { useRef, useState } from 'react';
 import { AxiosError } from 'axios';
 import { FileText, Loader2, XCircle } from 'lucide-react';
 import templateService from '../../services/templateService';
+import { useAuth } from '../../core/context/AuthContext';
 import type { ApiErrorResponse } from '../../types/auth';
 import DismissibleAlert from '../common/DismissibleAlert';
 import VariableInserter, { variablesIn } from './VariableInserter';
@@ -46,6 +47,12 @@ export default function RequestTemplateModal({
   const [variablesSchema, setVariablesSchema] = useState<TemplateVariableSchemaField[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // QA fixes (2026-10-14): on the Meta API the template is sent to Meta for approval —
+  // Meta needs its category and language.
+  const { user } = useAuth();
+  const isMeta = user?.account?.current_subscription?.engine_type === 'meta';
+  const [category, setCategory] = useState<'MARKETING' | 'UTILITY' | 'AUTHENTICATION'>('UTILITY');
+  const [language, setLanguage] = useState('en_US');
 
   const isValid = title.trim() !== '' && templateBody.trim() !== '';
 
@@ -69,6 +76,7 @@ export default function RequestTemplateModal({
         ...(variablesSchema.length > 0 ? { variables_schema: variablesSchema } : {}),
         // Requests are plain text only; attachments are not offered on this form.
         header_type: 'text',
+        ...(isMeta ? { category, language } : {}),
       });
       onSubmitted(result.message);
     } catch (err) {
@@ -109,6 +117,42 @@ export default function RequestTemplateModal({
               autoFocus
             />
           </div>
+          {isMeta && (
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2" data-testid="meta-template-fields">
+              <div>
+                <label htmlFor="template-request-category" className="text-sm font-medium text-slate-700">
+                  Category (Meta)
+                </label>
+                <select id="template-request-category" value={category} onChange={(e) => setCategory(e.target.value as typeof category)} className={inputClass}>
+                  <option value="UTILITY">Utility — updates, receipts, reminders</option>
+                  <option value="MARKETING">Marketing — offers, promotions</option>
+                  <option value="AUTHENTICATION">Authentication — one-time codes</option>
+                </select>
+                <p className="mt-1 text-xs text-slate-500">Marketing templates count against your monthly marketing limit.</p>
+              </div>
+              <div>
+                <label htmlFor="template-request-language" className="text-sm font-medium text-slate-700">
+                  Language
+                </label>
+                <select id="template-request-language" value={language} onChange={(e) => setLanguage(e.target.value)} className={inputClass}>
+                  <option value="en_US">English (US)</option>
+                  <option value="en_GB">English (UK)</option>
+                  <option value="en">English</option>
+                  <option value="hi">Hindi</option>
+                  <option value="mr">Marathi</option>
+                  <option value="gu">Gujarati</option>
+                  <option value="ta">Tamil</option>
+                  <option value="te">Telugu</option>
+                  <option value="bn">Bengali</option>
+                  <option value="kn">Kannada</option>
+                  <option value="ml">Malayalam</option>
+                  <option value="pa">Punjabi</option>
+                  <option value="ur">Urdu</option>
+                </select>
+                <p className="mt-1 text-xs text-slate-500">After our review it goes to Meta for approval.</p>
+              </div>
+            </div>
+          )}
           <div>
             <label htmlFor="template-request-industry" className="text-sm font-medium text-slate-700">
               Industry / Use Case <span className="font-normal text-slate-400">(optional)</span>

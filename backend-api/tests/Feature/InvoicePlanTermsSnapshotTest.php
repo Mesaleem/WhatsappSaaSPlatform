@@ -500,7 +500,7 @@ class InvoicePlanTermsSnapshotTest extends TestCase
     {
         ['account' => $account] = $this->tenant();
         $invoice = Invoice::create([
-            'account_id' => $account->id, 'invoice_number' => 'INV-TOPUP', 'plan_key' => 'quota_topup', 'plan_label' => 'Top-up',
+            'account_id' => $account->id, 'invoice_number' => 'INV-LEGACY', 'plan_key' => 'legacy_unknown_plan', 'plan_label' => 'Legacy plan',
             'amount' => 10, 'tax_amount' => 0, 'total_amount' => 10, 'currency' => 'INR', 'payment_gateway' => 'razorpay', 'status' => 'pending',
         ]);
 

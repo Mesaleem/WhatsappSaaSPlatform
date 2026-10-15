@@ -12,6 +12,7 @@ use App\Models\User;
 use App\Rules\DeliverableEmail;
 use App\Services\Access\AccessControlService;
 use App\Services\Auth\AccountMailer;
+use App\Services\Mail\SystemMailer;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -94,14 +95,11 @@ class AuthController extends Controller
                 ], 403);
             }
 
-            if (! $account->hasActiveSubscription()) {
-                $this->logAttempt($request, $user, 'failed');
-
-                return response()->json([
-                    'message' => "Your account's subscription is not active.",
-                    'error_code' => 'SUBSCRIPTION_EXPIRED',
-                ], 403);
-            }
+            // QA fixes (2026-10-14): an expired plan, or a used-up message quota, no
+            // longer blocks login. The client must reach Billing to renew; the
+            // read-only mode (subscription.guard + the frontend banner) keeps
+            // every change disabled until then. Only a suspended account is refused.
+            // (An agent's own account normally has no subscription at all.)
         }
 
         // Device limit (security.account.max_devices, default 2). Logins up to the
@@ -161,19 +159,13 @@ class AuthController extends Controller
         }
         $when = now()->timezone('Asia/Kolkata')->format('d M Y, h:i A').' IST';
 
-        defer(function () use ($user, $ip, $when) {
-            $mailer = app(AccountMailer::class);
-            $mailer->send(
-                $user->email,
-                "Your {$mailer->brand()} password was changed",
-                'Your password was changed',
-                '<p>Hi '.e($user->name).',</p>'
-                .'<p>The password for your account was changed on <b>'.e($when).'</b>'.($ip ? ' from IP <b>'.e($ip).'</b>' : '').'.</p>'
-                .'<p>All other devices have been logged out.</p>'
-                .'<p style="color:#b91c1c"><b>Not you?</b> Reset your password right away and contact us.</p>',
-                ['label' => 'Reset my password', 'url' => $mailer->frontendUrl('/forgot-password')],
-            );
-        });
+        $mailer = app(SystemMailer::class);
+        $mailer->sendLater('auth.password_changed', $user->email, [
+            'name' => $user->name,
+            'changed_at' => $when,
+            'ip_address' => $ip ?: 'unknown',
+            'reset_url' => $mailer->url('/forgot-password'),
+        ], [], $user->account_id, $user->name);
     }
 
     /** The user's app login tokens that are still valid (Sanctum expiration honoured). */
@@ -202,25 +194,14 @@ class AuthController extends Controller
         $device = AccountMailer::describeDevice($request->userAgent());
         $when = now()->timezone('Asia/Kolkata')->format('d M Y, h:i A').' IST';
 
-        defer(function () use ($user, $ip, $device, $when) {
-            $mailer = app(AccountMailer::class);
-            $brand = $mailer->brand();
-            $mailer->send(
-                $user->email,
-                "Security alert: all devices were logged out of your {$brand} account",
-                'All your devices were logged out',
-                '<p>Hi '.e($user->name).',</p>'
-                .'<p>Your account was logged in on one more device than allowed, so <b>every other device was logged out</b>. The new login:</p>'
-                .'<table style="border-collapse:collapse;font-size:14px;margin:8px 0 4px">'
-                .'<tr><td style="padding:4px 16px 4px 0;color:#64748b">When</td><td><b>'.e($when).'</b></td></tr>'
-                .'<tr><td style="padding:4px 16px 4px 0;color:#64748b">Device</td><td><b>'.e($device).'</b></td></tr>'
-                .'<tr><td style="padding:4px 16px 4px 0;color:#64748b">IP address</td><td><b>'.e($ip).'</b></td></tr>'
-                .'</table>'
-                .'<p>If this was you, you can ignore this email.</p>'
-                .'<p style="color:#b91c1c"><b>Not you?</b> Change your password now. Every device will be logged out.</p>',
-                ['label' => 'Change my password', 'url' => $mailer->frontendUrl('/forgot-password')],
-            );
-        });
+        $mailer = app(SystemMailer::class);
+        $mailer->sendLater('auth.login_alert', $user->email, [
+            'name' => $user->name,
+            'login_time' => $when,
+            'device' => $device,
+            'ip_address' => $ip,
+            'reset_url' => $mailer->url('/forgot-password'),
+        ], [], $user->account_id, $user->name);
     }
 
     /**
@@ -228,7 +209,7 @@ class AuthController extends Controller
      * email is real (format, not disposable, domain receives mail, not taken)
      * and email it a 6-digit code. The account is only created with that code.
      */
-    public function sendSignupCode(Request $request, AccountMailer $mailer): JsonResponse
+    public function sendSignupCode(Request $request, SystemMailer $mailer): JsonResponse
     {
         if (! PublicSiteController::brand('signup_enabled', true)) {
             return response()->json(['message' => 'Sign-up is currently closed.', 'error_code' => 'SIGNUP_DISABLED'], 403);
@@ -247,14 +228,7 @@ class AuthController extends Controller
             ['code_hash' => Hash::make($code), 'attempts' => 0, 'expires_at' => now()->addMinutes($minutes)],
         );
 
-        $sent = $mailer->send(
-            $email,
-            "{$code} is your {$mailer->brand()} verification code",
-            'Verify your email',
-            '<p>Use this code to finish creating your account:</p>'
-            .'<p style="font-size:32px;font-weight:bold;letter-spacing:8px;color:#047857;margin:18px 0">'.$code.'</p>'
-            .'<p style="color:#64748b">The code expires in '.$minutes.' minutes. If you did not try to sign up, ignore this email.</p>',
-        );
+        $sent = $mailer->send('auth.signup_otp', $email, ['code' => $code, 'minutes' => $minutes]);
 
         if (! $sent) {
             EmailVerificationCode::where('email', $email)->delete();
@@ -351,7 +325,7 @@ class AuthController extends Controller
                 'is_default' => true,
             ]);
 
-            Subscription::create([
+            $subscription = Subscription::create([
                 'account_id' => $account->id,
                 'engine_type' => 'qr',
                 'billing_model' => 'flat_quota',
@@ -365,11 +339,14 @@ class AuthController extends Controller
                 'status' => 'active',
             ]);
 
+            $this->startTrialPlan($account, $subscription);
+
             return $user;
         });
 
         EmailVerificationCode::where('email', mb_strtolower(trim($data['email'])))->delete();
         $user->refresh();
+        $this->sendWelcome($user, $data['company_name'], $data['phone'] ?? null, $trialDays, $trialMessages);
         $token = $user->createToken('api-token', $user->getAllPermissions()->pluck('name')->all())->plainTextToken;
         $this->logAttempt($request, $user, 'success');
 
@@ -378,6 +355,78 @@ class AuthController extends Controller
             'token' => $token,
             'token_type' => 'Bearer',
         ], 201);
+    }
+
+    /**
+     * QA fixes (2026-10-14, owner): a website trial is the hidden "Free Trial"
+     * plan — Starter's features and limits. A ₹0 paid invoice records it, so
+     * the trial is handled by the same plan machinery as every paid plan: its
+     * features (entitlements, via the reconciler), its menu (modules_from_plan)
+     * and its limits. Buying any plan later is an upgrade from it. The trial's
+     * length and messages still come from the website settings above.
+     */
+    private function startTrialPlan(Account $account, Subscription $subscription): void
+    {
+        $plan = \App\Models\Plan::query()->where('slug', \App\Models\Plan::TRIAL_SLUG)->where('is_active', true)->first();
+        if ($plan === null) {
+            return; // No trial plan configured: the account keeps the old open trial.
+        }
+
+        $invoice = (new \App\Models\Invoice())->forceFill([
+            'account_id' => $account->id,
+            'invoice_number' => sprintf('TRIAL-%d-%s', $account->id, now()->format('Ymd')),
+            'plan_key' => $plan->slug,
+            'plan_label' => $plan->label,
+            'amount' => 0,
+            'tax_amount' => 0,
+            'total_amount' => 0,
+            'currency' => 'INR',
+            'payment_gateway' => 'manual',
+            'status' => 'paid',
+            'gateway_payment_id' => 'trial',
+            'paid_at' => now(),
+        ]);
+        $invoice->capturePlanTerms($plan)->save();
+
+        foreach (array_keys(\App\Models\Plan::LIMITS) as $column) {
+            $subscription->{$column} = $plan->{$column};
+        }
+        $subscription->save();
+
+        $account->forceFill(['modules_from_plan' => true, 'allowed_modules' => null])->save();
+        app(\App\Services\Access\PlanEntitlementReconciliationService::class)->reconcile($account);
+    }
+
+    /**
+     * Onboarding after a website signup: a welcome email + in-app
+     * notification for the new customer, and an email + in-app notification
+     * for every Super Admin. Best effort, sent after the response.
+     */
+    private function sendWelcome(User $user, string $company, ?string $phone, int $trialDays, int $trialMessages): void
+    {
+        $mailer = app(SystemMailer::class);
+
+        $mailer->sendLater('onboarding.welcome', $user->email, [
+            'name' => $user->name,
+            'company_name' => $company,
+            'email' => $user->email,
+            'trial_days' => $trialDays,
+            'trial_messages' => $trialMessages,
+            'login_url' => $mailer->url('/'),
+        ], [], $user->account_id, $user->name);
+        $mailer->notifyUsers([$user], 'Welcome to '.app(AccountMailer::class)->brand().'!', "Your free trial is active: {$trialMessages} messages for {$trialDays} days. Start by connecting your WhatsApp number.", 'onboarding', '/settings/whatsapp');
+
+        $admins = $mailer->superAdmins();
+        $mailer->sendToUsers('onboarding.admin_new_signup', $admins, [
+            'name' => $user->name,
+            'company_name' => $company,
+            'email' => $user->email,
+            'phone' => $phone ?: '-',
+            'trial_days' => $trialDays,
+            'signup_time' => now()->timezone('Asia/Kolkata')->format('d M Y, h:i A').' IST',
+            'admin_url' => $mailer->url('/admin/accounts'),
+        ]);
+        $mailer->notifyUsers($admins, 'New signup: '.$company, $user->name.' ('.$user->email.') signed up from the website and started a free trial.', 'onboarding', '/admin/accounts');
     }
 
     /**
@@ -415,6 +464,38 @@ class AuthController extends Controller
     /**
      * Return the currently authenticated user's context.
      */
+    /**
+     * POST /api/auth/tours — product tours (2026-10-15).
+     *   {tour: "welcome"}                 mark one tour finished/skipped
+     *   {action: "reset"}                 see every tour again
+     *   {action: "reset", tour: "..."}    see one tour again
+     * Returns the user's finished tours.
+     */
+    public function tours(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'action' => ['sometimes', 'string', Rule::in(['complete', 'reset'])],
+            'tour' => ['required_unless:action,reset', 'nullable', 'string', 'max:64', 'regex:/^[a-z0-9_:\/\-]+$/'],
+        ]);
+
+        $user = $request->user();
+        $done = array_values($user->completed_tours ?? []);
+        $tour = $data['tour'] ?? null;
+
+        if (($data['action'] ?? 'complete') === 'reset') {
+            $done = $tour === null ? [] : array_values(array_diff($done, [$tour]));
+        } elseif (! in_array($tour, $done, true)) {
+            // Bounded: the oldest entries go first if someone keeps adding unknown keys.
+            $done = array_slice([...$done, $tour], -200);
+        }
+
+        // A direct write: finishing a tour is not an account change worth an activity-log row.
+        $user->newQuery()->whereKey($user->id)->update(['completed_tours' => json_encode($done)]);
+        $user->forceFill(['completed_tours' => $done])->syncOriginal();
+
+        return response()->json(['completed_tours' => $done]);
+    }
+
     public function me(Request $request): JsonResponse
     {
         /** @var User $user */
@@ -527,13 +608,16 @@ class AuthController extends Controller
         // this same 'account' payload (see Account::effectiveModules()),
         // so the frontend's hasModule() can honor the live Agent-Client
         // hierarchy cap without re-implementing the intersection itself.
-        $user->account?->setAttribute('effective_modules', $user->account->effectiveModules());
+        $effectiveModules = $user->account?->effectiveModules() ?? [];
+        $user->account?->setAttribute('effective_modules', $effectiveModules);
 
         // The API key is part of the plan (external_api capability), not a separate module. The key stays
         // with the client after the plan ends; sending from it is refused until the plan is renewed.
         if ($user->account !== null) {
             $user->account->setAttribute('api_access', app(\App\Services\Access\AccessControlService::class)->hasApiKeyAccess($user->account));
             $user->account->setAttribute('subscription_active', $user->account->hasActiveSubscription());
+            // Account override, else the plan's team-user limit (null = unlimited).
+            $user->account->setAttribute('user_limit', $user->account->userLimit());
         }
 
         return [
@@ -542,6 +626,8 @@ class AuthController extends Controller
             'email' => $user->email,
             'phone_number' => $user->phone_number,
             'is_active' => $user->is_active,
+            // Product tours already finished or skipped (empty for a new user → the welcome tour).
+            'completed_tours' => array_values($user->completed_tours ?? []),
             'account_id' => $user->account_id,
             'account' => $user->account,
             // CRM — the Super Admin's own CRM account (PlatformCrmAccount),
@@ -560,7 +646,7 @@ class AuthController extends Controller
             'capabilities' => $this->accessControl->capabilityMap($user),
             // Phase 11 Task 1 — "industry.module" keys this user may use right now (navigation gating).
             // Empty for a Super Admin (no own account) and for any account with no usable industry module.
-            'industry_modules' => $user->account && $user->account->hasModuleEnabled(config('industries.module'))
+            'industry_modules' => $user->account && in_array(config('industries.module'), $effectiveModules, true)
                 ? app(\App\Services\Industry\IndustryModuleResolver::class)->usableKeys($user->account, $user)
                 : [],
             'created_at' => $user->created_at,

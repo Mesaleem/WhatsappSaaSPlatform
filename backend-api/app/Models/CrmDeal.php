@@ -68,6 +68,35 @@ class CrmDeal extends Model
 
     protected static function booted(): void
     {
+        // QA fixes (2026-10-14): developer webhook crm.deal.won.
+        static::saved(function (CrmDeal $deal): void {
+            if ($deal->status === self::STATUS_WON && ($deal->wasRecentlyCreated || $deal->wasChanged('status'))) {
+                $payload = [
+                    'id' => $deal->id, 'account_id' => $deal->account_id, 'name' => $deal->name,
+                    'value' => (string) $deal->value, 'currency' => $deal->currency, 'crm_lead_id' => $deal->crm_lead_id ?? null,
+                    'won_at' => $deal->won_at?->toIso8601String(),
+                ];
+                \Illuminate\Support\Facades\DB::afterCommit(fn () => \App\Services\Webhooks\WebhookDispatcher::fire((int) $deal->account_id, 'crm.deal.won', $payload));
+
+                // QA fixes (2026-10-14): a won deal from an ad-attributed lead gives the ad its
+                // conversion value (only when none was entered by hand), so ROAS has a figure.
+                $leadId = $deal->crm_lead_id ?? null;
+                if ($leadId && (float) $deal->value > 0) {
+                    \Illuminate\Support\Facades\DB::afterCommit(function () use ($leadId, $deal): void {
+                        $lead = \App\Models\CrmLead::query()->find($leadId);
+                        $hasValue = \App\Models\AdAttribution::query()->where('crm_lead_id', $leadId)->whereNotNull('conversion_value')->exists();
+                        if ($lead !== null && ! $hasValue) {
+                            try {
+                                app(\App\Services\Ads\AdAttributionService::class)->recordConversionValue($lead, number_format((float) $deal->value, 2, '.', ''), strtoupper((string) ($deal->currency ?: 'INR')));
+                            } catch (\Throwable) {
+                                // Not attributed / not converted: nothing to record.
+                            }
+                        }
+                    });
+                }
+            }
+        });
+
         static::saving(function (CrmDeal $deal): void {
             if ($deal->exists && $deal->isDirty('account_id')) {
                 throw ValidationException::withMessages(['account_id' => ['A deal cannot be moved to another account.']]);
@@ -164,5 +193,11 @@ class CrmDeal extends Model
     public function scopeForAccount(Builder $query, int $accountId): Builder
     {
         return $query->where('account_id', $accountId);
+    }
+
+    /** Own records only for a CRM user without view-all-crm (QA fixes, 2026-10-14). */
+    public function scopeVisibleTo(Builder $query, ?\App\Models\User $user): Builder
+    {
+        return \App\Support\CrmVisibility::apply($query, $user, ['owner_user_id']);
     }
 }

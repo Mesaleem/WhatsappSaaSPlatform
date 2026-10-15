@@ -205,6 +205,14 @@ export interface Account {
    * accounts list).
    */
   effective_modules?: AccountModule[];
+  /**
+   * Plan restructure (2026-10-15): true = this client's menu modules come
+   * from its plan (effective_modules), not a per-client checklist.
+   * allowed_modules may still switch modules off.
+   */
+  modules_from_plan?: boolean;
+  /** The account's user cap: the account override, else the plan's (null = unlimited). /auth/me only. */
+  user_limit?: number | null;
   /** True when the plan includes API access (the external_api capability). */
   api_access?: boolean;
   /** False once the plan has expired: the key is kept, but sending from it is paused. */
@@ -325,8 +333,32 @@ export interface ClientPlanOption {
   tax_amount: number;
   total_amount: number;
   capabilities: { slug: string; label: string }[];
-  /** Menu modules the plan switches on (pre-ticked in the checklist). */
+  /** Menu modules the plan switches on (shown read-only — the plan decides). */
   modules: AccountModule[];
+  limits?: PlanLimits;
+}
+
+/** Plan restructure (2026-10-15) — per-plan limits; null = unlimited. */
+export interface PlanLimits {
+  max_users: number | null;
+  max_meta_templates: number | null;
+  max_flows: number | null;
+  max_broadcasts_per_month: number | null;
+  marketing_message_limit: number | null;
+}
+
+export const PLAN_LIMIT_LABELS: Record<keyof PlanLimits, string> = {
+  max_users: 'Team users',
+  max_meta_templates: 'Meta templates',
+  max_flows: 'Journeys / Flows',
+  max_broadcasts_per_month: 'Broadcasts / month',
+  marketing_message_limit: 'Marketing messages / month',
+};
+
+/** "5 Team users", "No Broadcasts / month", or null when unlimited (not worth listing). */
+export function describePlanLimit(key: keyof PlanLimits, value: number | null): string | null {
+  if (value === null) return null;
+  return value === 0 ? `No ${PLAN_LIMIT_LABELS[key].toLowerCase()}` : `${value.toLocaleString('en-IN')} ${PLAN_LIMIT_LABELS[key].toLowerCase()}`;
 }
 
 /** PUT /api/admin/accounts/{id} — account-level fields only. */

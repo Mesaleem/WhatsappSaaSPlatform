@@ -1,18 +1,20 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { AlertCircle, CheckCircle2, Loader2, MessageSquare, Radio, ShieldCheck } from 'lucide-react';
+import { AlertCircle, CheckCircle2, Contact, Loader2, MessageSquare, Radio, Settings2, Share2, ShieldCheck } from 'lucide-react';
 import { roleLabel } from '../../theme/signalIndigo';
 import teamService from '../../services/teamService';
 import { useAuth } from '../../core/context/AuthContext';
 import { extractErrorMessage as extractMessage } from '../../utils/apiError';
 import type { TeamUser } from '../../types/team';
-import {
-  MATRIX_PERMISSION_LABELS,
-  SOCIAL_ADS_MATRIX_PERMISSIONS,
-  WHATSAPP_MATRIX_PERMISSIONS,
-  type MatrixPermission,
-  type TeamMemberPermissions,
-} from '../../types/permissions';
+import { MATRIX_GROUPS, MATRIX_PERMISSION_LABELS, type MatrixPermission, type TeamMemberPermissions } from '../../types/permissions';
+
+const GROUP_ICONS: Record<string, typeof MessageSquare> = {
+  whatsapp: MessageSquare,
+  whatsapp_admin: Settings2,
+  crm: Contact,
+  social: Share2,
+  ads: Radio,
+};
 import DismissibleAlert from '../../components/common/DismissibleAlert';
 
 const inputClass =
@@ -67,8 +69,10 @@ function PermissionGroup({
   direct,
   effective,
   onToggle,
+  hint,
 }: {
   title: string;
+  hint?: string;
   icon: typeof MessageSquare;
   permissions: readonly MatrixPermission[];
   direct: MatrixPermission[];
@@ -81,6 +85,7 @@ function PermissionGroup({
         <Icon className="h-4 w-4 text-emerald-700" />
         {title}
       </div>
+      {hint && <p className="mt-1 text-xs text-slate-500">{hint}</p>}
       <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
         {permissions.map((permission) => {
           const isEffective = effective.includes(permission);
@@ -143,9 +148,9 @@ export default function TeamPermissionsPage() {
   const [isSaving, setIsSaving] = useState(false);
   const [saved, setSaved] = useState(false);
 
-  // Module & Feature Access filtering — see this file's docblock.
-  const whatsappModuleAvailable = hasModule('chatbot') || hasModule('send_alert');
-  const socialAdsModuleAvailable = hasModule('meta_ads');
+  // Module & Feature Access filtering — see this file's docblock. Only the groups whose modules
+  // the client's plan has are shown (QA fixes, 2026-10-14: CRM, social and setup groups added).
+  const availableGroups = useMemo(() => MATRIX_GROUPS.filter((g) => g.modules.some((m) => hasModule(m))), [hasModule]);
 
   const loadUsers = useCallback(async () => {
     setIsLoadingUsers(true);
@@ -231,7 +236,7 @@ export default function TeamPermissionsPage() {
             Granular Permission Matrix
           </h2>
           <p className="mt-1 text-sm text-slate-500">
-            Fine-tune exactly which WhatsApp and Social Ads actions one team member can perform, beyond what their role
+            Choose exactly what one team member can do — WhatsApp, CRM, social media and ads — beyond what their role
             already grants.
           </p>
         </div>
@@ -267,11 +272,10 @@ export default function TeamPermissionsPage() {
           </div>
         )}
 
-        {!whatsappModuleAvailable && !socialAdsModuleAvailable && (
+        {availableGroups.length === 0 && (
           <div className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
             <AlertCircle className="h-4 w-4 flex-shrink-0" />
-            Your account has no WhatsApp or Social Ads modules enabled. Ask the Super Admin to enable a module before
-            granting granular permissions for it.
+            Your plan has no features that can be shared with team members yet.
           </div>
         )}
 
@@ -290,28 +294,20 @@ export default function TeamPermissionsPage() {
           </DismissibleAlert>
         ) : permissions ? (
           <>
-            {whatsappModuleAvailable && (
+            {availableGroups.map((group) => (
               <PermissionGroup
-                title="WhatsApp Module"
-                icon={MessageSquare}
-                permissions={WHATSAPP_MATRIX_PERMISSIONS}
+                key={group.key}
+                title={group.title}
+                hint={group.hint}
+                icon={GROUP_ICONS[group.key] ?? ShieldCheck}
+                permissions={group.permissions}
                 direct={permissions.direct}
                 effective={permissions.effective}
                 onToggle={handleToggle}
               />
-            )}
-            {socialAdsModuleAvailable && (
-              <PermissionGroup
-                title="Social Ads Module"
-                icon={Radio}
-                permissions={SOCIAL_ADS_MATRIX_PERMISSIONS}
-                direct={permissions.direct}
-                effective={permissions.effective}
-                onToggle={handleToggle}
-              />
-            )}
+            ))}
 
-            {(whatsappModuleAvailable || socialAdsModuleAvailable) && (
+            {availableGroups.length > 0 && (
               <div className="flex items-center gap-3">
                 <button
                   onClick={() => void handleSave()}

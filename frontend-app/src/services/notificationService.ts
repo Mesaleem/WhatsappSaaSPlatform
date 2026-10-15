@@ -5,6 +5,7 @@ import type {
   MailLogsResponse,
   NotificationBroadcastsResponse,
   NotificationTemplate,
+  NotificationTemplateKind,
   NotificationTemplatesResponse,
   SaveNotificationTemplatePayload,
   SendBroadcastPayload,
@@ -13,10 +14,11 @@ import type {
 
 const notificationService = {
   // Mail Template Manager
-  listTemplates(page = 1, perPage = 15, search = '') {
+  // kind: 'system' = the automatic (master) emails, 'custom' = broadcast templates (Super Admin sees both).
+  listTemplates(page = 1, perPage = 15, search = '', kind: NotificationTemplateKind = '') {
     return axiosInstance
       .get<NotificationTemplatesResponse>('/notification-templates', {
-        params: { page, per_page: perPage, search: search || undefined },
+        params: { page, per_page: perPage, search: search || undefined, kind: kind || undefined },
       })
       .then((res) => res.data);
   },
@@ -27,6 +29,21 @@ const notificationService = {
 
   updateTemplate(id: number, payload: SaveNotificationTemplatePayload) {
     return axiosInstance.put<NotificationTemplate>(`/notification-templates/${id}`, payload).then((res) => res.data);
+  },
+
+  // Master (system) template back to its built-in default. Super Admin only.
+  resetTemplate(id: number) {
+    return axiosInstance.post<NotificationTemplate>(`/notification-templates/${id}/reset`).then((res) => res.data);
+  },
+
+  // Emails the (unsaved) subject/body to the signed-in user, with sample values in the variables.
+  sendTestEmail(payload: { subject: string; body: string }) {
+    return axiosInstance.post<{ message: string }>('/notification-templates/test', payload).then((res) => res.data);
+  },
+
+  // Role names for the "Particular role" broadcast target (Super Admin holds manage-roles).
+  listRoles() {
+    return axiosInstance.get<{ id: number; name: string }[]>('/roles').then((res) => res.data);
   },
 
   deleteTemplate(id: number) {

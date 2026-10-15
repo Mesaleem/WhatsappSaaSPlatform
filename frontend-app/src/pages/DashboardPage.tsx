@@ -68,7 +68,7 @@ import {
 } from '../components/dashboard/OverviewWidgets';
 import DismissibleAlert from '../components/common/DismissibleAlert';
 
-const ENGINE_LABEL: Record<EngineType, string> = { qr: 'QR (Baileys)', meta: 'Meta Cloud API' };
+const ENGINE_LABEL: Record<EngineType, string> = { qr: 'QR (Baileys)', meta: 'Meta Cloud API', none: 'No WhatsApp (CRM)' };
 
 /**
  * [Bugfix, disclosed]: narrowed from the old PaymentAlertStatus-keyed map —

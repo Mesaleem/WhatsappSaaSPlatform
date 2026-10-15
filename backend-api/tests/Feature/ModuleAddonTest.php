@@ -214,7 +214,11 @@ class ModuleAddonTest extends TestCase
         $request = ModuleAddonRequest::find($requestId);
         $this->assertSame(ModuleAddonRequest::PAID, $request->status);
         $this->assertSame(now()->addMonth()->toDateString(), $request->term_ends_at->toDateString());
-        $this->assertContains('contact_groups', $account->fresh()->allowed_modules);
+        // QA fixes (2026-10-14): contact_groups is a free baseline module — its paid part is the
+        // native-group allowance of the term — so paying never rewrites the module checklist
+        // (writing it there used to narrow a plan client's whole menu to this one module).
+        $this->assertSame($account->allowed_modules, $account->fresh()->allowed_modules);
+        $this->assertContains('contact_groups', $account->fresh()->effectiveModules());
     }
 
     public function test_a_wrong_amount_or_a_repeated_transaction_is_refused(): void
@@ -239,7 +243,10 @@ class ModuleAddonTest extends TestCase
         $this->assertTrue(app(InvoiceCreditService::class)->markPaidAndCreditQuota($invoiceId, 'pay_MODULE_1'));
 
         $this->assertSame(ModuleAddonRequest::PAID, ModuleAddonRequest::find($requestId)->status);
-        $this->assertContains('contact_groups', $account->fresh()->allowed_modules);
+        // QA fixes (2026-10-14): contact_groups is a free baseline module — its paid part is the
+        // native-group allowance of the term — so paying never rewrites the module checklist
+        // (writing it there used to narrow a plan client's whole menu to this one module).
+        $this->assertSame($account->allowed_modules, $account->fresh()->allowed_modules);
         $this->assertFalse(app(InvoiceCreditService::class)->markPaidAndCreditQuota($invoiceId, 'pay_MODULE_1'), 'a repeated confirmation changes nothing');
     }
 
@@ -256,7 +263,10 @@ class ModuleAddonTest extends TestCase
         $this->artisan('modules:enforce-addons')->assertSuccessful();
 
         $this->assertSame(ModuleAddonRequest::EXPIRED, $ended->fresh()->status);
-        $this->assertNotContains('contact_groups', $account->fresh()->allowed_modules);
+        // QA fixes (2026-10-14): contact_groups is a free baseline module — its paid part is the
+        // native-group allowance of the term — so paying never rewrites the module checklist
+        // (writing it there used to narrow a plan client's whole menu to this one module).
+        $this->assertSame(['dashboard', 'contact_groups'], $account->fresh()->allowed_modules);
     }
 
     public function test_the_module_stays_on_while_another_paid_term_still_runs(): void

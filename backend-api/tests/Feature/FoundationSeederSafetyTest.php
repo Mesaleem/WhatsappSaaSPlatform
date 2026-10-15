@@ -73,7 +73,8 @@ class FoundationSeederSafetyTest extends TestCase
 
         $this->seedFoundation();
 
-        $this->assertSame(['business', 'growth', 'starter'], Plan::orderBy('slug')->pluck('slug')->all());
+        // + the hidden website trial (QA fixes, 2026-10-14).
+        $this->assertSame(['business', 'crm', 'growth', 'meta_growth', 'meta_pro', 'starter', 'trial'], Plan::orderBy('slug')->pluck('slug')->all());
         foreach (self::BASELINE as $slug => $capabilities) {
             $plan = Plan::where('slug', $slug)->firstOrFail();
             $catalog = PlanCatalog::find($slug);
@@ -102,7 +103,7 @@ class FoundationSeederSafetyTest extends TestCase
 
         $this->assertEquals($afterFirst, $this->snapshot(), 'plans and plan_entitlements byte-identical, timestamps included');
         $this->assertSame($counts, [Plan::count(), DB::table('plan_entitlements')->count(), Capability::count(), DB::table('providers')->count(), DB::table('provider_capabilities')->count()]);
-        $this->assertSame(3, Plan::count(), 'no duplicate plans');
+        $this->assertSame(7, Plan::count(), 'no duplicate plans');
     }
 
     // ------------------------------------------------------------------ existing plan protection
@@ -192,7 +193,7 @@ class FoundationSeederSafetyTest extends TestCase
         $this->assertEquals($others['growth'], $now['growth']);
         $this->assertEquals($others['business'], $now['business'], 'the edited Business price is kept');
         $this->assertEquals(9999.00, (float) $now['business']['price']);
-        $this->assertSame(3, Plan::count());
+        $this->assertSame(7, Plan::count());
     }
 
     // ------------------------------------------------------------------ unrelated plans

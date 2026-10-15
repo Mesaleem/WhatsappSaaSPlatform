@@ -92,14 +92,28 @@ export default function QuotaRequestsPage() {
       // shape this page was built for; a per_message wallet top-up uses
       // the backend's own message instead ('Top-up approved. Balance
       // added and invoice generated.' — see QuotaRequestController::approve()).
-      setSuccessMessage(
-        request.requested_topup_amount !== null
-          ? result.message
-          : 'Extra quota added to your account. Invoice generated under Billing & Plans.',
-      );
+      // QA fixes (2026-10-14): the messages / balance are added when the invoice is PAID.
+      setSuccessMessage(result.message);
       void load(page);
     } catch (err) {
       setError(extractMessage(err, 'Could not approve this request. Please try again.'));
+    } finally {
+      setApprovingId(null);
+    }
+  };
+
+  const handleReject = async (request: QuotaRequest) => {
+    const reason = window.prompt('Reason for the client (optional):') ?? null;
+    if (reason === null) return;
+    setApprovingId(request.id);
+    setError(null);
+    setSuccessMessage(null);
+    try {
+      const result = await quotaRequestService.reject(request.id, reason.trim());
+      setSuccessMessage(result.message);
+      void load(page);
+    } catch (err) {
+      setError(extractMessage(err, 'Could not reject this request. Please try again.'));
     } finally {
       setApprovingId(null);
     }
@@ -110,7 +124,7 @@ export default function QuotaRequestsPage() {
       <PageHeader
         icon={Zap}
         title="Quota Top-Up Requests"
-        subtitle="Review and approve Client Admin requests for extra message quota or wallet top-ups. Approving credits the tenant's subscription and generates an invoice."
+        subtitle="Review Client Admin requests for extra message quota or wallet top-ups. Approving creates an invoice; the messages are added when it is paid. You can also reject a request."
         actions={
           <button
             onClick={() => void load(page)}
@@ -205,6 +219,15 @@ export default function QuotaRequestsPage() {
                           <CheckCircle2 className="h-3 w-3" />
                         )}
                         Approve
+                      </button>
+                    ) : null}
+                    {request.status === 'pending' ? (
+                      <button
+                        onClick={() => void handleReject(request)}
+                        disabled={approvingId === request.id}
+                        className="ml-2 inline-flex items-center gap-1 rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                      >
+                        Reject
                       </button>
                     ) : (
                       <span className="text-xs text-slate-400">

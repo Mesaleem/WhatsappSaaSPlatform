@@ -209,6 +209,9 @@ class Account extends Model
         'api_rate_limit_per_minute',
         // Absolute Super Admin Control — per-client module toggles.
         'allowed_modules',
+        'addon_modules',
+        // Plan restructure (2026-10-15) — true: the menu modules come from the plan (see effectiveModules()).
+        'modules_from_plan',
         // Super Admin Client Provisioning, Client Admin Mapping, User
         // Limits, Granular Permission Matrix & Adaptive Dashboards
         // refactor — see the creating migration's docblock and
@@ -259,6 +262,8 @@ class Account extends Model
     {
         return [
             'allowed_modules' => 'array',
+            'addon_modules' => 'array',
+            'modules_from_plan' => 'boolean',
             'max_users_limit' => 'integer',
             // 3-Tier Hierarchy (Phase 1).
             'agent_id' => 'integer',
@@ -519,6 +524,39 @@ class Account extends Model
      */
     public function effectiveModules(): array
     {
+        return $this->resolveModules(true);
+    }
+
+    /**
+     * The modules switched on for this account WITHOUT its plan's limit: only
+     * explicit switch-offs (allowed_modules, the Agent's own modules, Route
+     * Master's kill switch) count. Owner decision (2026-09-30): a Super Admin
+     * acting for a client is not held to that client's plan — this is the check
+     * for them.
+     */
+    public function hasModuleSwitchedOn(string $module): bool
+    {
+        return in_array($module, $this->resolveModules(false), true);
+    }
+
+    /**
+     * Why $module is unavailable: null = available; 'not_in_plan' = the
+     * client's plan does not include it (an upgrade opens it); 'disabled' =
+     * switched off (allowed_modules, Agent, kill switch). Callers turn
+     * 'not_in_plan' into their "upgrade your plan" (capability) refusal.
+     */
+    public function moduleDenial(string $module): ?string
+    {
+        if ($this->hasModuleEnabled($module)) {
+            return null;
+        }
+
+        return $this->hasModuleSwitchedOn($module) ? 'not_in_plan' : 'disabled';
+    }
+
+    /** @return list<string> */
+    private function resolveModules(bool $applyPlan): array
+    {
         // BUILD: Fully Dynamic Categorized Route Master & Nested
         // Permission Matrix UI — dynamic, DB-driven kill switch layered
         // on top of the existing allowed_modules hierarchy below (see
@@ -529,7 +567,22 @@ class Account extends Model
         // follows.
         $activeKeys = SystemRoute::activePermissionKeys();
 
-        $own = $this->allowed_modules ?? self::MODULES;
+        // Plan restructure (2026-10-15): a client on a plan gets the modules its capabilities
+        // open (PlanModules) — the plan decides. An explicit allowed_modules list can still
+        // only narrow that (a Super Admin switch-off); it never adds a module the plan lacks.
+        if ($applyPlan && $this->modules_from_plan && $this->account_type === 'client') {
+            $own = $this->planModules();
+            if ($this->allowed_modules !== null) {
+                $own = array_values(array_intersect($own, $this->allowed_modules));
+            }
+        } else {
+            $own = $this->allowed_modules ?? self::MODULES;
+        }
+        // Paid module add-ons are added on top (QA fixes, 2026-10-14): see
+        // migration 2026_10_16_100000_add_addon_modules_to_accounts.
+        if (! empty($this->addon_modules)) {
+            $own = array_values(array_unique([...$own, ...array_intersect((array) $this->addon_modules, self::MODULES)]));
+        }
         if ($activeKeys !== null) {
             $own = array_values(array_intersect($own, $activeKeys));
         }
@@ -574,6 +627,23 @@ class Account extends Model
      * @param  list<string>  $modules
      * @return list<string>
      */
+    /**
+     * The modules this account's held capabilities open (active entitlements:
+     * the plan's bundle plus any manual grant). See PlanModules.
+     *
+     * @return list<string>
+     */
+    public function planModules(): array
+    {
+        // One query: the slugs of the capabilities this account holds right now.
+        $slugs = $this->entitlements()->active()
+            ->join('capabilities', 'capabilities.id', '=', 'account_entitlements.capability_id')
+            ->pluck('capabilities.slug')
+            ->all();
+
+        return \App\Services\Access\PlanModules::forCapabilities($slugs);
+    }
+
     private static function withFreeBaselineModules(array $modules): array
     {
         return array_values(array_unique([...$modules, 'contact_groups']));
@@ -610,11 +680,28 @@ class Account extends Model
      */
     public function hasReachedUserLimit(): bool
     {
-        if ($this->max_users_limit === null) {
+        $limit = $this->userLimit();
+        if ($limit === null) {
             return false;
         }
 
-        return $this->users()->count() >= $this->max_users_limit;
+        return $this->users()->count() >= $limit;
+    }
+
+    /**
+     * The account's user cap: the Super Admin's per-account max_users_limit
+     * when set (an override, e.g. extra seats sold), else the running plan's
+     * max_users (plan restructure, 2026-10-15). NULL = unlimited.
+     */
+    public function userLimit(): ?int
+    {
+        if ($this->max_users_limit !== null) {
+            return (int) $this->max_users_limit;
+        }
+
+        $planLimit = $this->currentSubscription?->max_users;
+
+        return $planLimit === null ? null : (int) $planLimit;
     }
 
     /**

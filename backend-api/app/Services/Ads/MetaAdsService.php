@@ -99,7 +99,26 @@ class MetaAdsService
         'instagram_feed' => ['instagram', 'stream'],
         'instagram_stories' => ['instagram', 'story'],
         'instagram_reels' => ['instagram', 'reels'],
+        // 2026-10-15 — WhatsApp Status (Meta Placement targeting: whatsapp_positions = status).
+        // Meta allows it only on Click-to-WhatsApp ads and never on its own: Instagram Stories
+        // is added with it (placementsFor()).
+        'whatsapp_status' => ['whatsapp', 'status'],
     ];
+
+    /**
+     * The placements actually sent: WhatsApp Status always travels with Instagram Stories.
+     *
+     * @param  list<string>  $placements
+     * @return list<string>
+     */
+    public static function placementsFor(array $placements): array
+    {
+        if (in_array('whatsapp_status', $placements, true) && ! in_array('instagram_stories', $placements, true)) {
+            $placements[] = 'instagram_stories';
+        }
+
+        return array_values($placements);
+    }
 
     public const LOCATION_TYPES = ['country', 'region', 'city'];
 
@@ -183,6 +202,17 @@ class MetaAdsService
         $connections = app(SocialConnectionService::class);
         $connections->assertUsable($adAccount, 'ads.launch');
 
+        if (in_array('whatsapp_status', $payload['placements'] ?? [], true) && $payload['objective'] !== 'CLICK_TO_WHATSAPP') {
+            throw new RuntimeException('WhatsApp Status ads must use the Click-to-WhatsApp objective.');
+        }
+        // QA fixes (2026-10-14): a lead-generation ad must open an instant form (it was
+        // launched without one), and video is not sent as an image any more.
+        if ($payload['objective'] === 'LEAD_GENERATION' && empty($payload['creative']['lead_gen_form_id'])) {
+            throw new RuntimeException('Choose the instant form this lead ad opens (create one in Meta Business Suite → Instant forms first).');
+        }
+        if (! empty($payload['creative']['image_url']) && preg_match('/\.(mp4|mov|m4v|webm|avi)(\?.*)?$/i', (string) $payload['creative']['image_url'])) {
+            throw new RuntimeException('Video ads are not supported yet. Use an image for the ad (videos can still be posted as Reels).');
+        }
         $whatsAppNumber = $this->preflight($account, $payload['objective'], $page, $payload['creative']['call_to_action'] ?? null);
 
         // Owner request (2026-09-30): budget in the ad account's own currency,
@@ -192,7 +222,8 @@ class MetaAdsService
         $info = $this->probeAdAccount($adAccount, $accessToken);
         $this->assertBudgetFits($info, (float) $payload['daily_budget']);
         $payload['_currency_offset'] = self::currencyOffset($info['currency'] ?? null);
-        $payload['_instagram_actor_id'] = $this->instagramActorFor($account, $payload['placements'] ?? []);
+        $payload['placements'] = self::placementsFor($payload['placements'] ?? []);
+        $payload['_instagram_actor_id'] = $this->instagramActorFor($account, $payload['placements']);
 
         $campaign = $this->recordLaunch($account, $adAccount, $payload + ['_currency' => $info['currency'] ?? null], $requestKey);
 
@@ -925,6 +956,36 @@ class MetaAdsService
     }
 
     /**
+     * QA fixes (2026-10-14) — the instant (lead) forms of the account's connected Page,
+     * for the ad wizard's form picker. Empty when no Page is connected or Meta refuses.
+     *
+     * @return list<array{id: string, name: string, status: string}>
+     */
+    public function leadForms(\App\Models\Account $account): array
+    {
+        $page = SocialAccount::query()->where('account_id', $account->id)->where('provider', 'meta')
+            ->where('asset_type', 'facebook_page')->where('health_status', SocialAccount::HEALTH_CONNECTED)->first();
+        if ($page === null || ! $page->access_token) {
+            return [];
+        }
+        try {
+            $response = Http::withToken((string) $page->access_token)->timeout(15)
+                ->get('https://graph.facebook.com/'.self::API_VERSION."/{$page->provider_id}/leadgen_forms", ['fields' => 'id,name,status', 'limit' => 100]);
+        } catch (Throwable) {
+            return [];
+        }
+        if ($response->failed()) {
+            return [];
+        }
+
+        return collect((array) $response->json('data', []))
+            ->map(fn ($f) => ['id' => (string) ($f['id'] ?? ''), 'name' => (string) ($f['name'] ?? ''), 'status' => (string) ($f['status'] ?? '')])
+            ->filter(fn ($f) => $f['id'] !== '' && strtoupper($f['status']) !== 'ARCHIVED')
+            ->values()
+            ->all();
+    }
+
+    /**
      * @param array{image_url: string|null, headline: string, primary_text: string} $creative
      */
     private function createAdCreative(string $adAccountId, string $accessToken, ?SocialAccount $page, array $creative, string $objective, ?string $instagramActorId = null): string
@@ -958,9 +1019,13 @@ class MetaAdsService
             'message' => $creative['primary_text'],
             'name' => $creative['headline'],
             'link' => 'https://www.facebook.com/'.$page->provider_id,
-            'call_to_action' => [
+            'call_to_action' => array_filter([
                 'type' => $cta,
-            ],
+                // QA fixes (2026-10-14): the instant form a lead ad opens.
+                'value' => $objective === 'LEAD_GENERATION' && ! empty($creative['lead_gen_form_id'])
+                    ? ['lead_gen_form_id' => (string) $creative['lead_gen_form_id']]
+                    : null,
+            ], fn ($v) => $v !== null),
         ];
 
         if (! empty($creative['image_url'])) {

@@ -97,12 +97,16 @@ class WhatsAppNumberChangeService
 
             $this->assertNumberFree($locked->new_phone);
 
+            // The old number is logged out of the engine below for a linked OR paused slot,
+            // but only a LINKED one becomes "unlinked" (ready to connect). A paused slot
+            // (term ended / unpaid) stays paused — QA fixes (2026-10-14): approving a
+            // change used to let it connect again without renewing.
             $wasLinked = in_array($slot->status, [WhatsAppNumber::STATUS_LINKED, WhatsAppNumber::STATUS_PAUSED], true);
 
             try {
                 $slot->forceFill([
                     'phone_number' => $locked->new_phone,
-                    'status' => $wasLinked ? WhatsAppNumber::STATUS_UNLINKED : $slot->status,
+                    'status' => $slot->status === WhatsAppNumber::STATUS_LINKED ? WhatsAppNumber::STATUS_UNLINKED : $slot->status,
                 ])->save();
             } catch (QueryException $e) {
                 // Another slot took the number between the check above and this write.

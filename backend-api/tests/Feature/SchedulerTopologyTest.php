@@ -37,6 +37,9 @@ class SchedulerTopologyTest extends TestCase
         'batches:dispatch-due',
         'messages:dispatch-scheduled',
         'security:refresh-disposable-domains',
+        'crm:send-task-reminders',
+        'leads:retry-pending',
+        'templates:sync-meta',
     ];
 
     /** @return list<Event> */

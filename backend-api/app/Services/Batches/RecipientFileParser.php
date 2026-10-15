@@ -19,6 +19,19 @@ class RecipientFileParser
 
     private const PHONE_HEADERS = ['phone', 'phone_number', 'mobile', 'mobile_number', 'number', 'whatsapp', 'recipient_phone'];
 
+    /**
+     * Every row of the file, cells as strings (QA fixes, 2026-10-14 — used by the CRM
+     * lead import, which needs the other columns too). Bounded by MAX_ROWS.
+     *
+     * @return list<list<string>>
+     */
+    public function rows(string $path, string $extension): array
+    {
+        $rows = strtolower($extension) === 'xlsx' ? $this->xlsxRows($path) : $this->csvRows($path);
+
+        return array_slice($rows, 0, self::MAX_ROWS + 1);
+    }
+
     /** @return array{phones: list<string>, invalid: int, rows: int} */
     public function parse(string $path, string $extension): array
     {

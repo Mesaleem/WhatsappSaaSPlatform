@@ -553,6 +553,20 @@ class ModuleAddonService
             'link' => '/add-ons',
             'is_read' => false,
         ]);
+
+        // QA fixes (2026-10-14): add-on decisions / term ends are emailed too (in-app only before).
+        $user = User::query()->find($userId);
+        if ($user?->email) {
+            $mailer = app(\App\Services\Mail\SystemMailer::class);
+            $mailer->sendLater('account.alert', $user->email, [
+                'name' => $user->name,
+                'company_name' => (string) ($user->account?->company_name ?? ''),
+                'alert_title' => $title,
+                'alert_message' => $body,
+                'action_label' => 'Open add-ons',
+                'action_url' => $mailer->url('/add-ons'),
+            ], [], $request->account_id, $user->name);
+        }
     }
 
     /** The price tiers of a module, lowest first. Empty when the offer is a flat price. */
@@ -645,8 +659,15 @@ class ModuleAddonService
             return;
         }
 
-        $modules = array_values(array_unique(array_merge((array) $account->allowed_modules, [$module])));
-        $account->forceFill(['allowed_modules' => $modules])->save();
+        // QA fixes (2026-10-14): contact_groups is a free baseline module (its paid
+        // part is the native-group allowance, read from the term itself), and every
+        // other module add-on goes to addon_modules — never into allowed_modules,
+        // which for a plan client NARROWS the plan (that wiped the whole menu).
+        if ($module === 'contact_groups') {
+            return;
+        }
+        $modules = array_values(array_unique([...(array) $account->addon_modules, $module]));
+        $account->forceFill(['addon_modules' => $modules])->save();
     }
 
     /** Switches the offer off at the end of its last term. A capability is revoked only when this add-on granted it. */
@@ -668,8 +689,11 @@ class ModuleAddonService
             return;
         }
 
-        $modules = array_values(array_diff((array) $account->allowed_modules, [$module]));
-        $account->forceFill(['allowed_modules' => $modules])->save();
+        if ($module === 'contact_groups') {
+            return;
+        }
+        $modules = array_values(array_diff((array) $account->addon_modules, [$module]));
+        $account->forceFill(['addon_modules' => $modules === [] ? null : $modules])->save();
     }
 
     /**

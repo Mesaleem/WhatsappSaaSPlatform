@@ -1,3 +1,4 @@
+import type { PlanLimits } from './account';
 /**
  * Module 8 — Multi-Tenant Billing, Payment Gateway Integration & Automated
  * Invoicing type definitions. Mirrors PaymentGatewayController /
@@ -10,7 +11,8 @@ import type { PaginatedResponse } from './account';
 
 /** 'manual' = recorded by a Super Admin or Agent (cash, bank transfer, UPI, cheque). */
 export type PaymentGateway = 'razorpay' | 'stripe' | 'manual';
-export type InvoiceStatus = 'pending' | 'paid' | 'failed';
+// 'cancelled' (a withdrawn request) and 'refunded' (QA fixes, 2026-10-14) are shown as they are.
+export type InvoiceStatus = 'pending' | 'paid' | 'failed' | 'cancelled' | 'refunded';
 export type GatewayMode = 'test' | 'live';
 
 /** GET /api/billing/plans — one entry per App\Support\PlanCatalog plan. */
@@ -28,7 +30,16 @@ export interface Plan {
   total_amount: string;
   /** Plan purchase rules (PlanChangePolicy): what this plan's button may do for this account. */
   purchase?: PlanPurchase | null;
+  /** Plan restructure (2026-10-15): users / templates / journeys / broadcasts / marketing caps (null = unlimited). */
+  limits?: PlanLimits;
+  /** A custom plan built for this client. */
+  is_custom?: boolean;
+  /** What the plan includes besides messages, e.g. "CRM", "Social media" (QA fixes, 2026-10-14). */
+  features?: string[];
 }
+
+/** Each plan limit of the running plan and how much of it is used. */
+export type PlanUsage = Record<keyof PlanLimits, { limit: number | null; used: number; resets_at?: string | null }>;
 
 export type PlanPurchaseAction = 'new' | 'renew' | 'upgrade' | 'pending' | 'renew_after_expiry' | 'downgrade_after_expiry';
 
@@ -72,6 +83,7 @@ export interface CustomPlanRequest extends CustomPlanRequestPayload {
 export interface PlansResponse {
   plans: Plan[];
   plan_status?: PlanStatus | null;
+  plan_usage?: PlanUsage | null;
   /** Gateways that are both enabled AND fully configured — the only ones checkout can offer. */
   available_gateways: PaymentGateway[];
   tax_rate: number;

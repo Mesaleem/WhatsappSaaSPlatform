@@ -87,6 +87,9 @@ class WhatsAppFlowController extends Controller
             $this->assertPublishable($data['graph_data'], $account, 'journey.publish', null);
         }
 
+        // Plan restructure (2026-10-15): the plan's journey limit.
+        app(\App\Services\Billing\PlanLimits::class)->assertCanAddFlow($account, $request->user());
+
         $flow = new WhatsAppFlow([
             'account_id' => $account->id,
             'name' => $data['name'],
@@ -161,6 +164,35 @@ class WhatsAppFlowController extends Controller
     }
 
     /** POST /api/whatsapp/flows/{id}/toggle — mirrors ChatbotRuleController::toggle(). */
+    /**
+     * POST /api/whatsapp/flows/{id}/start  { phone_number, variables? } — QA fixes
+     * (2026-10-14): start this (active, published) journey for a customer, without
+     * waiting for them to message first. Refused while the number is already in a
+     * conversation. Real messages are sent (same gates and quota as live traffic).
+     */
+    public function start(Request $request, int $id): JsonResponse
+    {
+        $account = $this->account($request);
+        $flow = WhatsAppFlow::forAccount($account->id)->find($id);
+        $this->abortIfMissingFlow($request, $account, $flow, $id);
+
+        $data = $request->validate([
+            'phone_number' => ['required', 'string', 'max:32'],
+            'variables' => ['nullable', 'array', 'max:30'],
+            'variables.*' => ['nullable', 'string', 'max:500'],
+        ]);
+        if (! $flow->is_active || ! $flow->publishedVersion) {
+            return response()->json(['message' => 'Publish and switch on this journey first.', 'error_code' => 'JOURNEY_NOT_LIVE'], 422);
+        }
+
+        $started = app(\App\Services\WhatsApp\WhatsAppJourneyEngine::class)
+            ->startForContact($account, $flow, $data['phone_number'], $data['variables'] ?? [], 'manual_start');
+
+        return $started
+            ? response()->json(['message' => 'Journey started.'])
+            : response()->json(['message' => 'The journey could not start — the number may already be in a conversation, or journeys are not available on this plan.', 'error_code' => 'JOURNEY_NOT_STARTED'], 409);
+    }
+
     public function toggle(Request $request, int $id): JsonResponse
     {
         $account = $this->account($request);
@@ -171,6 +203,9 @@ class WhatsAppFlowController extends Controller
         // P5-7 — switching a journey ON makes its published version live.
         if (! $flow->is_active) {
             $this->assertPublishedVersionRunnable($flow, $account);
+            // QA fixes (2026-10-14): after a downgrade, journeys above the new plan's limit
+            // stay switched off — switching one on must fit in the plan's active journeys.
+            app(\App\Services\Billing\PlanLimits::class)->assertCanActivateFlow($account, $flow, $request->user());
         }
 
         $flow->forceFill(['is_active' => ! $flow->is_active])->save();

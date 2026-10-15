@@ -195,6 +195,75 @@ class TemplateService
      * Super Admin, either way. No-op for a global template (no single
      * account "owns" it to notify).
      */
+    /**
+     * QA fixes (2026-10-14) — tell the client its template can be used (it used
+     * to hear only about rejections).
+     */
+    public function notifyApproved(MessageTemplate $template, ?string $note = null): void
+    {
+        $this->notifyOwner($template, 'Template approved', $note ?? sprintf('"%s" is approved — you can send it now.', $template->title));
+    }
+
+    /**
+     * QA fixes (2026-10-14) — Meta's verdict on a template submitted to it
+     * (message_template_status_update webhook, or the templates:sync-meta poll).
+     */
+    public function applyMetaStatus(MessageTemplate $template, string $metaStatus, string $reason = ''): void
+    {
+        $metaStatus = strtoupper($metaStatus);
+        if ($template->meta_template_status === $metaStatus) {
+            return;
+        }
+        $template->forceFill(['meta_template_status' => $metaStatus]);
+
+        if ($metaStatus === 'APPROVED') {
+            $wasWaiting = $template->status !== 'approved';
+            $template->forceFill(['status' => 'approved'])->save();
+            if ($wasWaiting) {
+                $this->notifyApproved($template, sprintf('Meta approved "%s" — you can send it now.', $template->title));
+            }
+
+            return;
+        }
+
+        if ($metaStatus === 'REJECTED') {
+            $template->forceFill([
+                'status' => 'rejected',
+                'rejection_reason' => trim('Meta rejected this template'.($reason !== '' ? ': '.str_replace('_', ' ', strtolower($reason)) : '').'.'),
+            ])->save();
+            $this->notifyRejected($template);
+
+            return;
+        }
+
+        // PAUSED / DISABLED: kept, but not sendable (MessageTemplate::scopeApprovedFor) until Meta lifts it.
+        $template->save();
+        if (in_array($metaStatus, ['PAUSED', 'DISABLED'], true)) {
+            $this->notifyOwner($template, 'Template '.strtolower($metaStatus).' by Meta', sprintf('Meta %s "%s" (usually because of low quality / blocks). It cannot be sent until Meta allows it again.', strtolower($metaStatus), $template->title));
+        }
+    }
+
+    private function notifyOwner(MessageTemplate $template, string $title, string $body): void
+    {
+        $account = $template->account;
+        $owner = $account?->owner;
+        if (! $owner && $account?->account_type === 'agent') {
+            $owner = User::query()->where('account_id', $account->id)->whereHas('roles', fn ($q) => $q->where('name', 'agent'))->oldest()->first();
+        }
+        if (! $owner) {
+            return;
+        }
+
+        InAppNotification::create([
+            'user_id' => $owner->id,
+            'title' => $title,
+            'body' => $body,
+            'category' => 'template_review',
+            'link' => $account->account_type === 'agent' ? '/admin/templates' : self::CLIENT_TEMPLATES_LINK,
+            'is_read' => false,
+        ]);
+    }
+
     public function notifyRejected(MessageTemplate $template): void
     {
         $account = $template->account;

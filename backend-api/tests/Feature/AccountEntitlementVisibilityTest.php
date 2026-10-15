@@ -181,8 +181,11 @@ class AccountEntitlementVisibilityTest extends TestCase
 
         $this->assertSame($before, \DB::table('plan_entitlements')->count());
         // 4 + 9 + 11 rows — the confirmed matrix, asserted cell by cell
-        // in PlanCapabilityMatrixAndBackfillTest.
-        $this->assertSame(24, $before);
+        // in PlanCapabilityMatrixAndBackfillTest — plus the 2026-10-15
+        // line-up: crm 1 + meta_growth 3 + meta_pro 6, and the QA fixes (2026-10-14):
+        // AI in Meta Pro (+1) and the hidden trial with Starter's 4.
+        // + the Developer API in the CRM plan (+1).
+        $this->assertSame(40, $before);
     }
 
     public function test_the_plan_table_stays_value_identical_to_the_plan_catalog(): void

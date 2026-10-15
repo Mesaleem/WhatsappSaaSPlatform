@@ -80,6 +80,13 @@ class CrmActivity extends Model
 
     protected static function booted(): void
     {
+        // QA fixes (2026-10-14): a new due time is reminded again (crm:send-task-reminders).
+        static::saving(function (CrmActivity $activity): void {
+            if ($activity->exists && $activity->isDirty('due_at')) {
+                $activity->reminded_at = null;
+            }
+        });
+
         static::saving(function (CrmActivity $activity): void {
             if ($activity->exists && $activity->isDirty('account_id')) {
                 throw ValidationException::withMessages(['account_id' => ['An activity cannot be moved to another account.']]);
@@ -154,5 +161,11 @@ class CrmActivity extends Model
     public function scopeForAccount(Builder $query, int $accountId): Builder
     {
         return $query->where('account_id', $accountId);
+    }
+
+    /** Own records only for a CRM user without view-all-crm (QA fixes, 2026-10-14). */
+    public function scopeVisibleTo(Builder $query, ?\App\Models\User $user): Builder
+    {
+        return \App\Support\CrmVisibility::apply($query, $user, ['assigned_user_id', 'created_by_user_id']);
     }
 }

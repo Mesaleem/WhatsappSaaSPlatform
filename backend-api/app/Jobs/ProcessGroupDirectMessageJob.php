@@ -150,7 +150,7 @@ class ProcessGroupDirectMessageJob implements ShouldQueue
             return;
         }
 
-        if (PaymentAlertDispatcher::isWhatsAppDisconnected($account)) {
+        if (PaymentAlertDispatcher::isWhatsAppDisconnected($account, $this->senderNumberId)) {
             $this->resolveAllFailed($log, 'WhatsApp account was disconnected before this batch could be processed.');
 
             return;

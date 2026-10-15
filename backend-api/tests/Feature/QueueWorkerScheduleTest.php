@@ -60,6 +60,9 @@ class QueueWorkerScheduleTest extends TestCase
             'knowledge' => [ProcessKnowledgeDocumentJob::class],
             'social' => [PublishScheduledPostJob::class, RefreshPostInsightsJob::class, 'App\\Jobs\\CheckSocialConnectionJob', 'App\\Jobs\\CompleteInstagramVideoPostJob'],
             ReconcilePlanAccountsJob::QUEUE => [ReconcilePlanAccountsJob::class],
+            // QA fixes (2026-10-14): jobs dispatched without a named queue (alerts, group sends,
+            // native group creation, developer webhooks).
+            'default' => ['App\Jobs\ProcessPaymentAlertJob', 'App\Jobs\ProcessGroupDispatchJob', 'App\Jobs\ProcessGroupDirectMessageJob', 'App\Jobs\CreateNativeWhatsAppGroupJob', 'App\Jobs\SyncNativeWhatsAppGroupParticipantsJob', 'App\Jobs\DispatchWebhookJob'],
         ];
 
         $seen = [];
@@ -81,6 +84,7 @@ class QueueWorkerScheduleTest extends TestCase
 
         ksort($seen);
         $this->assertSame([
+            'default' => 'database',
             'journeys' => 'database',
             'knowledge' => 'database_long',
             'plan-reconciliation' => 'database_long',

@@ -448,7 +448,10 @@ class MetaProviderFoundationTest extends TestCase
         // whatsapp_setup deliberately absent from allowed_modules — the
         // existing entitlement mechanism this route is gated by
         // (module.guard:whatsapp_setup), not a new capability check.
-        $t = $this->makeMetaTenant(['allowed_modules' => ['dashboard', 'analytics']]);
+        $t = $this->makeMetaTenant();
+        // QA fixes (2026-10-14): paying for a plan resets an earlier checklist, so the
+        // switch-off is made after the purchase, as a Super Admin would.
+        $t['account']->forceFill(['allowed_modules' => ['dashboard', 'analytics']])->save();
 
         $this->actingAs($t['user'])->postJson('/api/whatsapp/meta-config', $this->validPayload())
             ->assertStatus(403);

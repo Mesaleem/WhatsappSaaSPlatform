@@ -164,7 +164,7 @@ class GroupMessageDispatcher
             ];
         }
 
-        if (PaymentAlertDispatcher::isWhatsAppDisconnected($account)) {
+        if (PaymentAlertDispatcher::isWhatsAppDisconnected($account, $senderNumberId)) {
             return ['status' => 'disconnected', 'message' => 'WhatsApp account is disconnected. Please connect your device first.'];
         }
 
@@ -217,6 +217,15 @@ class GroupMessageDispatcher
                     'required' => $recipientCount,
                     'remaining' => $current?->remainingQuota() ?? 0,
                 ];
+            }
+
+            // Plan restructure (2026-10-15), step 3: a MARKETING template also needs the plan's
+            // marketing cap for every recipient; refused = the message quota just claimed goes back.
+            if (MessageQuotaService::isMarketing($template->category)
+                && ! app(MessageQuotaService::class)->reserveMarketing($subscription, $recipientCount)) {
+                app(MessageQuotaService::class)->release($subscription, $recipientCount);
+
+                return ['status' => 'quota_exhausted', 'message' => MessageQuotaService::marketingLimitMessage($subscription)];
             }
 
             // A preview only, not the final per-recipient text — 'name'

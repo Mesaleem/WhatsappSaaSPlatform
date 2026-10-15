@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AxiosError } from 'axios';
-import { Loader2, Megaphone, Pencil, Plus, Trash2, X, XCircle } from 'lucide-react';
+import { Eye, Loader2, Megaphone, Pencil, Plus, RotateCcw, Send, Trash2, X, XCircle } from 'lucide-react';
 import { useAuth } from '../../core/context/AuthContext';
 import { useTenant } from '../../core/context/TenantContext';
 import accountService from '../../services/accountService';
@@ -14,6 +14,7 @@ import type {
   MailLogStatus,
   NotificationBroadcast,
   NotificationTemplate,
+  NotificationTemplateKind,
   NotificationTemplateType,
 } from '../../types/notifications';
 import { PageHeader, PageShell } from '../../components/common/PageShell';
@@ -23,6 +24,8 @@ import { TableSkeletonRows } from '../../components/common/Skeleton';
 import RichTextEditor from '../../components/common/RichTextEditor';
 import ConfirmModal from '../../components/common/ConfirmModal';
 import DismissibleAlert from '../../components/common/DismissibleAlert';
+import EmailPreviewModal, { InlineCssReport } from './EmailPreviewModal';
+import { findInlineCssIssues, renderPreview, usedVariables } from './emailPreview';
 
 type Tab = 'compose' | 'templates' | 'history' | 'mail-logs';
 
@@ -30,24 +33,6 @@ const MAIL_LOG_STATUS_OPTIONS: { value: MailLogStatus; label: string }[] = [
   { value: 'sent', label: 'Sent' },
   { value: 'failed', label: 'Failed' },
 ];
-
-const SAMPLE_PREVIEW_VARS = { name: 'Jane Doe', email: 'jane.doe@example.com' };
-
-/**
- * Live preview mirrors App\Support\TemplateRenderer::render() exactly
- * (simple {{token}} strtr-style substitution) — done here purely
- * client-side, with no round-trip to the backend, so the preview updates
- * with zero latency as the composer types. See TemplateRenderer's
- * docblock: this duplication is deliberate, not a gap, and the two are
- * kept in sync by hand since both are this same simple algorithm.
- */
-function renderPreview(html: string, vars: Record<string, string>): string {
-  let out = html;
-  for (const [key, value] of Object.entries(vars)) {
-    out = out.split(`{{${key}}}`).join(value);
-  }
-  return out;
-}
 
 function parseEmailList(text: string): string[] {
   const parts = text.split(/[\s,;]+/).map((s) => s.trim()).filter(Boolean);
@@ -100,7 +85,7 @@ export default function NotificationsPage() {
       {tab === 'compose' && (
         <ComposeTab superAdmin={superAdmin} selectedAccountId={selectedAccountId} selectedAccountName={selectedAccount?.company_name ?? null} />
       )}
-      {tab === 'templates' && <TemplatesTab />}
+      {tab === 'templates' && <TemplatesTab superAdmin={superAdmin} />}
       {tab === 'history' && <HistoryTab />}
       {tab === 'mail-logs' && <MailLogsTab />}
     </PageShell>
@@ -131,14 +116,19 @@ function ComposeTab({
   const [targetType, setTargetType] = useState<BroadcastTargetType>('account_users');
   const [accountIds, setAccountIds] = useState<number[]>([]);
   const [emailsText, setEmailsText] = useState('');
+  const [roles, setRoles] = useState<string[]>([]);
+  const [roleName, setRoleName] = useState('');
+  const [showPreview, setShowPreview] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const [sendResult, setSendResult] = useState<NotificationBroadcast | null>(null);
 
   useEffect(() => {
-    void notificationService.listTemplates(1, 100).then((res) => setTemplates(res.data)).catch(() => undefined);
+    // Broadcast templates only: the automatic (system) emails need variables a broadcast cannot fill.
+    void notificationService.listTemplates(1, 100, '', 'custom').then((res) => setTemplates(res.data)).catch(() => undefined);
     if (superAdmin) {
       void accountService.list({ per_page: 100 }).then((res) => setAccounts(res.data)).catch(() => undefined);
+      void notificationService.listRoles().then((list) => setRoles(list.map((r) => r.name))).catch(() => undefined);
     }
   }, [superAdmin]);
 
@@ -174,9 +164,10 @@ function ComposeTab({
     if (!subject.trim() || !body.trim() || channels.length === 0) return false;
     if (effectiveTargetType === 'account_users' && superAdmin && !selectedAccountId) return false;
     if (effectiveTargetType === 'specific_clients' && accountIds.length === 0) return false;
+    if (effectiveTargetType === 'role' && !roleName) return false;
     if (effectiveTargetType === 'custom_emails' && parseEmailList(emailsText).length === 0) return false;
     return true;
-  }, [subject, body, channels, effectiveTargetType, superAdmin, selectedAccountId, accountIds, emailsText]);
+  }, [subject, body, channels, effectiveTargetType, superAdmin, selectedAccountId, accountIds, roleName, emailsText]);
 
   const handleSend = async () => {
     setIsSending(true);
@@ -191,6 +182,7 @@ function ComposeTab({
         channels,
         target_type: effectiveTargetType,
         ...(effectiveTargetType === 'specific_clients' ? { account_ids: accountIds } : {}),
+        ...(effectiveTargetType === 'role' ? { role_name: roleName } : {}),
         ...(effectiveTargetType === 'custom_emails' ? { emails: parseEmailList(emailsText) } : {}),
       });
       setSendResult(result);
@@ -235,6 +227,9 @@ function ComposeTab({
               >
                 <option value="account_users">Account Users (client selected in header)</option>
                 <option value="specific_clients">Specific Clients</option>
+                <option value="all_clients">All Clients (every client user)</option>
+                <option value="all_agents">All Agents (every agent user)</option>
+                <option value="role">Particular Role</option>
                 <option value="all_users">All Platform Users</option>
                 <option value="custom_emails">Custom Email Addresses</option>
               </select>
@@ -265,6 +260,27 @@ function ComposeTab({
               </label>
             ))}
           </div>
+        )}
+
+        {superAdmin && effectiveTargetType === 'role' && (
+          <div>
+            <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">Role</label>
+            <select value={roleName} onChange={(e) => setRoleName(e.target.value)} className={inputClass} aria-label="Role">
+              <option value="">Choose a role…</option>
+              {roles.map((r) => (
+                <option key={r} value={r}>
+                  {r.replace(/_/g, ' ')}
+                </option>
+              ))}
+            </select>
+            <p className="mt-1 text-xs text-slate-500">Every active user with this role, on every account.</p>
+          </div>
+        )}
+
+        {superAdmin && (effectiveTargetType === 'all_clients' || effectiveTargetType === 'all_agents') && (
+          <p className="text-xs text-slate-500">
+            Every active user (owner and team) of every {effectiveTargetType === 'all_clients' ? 'client' : 'agent'} account.
+          </p>
         )}
 
         {superAdmin && effectiveTargetType === 'custom_emails' && (
@@ -347,21 +363,26 @@ function ComposeTab({
       </Card>
 
       <Card padded={false} className="flex flex-col">
-        <div className="border-b border-slate-200 px-4 py-2.5 text-xs font-semibold uppercase tracking-wide text-slate-500">
-          Live Preview
-        </div>
+        <PreviewHeader onOpen={() => setShowPreview(true)} disabled={!body.trim()} />
         <div className="flex-1 p-3">
           <div className="mb-2 text-sm font-semibold text-slate-900">
-            {renderPreview(subject, SAMPLE_PREVIEW_VARS) || <span className="text-slate-400">(no subject yet)</span>}
+            {renderPreview(subject) || <span className="text-slate-400">(no subject yet)</span>}
           </div>
           <iframe
             title="Broadcast preview"
             sandbox=""
-            srcDoc={renderPreview(body, SAMPLE_PREVIEW_VARS) || '<p style="color:#94a3b8;font-family:sans-serif">Start typing to see a preview…</p>'}
+            srcDoc={renderPreview(body) || '<p style="color:#94a3b8;font-family:sans-serif">Start typing to see a preview…</p>'}
             className="h-[420px] w-full rounded-lg border border-slate-200 bg-white"
           />
+          {body.trim() && channels.includes('email') && (
+            <div className="mt-3">
+              <InlineCssReport issues={findInlineCssIssues(body)} />
+            </div>
+          )}
         </div>
       </Card>
+
+      {showPreview && <EmailPreviewModal subject={subject} body={body} onClose={() => setShowPreview(false)} />}
     </div>
   );
 }
@@ -370,25 +391,59 @@ function ComposeTab({
 // Templates tab
 // ---------------------------------------------------------------------------
 
-function TemplatesTab() {
+function PreviewHeader({ onOpen, disabled }: { onOpen: () => void; disabled: boolean }) {
+  return (
+    <div className="flex items-center justify-between border-b border-slate-200 px-4 py-2">
+      <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Live Preview</span>
+      <button
+        type="button"
+        onClick={onOpen}
+        disabled={disabled}
+        title={disabled ? 'Write some HTML first' : 'Open a full-size preview (desktop / mobile)'}
+        className="flex items-center gap-1.5 rounded-md border border-slate-300 px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+      >
+        <Eye className="h-3.5 w-3.5" />
+        Preview
+      </button>
+    </div>
+  );
+}
+
+const TEMPLATE_KIND_OPTIONS: { value: NotificationTemplateKind; label: string }[] = [
+  { value: '', label: 'All templates' },
+  { value: 'system', label: 'System emails' },
+  { value: 'custom', label: 'Broadcast templates' },
+];
+
+/**
+ * Mail Templates. Two kinds live here:
+ *  - broadcast templates — reusable content for Compose Broadcast;
+ *  - system emails (Super Admin only) — the automatic emails the platform
+ *    sends (signup code, welcome, forgot password, plan / quota / add-on
+ *    requests, expiry reminders…). They are edited, switched off (the
+ *    built-in default is then sent) or reset, never deleted.
+ */
+function TemplatesTab({ superAdmin }: { superAdmin: boolean }) {
   const [templates, setTemplates] = useState<NotificationTemplate[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState<NotificationTemplate | 'new' | null>(null);
+  const [previewing, setPreviewing] = useState<NotificationTemplate | null>(null);
   const [search, setSearch] = useState('');
+  const [kind, setKind] = useState<NotificationTemplateKind>('');
 
   const load = useCallback(async () => {
     setIsLoading(true);
     setError(null);
     try {
-      const res = await notificationService.listTemplates(1, 100, search);
+      const res = await notificationService.listTemplates(1, 100, search, kind);
       setTemplates(res.data);
     } catch (err) {
       setError(errorMessage(err, 'Failed to load templates.'));
     } finally {
       setIsLoading(false);
     }
-  }, [search]);
+  }, [search, kind]);
 
   useEffect(() => {
     void load();
@@ -396,10 +451,6 @@ function TemplatesTab() {
 
   const [pendingDelete, setPendingDelete] = useState<NotificationTemplate | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
-
-  const handleDelete = (template: NotificationTemplate) => {
-    setPendingDelete(template);
-  };
 
   const confirmDelete = async () => {
     if (!pendingDelete) return;
@@ -420,8 +471,28 @@ function TemplatesTab() {
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-3">
-          <SearchInput value={search} onChange={setSearch} placeholder="Search name or subject…" />
-          <ClearFiltersButton active={search !== ''} onClear={() => setSearch('')} />
+          <SearchInput value={search} onChange={setSearch} placeholder="Search name, subject or key…" />
+          {superAdmin && (
+            <select
+              value={kind}
+              onChange={(e) => setKind(e.target.value as NotificationTemplateKind)}
+              aria-label="Template kind"
+              className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+            >
+              {TEMPLATE_KIND_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          )}
+          <ClearFiltersButton
+            active={search !== '' || kind !== ''}
+            onClear={() => {
+              setSearch('');
+              setKind('');
+            }}
+          />
         </div>
         <button
           onClick={() => setEditing('new')}
@@ -432,16 +503,24 @@ function TemplatesTab() {
         </button>
       </div>
 
+      {superAdmin && kind !== 'custom' && (
+        <p className="text-xs text-slate-500">
+          <span className="font-semibold text-slate-700">System emails</span> are sent automatically (signup code, welcome,
+          forgot password, plan / quota / add-on requests, plan reminders…). Edit their HTML here — use inline styles only.
+          A switched-off email sends the built-in default instead.
+        </p>
+      )}
+
       {error && (
         <DismissibleAlert className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</DismissibleAlert>
       )}
 
       <TableCard>
-        <table className="w-full min-w-[720px] divide-y divide-slate-200 text-sm">
+        <table className="w-full min-w-[820px] divide-y divide-slate-200 text-sm">
           <thead className="bg-slate-50">
             <tr className="text-left text-xs font-medium uppercase tracking-wide text-slate-500">
               <th className="px-4 py-3">Name</th>
-              <th className="px-4 py-3">Type</th>
+              <th className="px-4 py-3">Kind</th>
               <th className="px-4 py-3">Category</th>
               <th className="px-4 py-3">Subject</th>
               <th className="px-4 py-3 text-right">Actions</th>
@@ -453,18 +532,49 @@ function TemplatesTab() {
             ) : templates.length === 0 ? (
               <tr>
                 <td colSpan={5} className="px-4 py-10 text-center text-slate-400">
-                  {search ? 'No templates match this search.' : 'No templates yet. Click "New Template" to create one.'}
+                  {search || kind ? 'No templates match these filters.' : 'No templates yet. Click "New Template" to create one.'}
                 </td>
               </tr>
             ) : (
               templates.map((t) => (
                 <tr key={t.id} className="hover:bg-slate-50">
-                  <td className="px-4 py-3 font-medium text-slate-900">{t.name}</td>
-                  <td className="px-4 py-3 capitalize text-slate-600">{t.type.replace('_', ' ')}</td>
+                  <td className="px-4 py-3">
+                    <div className="font-medium text-slate-900">{t.name}</div>
+                    {t.slug && <div className="font-mono text-xs text-slate-400">{t.slug}</div>}
+                  </td>
+                  <td className="px-4 py-3">
+                    {t.is_system ? (
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="inline-flex items-center rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700 ring-1 ring-inset ring-emerald-600/20">
+                          System
+                        </span>
+                        {!t.is_active && (
+                          <span
+                            className="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600 ring-1 ring-inset ring-slate-500/20"
+                            title="Switched off: the built-in default is sent"
+                          >
+                            Off
+                          </span>
+                        )}
+                      </div>
+                    ) : (
+                      <span className="capitalize text-slate-600">{t.type.replace('_', ' ')}</span>
+                    )}
+                  </td>
                   <td className="px-4 py-3 text-slate-600">{t.category ?? '—'}</td>
-                  <td className="px-4 py-3 text-slate-600">{t.subject}</td>
+                  <td className="max-w-[320px] truncate px-4 py-3 text-slate-600" title={t.subject}>
+                    {t.subject}
+                  </td>
                   <td className="px-4 py-3">
                     <div className="flex items-center justify-end gap-2">
+                      <button
+                        onClick={() => setPreviewing(t)}
+                        className="rounded-md p-1.5 text-slate-500 hover:bg-slate-100 hover:text-slate-700"
+                        aria-label={`Preview ${t.name}`}
+                        title="Preview"
+                      >
+                        <Eye className="h-4 w-4" />
+                      </button>
                       <button
                         onClick={() => setEditing(t)}
                         className="rounded-md p-1.5 text-slate-500 hover:bg-slate-100 hover:text-slate-700"
@@ -473,14 +583,16 @@ function TemplatesTab() {
                       >
                         <Pencil className="h-4 w-4" />
                       </button>
-                      <button
-                        onClick={() => void handleDelete(t)}
-                        className="rounded-md p-1.5 text-slate-500 hover:bg-red-50 hover:text-red-600"
-                        aria-label="Delete template"
-                        title="Delete"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </button>
+                      {!t.is_system && (
+                        <button
+                          onClick={() => setPendingDelete(t)}
+                          className="rounded-md p-1.5 text-slate-500 hover:bg-red-50 hover:text-red-600"
+                          aria-label="Delete template"
+                          title="Delete"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      )}
                     </div>
                   </td>
                 </tr>
@@ -499,6 +611,10 @@ function TemplatesTab() {
             void load();
           }}
         />
+      )}
+
+      {previewing && (
+        <EmailPreviewModal subject={previewing.subject} body={previewing.body} onClose={() => setPreviewing(null)} />
       )}
 
       {pendingDelete && (
@@ -525,19 +641,35 @@ function TemplateModal({
   onClose: () => void;
   onSaved: () => void;
 }) {
+  const isSystem = template?.is_system ?? false;
   const [name, setName] = useState(template?.name ?? '');
-  const [type, setType] = useState<NotificationTemplateType>(template?.type ?? 'rich_text');
+  const [type, setType] = useState<NotificationTemplateType>(isSystem ? 'raw_html' : template?.type ?? 'rich_text');
   const [category, setCategory] = useState(template?.category ?? '');
   const [subject, setSubject] = useState(template?.subject ?? '');
   const [body, setBody] = useState(template?.body ?? '');
+  const [isActive, setIsActive] = useState(template?.is_active ?? true);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [showPreview, setShowPreview] = useState(false);
+  const [confirmReset, setConfirmReset] = useState(false);
+  const [isResetting, setIsResetting] = useState(false);
+  const [isTesting, setIsTesting] = useState(false);
+
+  const variables = useMemo(
+    () => template?.variables ?? { name: 'Recipient name', email: 'Recipient email' },
+    [template],
+  );
+  const unknownVariables = useMemo(
+    () => (isSystem ? usedVariables(subject + body).filter((v) => !(v in variables)) : []),
+    [isSystem, subject, body, variables],
+  );
 
   const handleSubmit = async () => {
     setIsSaving(true);
     setError(null);
     try {
-      const payload = { name, type, category: category || null, subject, body };
+      const payload = { name, type, category: category || null, subject, body, ...(isSystem ? { is_active: isActive } : {}) };
       if (template) {
         await notificationService.updateTemplate(template.id, payload);
       } else {
@@ -551,90 +683,200 @@ function TemplateModal({
     }
   };
 
+  const handleReset = async () => {
+    if (!template) return;
+    setIsResetting(true);
+    setError(null);
+    try {
+      const fresh = await notificationService.resetTemplate(template.id);
+      setName(fresh.name);
+      setCategory(fresh.category ?? '');
+      setSubject(fresh.subject);
+      setBody(fresh.body);
+      setIsActive(fresh.is_active);
+      setConfirmReset(false);
+      setNotice('Reset to the built-in default and saved.');
+    } catch (err) {
+      setError(errorMessage(err, 'Could not reset this template.'));
+    } finally {
+      setIsResetting(false);
+    }
+  };
+
+  const handleTest = async () => {
+    setIsTesting(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const res = await notificationService.sendTestEmail({ subject, body });
+      setNotice(res.message);
+    } catch (err) {
+      setError(errorMessage(err, 'Could not send the test email.'));
+    } finally {
+      setIsTesting(false);
+    }
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4">
-      <div className="max-h-[92vh] w-full max-w-5xl overflow-y-auto rounded-xl bg-white shadow-xl">
+      <div className="max-h-[92vh] w-full max-w-6xl overflow-y-auto rounded-xl bg-white shadow-xl">
         <div className="flex items-center justify-between border-b border-slate-200 px-6 py-4">
-          <h2 className="text-lg font-semibold text-slate-900">{template ? 'Edit Template' : 'New Template'}</h2>
-          <button onClick={onClose} className="rounded-md p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600">
+          <div className="min-w-0">
+            <h2 className="text-lg font-semibold text-slate-900">
+              {template ? (isSystem ? 'Edit System Email' : 'Edit Template') : 'New Template'}
+            </h2>
+            {isSystem && template?.description && <p className="mt-0.5 text-sm text-slate-500">{template.description}</p>}
+          </div>
+          <button onClick={onClose} aria-label="Close" className="rounded-md p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600">
             <X className="h-5 w-5" />
           </button>
         </div>
 
         <div className="grid grid-cols-1 gap-6 px-6 py-6 lg:grid-cols-2">
           <div className="space-y-4">
-            <div>
-              <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">Name <span className="text-red-500">*</span></label>
-              <input type="text" value={name} onChange={(e) => setName(e.target.value)} className={inputClass} />
-            </div>
-            <div>
-              <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">Category (optional)</label>
-              <input type="text" value={category} onChange={(e) => setCategory(e.target.value)} className={inputClass} />
+            {isSystem && (
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                <span className="font-mono text-xs text-slate-500">{template?.slug}</span>
+                <label className="flex items-center gap-2 text-sm text-slate-700">
+                  <input type="checkbox" checked={isActive} onChange={(e) => setIsActive(e.target.checked)} />
+                  Use this template
+                  <span className="text-xs text-slate-400">(off = built-in default is sent)</span>
+                </label>
+              </div>
+            )}
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+              <div>
+                <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">Name <span className="text-red-500">*</span></label>
+                <input type="text" value={name} onChange={(e) => setName(e.target.value)} className={inputClass} />
+              </div>
+              <div>
+                <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">Category (optional)</label>
+                <input type="text" value={category} onChange={(e) => setCategory(e.target.value)} className={inputClass} />
+              </div>
             </div>
             <div>
               <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">Subject <span className="text-red-500">*</span></label>
               <input type="text" value={subject} onChange={(e) => setSubject(e.target.value)} className={inputClass} />
             </div>
+
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Variables</p>
+              <div className="mt-1.5 flex flex-wrap gap-1.5">
+                {Object.entries(variables).map(([key, label]) => (
+                  <code
+                    key={key}
+                    title={label}
+                    className="rounded-md bg-slate-100 px-1.5 py-0.5 font-mono text-xs text-slate-700"
+                  >
+                    {`{{${key}}}`}
+                  </code>
+                ))}
+              </div>
+              {unknownVariables.length > 0 && (
+                <p className="mt-1.5 text-xs text-amber-700">
+                  Not available in this email (will show as typed): {unknownVariables.map((v) => `{{${v}}}`).join(', ')}
+                </p>
+              )}
+            </div>
+
             <div>
               <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                Body — use {'{{name}}'} / {'{{email}}'} for per-recipient variables
+                {isSystem ? 'HTML body (full email, inline CSS only)' : 'Body'}
               </label>
               <div className="mt-1.5">
-                <RichTextEditor mode={type} value={body} onChange={setBody} onModeChange={setType} />
+                <RichTextEditor mode={type} value={body} onChange={setBody} onModeChange={setType} lockMode={isSystem} rows={isSystem ? 16 : 8} />
               </div>
+              {type === 'raw_html' && body.trim() && (
+                <div className="mt-2">
+                  <InlineCssReport issues={findInlineCssIssues(body)} />
+                </div>
+              )}
             </div>
 
             {error && (
               <DismissibleAlert className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</DismissibleAlert>
             )}
+            {notice && (
+              <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{notice}</div>
+            )}
 
-            <div className="flex justify-end gap-2 pt-2">
-              <button
-                onClick={onClose}
-                className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={() => void handleSubmit()}
-                disabled={isSaving || !name.trim() || !subject.trim()}
-                className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-50"
-              >
-                {isSaving && <Loader2 className="h-4 w-4 animate-spin" />}
-                {isSaving ? 'Saving…' : 'Save Template'}
-              </button>
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-2">
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => void handleTest()}
+                  disabled={isTesting || !subject.trim() || !body.trim()}
+                  title="Emails this content to you, with sample values"
+                  className="flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                >
+                  {isTesting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                  Send test email
+                </button>
+                {isSystem && (
+                  <button
+                    type="button"
+                    onClick={() => setConfirmReset(true)}
+                    className="flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                  >
+                    <RotateCcw className="h-4 w-4" />
+                    Reset to default
+                  </button>
+                )}
+              </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={onClose}
+                  className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => void handleSubmit()}
+                  disabled={isSaving || !name.trim() || !subject.trim() || !body.trim()}
+                  className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-50"
+                >
+                  {isSaving && <Loader2 className="h-4 w-4 animate-spin" />}
+                  {isSaving ? 'Saving…' : 'Save Template'}
+                </button>
+              </div>
             </div>
           </div>
 
           {/*
-            Mail Template Manager — Preview Before Saving: same
-            renderPreview()/SAMPLE_PREVIEW_VARS + sandboxed iframe pattern
-            as ComposeTab's Live Preview panel above, so a Super
-            Admin/Admin can see exactly how {{name}}/{{email}} will
-            render for a real recipient before committing the template —
-            no round trip to the server, no draft saved just to look at it.
+            Mail Template Manager — Preview Before Saving: the HTML drawn in a
+            sandboxed iframe with sample values, no round trip to the server.
+            "Preview" opens it full size at desktop or phone width.
           */}
           <div className="flex flex-col rounded-xl border border-slate-200">
-            <div className="border-b border-slate-200 px-4 py-2.5 text-xs font-semibold uppercase tracking-wide text-slate-500">
-              Live Preview
-            </div>
+            <PreviewHeader onOpen={() => setShowPreview(true)} disabled={!body.trim()} />
             <div className="flex-1 p-3">
               <div className="mb-2 text-sm font-semibold text-slate-900">
-                {renderPreview(subject, SAMPLE_PREVIEW_VARS) || <span className="text-slate-400">(no subject yet)</span>}
+                {renderPreview(subject) || <span className="text-slate-400">(no subject yet)</span>}
               </div>
               <iframe
                 title="Template preview"
                 sandbox=""
-                srcDoc={
-                  renderPreview(body, SAMPLE_PREVIEW_VARS) ||
-                  '<p style="color:#94a3b8;font-family:sans-serif">Start typing to see a preview…</p>'
-                }
-                className="h-[420px] w-full rounded-lg border border-slate-200 bg-white"
+                srcDoc={renderPreview(body) || '<p style="color:#94a3b8;font-family:sans-serif">Start typing to see a preview…</p>'}
+                className="h-[560px] w-full rounded-lg border border-slate-200 bg-white"
               />
             </div>
           </div>
         </div>
       </div>
+
+      {showPreview && <EmailPreviewModal subject={subject} body={body} onClose={() => setShowPreview(false)} />}
+
+      {confirmReset && (
+        <ConfirmModal
+          title="Reset to default"
+          message="Replace this email's name, subject and HTML with the built-in default? Your changes to it will be lost."
+          confirmLabel="Reset"
+          variant="danger"
+          isLoading={isResetting}
+          onConfirm={() => void handleReset()}
+          onCancel={() => setConfirmReset(false)}
+        />
+      )}
     </div>
   );
 }

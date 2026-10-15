@@ -18,6 +18,7 @@ import {
   X,
   XCircle,
   Zap,
+  HelpCircle,
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import journeyService from '../../services/journeyService';
@@ -26,6 +27,7 @@ import knowledgeBaseService, { type KnowledgeBaseSummary } from '../../services/
 import aiAgentService, { type AiAgentSummary } from '../../services/aiAgentService';
 import journeyApiConnectionService from '../../services/journeyApiConnectionService';
 import senderNumberService from '../../services/senderNumberService';
+import { JOURNEY_NODES_TOUR, startTour } from '../../tours/tourKeys';
 import type { SenderNumber } from '../../types/senderNumber';
 import ManageApiConnectionsModal from '../../journey/ManageApiConnectionsModal';
 import type { JourneyApiConnection, JourneyStickyNote } from '../../types/journey';
@@ -317,6 +319,7 @@ function NodePalette({
           type="button"
           onClick={() => setOpen((o) => !o)}
           data-testid="palette-toggle"
+          data-tour="journey-palette"
           aria-expanded={open}
           aria-label="Add node"
           title="Add node"
@@ -729,6 +732,11 @@ function JourneyCanvasEditor({
         setChannelIds((prev) => (prev.length > 0 ? prev : list.find((n) => n.is_default) ? [list.find((n) => n.is_default)!.id] : list[0] ? [list[0].id] : []));
       })
       .catch(() => undefined);
+  }, []);
+  // Product tours (2026-10-15): the first time someone opens the editor, explain the canvas and every node.
+  useEffect(() => {
+    const timer = window.setTimeout(() => startTour(JOURNEY_NODES_TOUR), 700);
+    return () => window.clearTimeout(timer);
   }, []);
   const [graph, setGraph] = useState<JourneyGraph>(() => ensureEndConnections(initialFlow?.graph_data ?? newJourneyGraph()));
   /** Measured on-canvas height of each node, keyed by id — see the ref callback on the node render below. */
@@ -1326,6 +1334,17 @@ function JourneyCanvasEditor({
             API Connections
           </button>
           <button
+            type="button"
+            onClick={() => startTour(JOURNEY_NODES_TOUR, true)}
+            data-testid="journey-tour-button"
+            className="flex items-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-semibold"
+            style={{ borderColor: indigo.border, color: indigo.ink }}
+            title="A short tour of the canvas and every node"
+          >
+            <HelpCircle className="h-3.5 w-3.5" />
+            How nodes work
+          </button>
+          <button
             onClick={addStickyNote}
             className="flex items-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-semibold"
             style={{ borderColor: indigo.border, color: indigo.ink }}
@@ -1359,6 +1378,7 @@ function JourneyCanvasEditor({
           </button>
           <button
             onClick={() => handleSave()}
+            data-tour="journey-save"
             disabled={isSaving}
             className="flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
             style={{ background: activeGradient }}
@@ -1451,6 +1471,7 @@ function JourneyCanvasEditor({
 
         <div
           ref={canvasRef}
+          data-tour="journey-canvas"
           onMouseDown={() => setSelection(null)}
           className="relative flex-1 overflow-auto rounded-xl border bg-slate-50"
           style={{ borderColor: indigo.border }}
@@ -1538,6 +1559,7 @@ function JourneyCanvasEditor({
                   }}
                   data-testid={`canvas-node-${node.id}`}
                   data-node-type={node.type}
+                  data-tour={node.type === 'trigger' ? 'journey-start-node' : undefined}
                   // Dragging/selecting the card itself (anywhere outside the
                   // inline fields below, which stop this from bubbling up)
                   // works exactly as it did when the card was a fixed-size
@@ -1798,8 +1820,8 @@ function StartNodeFields({
   availableChannels: SenderNumber[];
   onChannelIdsChange: (ids: number[]) => void;
 }) {
-  const [configOpen, setConfigOpen] = useState(triggerType !== 'default');
-  const hasEvent = triggerType !== 'default';
+  const [configOpen, setConfigOpen] = useState(triggerType !== 'default' && triggerType !== 'lead_created');
+  const hasEvent = triggerType !== 'default' && triggerType !== 'lead_created';
 
   return (
     <div className="space-y-2">
@@ -1859,10 +1881,14 @@ function StartNodeFields({
         Select Event
         <select
           className={inlineInputClass}
-          value={hasEvent ? 'user_input' : 'no_event'}
+          value={triggerType === 'lead_created' ? 'lead_created' : hasEvent ? 'user_input' : 'no_event'}
           onChange={(e) => {
             if (e.target.value === 'no_event') {
               onTriggerTypeChange('default');
+              setConfigOpen(false);
+            } else if (e.target.value === 'lead_created') {
+              // QA fixes (2026-10-14): starts by itself for every new CRM lead.
+              onTriggerTypeChange('lead_created');
               setConfigOpen(false);
             } else {
               onTriggerTypeChange(triggerType === 'ctwa_referral' ? 'ctwa_referral' : 'keyword');
@@ -1872,10 +1898,15 @@ function StartNodeFields({
         >
           <option value="no_event">No Event</option>
           <option value="user_input">User Input</option>
+          <option value="lead_created">New CRM lead</option>
         </select>
       </label>
 
-      {!hasEvent ? (
+      {triggerType === 'lead_created' ? (
+        <span className="block text-[11px]" style={{ color: indigo.muted }} data-testid="trigger-lead-created-help">
+          Starts by itself when a new lead arrives (ad, website, API…). On the Meta API make the first step a template.
+        </span>
+      ) : !hasEvent ? (
         <span className="inline-block rounded bg-slate-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-slate-500">
           Default
         </span>
