@@ -30,6 +30,29 @@ export interface AdLocation {
   country_code?: string | null;
   country_name?: string | null;
   region?: string | null;
+  /** Cities only: people within this many km of the city (Meta allows 17-80). Unset = the city itself. */
+  radius_km?: number | null;
+}
+
+/** A pinned point (e.g. the user's current location) with a radius — Meta custom_locations, 1-80 km. */
+export interface AdCustomLocation {
+  latitude: number;
+  longitude: number;
+  radius_km: number;
+  name?: string | null;
+}
+
+export type AdGender = 'all' | 'male' | 'female';
+
+export const AD_GENDER_LABELS: Record<AdGender, string> = { all: 'All', male: 'Men', female: 'Women' };
+
+export const CITY_RADIUS_KM = { min: 17, max: 80 } as const;
+export const PIN_RADIUS_KM = { min: 1, max: 80 } as const;
+
+/** POST /social/ads/reach-estimate — Meta's estimated audience range. */
+export interface AdReachEstimate {
+  users_lower_bound: number;
+  users_upper_bound: number;
 }
 
 /** Manual placements (backend MetaAdsService::PLACEMENTS). None selected = automatic placements. */
@@ -108,7 +131,10 @@ export interface TargetingSpecs {
   /** ISO 3166-1 alpha-2 country codes (e.g. "IN", "US"). Optional when `locations` are given. */
   countries?: string[];
   /** Countries / regions / cities picked through the location search. */
-  locations?: Pick<AdLocation, 'key' | 'type' | 'name'>[];
+  locations?: Pick<AdLocation, 'key' | 'type' | 'name' | 'radius_km'>[];
+  /** Pinned points with a radius (e.g. "within 10 km of my shop"). */
+  custom_locations?: AdCustomLocation[];
+  gender?: AdGender;
   age_min: number;
   age_max: number;
   interests?: string[];

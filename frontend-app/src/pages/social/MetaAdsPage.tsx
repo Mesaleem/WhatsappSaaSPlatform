@@ -34,9 +34,10 @@ import { socialConnectionError, type SocialConnectionErrorInfo } from '../../uti
 import SocialReconnectNotice from '../../components/social/SocialReconnectNotice';
 import { META_SETUP_ITEMS } from '../../components/social/MetaSetupGuide';
 import { indigo, activeGradient } from '../../theme/signalIndigo';
-import { AD_CTA_LABELS, AD_CTAS_BY_OBJECTIVE, AD_OBJECTIVE_LABELS, AD_PLACEMENT_LABELS, formatAdMoney } from '../../types/ads';
-import type { AdAccountInfo, AdCallToAction, AdCampaign, AdLocation, AdObjective, AdPlacement, LaunchCampaignPayload } from '../../types/ads';
+import { AD_CTA_LABELS, AD_CTAS_BY_OBJECTIVE, AD_GENDER_LABELS, AD_OBJECTIVE_LABELS, AD_PLACEMENT_LABELS, formatAdMoney } from '../../types/ads';
+import type { AdAccountInfo, AdCallToAction, AdCampaign, AdCustomLocation, AdGender, AdLocation, AdObjective, AdPlacement, LaunchCampaignPayload, TargetingSpecs } from '../../types/ads';
 import AdLocationPicker from '../../components/social/AdLocationPicker';
+import AdAudienceEstimate from '../../components/social/AdAudienceEstimate';
 import { AD_COPY_TONES, TARGET_GOAL_LABELS } from '../../types/ai';
 import type { AdCopyTone, AdCopyVariant, TargetGoal } from '../../types/ai';
 import type { MediaType } from '../../types/media';
@@ -108,6 +109,9 @@ interface WizardState {
   cpl_threshold: string;
   /** Countries / states / cities from Meta's location search (owner request 2026-09-30). */
   locations: AdLocation[];
+  /** Pinned points with a radius, e.g. the user's current location (Phase A, 2026-10-15). */
+  custom_locations: AdCustomLocation[];
+  gender: AdGender;
   age_min: string;
   age_max: string;
   interests: string;
@@ -133,12 +137,35 @@ interface WizardState {
   lead_gen_form_id: string;
 }
 
+function targetingFromForm(form: WizardState): TargetingSpecs {
+  return {
+    locations: form.locations.map(({ key, type, name, radius_km }) => ({ key, type, name, ...(type === 'city' && radius_km ? { radius_km } : {}) })),
+    custom_locations: form.custom_locations,
+    gender: form.gender,
+    age_min: Number(form.age_min),
+    age_max: Number(form.age_max),
+    interests: parseList(form.interests),
+  };
+}
+
+/** The targeting to estimate, or null while the form cannot describe a valid audience yet. */
+function estimableTargeting(form: WizardState): TargetingSpecs | null {
+  const ageMin = Number(form.age_min);
+  const ageMax = Number(form.age_max);
+  const agesOk = Number.isInteger(ageMin) && Number.isInteger(ageMax) && ageMin >= 13 && ageMax <= 65 && ageMin <= ageMax;
+  const pinsOk = form.custom_locations.every((pin) => pin.radius_km >= 1 && pin.radius_km <= 80);
+
+  return agesOk && pinsOk && (form.locations.length > 0 || form.custom_locations.length > 0) ? targetingFromForm(form) : null;
+}
+
 const WIZARD_DEFAULTS: WizardState = {
   objective: 'LEAD_GENERATION',
   lead_gen_form_id: '',
   daily_budget: '',
   cpl_threshold: '',
   locations: [{ key: 'IN', name: 'India', type: 'country', country_code: 'IN', country_name: 'India' }],
+  custom_locations: [],
+  gender: 'all',
   age_min: '18',
   age_max: '65',
   interests: '',
@@ -316,7 +343,8 @@ function LaunchWizardModal({
       }
     }
     if (step === 1) {
-      if (form.locations.length === 0) return 'Choose at least one location (country, state or city).';
+      if (form.locations.length === 0 && form.custom_locations.length === 0) return 'Choose at least one location (country, state, city or your current location).';
+      if (form.custom_locations.some((pin) => !Number.isInteger(pin.radius_km) || pin.radius_km < 1 || pin.radius_km > 80)) return 'The radius around a pinned location must be 1 to 80 km.';
       if (form.placement_mode === 'manual' && form.placements.length === 0) return 'Choose at least one placement, or use automatic placements.';
       const ageMin = Number(form.age_min);
       const ageMax = Number(form.age_max);
@@ -360,12 +388,7 @@ function LaunchWizardModal({
       objective: form.objective,
       daily_budget: Number(form.daily_budget),
       cpl_threshold: form.cpl_threshold ? Number(form.cpl_threshold) : null,
-      targeting_specs: {
-        locations: form.locations.map(({ key, type, name }) => ({ key, type, name })),
-        age_min: Number(form.age_min),
-        age_max: Number(form.age_max),
-        interests: parseList(form.interests),
-      },
+      targeting_specs: targetingFromForm(form),
       creative: {
         // Populated by the upload dropzone (mediaService/SocialMediaController)
         // rather than typed by hand — see the module audit's gap analysis,
@@ -568,9 +591,29 @@ function LaunchWizardModal({
             <>
               <div className="block text-sm font-medium text-slate-700">
                 Locations <span className="text-red-500">*</span>
-                <AdLocationPicker value={form.locations} onChange={(locations) => update({ locations })} invalid={Boolean(fieldError('targeting_specs.locations', 'targeting_specs.countries'))} />
+                <AdLocationPicker
+                  value={form.locations}
+                  onChange={(locations) => update({ locations })}
+                  customLocations={form.custom_locations}
+                  onCustomChange={(custom_locations) => update({ custom_locations })}
+                  invalid={Boolean(fieldError('targeting_specs.locations', 'targeting_specs.countries'))}
+                />
                 {fieldError('targeting_specs.locations', 'targeting_specs.countries') && <p className="mt-1 text-xs font-medium text-red-600">{fieldError('targeting_specs.locations', 'targeting_specs.countries')}</p>}
               </div>
+              <fieldset className="text-sm text-slate-700" data-testid="ad-gender">
+                <legend className="font-medium">Gender</legend>
+                <div className="mt-1 inline-flex rounded-lg border border-slate-200 p-0.5">
+                  {(Object.keys(AD_GENDER_LABELS) as AdGender[]).map((gender) => (
+                    <label
+                      key={gender}
+                      className={`cursor-pointer rounded-md px-3 py-1.5 text-sm font-medium ${form.gender === gender ? 'bg-emerald-600 text-white' : 'text-slate-700 hover:bg-slate-50'}`}
+                    >
+                      <input type="radio" name="gender" value={gender} checked={form.gender === gender} onChange={() => update({ gender })} className="sr-only" />
+                      {AD_GENDER_LABELS[gender]}
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
               <div className="grid grid-cols-2 gap-3">
                 <label className="block text-sm font-medium text-slate-700">
                   Min Age <span className="text-red-500">*</span>
@@ -645,6 +688,7 @@ function LaunchWizardModal({
                 <p className="mt-1 text-xs text-slate-500">Stories and Reels show vertical (9:16) media best.</p>
                 {fieldError('placements') && <p className="mt-1 text-xs font-medium text-red-600">{fieldError('placements')}</p>}
               </fieldset>
+              <AdAudienceEstimate targeting={estimableTargeting(form)} placements={form.placement_mode === 'manual' ? form.placements : []} />
             </>
           )}
 

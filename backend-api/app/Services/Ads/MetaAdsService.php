@@ -122,6 +122,11 @@ class MetaAdsService
 
     public const LOCATION_TYPES = ['country', 'region', 'city'];
 
+    /** Meta targeting `genders`: 1 = men, 2 = women; "all" sends no genders field. */
+    public const GENDERS = ['all', 'male', 'female'];
+
+    private const GENDER_CODES = ['male' => [1], 'female' => [2]];
+
     /**
      * Owner request (2026-09-30) — the ad's button (Meta call_to_action.type)
      * is chosen per campaign instead of being fixed per objective. First entry
@@ -598,9 +603,19 @@ class MetaAdsService
             match ($location['type'] ?? null) {
                 'country' => $countries[] = strtoupper((string) $location['key']),
                 'region' => $geo['regions'][] = ['key' => (string) $location['key']],
-                'city' => $geo['cities'][] = ['key' => (string) $location['key']],
+                'city' => $geo['cities'][] = ['key' => (string) $location['key']]
+                    + (isset($location['radius_km']) ? ['radius' => (int) $location['radius_km'], 'distance_unit' => 'kilometer'] : []),
                 default => null,
             };
+        }
+
+        foreach ((array) ($targeting['custom_locations'] ?? []) as $point) {
+            $geo['custom_locations'][] = [
+                'latitude' => round((float) $point['latitude'], 6),
+                'longitude' => round((float) $point['longitude'], 6),
+                'radius' => (int) $point['radius_km'],
+                'distance_unit' => 'kilometer',
+            ];
         }
 
         if ($countries !== []) {
@@ -608,6 +623,68 @@ class MetaAdsService
         }
 
         return $geo;
+    }
+
+    /**
+     * The Meta targeting spec for an ad set — also what reachEstimate() asks Meta about.
+     *
+     * @param array<string, mixed> $targeting validated targeting_specs
+     * @param list<string> $placements
+     */
+    private function buildTargeting(string $accessToken, array $targeting, array $placements): array
+    {
+        return [
+            // Countries, regions / cities from searchLocations() (Meta keys, a city optionally
+            // with a radius) and pinned points with a radius, see geoLocations().
+            'geo_locations' => self::geoLocations($targeting),
+            ...self::placementTargeting($placements),
+            'age_min' => $targeting['age_min'],
+            'age_max' => $targeting['age_max'],
+            ...(isset(self::GENDER_CODES[$targeting['gender'] ?? 'all']) ? ['genders' => self::GENDER_CODES[$targeting['gender']]] : []),
+            ...$this->buildInterestTargeting($accessToken, $targeting['interests'] ?? []),
+        ];
+    }
+
+    /**
+     * Meta's estimated audience size (GET act_{id}/reachestimate) for targeting
+     * from the launch form. A read. Null when Meta gives no usable estimate
+     * (it answers -1 for some audiences, or the call fails for a non-connection reason).
+     *
+     * @param array<string, mixed> $targeting validated targeting_specs
+     * @param list<string> $placements
+     * @return array{users_lower_bound: int, users_upper_bound: int}|null
+     */
+    public function reachEstimate(Account $account, array $targeting, array $placements = []): ?array
+    {
+        $adAccount = $this->resolveAdAccount($account);
+        $accessToken = $adAccount->access_token ?: throw new RuntimeException('The connected Meta Ad Account has no stored access token. Please reconnect it.');
+        $connections = app(SocialConnectionService::class);
+        $connections->assertUsable($adAccount, 'ads.reach_estimate');
+
+        try {
+            $response = Http::withToken($accessToken)->timeout(15)->get(
+                'https://graph.facebook.com/'.self::API_VERSION."/{$adAccount->provider_id}/reachestimate",
+                ['targeting_spec' => json_encode($this->buildTargeting($accessToken, $targeting, $placements))]
+            );
+        } catch (Throwable) {
+            return null;
+        }
+
+        if ($response->failed()) {
+            // An expired / revoked connection is persisted and thrown; anything else is "no estimate".
+            if ($connections->observe($adAccount, ProviderRequestFailed::fromResponse($response, 'Meta rejected the reach estimate.'), 'ads.reach_estimate')) {
+                $connections->assertUsable($adAccount, 'ads.reach_estimate');
+            }
+
+            return null;
+        }
+
+        $data = $response->json('data');
+        $row = is_array($data) && array_is_list($data) ? ($data[0] ?? null) : $data;
+        $lower = is_array($row) && is_numeric($row['users_lower_bound'] ?? null) ? (int) $row['users_lower_bound'] : -1;
+        $upper = is_array($row) && is_numeric($row['users_upper_bound'] ?? null) ? (int) $row['users_upper_bound'] : -1;
+
+        return $lower >= 0 && $upper >= $lower ? ['users_lower_bound' => $lower, 'users_upper_bound' => $upper] : null;
     }
 
     /** @param list<string> $placements */
@@ -816,15 +893,7 @@ class MetaAdsService
             'optimization_goal' => self::OPTIMIZATION_GOAL_MAP[$objective],
             'bid_strategy' => 'LOWEST_COST_WITHOUT_CAP',
             'status' => 'ACTIVE',
-            'targeting' => [
-                // Owner request (2026-09-30): countries AND regions / cities picked
-                // through searchLocations() (Meta keys), see geoLocations().
-                'geo_locations' => self::geoLocations($targeting),
-                ...self::placementTargeting($payload['placements'] ?? []),
-                'age_min' => $targeting['age_min'],
-                'age_max' => $targeting['age_max'],
-                ...$this->buildInterestTargeting($accessToken, $targeting['interests'] ?? []),
-            ],
+            'targeting' => $this->buildTargeting($accessToken, $targeting, $payload['placements'] ?? []),
         ];
 
         // LEAD_GENERATION and MESSAGES both require a promoted_object

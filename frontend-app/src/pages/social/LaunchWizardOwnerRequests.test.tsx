@@ -19,7 +19,7 @@ vi.mock('../../services/socialService', () => ({
   default: { listAccounts: vi.fn(), listProviders: vi.fn(), checkConnection: vi.fn(), getOAuthRedirectUrl: vi.fn(), bindAccounts: vi.fn(), disconnect: vi.fn() },
 }));
 vi.mock('../../services/adsService', () => ({
-  default: { list: vi.fn(), launch: vi.fn(), pause: vi.fn(), resume: vi.fn(), account: vi.fn(), locations: vi.fn() },
+  default: { list: vi.fn(), launch: vi.fn(), pause: vi.fn(), resume: vi.fn(), account: vi.fn(), locations: vi.fn(), reachEstimate: vi.fn() },
   newLaunchKey: () => 'adlaunch-test',
 }));
 vi.mock('../../services/aiService', () => ({ default: { generate: vi.fn() } }));
@@ -80,6 +80,7 @@ beforeEach(() => {
   ads.list.mockResolvedValue([]);
   ads.account.mockResolvedValue(inrAccount);
   ads.locations.mockResolvedValue([]);
+  ads.reachEstimate.mockResolvedValue(null);
   ads.launch.mockResolvedValue({ message: 'Campaign launched.', data: {} });
   social.listAccounts.mockResolvedValue([adAccount, page]);
 });
@@ -146,6 +147,43 @@ describe('Launch form', () => {
     expect(payload.targeting_specs.locations).toEqual([{ key: '2295411', type: 'city', name: 'Mumbai' }]);
     expect(payload.placements).toEqual(['instagram_reels', 'instagram_stories']);
     expect(payload.creative.call_to_action).toBe('GET_QUOTE');
+  });
+
+  it('targets a gender, a radius around a city and the current location, and shows the audience estimate', async () => {
+    ads.locations.mockResolvedValue([{ key: '2295411', name: 'Mumbai', type: 'city', country_code: 'IN', country_name: 'India', region: 'Maharashtra' }]);
+    ads.reachEstimate.mockResolvedValue({ users_lower_bound: 120000, users_upper_bound: 150000 });
+    Object.defineProperty(navigator, 'geolocation', {
+      configurable: true,
+      value: { getCurrentPosition: (ok: PositionCallback) => ok({ coords: { latitude: 19.0760123, longitude: 72.8777 } } as GeolocationPosition) },
+    });
+    const user = userEvent.setup();
+    await openWizard(user);
+    await screen.findByText('Acme INR');
+    await stepOne(user);
+
+    await user.click(screen.getByRole('button', { name: 'Remove India' }));
+    await user.type(screen.getByLabelText('Search locations'), 'Mum');
+    await user.click(await screen.findByRole('button', { name: /Mumbai, Maharashtra, India/ }));
+    await user.selectOptions(screen.getByLabelText('Radius around Mumbai'), '25');
+    await user.click(screen.getByRole('button', { name: 'Use my current location' }));
+    const pinRadius = await screen.findByLabelText(/Radius in km around My current location/);
+    await user.clear(pinRadius);
+    await user.type(pinRadius, '5');
+    await user.click(screen.getByLabelText('Women'));
+
+    await waitFor(() => expect(screen.getByTestId('ad-audience-estimate')).toHaveTextContent('1.2L – 1.5L people'), { timeout: 3000 });
+    const asked = ads.reachEstimate.mock.calls.at(-1)?.[0];
+    expect(asked.gender).toBe('female');
+
+    await user.click(screen.getByRole('button', { name: 'Next' }));
+    await stepThree(user);
+    await user.click(screen.getByRole('button', { name: /launch campaign/i }));
+
+    await waitFor(() => expect(ads.launch).toHaveBeenCalledTimes(1));
+    const specs = ads.launch.mock.calls[0][0].targeting_specs;
+    expect(specs.gender).toBe('female');
+    expect(specs.locations).toEqual([{ key: '2295411', type: 'city', name: 'Mumbai', radius_km: 25 }]);
+    expect(specs.custom_locations).toEqual([{ latitude: 19.076012, longitude: 72.8777, radius_km: 5, name: 'My current location' }]);
   });
 
   it('click-to-WhatsApp always uses the WhatsApp button', async () => {

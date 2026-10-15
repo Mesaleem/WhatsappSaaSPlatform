@@ -246,6 +246,91 @@ class SuperAdminPlatformAdsTest extends TestCase
         $this->assertSame(['story'], $targeting['facebook_positions']);
     }
 
+    public function test_gender_city_radius_and_a_pinned_point_reach_the_ad_set(): void
+    {
+        $account = $this->tenant();
+        $this->metaAssets($account);
+
+        $this->actingAs($this->user($account))->postJson('/api/social/ads/launch', array_merge($this->payload(), [
+            'targeting_specs' => ['age_min' => 21, 'age_max' => 40, 'gender' => 'female',
+                'locations' => [['key' => '2295411', 'type' => 'city', 'name' => 'Mumbai', 'radius_km' => 25]],
+                'custom_locations' => [['latitude' => 19.0760123456, 'longitude' => 72.8777, 'radius_km' => 5, 'name' => 'My shop']],
+            ],
+        ]))->assertCreated();
+
+        $targeting = json_decode($this->sentTo('/adsets')['targeting'], true);
+        $this->assertSame([2], $targeting['genders']);
+        $this->assertEquals([
+            'cities' => [['key' => '2295411', 'radius' => 25, 'distance_unit' => 'kilometer']],
+            'custom_locations' => [['latitude' => 19.076012, 'longitude' => 72.8777, 'radius' => 5, 'distance_unit' => 'kilometer']],
+        ], $targeting['geo_locations']);
+    }
+
+    public function test_all_genders_send_no_genders_field_and_a_pinned_point_alone_is_a_location(): void
+    {
+        $account = $this->tenant();
+        $this->metaAssets($account);
+
+        $this->actingAs($this->user($account))->postJson('/api/social/ads/launch', array_merge($this->payload(), [
+            'targeting_specs' => ['age_min' => 18, 'age_max' => 65, 'gender' => 'all', 'custom_locations' => [['latitude' => 28.61, 'longitude' => 77.2, 'radius_km' => 20]]],
+        ]))->assertCreated();
+
+        $targeting = json_decode($this->sentTo('/adsets')['targeting'], true);
+        $this->assertArrayNotHasKey('genders', $targeting);
+        $this->assertSame(20, $targeting['geo_locations']['custom_locations'][0]['radius']);
+    }
+
+    public function test_radius_and_gender_follow_metas_limits(): void
+    {
+        $account = $this->tenant();
+        $this->metaAssets($account);
+        $user = $this->user($account);
+        $with = fn (array $specs) => array_merge($this->payload(), ['targeting_specs' => $specs + ['age_min' => 18, 'age_max' => 45]]);
+
+        // A city radius is 17-80 km, and only a city takes one.
+        $this->actingAs($user)->postJson('/api/social/ads/launch', $with(['locations' => [['key' => '2295411', 'type' => 'city', 'radius_km' => 10]]]))->assertStatus(422)->assertJsonValidationErrors('targeting_specs.locations.0.radius_km');
+        $this->actingAs($user)->postJson('/api/social/ads/launch', $with(['locations' => [['key' => '1740', 'type' => 'region', 'radius_km' => 25]]]))->assertStatus(422)->assertJsonValidationErrors('targeting_specs.locations.0.radius_km');
+        // A pinned point's radius is 1-80 km.
+        $this->actingAs($user)->postJson('/api/social/ads/launch', $with(['custom_locations' => [['latitude' => 19, 'longitude' => 72, 'radius_km' => 0]]]))->assertStatus(422);
+        $this->actingAs($user)->postJson('/api/social/ads/launch', $with(['custom_locations' => [['latitude' => 19, 'longitude' => 72, 'radius_km' => 81]]]))->assertStatus(422);
+        $this->actingAs($user)->postJson('/api/social/ads/launch', $with(['countries' => ['IN'], 'gender' => 'other']))->assertStatus(422)->assertJsonValidationErrors('targeting_specs.gender');
+
+        $this->assertSame(0, AdCampaign::count());
+    }
+
+    public function test_reach_estimate_returns_metas_audience_range_for_the_same_targeting(): void
+    {
+        $account = $this->tenant();
+        $this->metaAssets($account);
+        $this->graph['#^GET /v19\.0/act_\d+/reachestimate$#'] = ['data' => ['users_lower_bound' => 120000, 'users_upper_bound' => 150000, 'estimate_ready' => true]];
+        $body = ['targeting_specs' => ['age_min' => 25, 'age_max' => 35, 'gender' => 'male', 'locations' => [['key' => '2295411', 'type' => 'city', 'radius_km' => 20]]]];
+
+        $this->actingAs($this->user($account))->postJson('/api/social/ads/reach-estimate', $body)->assertOk()
+            ->assertExactJson(['data' => ['users_lower_bound' => 120000, 'users_upper_bound' => 150000]]);
+
+        $sent = collect(Http::recorded())->map(fn ($pair) => $pair[0])->first(fn (HttpRequest $r) => str_contains($r->url(), '/reachestimate'));
+        parse_str((string) parse_url($sent->url(), PHP_URL_QUERY), $query);
+        $spec = json_decode($query['targeting_spec'], true);
+        $this->assertSame([1], $spec['genders']);
+        $this->assertSame(20, $spec['geo_locations']['cities'][0]['radius']);
+        $this->assertSame(0, AdCampaign::count(), 'an estimate never launches anything');
+    }
+
+    public function test_reach_estimate_is_null_when_meta_has_none_and_needs_a_launch_permission(): void
+    {
+        $account = $this->tenant();
+        $this->metaAssets($account);
+        $body = ['targeting_specs' => ['age_min' => 25, 'age_max' => 35, 'countries' => ['IN']]];
+
+        $this->graph['#^GET /v19\.0/act_\d+/reachestimate$#'] = ['data' => ['users_lower_bound' => -1, 'users_upper_bound' => -1]];
+        $this->actingAs($this->user($account))->postJson('/api/social/ads/reach-estimate', $body)->assertOk()->assertExactJson(['data' => null]);
+
+        $this->actingAs($this->user($account))->postJson('/api/social/ads/reach-estimate', ['targeting_specs' => ['age_min' => 25, 'age_max' => 35]])->assertStatus(422);
+
+        Role::firstOrCreate(['name' => 'ads_viewer', 'guard_name' => 'web'])->syncPermissions(['social_ads.view']);
+        $this->actingAs($this->user($account, 'ads_viewer'))->postJson('/api/social/ads/reach-estimate', $body)->assertForbidden();
+    }
+
     public function test_automatic_placements_send_no_placement_fields_and_a_location_is_required(): void
     {
         $account = $this->tenant();

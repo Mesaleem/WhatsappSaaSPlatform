@@ -1,5 +1,5 @@
 import axiosInstance from '../core/api/axiosInstance';
-import type { AdAccountInfo, AdCampaign, AdCampaignResponse, AdLocation, LaunchCampaignPayload } from '../types/ads';
+import type { AdAccountInfo, AdCampaign, AdCampaignResponse, AdLocation, AdPlacement, AdReachEstimate, LaunchCampaignPayload, TargetingSpecs } from '../types/ads';
 
 const BASE = '/social/ads';
 
@@ -45,6 +45,13 @@ const adsService = {
   /** Meta location search (countries, regions, cities) for the launch form. */
   locations(q: string) {
     return axiosInstance.get<{ data: AdLocation[] }>(`${BASE}/locations`, { params: { q } }).then((res) => res.data.data);
+  },
+
+  /** Meta's estimated audience for the targeting being built; null = Meta has no estimate. */
+  reachEstimate(targeting_specs: TargetingSpecs, placements: AdPlacement[] = []) {
+    return axiosInstance
+      .post<{ data: AdReachEstimate | null }>(`${BASE}/reach-estimate`, { targeting_specs, placements })
+      .then((res) => res.data.data);
   },
 
   updateCplThreshold(id: number, cplThreshold: number | null) {

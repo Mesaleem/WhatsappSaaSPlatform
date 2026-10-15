@@ -846,6 +846,7 @@ Route::middleware('auth:sanctum')->group(function () {
             // Owner request (2026-09-30): ad account currency / balance, and Meta location search for the launch form (reads).
             Route::middleware('permission:launch-meta-ads|social_ads.view')->get('/account', [AdCampaignController::class, 'account']);
             Route::middleware('permission:launch-meta-ads|social_ads.launch')->get('/locations', [AdCampaignController::class, 'locations']);
+            Route::middleware('permission:launch-meta-ads|social_ads.launch')->post('/reach-estimate', [AdCampaignController::class, 'reachEstimate']);
             // QA fixes (2026-10-14): the Page's instant forms, for a lead-generation ad.
             Route::middleware('permission:launch-meta-ads|social_ads.launch')->get('/lead-forms', [AdCampaignController::class, 'leadForms']);
             Route::middleware('permission:launch-meta-ads|social_ads.launch')->post('/launch', [AdCampaignController::class, 'launch']);

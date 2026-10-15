@@ -75,21 +75,7 @@ class AdCampaignController extends Controller
             'objective' => ['required', 'string', Rule::in(AdCampaign::OBJECTIVES)],
             'daily_budget' => ['required', 'numeric', 'min:1'],
             'cpl_threshold' => ['nullable', 'numeric', 'min:0'],
-            'targeting_specs' => ['required', 'array'],
-            // Owner request (2026-09-30): countries and/or Meta locations (country / region / city
-            // keys from GET /social/ads/locations) — at least one of the two.
-            'targeting_specs.countries' => ['nullable', 'array', 'required_without:targeting_specs.locations'],
-            'targeting_specs.countries.*' => ['string', 'size:2'],
-            'targeting_specs.locations' => ['nullable', 'array', 'max:50', 'required_without:targeting_specs.countries'],
-            'targeting_specs.locations.*.key' => ['required', 'string', 'max:64'],
-            'targeting_specs.locations.*.type' => ['required', 'string', Rule::in(MetaAdsService::LOCATION_TYPES)],
-            'targeting_specs.locations.*.name' => ['nullable', 'string', 'max:255'],
-            'placements' => ['nullable', 'array'],
-            'placements.*' => ['string', 'distinct', Rule::in(array_keys(MetaAdsService::PLACEMENTS))],
-            'targeting_specs.age_min' => ['required', 'integer', 'min:13', 'max:65'],
-            'targeting_specs.age_max' => ['required', 'integer', 'min:13', 'max:65', 'gte:targeting_specs.age_min'],
-            'targeting_specs.interests' => ['nullable', 'array'],
-            'targeting_specs.interests.*' => ['string', 'max:100'],
+            ...self::targetingRules(),
             'creative' => ['required', 'array'],
             'creative.image_url' => ['nullable', 'url'],
             'creative.headline' => ['required', 'string', 'max:255'],
@@ -99,9 +85,7 @@ class AdCampaignController extends Controller
             'creative.lead_gen_form_id' => ['nullable', 'string', 'max:64', 'regex:/^[0-9]+$/'],
         ]);
 
-        if (empty($data['targeting_specs']['countries']) && empty($data['targeting_specs']['locations'])) {
-            throw ValidationException::withMessages(['targeting_specs.locations' => 'Choose at least one location.']);
-        }
+        self::assertHasLocation($data);
 
         // Phase 10 Task 2 — optional Idempotency-Key: a repeated launch replays the stored row.
         $requestKey = $this->idempotencyKey($request);
@@ -119,6 +103,66 @@ class AdCampaignController extends Controller
         }
 
         return $replayed ? $this->replay($campaign) : response()->json(['message' => 'Campaign launched.', 'data' => $this->present($campaign)], 201);
+    }
+
+    /** Targeting + placement rules shared by launch() and reachEstimate(). */
+    private static function targetingRules(): array
+    {
+        return [
+            'targeting_specs' => ['required', 'array'],
+            // Countries, Meta locations (country / region / city keys from GET /social/ads/locations)
+            // and/or pinned points with a radius — at least one, see assertHasLocation().
+            'targeting_specs.countries' => ['nullable', 'array'],
+            'targeting_specs.countries.*' => ['string', 'size:2'],
+            'targeting_specs.locations' => ['nullable', 'array', 'max:50'],
+            'targeting_specs.locations.*.key' => ['required', 'string', 'max:64'],
+            'targeting_specs.locations.*.type' => ['required', 'string', Rule::in(MetaAdsService::LOCATION_TYPES)],
+            'targeting_specs.locations.*.name' => ['nullable', 'string', 'max:255'],
+            // Meta: a radius around a city is 17-80 km; only cities take one.
+            'targeting_specs.locations.*.radius_km' => ['nullable', 'integer', 'min:17', 'max:80', 'prohibited_unless:targeting_specs.locations.*.type,city'],
+            'targeting_specs.custom_locations' => ['nullable', 'array', 'max:50'],
+            'targeting_specs.custom_locations.*.latitude' => ['required', 'numeric', 'between:-90,90'],
+            'targeting_specs.custom_locations.*.longitude' => ['required', 'numeric', 'between:-180,180'],
+            // Meta: a radius around a pinned point is 1-80 km.
+            'targeting_specs.custom_locations.*.radius_km' => ['required', 'integer', 'min:1', 'max:80'],
+            'targeting_specs.custom_locations.*.name' => ['nullable', 'string', 'max:255'],
+            'targeting_specs.gender' => ['nullable', 'string', Rule::in(MetaAdsService::GENDERS)],
+            'placements' => ['nullable', 'array'],
+            'placements.*' => ['string', 'distinct', Rule::in(array_keys(MetaAdsService::PLACEMENTS))],
+            'targeting_specs.age_min' => ['required', 'integer', 'min:13', 'max:65'],
+            'targeting_specs.age_max' => ['required', 'integer', 'min:13', 'max:65', 'gte:targeting_specs.age_min'],
+            'targeting_specs.interests' => ['nullable', 'array'],
+            'targeting_specs.interests.*' => ['string', 'max:100'],
+        ];
+    }
+
+    private static function assertHasLocation(array $data): void
+    {
+        $specs = $data['targeting_specs'];
+
+        if (empty($specs['countries']) && empty($specs['locations']) && empty($specs['custom_locations'])) {
+            throw ValidationException::withMessages(['targeting_specs.locations' => 'Choose at least one location.']);
+        }
+    }
+
+    /**
+     * POST /api/social/ads/reach-estimate — Meta's estimated audience size for
+     * the targeting being built in the launch form. A read; never blocks a launch:
+     * when Meta cannot estimate, `data` is null.
+     */
+    public function reachEstimate(Request $request, MetaAdsService $service): JsonResponse
+    {
+        $account = $this->requireTargetAccount($request);
+        $data = $request->validate(self::targetingRules());
+        self::assertHasLocation($data);
+
+        try {
+            return response()->json(['data' => $service->reachEstimate($account, $data['targeting_specs'], $data['placements'] ?? [])]);
+        } catch (SocialConnectionException $e) {
+            return $e->render();
+        } catch (RuntimeException $e) {
+            return response()->json(['message' => $e->getMessage()], 422);
+        }
     }
 
     /**
