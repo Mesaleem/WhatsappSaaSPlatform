@@ -984,6 +984,8 @@ Production showed a Page flipping connected → revoked on every Social Inbox vi
 - Publish / comments / lead fetch / ads now take their existing non-connection failure path (Meta's message shown, connection stays connected).
 - Tests: `SocialConnectionHealthTest` (10/200 stay connected; new inbox permission test), `SocialConnectionWriteBackTest` (2 tests flipped). Social/ads filter: 485 passed; the 6 `SocialMediaDiskTest` failures are the local PHP missing GD, unrelated.
 - **Operational**: rows already marked revoked are reset by the account's "Check" button or a reconnect. Inbox / publishing still need the Meta app's permissions approved.
+- Header "needs reconnecting" banner (`SocialConnectionWarningBanner.tsx`) used to load the account list once per app load, so it stayed after a reconnect/Check. `socialService.listAccounts()` now fires `social-accounts-loaded` with the fresh list; the banner listens to it and also reloads on every route change. Test: `SocialConnectionWarningBanner.test.tsx`.
+- `docs/WapHub-Social-Media-Connection-Guide.docx`: new 2.3.1 (permissions to "+ Add" inside each Meta use case), a Troubleshooting row for "Access revoked after connecting", a Checklist item.
 
 ### Meta OAuth scopes (2026-10-01 fix)
 

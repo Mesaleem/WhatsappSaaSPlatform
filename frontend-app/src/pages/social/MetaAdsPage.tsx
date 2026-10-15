@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import {
   AlertCircle,
   BarChart3,
+  ExternalLink,
   Loader2,
   Pause,
   Play,
@@ -31,6 +32,7 @@ import type { OrganicPost } from '../../types/organic';
 import { extractErrorCode, extractErrorMessage, extractFieldErrors } from '../../utils/apiError';
 import { socialConnectionError, type SocialConnectionErrorInfo } from '../../utils/socialConnectionError';
 import SocialReconnectNotice from '../../components/social/SocialReconnectNotice';
+import { META_SETUP_ITEMS } from '../../components/social/MetaSetupGuide';
 import { indigo, activeGradient } from '../../theme/signalIndigo';
 import { AD_CTA_LABELS, AD_CTAS_BY_OBJECTIVE, AD_OBJECTIVE_LABELS, AD_PLACEMENT_LABELS, formatAdMoney } from '../../types/ads';
 import type { AdAccountInfo, AdCallToAction, AdCampaign, AdLocation, AdObjective, AdPlacement, LaunchCampaignPayload } from '../../types/ads';
@@ -996,9 +998,11 @@ function CplThresholdEditor({ campaign, onSaved }: { campaign: AdCampaign; onSav
   );
 }
 
+const META_AD_ACCOUNTS_URL = 'https://business.facebook.com/settings/ad-accounts';
+
 interface LaunchNotice {
   title: string;
-  message: string;
+  message: ReactNode;
   action: GateNoticeAction | null;
   /** Offered when the missing asset is only recommended, not required by the backend. */
   continueAnyway: (() => void) | null;
@@ -1118,7 +1122,30 @@ export default function MetaAdsPage() {
         if (!adAccount) {
           setNotice({
             title: 'Connect a Meta Ad Account first',
-            message: `A paid campaign is created in a Meta Ad Account, and none is connected for this account yet. Connect your Meta account and select the Ad Account (and the Facebook Page) to use; the launcher reopens afterwards.${askAdmin}`,
+            message: (
+              <>
+                <p>{`A paid campaign is created in a Meta Ad Account, and none is connected for this account yet. Connect your Meta account and select the Ad Account (and the Facebook Page) to use; the launcher reopens afterwards.${askAdmin}`}</p>
+                <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3" data-testid="ads-create-ad-account-help">
+                  <p className="font-medium text-slate-800">No Ad Account yet? Create one on Meta first:</p>
+                  <ol className="mt-1 list-decimal space-y-0.5 pl-5">
+                    {META_SETUP_ITEMS.meta_ad_account.steps.map((step) => (
+                      <li key={step}>{step}</li>
+                    ))}
+                  </ol>
+                  {canManageSocialAccounts && (
+                    <a
+                      href={META_AD_ACCOUNTS_URL}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="mt-2 inline-flex items-center gap-1 font-semibold text-emerald-700 underline hover:text-emerald-800"
+                    >
+                      Create an Ad Account in Meta <ExternalLink className="h-3.5 w-3.5" />
+                    </a>
+                  )}
+                  <p className="mt-1 text-xs text-slate-500">Then come back and connect again, ticking the new Ad Account.</p>
+                </div>
+              </>
+            ),
             action: connectAction('paid'),
             continueAnyway: null,
           });

@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { AlertTriangle } from 'lucide-react';
 import { useAuth } from '../../core/context/AuthContext';
-import socialService from '../../services/socialService';
+import socialService, { SOCIAL_ACCOUNTS_LOADED_EVENT } from '../../services/socialService';
 import { connectionStatusOf, SOCIAL_ASSET_TYPE_LABELS, type SocialAccount } from '../../types/social';
 
 /**
@@ -43,6 +43,15 @@ export default function SocialConnectionWarningBanner() {
   const hasAds = !!capabilities && capabilities.ads === true;
   const canManageSocial = hasPermission('manage-social-accounts') && hasModule('social_accounts') && hasSocial;
   const [accounts, setAccounts] = useState<SocialAccount[] | null>(null);
+  const { pathname } = useLocation();
+
+  // Any page that reloads the list (reconnect, Check, disconnect) refreshes the banner too.
+  useEffect(() => {
+    if (!canManageSocial) return;
+    const onLoaded = (event: Event) => setAccounts((event as CustomEvent<SocialAccount[]>).detail);
+    window.addEventListener(SOCIAL_ACCOUNTS_LOADED_EVENT, onLoaded);
+    return () => window.removeEventListener(SOCIAL_ACCOUNTS_LOADED_EVENT, onLoaded);
+  }, [canManageSocial]);
 
   useEffect(() => {
     if (!canManageSocial) return;
@@ -51,9 +60,6 @@ export default function SocialConnectionWarningBanner() {
 
     socialService
       .listAccounts()
-      .then((list) => {
-        if (!cancelled) setAccounts(list);
-      })
       .catch(() => {
         // Swallow — same "don't turn a transient fetch failure into a
         // false compliance alarm" reasoning as NotificationBell's poll.
@@ -63,7 +69,7 @@ export default function SocialConnectionWarningBanner() {
     return () => {
       cancelled = true;
     };
-  }, [canManageSocial]);
+  }, [canManageSocial, pathname]);
 
   if (!canManageSocial || accounts === null) return null;
 

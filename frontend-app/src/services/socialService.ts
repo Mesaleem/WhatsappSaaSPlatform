@@ -12,6 +12,9 @@ import type {
 
 const BASE = '/social';
 
+/** Fired with every freshly loaded account list so app-wide widgets (the header banner) never show a stale status. */
+export const SOCIAL_ACCOUNTS_LOADED_EVENT = 'social-accounts-loaded';
+
 /**
  * Social Media Marketing & Meta Ads Automation Expansion — Phase 1.
  * Axios service for the tenant-scoped Social Accounts hub. The OAuth
@@ -23,7 +26,10 @@ const BASE = '/social';
  */
 const socialService = {
   listAccounts() {
-    return axiosInstance.get<{ data: SocialAccount[] }>(`${BASE}/accounts`).then((res) => res.data.data);
+    return axiosInstance.get<{ data: SocialAccount[] }>(`${BASE}/accounts`).then((res) => {
+      window.dispatchEvent(new CustomEvent<SocialAccount[]>(SOCIAL_ACCOUNTS_LOADED_EVENT, { detail: res.data.data }));
+      return res.data.data;
+    });
   },
 
   disconnect(id: number) {

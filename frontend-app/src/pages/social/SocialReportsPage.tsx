@@ -10,6 +10,7 @@ import { TableCard, inputClass } from '../../components/common/Card';
 import { extractErrorMessage } from '../../utils/apiError';
 import { indigo } from '../../theme/signalIndigo';
 import type { SocialReportSummary } from '../../types/reports';
+import { formatAdMoney } from '../../types/ads';
 import DismissibleAlert from '../../components/common/DismissibleAlert';
 
 function currentMonthValue(): string {
@@ -18,7 +19,7 @@ function currentMonthValue(): string {
 }
 
 function formatMoney(value: number): string {
-  return `$${value.toFixed(2)}`;
+  return formatAdMoney(value);
 }
 
 function KpiCard({ label, value, sub }: { label: string; value: string; sub?: string }) {
