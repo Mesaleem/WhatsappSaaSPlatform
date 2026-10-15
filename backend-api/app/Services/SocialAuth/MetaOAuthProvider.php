@@ -315,10 +315,13 @@ class MetaOAuthProvider implements SocialOAuthProviderInterface
      * connection problem (checkConnection() above and every feature that
      * calls Graph with a stored token go through it). Graph error 190 = the
      * token is invalid: subcode 463 means it expired, any other 190 means
-     * Meta no longer accepts it → revoked. 10 / 200-299 = a permission the
-     * connection needs was removed → revoked. Everything else (validation,
-     * rate limits 4/17/32/613, transient 1/2, 5xx) → null: not a connection
-     * problem, the stored state is left alone.
+     * Meta no longer accepts it → revoked. 10 / 200-299 are per-endpoint
+     * permission refusals (e.g. pages_messaging not granted or not approved
+     * in App Review) — the token still works for everything else, so they
+     * are NOT a connection problem: marking the whole connection revoked on
+     * them made every reconnect flip straight back to revoked. Callers see
+     * them via isPermissionFailure(). Everything else (validation, rate
+     * limits 4/17/32/613, transient 1/2, 5xx) → null as well.
      */
     public function classifyApiFailure(int $httpStatus, array $errorBody): ?ConnectionCheck
     {
@@ -329,9 +332,16 @@ class MetaOAuthProvider implements SocialOAuthProviderInterface
         return match (true) {
             $code === 190 && $subcode === 463 => ConnectionCheck::expired('Meta reports that the access token has expired. Reconnect the account.'),
             $code === 190 => ConnectionCheck::revoked('Meta no longer accepts this connection (the permission was removed or the password changed). Reconnect the account.'),
-            $code === 10 || ($code >= 200 && $code <= 299) => ConnectionCheck::revoked('A Meta permission this connection needs was removed. Reconnect the account and grant it again.'),
             default => null,
         };
+    }
+
+    /** Graph error 10 / 200-299: this endpoint needs a permission the app or token does not have. */
+    public static function isPermissionFailure(array $errorBody): bool
+    {
+        $code = (int) ($errorBody['error']['code'] ?? 0);
+
+        return $code === 10 || ($code >= 200 && $code <= 299);
     }
 
     /**

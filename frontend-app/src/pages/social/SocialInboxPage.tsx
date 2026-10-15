@@ -34,6 +34,12 @@ const PLATFORM_TINT: Record<InboxPlatform, { bg: string; fg: string }> = {
   lead: { bg: '#FEF3D9', fg: '#B45309' },
 };
 
+const INBOX_ISSUE_LABELS: Record<InboxConnectionIssue['connection_status'], string> = {
+  revoked: 'Access revoked',
+  expired: 'Connection expired',
+  permission_missing: 'Permission missing',
+};
+
 /** Phase 9 Task 2 — only an in-app path is followed for Reconnect. */
 function safeInboxReconnect(path: string): string {
   return path.startsWith('/') && !path.startsWith('//') ? path : '/social/accounts';
@@ -176,7 +182,7 @@ export default function SocialInboxPage() {
             {connectionIssues.map((issue) => (
               <div key={issue.social_account_id} className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
                 <span>
-                  <strong>{issue.connection_status === 'revoked' ? 'Access revoked' : 'Connection expired'}:</strong> {issue.message}
+                  <strong>{INBOX_ISSUE_LABELS[issue.connection_status]}:</strong> {issue.message}
                 </span>
                 {canManageSocialAccounts && (
                   <Link to={safeInboxReconnect(issue.reconnect_path)} className="font-semibold underline">

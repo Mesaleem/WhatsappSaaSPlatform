@@ -227,11 +227,31 @@ class SocialConnectionHealthTest extends TestCase
         $this->assertSame(SocialAccount::HEALTH_REAUTH_REQUIRED, $socialAccount->fresh()->health_status);
         $this->assertSame('revoked', $socialAccount->fresh()->connectionStatus());
 
-        // A removed permission is also revoked.
-        $other = $this->connection($this->tenant());
-        $this->graph = $this->graphError(200);
-        $this->runJob($other);
-        $this->assertSame('revoked', $other->fresh()->connectionStatus());
+        // A per-endpoint permission refusal (10 / 2xx) is not a dead connection.
+        foreach ([10, 200] as $code) {
+            $other = $this->connection($this->tenant());
+            $this->graph = $this->graphError($code);
+            $this->runJob($other);
+            $this->assertSame('connected', $other->fresh()->connectionStatus(), "code {$code}");
+        }
+    }
+
+    public function test_an_inbox_permission_refusal_reports_permission_missing_without_revoking(): void
+    {
+        $account = $this->tenant();
+        $page = $this->connection($account, ['asset_type' => 'facebook_page', 'provider_id' => 'page-1', 'name' => 'Acme Page']);
+        $this->graph = $this->graphError(10);
+
+        $response = $this->actingAs($this->user($account))->getJson('/api/social/inbox/threads')->assertOk();
+
+        $issue = collect($response->json('connection_issues'))->sole();
+        $this->assertSame($page->id, $issue['social_account_id']);
+        $this->assertSame('permission_missing', $issue['connection_status']);
+        $this->assertSame('connected', $page->fresh()->connectionStatus());
+
+        // The next visit asks Meta again instead of short-circuiting on a stored "revoked".
+        $this->actingAs($this->user($account))->getJson('/api/social/inbox/threads')->assertOk();
+        Http::assertSentCount(2);
     }
 
     public function test_a_network_failure_never_marks_the_connection_revoked_and_is_not_retried_aggressively(): void

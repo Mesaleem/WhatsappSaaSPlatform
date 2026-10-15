@@ -110,15 +110,15 @@ class SocialConnectionWriteBackTest extends TestCase
         $this->assertSame(0, Lead::count(), 'no lead can be captured without its form data (unchanged)');
     }
 
-    public function test_lead_fetch_with_a_revoked_permission_persists_revoked(): void
+    public function test_lead_fetch_with_a_missing_permission_keeps_the_connection(): void
     {
         $page = $this->page();
         $this->graph = $this->graphError(200);
 
         $this->deliverLead($page);
 
-        $this->assertSame('revoked', $page->fresh()->connectionStatus());
-        $this->assertNotNull($page->fresh()->status_reason);
+        $this->assertSame('connected', $page->fresh()->connectionStatus());
+        $this->assertNull($page->fresh()->status_checked_at);
     }
 
     public function test_lead_fetch_temporary_failures_do_not_mark_the_connection_dead(): void
@@ -175,7 +175,7 @@ class SocialConnectionWriteBackTest extends TestCase
         Http::assertSentCount(1); // the private reply is not attempted with the dead token
     }
 
-    public function test_a_comment_reply_rejected_for_a_revoked_permission_persists_revoked(): void
+    public function test_a_comment_reply_rejected_for_a_missing_permission_keeps_the_connection(): void
     {
         $page = $this->page();
         $this->rule($page);
@@ -183,7 +183,8 @@ class SocialConnectionWriteBackTest extends TestCase
 
         $this->deliverComment($page);
 
-        $this->assertSame('revoked', $page->fresh()->connectionStatus());
+        $this->assertSame('connected', $page->fresh()->connectionStatus());
+        $this->assertSame('Raw Meta detail fbtrace_id=XYZ', CommentAutomationEvent::sole()->public_reply_error);
     }
 
     public function test_other_comment_reply_failures_keep_the_previous_behaviour(): void

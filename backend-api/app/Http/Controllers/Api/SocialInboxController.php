@@ -9,6 +9,7 @@ use App\Models\Lead;
 use App\Models\SocialAccount;
 use App\Services\SocialAuth\Exceptions\ProviderRequestFailed;
 use App\Services\SocialAuth\Exceptions\SocialConnectionException;
+use App\Services\SocialAuth\MetaOAuthProvider;
 use App\Services\SocialAuth\SocialConnectionService;
 use App\Services\WhatsApp\DirectMessageDispatcher;
 use Illuminate\Http\Client\Response as HttpResponse;
@@ -98,6 +99,22 @@ class SocialInboxController extends Controller
             } catch (Throwable $e) {
                 if ($e instanceof ProviderRequestFailed && ($result = $connections->observe($socialAccount, $e, 'inbox.threads'))) {
                     $connectionIssues[] = $this->connectionIssue(SocialConnectionException::for($socialAccount, $result->status, $result->reason));
+
+                    continue;
+                }
+
+                if ($e instanceof ProviderRequestFailed && MetaOAuthProvider::isPermissionFailure($e->errorBody)) {
+                    $label = $platform === 'facebook' ? 'Facebook Page' : 'Instagram account';
+                    $connectionIssues[] = [
+                        'social_account_id' => (int) $socialAccount->id,
+                        'asset_type' => (string) $socialAccount->asset_type,
+                        'name' => $socialAccount->name,
+                        'connection_status' => 'permission_missing',
+                        'message' => "Meta did not allow reading the messages of {$label}".($socialAccount->name ? " \"{$socialAccount->name}\"" : '').': '
+                            .mb_substr($e->getMessage(), 0, 200)
+                            .' The Meta app needs this permission approved (App Review), or reconnect and tick every permission.',
+                        'reconnect_path' => SocialConnectionException::RECONNECT_PATH,
+                    ];
 
                     continue;
                 }

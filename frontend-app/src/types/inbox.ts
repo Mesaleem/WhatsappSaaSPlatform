@@ -24,14 +24,15 @@ export interface InboxThread {
 
 /**
  * Phase 9 Task 2 — a connected Page / Instagram account whose conversations
- * could not be listed because the connection is expired or revoked
+ * could not be listed because the connection is expired or revoked, or
+ * because Meta refused the messaging permission (`permission_missing`)
  * (GET /social/inbox/threads `connection_issues`). Safe fields only.
  */
 export interface InboxConnectionIssue {
   social_account_id: number;
   asset_type: string;
   name: string | null;
-  connection_status: 'expired' | 'revoked';
+  connection_status: 'expired' | 'revoked' | 'permission_missing';
   message: string;
   reconnect_path: string;
 }
