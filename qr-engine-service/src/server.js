@@ -7,6 +7,7 @@ import { Server as SocketIOServer } from 'socket.io';
 import { startSession, logoutSession, getStatus, getQr, getPairingCode, sendMessage, createGroup, addGroupParticipants, listGroups, getGroupMetadata, resumeAllSessions } from './services/sessionManager.js';
 import { verifyAccountAccess, verifyNumberOwner } from './services/backendClient.js';
 import { drainAllAuthStates } from './services/authStore.js';
+import { shutdownAllSessions } from './services/sessionManager.js';
 
 /**
  * [Cross-device boot-stall hardening, disclosed]: added because a "silent
@@ -48,7 +49,8 @@ for (const signal of ['SIGTERM', 'SIGINT']) {
   process.on(signal, async () => {
     if (shuttingDown) return;
     shuttingDown = true;
-    console.log(`[server] ${signal}: saving queued WhatsApp credential updates before exit`);
+    console.log(`[server] ${signal}: closing WhatsApp sockets (no logout) and saving queued credential updates before exit`);
+    shutdownAllSessions();
     await Promise.race([drainAllAuthStates(), new Promise((resolve) => setTimeout(resolve, SHUTDOWN_DRAIN_MS))]);
     process.exit(0);
   });

@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
-    "test": "node --test test/authStore.test.js test/messageRetry.test.js"
+    "test": "node --test test/authStore.test.js test/messageRetry.test.js test/replacedRetry.test.js"
   },
   "keywords": [],
   "author": "",

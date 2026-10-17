@@ -1317,6 +1317,17 @@ privacy tokens. Engine tests 23/23.
 ['WapHub', 'Chrome', '22.04.4']` (`sessionManager.js`). The 2026-10-11 belief that a custom name breaks pairing-code login
 was wrong: verified live — a phone-number code was accepted and Linked Devices shows WapHub. Applies to new links only.
 
+**Same day — production disconnects after deploy (Render log):** a Render deploy (and a wake from hibernation) briefly
+runs the new instance next to the old one; both resumed the same login, WhatsApp kicked one out (`stream:error conflict
+type=replaced`, 440), the engine gave up for good ("not reconnecting") and told backend-api `disconnected`; Render then
+stopped the other instance, so nothing was connected and every send answered "WhatsApp account is disconnected". Fix:
+`replacedRetry.js` — a 440 is retried after 20 / 40 / 60 s (at most 3 per 10 min per session, so two engines that
+really run side by side cannot fight forever), backend gets `connecting` meanwhile; on SIGTERM/SIGINT
+`shutdownAllSessions()` closes every socket without logging out and blocks reconnects/retries, so the old instance stops
+competing. Tests: engine 25/25 (`replacedRetry.test.js` 2 new). ⏳ Needs a Render deploy to verify. Note: the Render
+service runs on a plan that hibernates (hostname `...-hibernate-...`): while it sleeps, no WhatsApp number is connected
+and nothing can be sent or received — the QR engine needs an always-on instance.
+
 ## 6. Test Suite
 
 **98 feature test files** + 2 unit files (+ `tests/Probes/`: 7 MariaDB/MySQL-only probe scripts, not PHPUnit — P5-9 added `inbound_gate_nonblocking_probe.php` and `outbound_pacing_probe.php`; Phase 8 T5 added `ai_credit_concurrency_probe.php`; Phase 8 T7 added `journey_ai_concurrency_probe.php`; Phase 8 T9 added `knowledge_concurrency_probe.php`; Phase 8 T10 added `journey_rag_concurrency_probe.php`; Phase 8 T11 added `agent_tool_concurrency_probe.php` — 11 scripts now), run with `php artisan test`.

@@ -9,6 +9,7 @@ import axios from 'axios';
 import { notifyBackend, notifyInboundMessage, registerSessionOwner, hasSessionOwner, fetchNumberOwner } from './backendClient.js';
 import { loadAuthState, drainAuthState, clearAuthState, listPairedAccountIds } from './authStore.js';
 import { rememberSentMessage, recallSentMessage, forgetSentMessages, inboundSenderPhone, resolveSendJid } from './messageRetry.js';
+import { nextReplacedRetryDelay, resetReplacedRetries } from './replacedRetry.js';
 
 const MAX_RECONNECT_ATTEMPTS = 5;
 // The number each number slot must link to, keyed by session key. A login on
@@ -50,6 +51,10 @@ const logger = pino({ level: process.env.LOG_LEVEL || 'silent' });
  * account_id -> { sock, status, qr, reconnectAttempts }
  */
 const sessions = new Map();
+
+// [2026-10-17]: set by shutdownAllSessions(). A stopping process must not
+// reconnect or retry: on Render the new instance is taking over.
+let shuttingDown = false;
 
 function getSession(accountId) {
   return sessions.get(String(accountId));
@@ -429,6 +434,7 @@ export async function getGroupMetadata(accountId, groupJid) {
 
 async function clearSessionFiles(accountId) {
   forgetSentMessages(accountId);
+  resetReplacedRetries(accountId);
   await clearAuthState(accountId);
 }
 
@@ -975,10 +981,27 @@ export async function startSession(
           return;
         }
         if (statusCode === DisconnectReason.connectionReplaced) {
-          console.log(`[qr-engine] CONNECTION_REPLACED account_id=${id}: another client took over this WhatsApp login; not reconnecting`);
           sessions.delete(id);
-          broadcast(id, { status: 'disconnected', qr: null, error: 'session_replaced' });
-          await notifyBackend(id, 'disconnected');
+          record.sock.ev.removeAllListeners();
+          // [Bug fix 2026-10-17]: retried after a delay (see replacedRetry.js) --
+          // on Render this is nearly always the old instance of a deploy, which
+          // is about to stop. A shutting-down process never retries.
+          const delay = shuttingDown ? null : nextReplacedRetryDelay(id);
+          if (delay === null) {
+            console.log(`[qr-engine] CONNECTION_REPLACED account_id=${id}: another client took over this WhatsApp login; not reconnecting`);
+            broadcast(id, { status: 'disconnected', qr: null, error: 'session_replaced' });
+            await notifyBackend(id, 'disconnected');
+            return;
+          }
+          console.log(`[qr-engine] CONNECTION_REPLACED account_id=${id}: another client took over this WhatsApp login; retrying in ${delay / 1000}s`);
+          broadcast(id, { status: 'connecting', qr: null });
+          await notifyBackend(id, 'connecting');
+          setTimeout(() => {
+            // Skipped if the process is stopping or a session was started meanwhile
+            // (startSession() returns early for one that is connecting/connected).
+            if (shuttingDown) return;
+            startSession(id, broadcast).catch((err) => console.error(`[qr-engine] REPLACED_RETRY_FAILED account_id=${id}:`, err?.message || err));
+          }, delay).unref?.();
           return;
         }
 
@@ -1127,4 +1150,23 @@ export async function logoutSession(accountId, broadcast) {
     }
     await notifyBackend(id, 'disconnected');
   })();
+}
+
+/**
+ * [2026-10-17]: graceful shutdown (SIGTERM on a Render deploy, Ctrl+C). Closes
+ * every WhatsApp socket WITHOUT logging out, so the device stays linked and the
+ * new instance resumes it, and stops this process from reconnecting or retrying
+ * and taking the login back from that new instance.
+ */
+export function shutdownAllSessions() {
+  shuttingDown = true;
+  for (const record of sessions.values()) {
+    clearTimeout(record.pairingTimer);
+    try {
+      record.sock.ev.removeAllListeners();
+      record.sock.end(undefined);
+    } catch {
+      // Already closed.
+    }
+  }
 }
