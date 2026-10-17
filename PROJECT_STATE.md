@@ -1312,6 +1312,11 @@ Production note: full history sync adds work right after linking (CPU/memory on 
 the overrides were live should be **logged out and re-linked by QR** after deploy so history sync runs and brings the
 privacy tokens. Engine tests 23/23.
 
+**Same day — linked-device name (owner request):** pairing-code links used `Browsers.ubuntu('Chrome')` and showed
+"Ubuntu" in WhatsApp's Linked Devices; every link (QR and phone number) now registers as `WAPHUB_BROWSER =
+['WapHub', 'Chrome', '22.04.4']` (`sessionManager.js`). The 2026-10-11 belief that a custom name breaks pairing-code login
+was wrong: verified live — a phone-number code was accepted and Linked Devices shows WapHub. Applies to new links only.
+
 ## 6. Test Suite
 
 **98 feature test files** + 2 unit files (+ `tests/Probes/`: 7 MariaDB/MySQL-only probe scripts, not PHPUnit — P5-9 added `inbound_gate_nonblocking_probe.php` and `outbound_pacing_probe.php`; Phase 8 T5 added `ai_credit_concurrency_probe.php`; Phase 8 T7 added `journey_ai_concurrency_probe.php`; Phase 8 T9 added `knowledge_concurrency_probe.php`; Phase 8 T10 added `journey_rag_concurrency_probe.php`; Phase 8 T11 added `agent_tool_concurrency_probe.php` — 11 scripts now), run with `php artisan test`.

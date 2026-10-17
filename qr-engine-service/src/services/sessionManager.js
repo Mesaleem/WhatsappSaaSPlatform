@@ -4,7 +4,6 @@ import {
   makeWASocket,
   DisconnectReason,
   fetchLatestBaileysVersion,
-  Browsers,
 } from '@whiskeysockets/baileys';
 import axios from 'axios';
 import { notifyBackend, notifyInboundMessage, registerSessionOwner, hasSessionOwner, fetchNumberOwner } from './backendClient.js';
@@ -36,6 +35,8 @@ const PAIRING_REQUEST_RETRY_MS = 1000;
 // now-stale code as invalid. Below this window a repeat request for the
 // same number just re-emits the existing code instead of restarting.
 const MIN_PAIRING_CODE_REISSUE_MS = 8000;
+// The name the phone shows under Linked Devices for every WapHub link.
+const WAPHUB_BROWSER = ['WapHub', 'Chrome', '22.04.4'];
 
 const logger = pino({ level: process.env.LOG_LEVEL || 'silent' });
 
@@ -727,7 +728,13 @@ export async function startSession(
     // (it is off here); companion_platform_display is built only for a pairing-code
     // request. A pairing-code session (phoneNumber set, also on its own 515 restart,
     // which passes pairingPhone through) keeps the proven Browsers.ubuntu('Chrome').
-    browser: phoneNumber ? Browsers.ubuntu('Chrome') : ['WapHub', 'Chrome', '22.04.4'],
+    // [Owner request 2026-10-17]: every link -- QR and phone number -- shows the
+    // platform name. Supersedes the note above: the pairing-code failures that
+    // note blamed on the name happened while pairing was broken for other reasons
+    // (since fixed). One identity for every session, so the restart after pairing
+    // presents the same device as the request. Linked Devices shows "WapHub"
+    // (QR) / "Chrome (WapHub)" (pairing code).
+    browser: WAPHUB_BROWSER,
     printQRInTerminal: false,
     // [Bug fix 2026-10-17 -- "Waiting for this message"]: these three stay at
     // Baileys' defaults (true), as in the Sept 25 build that delivered fine.
