@@ -119,9 +119,19 @@ async function loadBackendHandle(accountId) {
               }
             }
           }
-          // Awaited on purpose: Baileys only treats a key as used once
-          // set() resolves, so the row must be durable before we return.
-          await persist({ set, delete: remove });
+          // [Bug fix 2026-10-17]: queued, NOT awaited. Baileys awaits set() in
+          // the middle of sendMessage(), and backend-api is often the caller of
+          // that send (POST /api/message/send), waiting on this process. With
+          // the await, a backend that has no free worker (php artisan serve has
+          // one; a busy php-fpm pool has none) could not take this write until
+          // its own request timed out: the send hung for 15-30 s and was reported
+          // as "qr-engine-service is unreachable" although it was delivered.
+          // The cache above is what this socket reads, so it is already
+          // current; writes still go out strictly in order, are retried, and
+          // are drained before a reload of this account and on shutdown
+          // (drainAllAuthStates). A hard crash can lose the last few seconds of
+          // key updates; a phone's retry receipt then re-establishes the session.
+          persist({ set, delete: remove });
         },
       },
     },
@@ -232,6 +242,11 @@ export async function loadAuthState(accountId) {
 export async function drainAuthState(accountId) {
   const handle = handles.get(String(accountId));
   if (handle) await handle.drain().catch(() => {});
+}
+
+/** Waits for every account's queued writes (graceful shutdown). */
+export async function drainAllAuthStates() {
+  await Promise.all([...handles.values()].map((handle) => handle.drain().catch(() => {})));
 }
 
 /** Stops further writes for accountId and deletes its stored credentials. */

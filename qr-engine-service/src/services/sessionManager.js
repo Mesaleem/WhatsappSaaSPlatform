@@ -9,7 +9,7 @@ import {
 import axios from 'axios';
 import { notifyBackend, notifyInboundMessage, registerSessionOwner, hasSessionOwner, fetchNumberOwner } from './backendClient.js';
 import { loadAuthState, drainAuthState, clearAuthState, listPairedAccountIds } from './authStore.js';
-import { rememberSentMessage, recallSentMessage, forgetSentMessages, inboundSenderPhone } from './messageRetry.js';
+import { rememberSentMessage, recallSentMessage, forgetSentMessages, inboundSenderPhone, resolveSendJid } from './messageRetry.js';
 
 const MAX_RECONNECT_ATTEMPTS = 5;
 // The number each number slot must link to, keyed by session key. A login on
@@ -229,7 +229,10 @@ export async function sendMessage(accountId, to, message, media = null) {
     // logging above for whether a given failure correlates with a larger
     // file needing more of that time than the previous, shorter, implicit
     // Baileys default allowed.
-    const sent = await session.sock.sendMessage(to, content, { mediaUploadTimeoutMs: 60000 });
+    // A contact WhatsApp addresses by LID must be sent to its LID (see resolveSendJid).
+    const mapping = session.sock.signalRepository?.lidMapping;
+    const target = await resolveSendJid(mapping?.getLIDForPN?.bind(mapping), to);
+    const sent = await session.sock.sendMessage(target, content, { mediaUploadTimeoutMs: 60000 });
     const messageId = sent?.key?.id ?? null;
     // Kept so a retry receipt can be answered (see messageRetry.js).
     rememberSentMessage(id, sent);

@@ -1285,6 +1285,19 @@ still failed on 6.7.24, which rules out stale keys. Added: a LID reply with no n
 `sock.signalRepository.lidMapping.getPNForLID()`. **Production needs Node ≥ 20** (Baileys 7 `engines`), `npm ci`, a
 single engine instance. Not verified here: a real send/receive on 7.0.0-rc14 (needs the owner's phones).
 
+**Same day — send deadlock + LID addressing (after commit `753f539`, not committed yet):** (1) Sends timed out at 30 s
+locally: Baileys awaits `keys.set()` inside `sendMessage()`, `authStore` awaited the PATCH to backend-api, and backend-api
+(`php artisan serve`, one worker; a busy php-fpm pool in production) was itself blocked waiting on that send — key writes
+landed 9–39 s after the backend gave up. `keys.set()` now updates the cache and queues the write (ordered, retried,
+drained before an account reload and on SIGTERM/SIGINT via `drainAllAuthStates()`). Verified: test sends answered in
+0.98 s / 0.62 s. (2) Debug log of a live send: a message addressed to `<pn>@s.whatsapp.net` is encrypted "PN identity";
+the LID contact (`222350507286561@lid`) answered with a retry 600 ms later and only the LID resend got through, so
+delivery depended on the retry (lost across an engine restart; impossible on 6.7.24). `sendMessage()` now sends to the
+contact's LID (`resolveSendJid()` → `lidMapping.getLIDForPN`, 5 s cap, PN fallback). Verified live: first send went out
+as LID; the recipient still sent ONE retry and accepted the resend (no second retry). Retries from the number's other
+linked devices (`:72`, `:99@hosted`) are rejected by the server with 479 — stale old links; they do not affect the
+recipient. Tests: engine 21/21 (new: slow-backend `set()`, LID send address).
+
 ## 6. Test Suite
 
 **98 feature test files** + 2 unit files (+ `tests/Probes/`: 7 MariaDB/MySQL-only probe scripts, not PHPUnit — P5-9 added `inbound_gate_nonblocking_probe.php` and `outbound_pacing_probe.php`; Phase 8 T5 added `ai_credit_concurrency_probe.php`; Phase 8 T7 added `journey_ai_concurrency_probe.php`; Phase 8 T9 added `knowledge_concurrency_probe.php`; Phase 8 T10 added `journey_rag_concurrency_probe.php`; Phase 8 T11 added `agent_tool_concurrency_probe.php` — 11 scripts now), run with `php artisan test`.

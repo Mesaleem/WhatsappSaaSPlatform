@@ -6,6 +6,7 @@ import cors from 'cors';
 import { Server as SocketIOServer } from 'socket.io';
 import { startSession, logoutSession, getStatus, getQr, getPairingCode, sendMessage, createGroup, addGroupParticipants, listGroups, getGroupMetadata, resumeAllSessions } from './services/sessionManager.js';
 import { verifyAccountAccess, verifyNumberOwner } from './services/backendClient.js';
+import { drainAllAuthStates } from './services/authStore.js';
 
 /**
  * [Cross-device boot-stall hardening, disclosed]: added because a "silent
@@ -37,6 +38,21 @@ process.on('uncaughtException', (err) => {
 process.on('unhandledRejection', (reason) => {
   console.error('[server] unhandledRejection (process continues running):', reason);
 });
+
+// [2026-10-17]: credential writes are queued, not awaited (see authStore.js
+// keys.set), so a redeploy (SIGTERM) or Ctrl+C flushes them before exiting.
+// Capped so a dead backend cannot hold the shutdown open.
+const SHUTDOWN_DRAIN_MS = 10000;
+let shuttingDown = false;
+for (const signal of ['SIGTERM', 'SIGINT']) {
+  process.on(signal, async () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`[server] ${signal}: saving queued WhatsApp credential updates before exit`);
+    await Promise.race([drainAllAuthStates(), new Promise((resolve) => setTimeout(resolve, SHUTDOWN_DRAIN_MS))]);
+    process.exit(0);
+  });
+}
 
 const PORT = process.env.PORT || 4000;
 // [Windows IPv6/IPv4 resolution fix, disclosed]: binding explicitly to an

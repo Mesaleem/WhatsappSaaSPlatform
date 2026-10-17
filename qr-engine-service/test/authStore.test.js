@@ -14,6 +14,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const SECRET = 'test-secret';
 const store = new Map(); // accountId -> Map(name -> raw JSON string)
+let putDelayMs = 0; // simulates a backend with no free worker
 
 function accountEntries(id) {
   if (!store.has(id)) store.set(id, new Map());
@@ -57,6 +58,7 @@ const server = http.createServer(async (req, res) => {
   }
   if (req.method === 'PUT') {
     const body = await readBody(req);
+    if (putDelayMs) await new Promise((resolve) => setTimeout(resolve, putDelayMs));
     const entries = accountEntries(id);
     for (const [name, value] of Object.entries(body.set ?? {})) entries.set(name, value);
     for (const name of body.delete ?? []) entries.delete(name);
@@ -100,6 +102,8 @@ test('credentials and keys survive a restart with their binary fields intact', a
   await first.state.keys.set({
     'pre-key': { 7: { keyId: 7, keyPair: { public: Buffer.from([1, 2, 3]), private: Buffer.from([4, 5, 6]) } } },
   });
+  // Key writes are queued (not awaited by set()); a shutdown drains them first.
+  await authStore.drainAllAuthStates();
 
   const originalNoise = first.state.creds.noiseKey.public;
 
@@ -208,4 +212,21 @@ test('a QR-paired account (device identity set, registered still false) is resum
   const later = await restart();
   const ids = await later.listPairedAccountIds();
   assert.ok(ids.includes('2009'), 'Baileys 7 leaves registered=false after a QR pairing; the device identity is the signal');
+});
+
+test('a key write does not wait for a slow backend, and is still stored in order', async () => {
+  const handle = await authStore.loadAuthState(2101);
+  putDelayMs = 1500;
+  try {
+    const started = Date.now();
+    await handle.state.keys.set({ session: { a: { v: 1 } } });
+    await handle.state.keys.set({ session: { a: { v: 2 } } });
+    assert.ok(Date.now() - started < 500, 'set() must not block on the backend (it is awaited inside a send)');
+    assert.deepEqual((await handle.state.keys.get('session', ['a'])).a, { v: 2 }, 'the running socket reads the new value at once');
+
+    await authStore.drainAllAuthStates();
+    assert.equal(accountEntries(2101).get('session-a.json'), JSON.stringify({ v: 2 }), 'the last write wins after draining');
+  } finally {
+    putDelayMs = 0;
+  }
 });

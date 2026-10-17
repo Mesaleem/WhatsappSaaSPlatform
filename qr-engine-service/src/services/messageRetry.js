@@ -58,6 +58,40 @@ export function forgetSentMessages(accountId) {
 }
 
 /**
+ * The address to send a 1:1 message to: the contact's LID when WhatsApp has
+ * one, else the phone-number JID unchanged.
+ *
+ * [Bug fix 2026-10-17]: a message addressed to "<digits>@s.whatsapp.net" is
+ * encrypted the old phone-number way (Baileys: "Using PN identity"). A contact
+ * WhatsApp has moved to LID cannot decrypt it, answers with a retry receipt and
+ * shows "Waiting for this message" until the LID-addressed resend arrives --
+ * which never happens if the engine restarted in between. Seen live: first send
+ * PN -> retry from 222350507286561@lid 600 ms later -> resend as LID.
+ *
+ * `lookup` is Baileys' signalRepository.lidMapping.getLIDForPN (stored mapping,
+ * else a USync query). Any failure or a slow answer keeps the PN JID, so a send
+ * is never blocked by the lookup. Groups, LIDs and other JIDs pass through.
+ */
+export async function resolveSendJid(lookup, to, timeoutMs = 5000) {
+  if (typeof lookup !== 'function' || !String(to).endsWith('@s.whatsapp.net')) return to;
+
+  let timer;
+  try {
+    const lid = await Promise.race([
+      Promise.resolve(lookup(to)),
+      new Promise((resolve) => {
+        timer = setTimeout(() => resolve(null), timeoutMs);
+      }),
+    ]);
+    return typeof lid === 'string' && /@(hosted\.)?lid$/.test(lid) ? lid : to;
+  } catch {
+    return to;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
  * The sender's phone number (digits) for an inbound 1:1 message, or null.
  *
  * WhatsApp now addresses many chats by LID (a private id, "<digits>@lid")
