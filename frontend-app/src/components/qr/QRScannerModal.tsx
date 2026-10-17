@@ -56,6 +56,11 @@ interface QRScannerModalProps {
    * other WhatsApp account is refused, and the phone box is locked to this number.
    */
   expectedPhone?: string | null;
+  /**
+   * The number saved on this slot, if any. Pre-fills the phone box but, unlike
+   * expectedPhone, does not lock it: any number may still be typed instead.
+   */
+  suggestedPhone?: string | null;
 }
 
 function formatPairingCode(code: string): string {
@@ -67,7 +72,7 @@ function extractErrorMessage(err: unknown, fallback: string): string {
   return data?.errors?.phone_number?.[0] ?? data?.message ?? fallback;
 }
 
-export default function QRScannerModal({ accountId, onClose, onConnected, startSession, numberId, expectedPhone = null }: QRScannerModalProps) {
+export default function QRScannerModal({ accountId, onClose, onConnected, startSession, numberId, expectedPhone = null, suggestedPhone = null }: QRScannerModalProps) {
   const expectedDigits = expectedPhone ? expectedPhone.replace(/\D/g, '') : null;
   const expectedLabel = expectedDigits ? `+${expectedDigits}` : 'the number added for this slot';
   const startSessionRequest = startSession ?? ((phoneNumber?: string) => whatsappService.startSession(accountId, phoneNumber, numberId));
@@ -80,7 +85,7 @@ export default function QRScannerModal({ accountId, onClose, onConnected, startS
   const socketRef = useRef<Socket | null>(null);
 
   // Phone-number login state.
-  const [phoneInput, setPhoneInput] = useState(expectedDigits ?? '');
+  const [phoneInput, setPhoneInput] = useState(expectedDigits ?? suggestedPhone?.replace(/\D/g, '') ?? '');
   const [phoneDigits, setPhoneDigits] = useState<string | null>(null);
   const [pairingCode, setPairingCode] = useState<string | null>(null);
   const [phoneBusy, setPhoneBusy] = useState(false);

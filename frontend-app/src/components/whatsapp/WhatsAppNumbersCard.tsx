@@ -514,6 +514,8 @@ export default function WhatsAppNumbersCard({ accountId, onConnected, reloadKey 
           // Seat model (2026-10-13): every slot accepts whatever number connects
           // (server rule: acceptsAnyNumber), so the modal never locks the number field.
           expectedPhone={null}
+          // ...but the number saved on the slot is pre-filled (still editable).
+          suggestedPhone={connectingRow.has_pending_number ? null : connectingRow.phone_number}
           onClose={() => setConnectingId(null)}
           onConnected={() => {
             setConnectingId(null);

@@ -9,6 +9,7 @@ import {
 import axios from 'axios';
 import { notifyBackend, notifyInboundMessage, registerSessionOwner, hasSessionOwner, fetchNumberOwner } from './backendClient.js';
 import { loadAuthState, drainAuthState, clearAuthState, listPairedAccountIds } from './authStore.js';
+import { rememberSentMessage, recallSentMessage, forgetSentMessages, inboundSenderPhone } from './messageRetry.js';
 
 const MAX_RECONNECT_ATTEMPTS = 5;
 // The number each number slot must link to, keyed by session key. A login on
@@ -230,6 +231,8 @@ export async function sendMessage(accountId, to, message, media = null) {
     // Baileys default allowed.
     const sent = await session.sock.sendMessage(to, content, { mediaUploadTimeoutMs: 60000 });
     const messageId = sent?.key?.id ?? null;
+    // Kept so a retry receipt can be answered (see messageRetry.js).
+    rememberSentMessage(id, sent);
     console.log(`[qr-engine] MESSAGE_SENT account_id=${id} message_id=${messageId ?? 'unknown'}`);
     return { success: true, message_id: messageId };
   } catch (err) {
@@ -421,6 +424,7 @@ export async function getGroupMetadata(accountId, groupJid) {
 }
 
 async function clearSessionFiles(accountId) {
+  forgetSentMessages(accountId);
   await clearAuthState(accountId);
 }
 
@@ -742,6 +746,10 @@ export async function startSession(
     syncFullHistory: false,
     fireInitQueries: false,
     markOnlineOnConnect: false,
+    // [Bug fix 2026-10-17]: answers retry receipts with the original message.
+    // Without it a message a phone could not decrypt stayed "Waiting for this
+    // message" forever, on the recipient and on the account's own phone.
+    getMessage: async (key) => recallSentMessage(id, key),
   });
 
   const record = {
@@ -814,18 +822,29 @@ export async function startSession(
   //    MetaWebhookController::handleInboundMessages()'s $body match().
   //    Every other message type (image, audio, video, location, ...) is
   //    not forwarded.
-  sock.ev.on('messages.upsert', ({ messages, type }) => {
+  sock.ev.on('messages.upsert', async ({ messages, type }) => {
     if (type !== 'notify') return;
 
     for (const msg of messages) {
       try {
         if (msg.key?.fromMe) continue;
 
-        const remoteJid = msg.key?.remoteJid || '';
-        if (!remoteJid.endsWith('@s.whatsapp.net')) continue;
-
-        const senderPhone = remoteJid.split('@')[0];
-        if (!senderPhone) continue;
+        // [Bug fix 2026-10-17]: a chat addressed by LID ("<id>@lid") carries the
+        // number in key.remoteJidAlt / senderPn; those replies used to be dropped
+        // here. When the key has no number, Baileys' own LID->phone mapping is
+        // asked. Groups and other non-1:1 chats still return null and are skipped.
+        const remoteJid = String(msg.key?.remoteJid || '');
+        let senderPhone = inboundSenderPhone(msg.key);
+        if (!senderPhone && remoteJid.endsWith('@lid')) {
+          const pn = await sock.signalRepository?.lidMapping?.getPNForLID?.(remoteJid).catch(() => null);
+          senderPhone = inboundSenderPhone({ remoteJid: pn || '' });
+        }
+        if (!senderPhone) {
+          if (remoteJid.endsWith('@lid')) {
+            console.log(`[qr-engine] INBOUND_SKIPPED_NO_PHONE account_id=${id} message_id=${msg.key?.id ?? 'unknown'}`);
+          }
+          continue;
+        }
 
         const m = msg.message;
         if (!m) continue;

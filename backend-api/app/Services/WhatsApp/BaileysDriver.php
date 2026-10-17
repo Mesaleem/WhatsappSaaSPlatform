@@ -36,7 +36,10 @@ class BaileysDriver implements WhatsAppDriverInterface
 
         try {
             $response = Http::withHeaders(['X-Internal-Secret' => $secret])
-                ->timeout(15)
+                // 2026-10-17: was 15 s. A first send to a contact WhatsApp addresses by LID fetches
+                // that contact's devices and keys first and can pass 15 s; the message was then
+                // delivered while this call reported "unreachable" (and invited a duplicate resend).
+                ->timeout(30)
                 ->post("{$baseUrl}/api/message/send", [
                     'account_id' => $this->accountId,
                     ...$this->sessionPayload(),

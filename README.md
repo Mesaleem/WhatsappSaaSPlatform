@@ -88,7 +88,7 @@ The system is composed of three independently-run services:
 | Runtime | Node.js (ESM, `"type": "module"`) |
 | HTTP | Express 5 |
 | Realtime | Socket.IO 4 (per-tenant room `account:{id}`, auth'd via a call back to `backend-api`'s `/api/auth/me`) |
-| WhatsApp | `@whiskeysockets/baileys` 6.7.24 (multi-device Web API, unofficial -- pinned to the stable `legacy` line, not the `7.0.0-rc*` release candidates, after real pairing-code instability only on the RC line) |
+| WhatsApp | `@whiskeysockets/baileys` 7.0.0-rc14 (multi-device Web API, unofficial -- back on the 7.x line on 2026-10-17: the 6.7.24 `legacy` line has no LID support, so messages showed "Waiting for this message"; see PROJECT_STATE.md) |
 | Dev runner | `nodemon` (watches `src/`, ignores `sessions/` so a live pairing handshake is never interrupted by a file-watcher restart) |
 
 ### Database & Cache

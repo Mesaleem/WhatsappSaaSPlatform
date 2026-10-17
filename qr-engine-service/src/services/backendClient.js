@@ -202,8 +202,14 @@ export async function verifyNumberOwner(sessionId, accountId) {
       timeout: AUTH_STATE_TIMEOUT_MS,
     });
     return Number(data?.account_id) === Number(accountId);
-  } catch {
-    return false;
+  } catch (err) {
+    // [Bug fix 2026-10-17]: only "this slot does not exist" is a definite no.
+    // A timeout or backend error used to return false too, which the socket
+    // handshake reports as 'forbidden' -- the browser then showed "You aren't
+    // authorized..." and never retried, although the user owned the slot.
+    // Rethrown, it becomes 'token verification failed', which the modal retries.
+    if (err?.response?.status === 404) return false;
+    throw err;
   }
 }
 

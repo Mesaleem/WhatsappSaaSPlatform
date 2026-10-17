@@ -29,7 +29,7 @@ Three deployable services:
 |---|---|---|
 | `backend-api/` | **Laravel 11**, PHP **8.4**, MariaDB **10.11.14**, Sanctum, spatie/laravel-permission | The entire API, business logic, billing, RBAC |
 | `frontend-app/` | **React 19.2**, TypeScript 6.0, Vite 8.2, Tailwind 3.4, vitest, oxlint | Tenant + Super Admin web console |
-| `qr-engine-service/` | Node, **Baileys 6.7.24** (downgraded from 7.0.0-rc14, 2026-10-11 -- see header), Express 5.2, socket.io 4.8 | The QR/Baileys WhatsApp engine (separate process) |
+| `qr-engine-service/` | Node, **Baileys 7.0.0-rc14** (back from 6.7.24 on 2026-10-17 for LID support -- see §5 QR engine 2026-10-17), Express 5.2, socket.io 4.8 | The QR/Baileys WhatsApp engine (separate process) |
 
 ---
 
@@ -1243,6 +1243,48 @@ identical 404s. Writes need an active subscription; reads do not. API-key writes
 - Internal (`internal.secret` only, no user): `GET /api/internal/whatsapp-auth/paired` → `{account_ids}` (creds with `registered: true` only); `GET|PUT|DELETE /api/internal/whatsapp-auth/{accountId}` → `{entries}` / batch `{set, delete}` (≤ 1000 entries, names `[A-Za-z0-9._@+=-]{1,191}`, values ≤ 2 MB) / forget everything. `WhatsAppAuthStateController`; model `WhatsAppEngineAuthState` (hidden + encrypted `value`, not tenant-scoped, listed in `config/recovery.php`).
 - Storage contract: the same JSON (`BufferJSON`) and file-name mapping Baileys uses on disk, so a `sessions/<id>/` folder imports unchanged. Credentials are never written to the pod's filesystem in `backend` mode.
 
+### QR engine — "Waiting for this message" + missing inbound replies (2026-10-17 fix)
+
+Messages sent through a QR number showed "Waiting for this message. This may take a while." on the recipient AND on the
+account's own phone, and replies from some contacts never reached the WhatsApp inbox. Two causes in `qr-engine-service`:
+(1) the socket had no `getMessage`, so Baileys could not answer a phone's retry receipt (Baileys' default returns
+undefined) and an undecryptable message stayed a placeholder forever; (2) WhatsApp now addresses many 1:1 chats by LID
+(`<id>@lid`, number in `key.senderPn`), and `messages.upsert` forwarded only `@s.whatsapp.net` chats, silently dropping those
+replies. Fix: new `src/services/messageRetry.js` — sent messages kept per account in memory (1,000 per account, 3 days,
+cleared on logout) and returned by `getMessage`; `inboundSenderPhone()` resolves a LID chat to its phone number
+(`INBOUND_SKIPPED_NO_PHONE` logged when none is given). Known limit: retries for messages sent before an engine restart
+cannot be answered. Tests: `test/messageRetry.test.js` 9 new, engine suite 17/17. Needs a QR engine restart; ⏳ live test
+by the owner pending (not committed).
+
+**Same day — Connect modal:** (1) "You aren't authorized to manage this account's WhatsApp connection" on a slot the user
+owns: `backendClient.verifyNumberOwner()` returned false on ANY error (timeout / backend busy — e.g. single-threaded
+`php artisan serve` while the start-session call is in flight), which the socket handshake reports as `forbidden`, and the
+modal never retries `forbidden`. Now only a 404 is "not owner"; other errors are rethrown → `token verification failed`,
+which the modal retries. Reproduced the handshake locally (user 2 / slot 1) — it connects and gets a QR. (2) The phone
+tab now pre-fills the slot's saved number, still editable: `QRScannerModal` `suggestedPhone` prop, passed by
+`WhatsAppNumbersCard`. Tests: `QRScannerModal.test.tsx` 2 new; tsc clean; engine 17/17.
+
+**Same day — root cause of "Waiting for this message": Baileys 6.7.24 has no LID support.** The live log showed
+`Bad MAC` / `No matching sessions found` for the account's own LID (`156281008586957@lid`, fromMe) and "dropping spoofed
+self-only protocolMessage", and the recipient (a LID-addressed WhatsApp Business account) still got the placeholder for a
+new message. Stored auth state had only phone-number sessions (`session-<pn>.<device>`), no `lid-mapping` /
+`device-list` — 6.7.24 (npm tag `legacy`) predates WhatsApp's LID addressing; 7.x maps LID↔PN and migrates sessions.
+Timeline matches: broken since the 2026-10-11 downgrade (`dabd636`). **Upgraded back to `7.0.0-rc14`** (npm `latest`,
+exact pin; exports/options used verified; 0 prod vulnerabilities); `inboundSenderPhone()` already reads 7.x's
+`remoteJidAlt`. Trade-off: the 7.0 rc line is why the downgrade happened (pairing-code login failing, upstream issues
+#2008 / #2488) — **QR login is the reliable path; re-check pairing-code login live.** Also `BaileysDriver` HTTP timeout
+15 s → 30 s: a first send to a LID contact took > 15 s, so the backend reported "qr-engine-service is unreachable" for a
+message that was delivered. Local engine restarted on 7.0.0-rc14 and the slot resumed (`linked`). Engine 17/17; backend
+WhatsApp/Baileys/payment-alert tests 43/43. ⏳ Live test pending; if a contact still shows the placeholder, log out and
+re-link the number by QR so the sessions are rebuilt by 7.x.
+
+**Pre-production verification (2026-10-17):** after the upgrade the local engine persisted 7.x's new key types to the
+backend store (`lid-mapping-*`, `device-list-*`, LID sessions `session-<lid>_1.<device>`; all match the controller's
+`NAME_PATTERN`). No local/production credential sharing: the local login was paired fresh today as device `:75` and
+still failed on 6.7.24, which rules out stale keys. Added: a LID reply with no number in its key falls back to
+`sock.signalRepository.lidMapping.getPNForLID()`. **Production needs Node ≥ 20** (Baileys 7 `engines`), `npm ci`, a
+single engine instance. Not verified here: a real send/receive on 7.0.0-rc14 (needs the owner's phones).
+
 ## 6. Test Suite
 
 **98 feature test files** + 2 unit files (+ `tests/Probes/`: 7 MariaDB/MySQL-only probe scripts, not PHPUnit — P5-9 added `inbound_gate_nonblocking_probe.php` and `outbound_pacing_probe.php`; Phase 8 T5 added `ai_credit_concurrency_probe.php`; Phase 8 T7 added `journey_ai_concurrency_probe.php`; Phase 8 T9 added `knowledge_concurrency_probe.php`; Phase 8 T10 added `journey_rag_concurrency_probe.php`; Phase 8 T11 added `agent_tool_concurrency_probe.php` — 11 scripts now), run with `php artisan test`.
@@ -2147,7 +2189,7 @@ explain/route; entitlement/permission → explain + upgrade path; genuinely impo
 ### WhatsApp QR login: phone-number option + durable sessions — DONE (2026-10-05)
 
 - **Why**: (a) owner asked for a second login method — a WhatsApp number plus an OTP-style code, alongside QR; (b) QR-engine sessions lived in `qr-engine-service/sessions/<id>/` on the pod's disk, so every redeploy or pod recreation disconnected every tenant (the 2026-10-05 boot-resume only helped when the disk survived).
-- **Pairing code**: Baileys (6.7.24, downgraded from 7.0.0-rc14 -- see header) `requestPairingCode(phone)`. Requested on the first `connecting`/`qr` event after the socket starts (retried on later events if WhatsApp is not ready), at most once per socket; a same-number repeat request within `MIN_PAIRING_CODE_REISSUE_MS` (8s) of an already-issued code re-emits it instead of restarting (2026-10-11 fix for a rapid double-submit invalidating the code mid-type). The code is broadcast as `pairing_code`. A replacement socket is created when a number is submitted while a QR socket waits; the old socket's listeners are removed first, then it ends and its pending writes are flushed.
+- **Pairing code**: Baileys (7.0.0-rc14 again since 2026-10-17; 6.7.24 from 2026-10-11 to 10-17) `requestPairingCode(phone)`. Requested on the first `connecting`/`qr` event after the socket starts (retried on later events if WhatsApp is not ready), at most once per socket; a same-number repeat request within `MIN_PAIRING_CODE_REISSUE_MS` (8s) of an already-issued code re-emits it instead of restarting (2026-10-11 fix for a rapid double-submit invalidating the code mid-type). The code is broadcast as `pairing_code`. A replacement socket is created when a number is submitted while a QR socket waits; the old socket's listeners are removed first, then it ends and its pending writes are flushed.
 - **Session storage**: `authStore.js` (`loadAuthState` / `drainAuthState` / `clearAuthState` / `listPairedAccountIds`). Backend store: `keys.set` is awaited (Baileys treats a key as used only after `set` resolves), `creds.update` is saved, and writes are chained per account with 3 retries and backoff. A failure after the retries is logged as `AUTH_STATE_PERSIST_FAILED` and not stored: the affected key is then lost, which can force a re-pair. Logout (`clearAuthState`) closes the handle first, so a late write cannot bring deleted keys back. A reconnect or replacement waits for the old handle to drain before loading, so it never reads older state than the last save.
 - **Files touched**: `qr-engine-service/src/services/{authStore,sessionManager,backendClient}.js`, `src/server.js`, `test/authStore.test.js`; `backend-api` `WhatsAppController` (start-session + `forwardToQrEngine` extra payload), `Internal/WhatsAppAuthStateController`, `Models/WhatsAppEngineAuthState`, the 143rd migration, `routes/api.php`, `config/recovery.php`, `tests/Feature/WhatsAppEngineAuthStateTest` (14), `CriticalRouteAuthorizationSweepTest` (4 routes allowlisted, internal.secret), `RecoveryConfigurationTest` (guard recognises `EncryptedOrNull`); `frontend-app` `QRScannerModal.tsx` (tabs: QR default / phone number; tenant connections only), `whatsappService.startSession(accountId, phoneNumber)`, `types/whatsapp.ts`.
 - **Limitations / follow-ups (not done)**: (1) Pairing-code and pod-restart behaviour is NOT yet verified against a real WhatsApp account — only the storage layer and the HTTP contract are tested. (2) No Kubernetes manifest in the repo; replica count and `Recreate` strategy must be set in the deployment. (3) The Super Admin self-device is QR-only. (4) The phone tab has no automated frontend test (vitest is not installed in this environment). (5) If the backend is down at boot, no account resumes until the next boot or a manual Connect — there is no retry loop for boot-time resume. (6) Credential writes that fail all retries are dropped with a log line (see the Why above); no dead-letter store. (7) Import of a local folder runs only while the backend has no `creds.json` for that account.
