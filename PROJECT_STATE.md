@@ -1298,6 +1298,20 @@ as LID; the recipient still sent ONE retry and accepted the resend (no second re
 linked devices (`:72`, `:99@hosted`) are rejected by the server with 479 — stale old links; they do not affect the
 recipient. Tests: engine 21/21 (new: slow-backend `set()`, LID send address).
 
+**ROOT CAUSE (2026-10-17, confirmed live): commit `3270060` (2026-10-11) turned off Baileys' `fireInitQueries`,
+`syncFullHistory` and `markOnlineOnConnect` as "unused work".** They are not: `fireInitQueries` runs `fetchProps()`, which tells
+Baileys that WhatsApp requires a privacy token on 1:1 messages (`privacyTokenOn1to1: true`), and history sync is what
+delivers those privacy tokens (`tctoken`, log "storing tctokens from history sync"). Without them every message from a
+linked device reached a contact's phone as "Waiting for this message": one retry receipt, then nothing — no delivery
+receipt — whatever the Baileys version, addressing (PN or LID) or retry handling. The Sept 25 build (rc14, Baileys
+defaults) delivered fine. Evidence: with the overrides, 3 sends to the same contact got only a retry; with the defaults
+restored (fresh QR link, device `:76`), the first send got a delivery receipt and no retry, and the owner saw it on the
+phone. All three options are back to `true` in `sessionManager.js`. Also: credential writes are now split into chunks of
+500 (`authStore.chunkBatch`) — a fresh link's history sync produced 4,807 keys and backend-api allows 1,000 per request.
+Production note: full history sync adds work right after linking (CPU/memory on the Render host); numbers linked while
+the overrides were live should be **logged out and re-linked by QR** after deploy so history sync runs and brings the
+privacy tokens. Engine tests 23/23.
+
 ## 6. Test Suite
 
 **98 feature test files** + 2 unit files (+ `tests/Probes/`: 7 MariaDB/MySQL-only probe scripts, not PHPUnit — P5-9 added `inbound_gate_nonblocking_probe.php` and `outbound_pacing_probe.php`; Phase 8 T5 added `ai_credit_concurrency_probe.php`; Phase 8 T7 added `journey_ai_concurrency_probe.php`; Phase 8 T9 added `knowledge_concurrency_probe.php`; Phase 8 T10 added `journey_rag_concurrency_probe.php`; Phase 8 T11 added `agent_tool_concurrency_probe.php` — 11 scripts now), run with `php artisan test`.

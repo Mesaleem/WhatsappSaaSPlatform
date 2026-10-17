@@ -729,26 +729,21 @@ export async function startSession(
     // which passes pairingPhone through) keeps the proven Browsers.ubuntu('Chrome').
     browser: phoneNumber ? Browsers.ubuntu('Chrome') : ['WapHub', 'Chrome', '22.04.4'],
     printQRInTerminal: false,
-    // [Owner instruction, disclosed]: this platform only ever SENDS messages
-    // through a linked number -- it never reads or displays the account's own
-    // chat history, blocklist, or privacy settings, so none of what these
-    // three normally fetch is used anywhere in this codebase (grepped: no
-    // caller reads messaging-history.set, chats.set, contacts.set, or a
-    // blocklist/privacy-settings event). Baileys defaults all three to true.
-    // Turning them off skips that unused work entirely, which matters more
-    // here than usual: a free-tier host (lower CPU/network priority, see
-    // startSession's own reconnect-backoff comment) has less headroom to
-    // absorb extra round-trips and parsing during the already-fragile window
-    // right after pairing. NOTE, precisely: this does NOT touch WhatsApp's
-    // separate, mandatory app-state (contacts/chat-list/pins) sync -- that is
-    // gated by its own sync-state machine, not by these flags, and is also
-    // not the cause of a "blocked on missing key ... parking" log: Baileys
-    // already catches that itself and retries once the key arrives (that IS
-    // what "parking" means) rather than crashing -- it is informational, not
-    // a connection failure, with or without this change.
-    syncFullHistory: false,
-    fireInitQueries: false,
-    markOnlineOnConnect: false,
+    // [Bug fix 2026-10-17 -- "Waiting for this message"]: these three stay at
+    // Baileys' defaults (true), as in the Sept 25 build that delivered fine.
+    // Commit 3270060 (2026-10-11) turned them off as "unused work"; it is not:
+    //  - fireInitQueries runs fetchProps(), which tells Baileys that WhatsApp
+    //    requires a privacy token on 1:1 messages (privacyTokenOn1to1);
+    //  - syncFullHistory brings those privacy tokens (tctokens) in through
+    //    history sync ("storing tctokens from history sync").
+    // Without them every message from this linked device reached the
+    // recipient's phone as "Waiting for this message" (retry, then nothing).
+    // Verified live: same number, same recipient, defaults on -> delivery
+    // receipt on the first send, no retry. markOnlineOnConnect is kept at the
+    // default too, to match the verified setup exactly.
+    syncFullHistory: true,
+    fireInitQueries: true,
+    markOnlineOnConnect: true,
     // [Bug fix 2026-10-17]: answers retry receipts with the original message.
     // Without it a message a phone could not decrypt stayed "Waiting for this
     // message" forever, on the recipient and on the account's own phone.

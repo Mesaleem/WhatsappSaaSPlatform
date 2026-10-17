@@ -59,6 +59,10 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'PUT') {
     const body = await readBody(req);
     if (putDelayMs) await new Promise((resolve) => setTimeout(resolve, putDelayMs));
+    // Same limit as backend-api's WhatsAppAuthStateController.
+    if (Object.keys(body.set ?? {}).length > 1000 || (body.delete ?? []).length > 1000) {
+      return send(422, { message: 'Too many entries.' });
+    }
     const entries = accountEntries(id);
     for (const [name, value] of Object.entries(body.set ?? {})) entries.set(name, value);
     for (const name of body.delete ?? []) entries.delete(name);
@@ -229,4 +233,23 @@ test('a key write does not wait for a slow backend, and is still stored in order
   } finally {
     putDelayMs = 0;
   }
+});
+
+test('a write larger than the backend limit is stored in full, in chunks', async () => {
+  const handle = await authStore.loadAuthState(2201);
+  const many = {};
+  for (let i = 0; i < 1200; i += 1) many[`k${i}`] = { v: i };
+  await handle.state.keys.set({ tctoken: many });
+  await authStore.drainAllAuthStates();
+
+  const stored = accountEntries(2201);
+  assert.equal([...stored.keys()].filter((name) => name.startsWith('tctoken-')).length, 1200);
+  assert.equal(stored.get('tctoken-k1199.json'), JSON.stringify({ v: 1199 }));
+});
+
+test('chunkBatch splits sets and deletes and keeps an empty batch as one no-op', () => {
+  const set = Object.fromEntries(Array.from({ length: 1001 }, (_, i) => [`a${i}`, 'x']));
+  const chunks = authStore.chunkBatch({ set, delete: ['d1', 'd2'] }, 500);
+  assert.deepEqual(chunks.map((c) => [Object.keys(c.set).length, c.delete.length]), [[500, 0], [500, 0], [1, 0], [0, 2]]);
+  assert.deepEqual(authStore.chunkBatch({ set: {}, delete: [] }), [{ set: {}, delete: [] }]);
 });

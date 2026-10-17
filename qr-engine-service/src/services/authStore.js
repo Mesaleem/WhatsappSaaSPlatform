@@ -70,7 +70,9 @@ async function loadBackendHandle(accountId) {
   if (!cache.has('creds.json')) {
     const local = await readLocalFolder(sessionDirFor(id));
     if (local.size > 0) {
-      await patchBackendAuthState(id, { set: Object.fromEntries(local), delete: [] });
+      for (const chunk of chunkBatch({ set: Object.fromEntries(local), delete: [] })) {
+        await patchBackendAuthState(id, chunk);
+      }
       for (const [name, raw] of local) cache.set(name, raw);
       console.log(`[qr-engine] AUTH_STATE_IMPORTED account_id=${id} entries=${local.size} source=local_folder`);
     }
@@ -81,7 +83,11 @@ async function loadBackendHandle(accountId) {
 
   const persist = (batch) => {
     if (closed) return chain;
-    chain = chain.then(() => pushWithRetry(id, batch)).catch(() => {});
+    chain = chain
+      .then(async () => {
+        for (const chunk of chunkBatch(batch)) await pushWithRetry(id, chunk);
+      })
+      .catch(() => {});
     return chain;
   };
 
@@ -154,6 +160,21 @@ async function loadBackendHandle(accountId) {
   };
 
   return handle;
+}
+
+// backend-api accepts at most 1000 set / 1000 delete entries per request
+// (WhatsAppAuthStateController::MAX_ENTRIES_PER_REQUEST). A full history sync
+// can hand Baileys thousands of keys at once, so writes go out in chunks,
+// in order -- an oversized request would be refused and those keys lost.
+export const MAX_ENTRIES_PER_WRITE = 500;
+
+export function chunkBatch(batch, size = MAX_ENTRIES_PER_WRITE) {
+  const set = Object.entries(batch.set ?? {});
+  const del = batch.delete ?? [];
+  const chunks = [];
+  for (let i = 0; i < set.length; i += size) chunks.push({ set: Object.fromEntries(set.slice(i, i + size)), delete: [] });
+  for (let i = 0; i < del.length; i += size) chunks.push({ set: {}, delete: del.slice(i, i + size) });
+  return chunks.length ? chunks : [{ set: {}, delete: [] }];
 }
 
 async function pushWithRetry(accountId, batch) {
